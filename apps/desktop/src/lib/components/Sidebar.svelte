@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
   import { ZButton, ZIcon, ZLoading, ZTree } from '@shival99/z-ui-svelte';
   import type { ZTreeNode } from '@shival99/z-ui-svelte';
+  import AgentStack from './AgentStack.svelte';
   import { buildTree, forkSession, history, newSession, workspace, type TreeData } from '../sessions.svelte';
 
   const nodes = $derived(buildTree());
@@ -89,11 +90,20 @@
     >
       {#snippet node(ctx)}
         {@const data = ctx.node.data}
-        <span class="flex min-w-0 flex-1 items-center gap-2">
+        <span class="relative flex min-w-0 flex-1 items-center gap-2">
           {#if data?.kind === 'session' && data.session}
+            <!-- A fork hangs off its parent: an elbow drops from the parent's dot to this row. -->
+            {#if data.session.parentId}
+              <span class="pointer-events-none absolute bottom-1/2 -left-3.5 h-7 w-3 rounded-bl-lg border-b border-l border-muted-foreground/40" aria-hidden="true"></span>
+            {/if}
             <span class="size-1.5 shrink-0 rounded-full {statusColor[data.session.status]}" aria-label={data.session.status}></span>
             <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}">{ctx.node.label}</span>
-            <span class="shrink-0 rounded px-1.5 py-px text-[10px] font-medium group-hover/row:hidden {agentTag[data.session.agent]}">{agentLabel(data.session.agent)}</span>
+            <!-- One agent: a coloured name. Several agents in one chat: overlapping logos. -->
+            {#if (data.session.agents?.length ?? 1) > 1}
+              <span class="group-hover/row:hidden"><AgentStack agents={data.session.agents!} /></span>
+            {:else}
+              <span class="shrink-0 rounded px-1.5 py-px text-[10px] font-medium group-hover/row:hidden {agentTag[data.session.agent]}">{agentLabel(data.session.agent)}</span>
+            {/if}
             <button
               type="button"
               class="hidden shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground group-hover/row:inline-flex"

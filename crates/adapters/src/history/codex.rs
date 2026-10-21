@@ -8,7 +8,7 @@ use std::{collections::HashMap, path::Path};
 
 use serde_json::Value;
 
-use super::util::{describe_tool, jsonl_files, read_lines, truncate};
+use super::util::{describe_tool, jsonl_files, read_lines, strip_ansi, truncate};
 use super::{HistoryBlock, HistoryMessage, HistorySession, Source};
 
 const OUTPUT_LIMIT: usize = 6_000;
@@ -182,7 +182,7 @@ fn attach_output(
         },
         other => (other.to_string(), false),
     };
-    *output = truncate(&text, OUTPUT_LIMIT);
+    *output = truncate(&strip_ansi(&text), OUTPUT_LIMIT);
     if failed {
         *status = "fail".into();
     }

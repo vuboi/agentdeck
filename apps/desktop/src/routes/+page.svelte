@@ -38,10 +38,10 @@
 
   // The divider is the handle itself: 1px wide, with a wider invisible hit area.
   // Its inner line is hidden so the border is a single crisp pixel row, not an offset anti-aliased one.
-  const colHandle = "w-px bg-border [&>*]:hidden after:absolute after:inset-y-0 after:-left-1 after:w-[9px] after:content-['']";
+  const colHandle = "agent-divider agent-divider-v w-px bg-border [&>*]:hidden after:absolute after:inset-y-0 after:-left-1 after:w-[9px] after:content-['']";
   // Collapsed tools pane: no divider and no hit area, so nothing is left at the right edge.
   const colHandleClosed = "w-0 [&>*]:hidden";
-  const rowHandle = "h-px bg-border [&>*]:hidden after:absolute after:inset-x-0 after:-top-1 after:h-[9px] after:content-['']";
+  const rowHandle = "agent-divider agent-divider-h h-px bg-border [&>*]:hidden after:absolute after:inset-x-0 after:-top-1 after:h-[9px] after:content-['']";
 
   $effect(() => {
     const open = terminal.open;

@@ -136,6 +136,37 @@ fn claude_keeps_older_messages_when_the_parent_link_is_gone() {
 }
 
 #[test]
+fn terminal_colour_codes_are_removed_from_tool_output() {
+    let home = Home::new("claude-ansi");
+    let path = home.write(
+        ".claude/projects/demo/55555555.jsonl",
+        &[
+            user("a", None, json!("run"), "2026-01-01T00:00:00Z"),
+            assistant(
+                "b",
+                "a",
+                json!([{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"lint"}}]),
+            ),
+            user(
+                "c",
+                Some("b"),
+                json!([{"type":"tool_result","tool_use_id":"t1","content":"[32mOK[0m done"}]),
+                "t",
+            ),
+        ],
+    );
+    let messages = load(&home.roots(), Source::Claude, &path).unwrap();
+    assert_eq!(
+        messages[1].blocks,
+        vec![HistoryBlock::Command {
+            command: "Bash  lint".into(),
+            output: "OK done".into(),
+            status: "ok".into()
+        }]
+    );
+}
+
+#[test]
 fn claude_failed_tool_result_is_marked() {
     let home = Home::new("claude-fail");
     let path = home.write(

@@ -1,8 +1,9 @@
 import { neutralTokens, primaryTokens, radiusTokens, type Mode, type Neutral, type Primary } from './theme-tokens';
 
 const KEY = 'agentdeck.theme';
-type Saved = { primary: Primary; neutral: Neutral; mode: Mode };
-const DEFAULTS: Saved = { primary: 'violet', neutral: 'zinc', mode: 'dark' };
+export type ChatLayout = 'split' | 'single';
+type Saved = { primary: Primary; neutral: Neutral; mode: Mode; chatLayout: ChatLayout };
+const DEFAULTS: Saved = { primary: 'violet', neutral: 'zinc', mode: 'dark', chatLayout: 'split' };
 // Fixed corner radius (not user-configurable): z-ui buttons use rounded-md/sm, i.e. radius minus 2px / 4px,
 // so 0.375rem collapses them to near-square corners.
 const RADIUS = 0.625;
@@ -24,6 +25,8 @@ class Theme {
   neutral = $state(initial.neutral);
   readonly radius = RADIUS;
   mode = $state(initial.mode);
+  /** `split`: your messages on the right, the agent on the left. `single`: everything on the left. */
+  chatLayout = $state(initial.chatLayout);
   private systemDark = $state(media.matches);
 
   readonly dark = $derived(this.mode === 'system' ? this.systemDark : this.mode === 'dark');
@@ -42,7 +45,7 @@ class Theme {
         root.classList.toggle('dark', this.dark);
         for (const [name, value] of Object.entries(this.tokens)) root.style.setProperty(name, value, 'important');
         try {
-          const saved: Saved = { primary: this.primary, neutral: this.neutral, mode: this.mode };
+          const saved: Saved = { primary: this.primary, neutral: this.neutral, mode: this.mode, chatLayout: this.chatLayout };
           localStorage.setItem(KEY, JSON.stringify(saved));
         } catch {
           // Persisting is best-effort.

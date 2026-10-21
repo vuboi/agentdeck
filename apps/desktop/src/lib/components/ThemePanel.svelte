@@ -5,6 +5,12 @@
   import { layout } from '../layout.svelte';
   import { theme } from '../theme.svelte';
   import { NEUTRALS, PRIMARIES, swatch, type Mode } from '../theme-tokens';
+  import type { ChatLayout } from '../theme.svelte';
+
+  const layouts = [
+    { value: 'split', label: 'Both sides' },
+    { value: 'single', label: 'One side' },
+  ];
 
   const modes = [
     { value: 'light', label: 'Light', icon: 'lucideSun' as ZIconName },
@@ -82,6 +88,21 @@
             </button>
           {/each}
         </div>
+      </div>
+
+      <div>
+        <div class="mb-1.5 font-mono text-[10px] tracking-widest text-muted-foreground">CHAT LAYOUT</div>
+        <ZTabs
+          zTabs={layouts}
+          zType="segmented"
+          zSize="sm"
+          zTabsOnly
+          zNavFullWidth
+          zCache={false}
+          class="w-full [&_.z-tab-item]:flex-1 [&_.z-tab-item-label]:text-center"
+          activeTab={theme.chatLayout}
+          onTabChange={(value) => (theme.chatLayout = value as ChatLayout)}
+        />
       </div>
     </div>
   {/snippet}

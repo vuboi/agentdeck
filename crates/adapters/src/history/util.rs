@@ -119,3 +119,25 @@ pub fn describe_tool(name: &str, input: &Value) -> String {
     .unwrap_or_default();
     truncate(format!("{name}  {arg}").trim(), 240)
 }
+
+/// Removes terminal colour codes (`ESC [ … m` and friends) that tool output carries.
+pub fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '' {
+            out.push(ch);
+            continue;
+        }
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            // A CSI sequence ends at the first byte in 0x40..=0x7E.
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}

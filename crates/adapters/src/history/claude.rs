@@ -8,7 +8,9 @@ use std::{collections::HashMap, path::Path};
 
 use serde_json::Value;
 
-use super::util::{describe_tool, jsonl_files, read_lines, result_text, strip_reminders, truncate};
+use super::util::{
+    describe_tool, jsonl_files, read_lines, result_text, strip_ansi, strip_reminders, truncate,
+};
 use super::{HistoryBlock, HistoryMessage, HistorySession, Source};
 
 /// Message uuids kept per session to recognise forks and resumes.
@@ -308,7 +310,7 @@ fn attach_result(
         return;
     };
     *output = truncate(
-        &result_text(item.get("content").unwrap_or(&Value::Null)),
+        &strip_ansi(&result_text(item.get("content").unwrap_or(&Value::Null))),
         OUTPUT_LIMIT,
     );
     if is_true(item, "is_error") {

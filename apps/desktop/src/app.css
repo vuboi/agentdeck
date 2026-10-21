@@ -66,3 +66,28 @@ body {
 .z-tree > .relative.w-full {
   overflow: clip;
 }
+
+/* Resize dividers: a quiet hairline that lights up at its centre on hover or drag and tapers to
+   nothing at both ends. */
+.agent-divider {
+  position: relative;
+}
+.agent-divider::before {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+.agent-divider-v::before {
+  inset: 0 -0.5px;
+  background: linear-gradient(to bottom, transparent 0%, color-mix(in oklab, var(--primary) 85%, transparent) 50%, transparent 100%);
+}
+.agent-divider-h::before {
+  inset: -0.5px 0;
+  background: linear-gradient(to right, transparent 0%, color-mix(in oklab, var(--primary) 85%, transparent) 50%, transparent 100%);
+}
+.agent-divider:hover::before,
+.agent-divider[data-dragging='true']::before {
+  opacity: 1;
+}

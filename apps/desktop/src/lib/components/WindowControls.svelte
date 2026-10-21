@@ -41,7 +41,7 @@
 </script>
 
 <!-- Pinned to the top-right corner, over the header row of whichever pane sits there. -->
-<div class="absolute top-0 right-0 z-50 flex h-[39px] items-center gap-0.5 pr-1.5" aria-label="Window controls">
+<div class="absolute top-0 right-0 z-50 flex h-[39px] items-center gap-0.5 pr-[3.5px]" aria-label="Window controls">
   <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-9 items-center justify-center rounded-md" aria-label="Minimize window" onclick={() => windowAction('minimize')}>
     <ZIcon zType="lucideMinus" class="size-3.5" zStrokeWidth={1.5} />
   </ZButton>

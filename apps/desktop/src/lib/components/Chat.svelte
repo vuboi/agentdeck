@@ -1,13 +1,17 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { ZChatNavigator, ZIcon, createVirtualizer } from '@shival99/z-ui-svelte';
+  import { ZChatNavigator, createVirtualizer } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
-  import { activeSession, chat, openTranscript, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, chat, openTranscript, workspace } from '../sessions.svelte';
+  import { theme } from '../theme.svelte';
   import ChatBlock from './ChatBlock.svelte';
   import Composer from './Composer.svelte';
   import ToolbarActions from './ToolbarActions.svelte';
 
   let viewportEl: HTMLDivElement | undefined = $state();
+
+  const agentText = { claude: 'text-orange-500', codex: 'text-emerald-500', gemini: 'text-sky-500' } as const;
+  const agentName = (agent: string) => AGENTS.find((item) => item.value === agent)?.label ?? agent;
 
   // ---------- virtual list (same approach as ZChat) ----------
   // Pinned to the bottom, follows new rows only when already there, so a reader scrolled into
@@ -126,25 +130,30 @@
       <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" role="log" aria-live="polite" aria-label="Conversation">
         {#each $virtualizer.getVirtualItems() as row (row.key)}
           {@const message = chat.messages[row.index]}
+          {@const mine = message?.role === 'user'}
+          {@const agent = activeSession()?.agent ?? 'claude'}
           {#if message}
             <div class="absolute top-0 left-0 w-full" data-index={row.index} style:transform="translateY({row.start}px)" {@attach measureRow}>
-              <article class="mx-auto flex w-full max-w-3xl gap-3 pr-6 pl-12 py-3">
-                {#if message.role === 'assistant'}
-                  <div class="grid size-7 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
-                    <ZIcon zType="lucideSparkles" class="size-3.5" />
+              <!-- No avatars: your messages are a bubble (right side, or left in one-sided mode); the agent is just its coloured name. -->
+              <article class="mx-auto flex w-full max-w-3xl flex-col py-2.5 pr-6 pl-12 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
+                {#if mine}
+                  <div class="flex max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 py-2.5 text-sm {theme.chatLayout === 'split' ? 'rounded-br-md' : 'rounded-bl-md'}">
+                    {#each message.blocks as block}
+                      <ChatBlock {block} />
+                    {/each}
                   </div>
+                  <span class="mt-1 px-1 text-[10px] text-muted-foreground">{message.time}</span>
                 {:else}
-                  <div class="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-[10px]">JD</div>
-                {/if}
-                <div class="flex min-w-0 flex-1 flex-col gap-3">
-                  <div class="text-xs font-semibold">
-                    {message.role === 'assistant' ? 'Claude' : 'You'}
-                    <span class="ml-1.5 font-normal text-muted-foreground">{message.time}</span>
+                  <div class="mb-1.5 flex items-baseline gap-2 text-xs">
+                    <span class="font-semibold {agentText[agent]}">{agentName(agent)}</span>
+                    <span class="text-muted-foreground">{message.time}</span>
                   </div>
-                  {#each message.blocks as block}
-                    <ChatBlock {block} />
-                  {/each}
-                </div>
+                  <div class="flex w-full min-w-0 flex-col gap-3">
+                    {#each message.blocks as block}
+                      <ChatBlock {block} />
+                    {/each}
+                  </div>
+                {/if}
               </article>
             </div>
           {/if}

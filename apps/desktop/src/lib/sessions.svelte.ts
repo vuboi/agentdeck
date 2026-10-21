@@ -1,4 +1,4 @@
-import type { ZTreeNode } from '@shival99/z-ui-svelte';
+import type { ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
 import { clock, inTauri, listHistory, loadHistory, toBlocks, type HistorySession } from './history';
 import { messages as mockMessages, type Message } from './mock';
 
@@ -15,6 +15,8 @@ export type SessionItem = {
   projectId: string;
   title: string;
   agent: Agent;
+  /** Every agent that took part when an orchestrated chat mixes several; falls back to `[agent]`. */
+  agents?: Agent[];
   model: string;
   /** Git branch the session works on, if any. A conversation branch is `parentId`, not this. */
   gitBranch?: string;
@@ -28,6 +30,13 @@ export type SessionItem = {
   messageCount?: number;
   /** Created in the app and still empty. */
   draft?: boolean;
+};
+
+/** Brand logo per agent (z-icon brand set). */
+export const AGENT_ICON: Record<Agent, ZIconName> = {
+  claude: 'brandClaude' as ZIconName,
+  codex: 'brandOpenai' as ZIconName,
+  gemini: 'brandGemini' as ZIconName,
 };
 
 export const AGENTS: { value: Agent; label: string }[] = [
@@ -61,9 +70,9 @@ const mockWorkspace = {
   ] as Project[],
   sessions: [
     { id: 's1', projectId: 'p1', title: 'Build the settings panel', agent: 'claude', model: 'sonnet-5-5', gitBranch: 'main', status: 'working' },
-    { id: 's2', projectId: 'p1', title: 'Try it with Codex', agent: 'codex', model: 'gpt-6-luna', gitBranch: 'main', status: 'waiting', parentId: 's1' },
+    { id: 's2', projectId: 'p1', title: 'Try it with Codex', agent: 'codex', agents: ['claude', 'codex'], model: 'gpt-6-luna', gitBranch: 'main', status: 'waiting', parentId: 's1' },
     { id: 's3', projectId: 'p1', title: 'Codex, second attempt', agent: 'codex', model: 'gpt-5-6-luna', gitBranch: 'main', status: 'idle', parentId: 's2' },
-    { id: 's4', projectId: 'p1', title: 'Virtual chat list', agent: 'claude', model: 'opus-5-5', gitBranch: 'feat/chat-virtual', status: 'idle' },
+    { id: 's4', projectId: 'p1', title: 'Virtual chat list', agent: 'claude', agents: ['claude', 'codex', 'gemini'], model: 'opus-5-5', gitBranch: 'feat/chat-virtual', status: 'idle' },
     { id: 's5', projectId: 'p2', title: 'Svelte 5 z-tabs styling', agent: 'claude', model: 'sonnet-5-5', gitBranch: 'main', status: 'idle' },
     { id: 's6', projectId: 'p2', title: 'Review the carousel API', agent: 'gemini', model: 'gemini-3-pro', gitBranch: 'feat/carousel', status: 'idle' },
     { id: 's7', projectId: 'p3', title: 'Zoom check on mobile table', agent: 'claude', model: 'haiku-5-5', gitBranch: 'fix/mobile-zoom', status: 'waiting' },

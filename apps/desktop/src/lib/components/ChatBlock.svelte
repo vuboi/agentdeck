@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ZIcon, ZLoading, ZShowMore } from '@shival99/z-ui-svelte';
+  import { ZCard, ZIcon, ZLoading, ZShowMore } from '@shival99/z-ui-svelte';
   import type { Block } from '../mock';
 
   let { block }: { block: Block } = $props();
@@ -9,18 +9,18 @@
 </script>
 
 {#if block.kind === 'thinking'}
-  <details class="group rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground" open={false}>
-    <summary class="flex cursor-pointer list-none items-center gap-2 select-none">
-      <ZIcon zType="lucideBrain" class="size-3.5" />
-      <span class="font-medium">Thinking</span>
-      <ZIcon zType="lucideChevronRight" class="ml-auto size-3.5 transition-transform group-open:rotate-90" />
-    </summary>
-    <div class="mt-2 leading-relaxed">
-      <ZShowMore zMaxHeight={72} zButtonSize="sm" moreLabel="Show thinking" lessLabel="Hide">
-        <p class="m-0 whitespace-pre-wrap">{block.text}</p>
-      </ZShowMore>
-    </div>
-  </details>
+  <!-- ZCard animates the open and close of its body, so Thinking expands smoothly. -->
+  <ZCard collapsible collapsed zSize="sm" class="text-xs text-muted-foreground">
+    {#snippet header()}
+      <span class="flex items-center gap-2 font-medium">
+        <ZIcon zType="lucideBrain" class="size-3.5" />
+        Thinking
+      </span>
+    {/snippet}
+    <ZShowMore zMaxHeight={160} zButtonSize="sm" moreLabel="Show more" lessLabel="Show less">
+      <p class="m-0 whitespace-pre-wrap leading-relaxed">{block.text}</p>
+    </ZShowMore>
+  </ZCard>
 {:else if block.kind === 'response'}
   <div class="text-sm leading-relaxed text-foreground">
     <ZShowMore zMaxHeight={240} zButtonSize="sm">
