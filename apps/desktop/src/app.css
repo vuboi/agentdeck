@@ -91,3 +91,8 @@ body {
 .agent-divider[data-dragging='true']::before {
   opacity: 1;
 }
+
+/* Row that has its context menu open stays highlighted like a hover. */
+.z-tree [role='treeitem'][data-menu-row] {
+  background-color: var(--accent);
+}

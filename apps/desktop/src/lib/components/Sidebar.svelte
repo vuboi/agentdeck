@@ -58,6 +58,25 @@
   // ---------- row menu: right click, or the three dots that replace the agent tag on hover ----------
   let menu = $state<{ x: number; y: number; id: string; align: 'bottom-left' | 'bottom-right' } | null>(null);
   let menuOpen = $state(false);
+  let treeBox: HTMLDivElement | undefined = $state();
+
+  // Right click anywhere on a row, not just on its text. Everywhere else in the tree the browser's own
+  // menu (Inspect…) is suppressed too.
+  function onTreeContextMenu(event: MouseEvent) {
+    event.preventDefault();
+    const row = (event.target as HTMLElement).closest('[role="treeitem"]');
+    const id = row?.querySelector<HTMLElement>('[data-session]')?.dataset.session;
+    if (id) void openMenu(event, id);
+  }
+
+  // The row the menu belongs to stays highlighted while the menu is open.
+  $effect(() => {
+    const id = menuOpen ? menu?.id : undefined;
+    untrack(() => {
+      for (const row of treeBox?.querySelectorAll('[data-menu-row]') ?? []) row.removeAttribute('data-menu-row');
+      if (id) treeBox?.querySelector(`[data-session="${CSS.escape(id)}"]`)?.closest('[role="treeitem"]')?.setAttribute('data-menu-row', '');
+    });
+  });
   let searchOpen = $state(false);
   const menuSession = $derived(menu ? workspace.sessions.find((item) => item.id === menu!.id) : undefined);
 
@@ -155,7 +174,7 @@
         <ZIcon zType="lucidePlus" class="size-3.5" />
         New session
       </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-7 shrink-0 px-0" aria-label="New chat without a project" title="New chat without a project" onclick={() => newChat()}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="New chat without a project" title="New chat without a project" onclick={() => newChat()}>
         <ZIcon zType="lucideMessageSquarePlus" class="size-3.5" />
       </ZButton>
     </div>
@@ -168,7 +187,8 @@
     </div>
   {/if}
   <!-- Full width, so the tree's own scrollbar sits flush against the sidebar border. -->
-  <div bind:clientHeight={treeHeight} class="min-h-0 flex-1">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div bind:clientHeight={treeHeight} bind:this={treeBox} class="min-h-0 flex-1" oncontextmenu={onTreeContextMenu}>
     <ZTree
       {nodes}
       zSize="sm"
@@ -186,7 +206,7 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span
           class="relative flex min-w-0 flex-1 items-center gap-2"
-          oncontextmenu={(event) => data?.kind === 'session' && data.session && openMenu(event, data.session.id)}
+          data-session={data?.kind === 'session' ? data.session?.id : undefined}
         >
           {#if data?.kind === 'session' && data.session}
             <!-- A fork hangs off its parent: an elbow drops from the parent's dot to this row. -->
@@ -250,7 +270,7 @@
   <!-- One shared menu, anchored to a 1px box at the click (or at the three dots). -->
   {#if menu}
     <div class="pointer-events-none fixed z-50 size-px" style:left="{menu.x}px" style:top="{menu.y}px">
-      <ZDropdownMenu zItems={menuItems} bind:open={menuOpen} zPosition={menu.align} zOffset={4} zMinWidth={176}>
+      <ZDropdownMenu zItems={menuItems} bind:open={menuOpen} zPosition={menu.align} zOffset={4} zMinWidth={160} zContentClass="p-1 text-xs">
         <span class="block size-px"></span>
       </ZDropdownMenu>
     </div>
