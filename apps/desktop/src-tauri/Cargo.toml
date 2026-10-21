@@ -13,3 +13,4 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+ag-adapters.workspace = true

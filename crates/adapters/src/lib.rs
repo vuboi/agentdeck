@@ -1,4 +1,9 @@
-//! Stub library for the ag-adapters workspace crate.
+//! Adapters between AgentDeck and the agent CLIs.
+//!
+//! For now this crate holds the read-only history readers (`history`). The live adapters
+//! (Claude stream-json, ACP, Codex app-server) arrive with M3 and M5.
+
+pub mod history;
 
 /// Identifies this crate as part of the AgentDeck scaffold.
 pub const ADAPTERS_STUB: &str = "ag-adapters";

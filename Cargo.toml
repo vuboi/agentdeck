@@ -29,3 +29,10 @@ ag-adapters = { path = "crates/adapters" }
 ag-quota = { path = "crates/quota" }
 ag-orchestrator = { path = "crates/orchestrator" }
 ag-cdp = { path = "crates/cdp" }
+
+# Reading hundreds of chat files in a debug build is slow; keep these two optimised.
+[profile.dev.package.ag-adapters]
+opt-level = 3
+
+[profile.dev.package.serde_json]
+opt-level = 3

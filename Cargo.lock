@@ -17,6 +17,11 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 [[package]]
 name = "ag-adapters"
 version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "ag-cdp"
@@ -72,6 +77,7 @@ dependencies = [
 name = "agentdeck-desktop"
 version = "0.0.0"
 dependencies = [
+ "ag-adapters",
  "tauri",
  "tauri-build",
 ]

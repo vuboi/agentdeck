@@ -1,15 +1,30 @@
 <script lang="ts">
-  import { ZButton, ZIcon, ZTree } from '@shival99/z-ui-svelte';
+  import { untrack } from 'svelte';
+  import { ZButton, ZIcon, ZLoading, ZTree } from '@shival99/z-ui-svelte';
   import type { ZTreeNode } from '@shival99/z-ui-svelte';
-  import { buildTree, forkSession, newSession, workspace, type TreeData } from '../sessions.svelte';
+  import { buildTree, forkSession, history, newSession, workspace, type TreeData } from '../sessions.svelte';
 
   const nodes = $derived(buildTree());
+
+  // The tree is the only scroller (wheel, keyboard and virtualisation all work on it), sized to the space left.
+  let treeHeight = $state(400);
 
   // Everything starts open; a fork opens its parent so the new row is visible.
   let expanded = $state<string[]>([
     ...workspace.projects.map((project) => `project:${project.id}`),
     ...workspace.sessions.map((item) => `session:${item.id}`),
   ]);
+
+  // Everything stays open: the tree is virtualised, so a long list costs nothing.
+  $effect(() => {
+    if (!history.imported) return;
+    untrack(() => {
+      expanded = [
+        ...workspace.projects.map((project) => `project:${project.id}`),
+        ...workspace.sessions.filter((item) => workspace.sessions.some((child) => child.parentId === item.id)).map((item) => `session:${item.id}`),
+      ];
+    });
+  });
 
   let selected = $state<string[]>([]);
   $effect(() => {
@@ -29,6 +44,12 @@
 
   const statusColor = { working: 'bg-success', waiting: 'bg-warning', idle: 'bg-muted-foreground/40' } as const;
   const agentLabel = (agent: string) => agent[0].toUpperCase() + agent.slice(1);
+  // Each agent has its own tint so rows are readable at a glance.
+  const agentTag = {
+    claude: 'bg-orange-500/15 text-orange-500',
+    codex: 'bg-emerald-500/15 text-emerald-500',
+    gemini: 'bg-sky-500/15 text-sky-500',
+  } as const;
 </script>
 
 <aside class="flex h-full min-w-0 flex-col bg-sidebar" aria-label="Sessions">
@@ -46,16 +67,21 @@
   </div>
 
   <div class="px-4 pt-3 pb-1.5 font-mono text-[10px] tracking-widest text-muted-foreground">PROJECTS</div>
-  <!-- The scroll container spans the whole sidebar so its scrollbar sits flush against the border; padding lives inside. -->
-  <div class="min-h-0 flex-1 overflow-y-auto">
-    <div class="px-1.5 pb-2">
+  {#if history.loading && workspace.sessions.length === 0}
+    <div class="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground" role="status">
+      <ZLoading zSpinner="orbit" zSize="xs" zColor="primary" />
+      Loading your Claude and Codex history…
+    </div>
+  {/if}
+  <!-- Full width, so the tree's own scrollbar sits flush against the sidebar border. -->
+  <div bind:clientHeight={treeHeight} class="min-h-0 flex-1">
     <ZTree
       {nodes}
       zSize="sm"
       zShowLine
       zSelectable
       zExpandOnClick
-      zMaxHeight="none"
+      zMaxHeight={treeHeight}
       zLabel="Projects and sessions"
       bind:expanded
       bind:selected
@@ -67,7 +93,7 @@
           {#if data?.kind === 'session' && data.session}
             <span class="size-1.5 shrink-0 rounded-full {statusColor[data.session.status]}" aria-label={data.session.status}></span>
             <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}">{ctx.node.label}</span>
-            <span class="shrink-0 text-[10px] text-muted-foreground group-hover/row:hidden">{agentLabel(data.session.agent)}</span>
+            <span class="shrink-0 rounded px-1.5 py-px text-[10px] font-medium group-hover/row:hidden {agentTag[data.session.agent]}">{agentLabel(data.session.agent)}</span>
             <button
               type="button"
               class="hidden shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground group-hover/row:inline-flex"
@@ -82,12 +108,11 @@
             </button>
           {:else}
             <ZIcon zType={ctx.node.icon ?? 'lucideFolder'} class="size-3.5 shrink-0 text-muted-foreground" />
-            <span class="min-w-0 flex-1 truncate {data?.kind === 'project' ? 'font-medium' : 'text-muted-foreground'}">{ctx.node.label}</span>
+            <span title={data?.path} class="min-w-0 flex-1 truncate {data?.kind === 'project' ? 'font-medium' : 'text-muted-foreground'}">{ctx.node.label}</span>
           {/if}
         </span>
       {/snippet}
     </ZTree>
-    </div>
   </div>
 
   <div class="flex h-11 shrink-0 items-center gap-2 px-3 text-xs">

@@ -17,4 +17,5 @@ pnpm test
 pnpm gen:types  # regenerate packages/protocol-ts from the Rust protocol types
 ```
 
-Status: M0 (scaffold) and M1 (protocol + event store) are done; the UI is a mock shell for now.
+Status: M0 (scaffold), M1 (protocol + event store) and M3b (read-only import of Claude Code and Codex history) are done.
+The desktop app lists your existing Claude Code / Codex chats by project and opens them in the chat view; live agent sessions come next (M2, M3).

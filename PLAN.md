@@ -169,6 +169,7 @@ Mỗi module có Definition of Done (DoD). Làm tuần tự, mỗi module = 1 co
 - Module `history` trong `crates/adapters`: reader Claude Code (`~/.claude/projects/**/<uuid>.jsonl`) và Codex (`~/.codex/sessions/**/rollout-*.jsonl`), map sang `EventKind` (xem mục 3b).
 - Index nhanh (title, cwd, thời gian) rồi parse thân khi mở; session import là read-only, hiển thị cùng format với session thật; fork nhận diện qua chuỗi `parentUuid`.
 - **DoD**: test với fixture đã ẩn nội dung; import 1 session Claude + 1 session Codex thật và xem trong UI.
+- **Trạng thái**: reader Claude + Codex xong (`crates/adapters/src/history`), lệnh Tauri `history_list` / `history_load` (chỉ nhận path nằm trong 2 thư mục history), sidebar và chat hiển thị lịch sử thật. Fork nhận diện bằng cách hai session chung uuid tin nhắn đầu (resume/fork của Claude Code); sau compaction thì giữ phần tin nhắn cũ trước điểm đứt `parentUuid`. Chạy thử trên máy thật: `cargo run -p ag-adapters --example history_stats` (chỉ in số lượng, không in nội dung). Codex chưa thấy dấu hiệu fork trong file, nên chưa nhận diện.
 
 ### M5 — Codex + Gemini + MCP + worktree
 - Codex: `codex app-server` (JSON-RPC) hoặc `codex-acp`; Gemini: ACP. Antigravity: verify khả năng headless, nếu không có thì đánh dấu deferred.

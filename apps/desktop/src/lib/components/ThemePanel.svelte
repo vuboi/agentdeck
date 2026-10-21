@@ -38,7 +38,7 @@
         zSize="sm"
         zTabsOnly
         zNavFullWidth
-        class="w-full [&_.z-tab-item]:flex-1"
+        class="w-full [&_.z-tab-item]:flex-1 [&_.z-tab-item-label]:text-center"
         zCache={false}
         activeTab={theme.mode}
         onTabChange={(value) => (theme.mode = value as Mode)}
