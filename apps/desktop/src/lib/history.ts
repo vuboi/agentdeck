@@ -52,3 +52,13 @@ export function toBlocks(blocks: HistoryBlock[]): Block[] {
       : block,
   );
 }
+
+/** Renames the session in Claude's or Codex's own storage. Rejects with a readable message. */
+export async function renameHistory(source: HistorySource, path: string, title: string): Promise<void> {
+  if (inTauri()) await invoke<void>('history_rename', { source, path, title });
+}
+
+/** Moves the session to ~/.agentdeck/trash, so it disappears from Claude / Codex as well. */
+export async function deleteHistory(source: HistorySource, path: string): Promise<void> {
+  if (inTauri()) await invoke<void>('history_delete', { source, path });
+}

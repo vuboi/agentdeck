@@ -315,3 +315,73 @@ fn missing_folders_yield_no_sessions() {
     let home = Home::new("empty");
     assert!(list_all(&home.roots()).is_empty());
 }
+
+fn two_sessions(home: &Home) -> (PathBuf, PathBuf) {
+    let claude = home.write(
+        ".claude/projects/demo/99999999.jsonl",
+        &[
+            user("a", None, json!("hi"), "2026-01-01T00:00:00Z"),
+            assistant("b", "a", json!([{"type":"text","text":"yo"}])),
+        ],
+    );
+    let codex = home.write(
+        ".codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-0198a1b2-c3d4-e5f6-a7b8-c9d0e1f2a3b4.jsonl",
+        &[
+            json!({"timestamp":"2026-01-01T00:00:00Z","type":"session_meta",
+                   "payload":{"id":"0198a1b2-c3d4-e5f6-a7b8-c9d0e1f2a3b4","cwd":"C:\\work\\demo","timestamp":"2026-01-01T00:00:00Z"}}),
+            json!({"timestamp":"t","type":"response_item",
+                   "payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first prompt"}]}}),
+        ],
+    );
+    // Both files are old enough to count as closed.
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3_600);
+    for path in [&claude, &codex] {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+    (claude, codex)
+}
+
+#[test]
+fn rename_changes_the_title_the_tools_and_we_read() {
+    let home = Home::new("rename");
+    let (claude, codex) = two_sessions(&home);
+    rename(&home.roots(), Source::Claude, &claude, "  Claude renamed ").unwrap();
+    rename(&home.roots(), Source::Codex, &codex, "Codex renamed").unwrap();
+
+    let sessions = list_all(&home.roots());
+    assert!(sessions.iter().any(|s| s.title == "Claude renamed"));
+    assert!(sessions.iter().any(|s| s.title == "Codex renamed"));
+    assert!(rename(&home.roots(), Source::Claude, &claude, "  ").is_err());
+}
+
+#[test]
+fn delete_moves_the_file_to_the_trash_and_refuses_busy_or_foreign_files() {
+    let home = Home::new("delete");
+    let (claude, codex) = two_sessions(&home);
+    let roots = home.roots();
+
+    let moved = delete(&roots, Source::Claude, &claude).unwrap();
+    assert!(!claude.exists() && moved.exists() && moved.starts_with(&roots.trash));
+    delete(&roots, Source::Codex, &codex).unwrap();
+    assert!(list_all(&roots).is_empty());
+
+    // Just written: probably open in a running CLI.
+    let fresh = home.write(
+        ".claude/projects/demo/77777777.jsonl",
+        &[user("a", None, json!("hi"), "2026-01-01T00:00:00Z")],
+    );
+    assert!(matches!(
+        delete(&roots, Source::Claude, &fresh),
+        Err(HistoryError::InUse)
+    ));
+    let outside = home.write("notes/secret.jsonl", &[json!({})]);
+    assert!(matches!(
+        delete(&roots, Source::Claude, &outside),
+        Err(HistoryError::OutsideRoots)
+    ));
+}

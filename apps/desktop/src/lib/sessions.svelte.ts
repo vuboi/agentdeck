@@ -1,5 +1,14 @@
 import type { ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
-import { clock, inTauri, listHistory, loadHistory, toBlocks, type HistorySession } from './history';
+import {
+  clock,
+  deleteHistory,
+  inTauri,
+  listHistory,
+  loadHistory,
+  renameHistory,
+  toBlocks,
+  type HistorySession,
+} from './history';
 import { messages as mockMessages, type Message } from './mock';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
@@ -87,27 +96,84 @@ export const workspace = $state(
 export const activeSession = () => workspace.sessions.find((item) => item.id === workspace.activeId);
 export const projectOf = (session: SessionItem) => workspace.projects.find((item) => item.id === session.projectId);
 
-export function newSession(projectId = activeSession()?.projectId ?? workspace.projects[0].id) {
+export type Mention = { kind: 'session' | 'project' | 'ai'; id: string; label: string };
+
+/** What was typed but not sent, per session: switch away and back and it is still there. */
+export const drafts = $state<Record<string, string>>({});
+export const draftMentions = $state<Record<string, Mention[]>>({});
+/** Messages of sessions that live only in this app (new chats), by session id. */
+const localMessages: Record<string, Message[]> = {};
+const mockIds = new Set(mockWorkspace.sessions.map((item) => item.id));
+
+/** Sessions that belong to no project: a plain chat with the computer. */
+export const NO_PROJECT = 'none';
+const nextId = () => `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+function ensureNoProject() {
+  if (!workspace.projects.some((item) => item.id === NO_PROJECT)) {
+    workspace.projects.unshift({ id: NO_PROJECT, name: 'Chats', path: '' });
+  }
+}
+
+/**
+ * Like Codex: one untouched "New session" is reused instead of piling up empty ones, so pressing the
+ * button from another session brings you back to the draft you left, input included. Only once a
+ * message has been sent does the button start a new one.
+ */
+export function newSession(projectId = activeSession()?.projectId ?? workspace.projects[0]?.id ?? NO_PROJECT) {
+  if (projectId === NO_PROJECT) ensureNoProject();
+  const empty = workspace.sessions.find((item) => item.draft);
+  if (empty) {
+    empty.projectId = projectId;
+    workspace.activeId = empty.id;
+    return;
+  }
   const base = workspace.sessions.find((item) => item.projectId === projectId);
-  const id = `s${workspace.sessions.length + 1}`;
+  const id = nextId();
   workspace.sessions.push({
     id,
     projectId,
     title: 'New session',
     agent: 'claude',
     model: 'sonnet-5-5',
-    gitBranch: base?.gitBranch,
+    gitBranch: projectId === NO_PROJECT ? undefined : base?.gitBranch,
     status: 'idle',
     draft: true,
   });
   workspace.activeId = id;
 }
 
+/** A new chat outside any project. */
+export function newChat() {
+  newSession(NO_PROJECT);
+}
+
+/** Adds the typed message to the open session. The first message turns a draft into a real session. */
+export function sendMessage(text: string) {
+  const session = activeSession();
+  const body = text.trim();
+  if (!session || !body) return;
+  if (chat.messages === mockMessages) chat.messages = [...mockMessages];
+  chat.messages.push({
+    id: nextId(),
+    role: 'user',
+    time: clock(new Date().toISOString()),
+    blocks: [{ kind: 'response', text: body }],
+  });
+  // Imported sessions reload from disk; sessions that only exist here keep their messages in memory.
+  if (!session.path) localMessages[session.id] = chat.messages;
+  if (session.draft) {
+    session.draft = false;
+    const firstLine = body.split('\n')[0];
+    session.title = firstLine.length > 60 ? `${firstLine.slice(0, 57)}…` : firstLine;
+  }
+}
+
 /** A fork keeps the project and branch of its parent and nests under it in the tree. */
 export function forkSession(sourceId: string) {
   const source = workspace.sessions.find((item) => item.id === sourceId);
   if (!source) return;
-  const id = `s${workspace.sessions.length + 1}`;
+  const id = nextId();
   workspace.sessions.push({ ...source, id, title: `${source.title} (fork)`, status: 'idle', parentId: source.id });
   workspace.activeId = id;
 }
@@ -195,7 +261,7 @@ function applyHistory(found: HistorySession[]) {
   const projects: Project[] = [];
   for (const item of found) {
     if (!projectIds.has(item.cwd)) {
-      const id = `p${projects.length + 1}`;
+      const id = `dir:${item.cwd}`;
       projectIds.set(item.cwd, id);
       projects.push({ id, name: item.cwd ? folderName(item.cwd) : 'Unknown', path: item.cwd });
     }
@@ -218,9 +284,16 @@ function applyHistory(found: HistorySession[]) {
     sessions.filter((item) => item.projectId === projectId).reduce((max, item) => (item.updatedAt ?? '') > max ? item.updatedAt ?? '' : max, '');
   projects.sort((a, b) => latest(b.id).localeCompare(latest(a.id)));
 
+  // Sessions that only exist here (drafts, new chats) survive the import.
+  const local = workspace.sessions.filter((item) => !item.path && (item.draft || localMessages[item.id]));
+  const noProject = workspace.projects.find((item) => item.id === NO_PROJECT);
+  const keepActive = local.some((item) => item.id === workspace.activeId) ? workspace.activeId : undefined;
+  if (noProject && local.some((item) => item.projectId === NO_PROJECT)) projects.unshift(noProject);
+  sessions.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+
   workspace.projects = projects;
-  workspace.sessions = sessions;
-  workspace.activeId = sessions.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0].id;
+  workspace.sessions = [...sessions, ...local.filter((item) => projects.some((project) => project.id === item.projectId))];
+  workspace.activeId = keepActive ?? sessions[0].id;
 }
 
 let transcriptToken = 0;
@@ -229,12 +302,12 @@ let transcriptToken = 0;
 export async function openTranscript(session: SessionItem | undefined) {
   const token = ++transcriptToken;
   chat.error = '';
-  if (!session || session.draft) {
+  if (!session) {
     chat.messages = [];
     return;
   }
   if (!session.path || !session.source) {
-    chat.messages = mockMessages;
+    chat.messages = localMessages[session.id] ?? (mockIds.has(session.id) ? mockMessages : []);
     return;
   }
   chat.loading = true;
@@ -253,5 +326,44 @@ export async function openTranscript(session: SessionItem | undefined) {
     chat.error = String(error);
   } finally {
     if (token === transcriptToken) chat.loading = false;
+  }
+}
+
+/** The cached index mirrors the files on disk, so a rename or delete has to reach it too. */
+function patchCache(change: (list: HistorySession[]) => HistorySession[]) {
+  try {
+    const list = JSON.parse(localStorage.getItem(CACHE_KEY) ?? '[]') as HistorySession[];
+    localStorage.setItem(CACHE_KEY, JSON.stringify(change(list)));
+  } catch {
+    // Only an optimisation.
+  }
+}
+
+/** Renames the chat; for Claude and Codex sessions the name is written into the tool's own storage. */
+export async function renameSession(id: string, title: string) {
+  const session = workspace.sessions.find((item) => item.id === id);
+  const next = title.trim();
+  if (!session || !next) return;
+  if (session.path && session.source) await renameHistory(session.source, session.path, next);
+  session.title = next;
+  patchCache((list) => list.map((item) => (item.id === id ? { ...item, title: next } : item)));
+}
+
+/** Deletes the chat; Claude and Codex sessions are moved to ~/.agentdeck/trash, so they vanish there too. */
+export async function deleteSession(id: string) {
+  const session = workspace.sessions.find((item) => item.id === id);
+  if (!session) return;
+  if (session.path && session.source) await deleteHistory(session.source, session.path);
+  // Forks of it move up to its own parent.
+  for (const child of workspace.sessions.filter((item) => item.parentId === id)) child.parentId = session.parentId;
+  workspace.sessions = workspace.sessions.filter((item) => item.id !== id);
+  delete drafts[id];
+  delete draftMentions[id];
+  delete localMessages[id];
+  patchCache((list) => list.filter((item) => item.id !== id));
+  if (workspace.activeId === id) {
+    const next = workspace.sessions.find((item) => item.projectId === session.projectId) ?? workspace.sessions[0];
+    if (next) workspace.activeId = next.id;
+    else newSession(session.projectId);
   }
 }

@@ -2,14 +2,29 @@
   import { untrack } from 'svelte';
   import { ZButton, ZCommand, ZIcon } from '@shival99/z-ui-svelte';
   import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
-  import { activeSession, AGENTS, MODELS, projectOf, workspace, type Agent, type Effort, type Permission } from '../sessions.svelte';
+  import {
+    activeSession,
+    AGENTS,
+    draftMentions,
+    drafts,
+    MODELS,
+    projectOf,
+    sendMessage,
+    workspace,
+    type Agent,
+    type Effort,
+    type Mention,
+    type Permission,
+  } from '../sessions.svelte';
   import ModelPicker from './ModelPicker.svelte';
 
-  type Mention = { kind: 'session' | 'project' | 'ai'; id: string; label: string };
-
-  let draft = $state('');
+  // What is typed belongs to the open session: switch away and back and it is still there.
+  const sessionId = $derived(workspace.activeId);
+  const draft = $derived(drafts[sessionId] ?? '');
+  const mentions = $derived(draftMentions[sessionId] ?? []);
+  const setDraft = (value: string) => (drafts[sessionId] = value);
+  const setMentions = (value: Mention[]) => (draftMentions[sessionId] = value);
   let area: HTMLTextAreaElement | undefined = $state();
-  let mentions = $state<Mention[]>([]);
   let paletteOpen = $state(false);
 
   // Agent + model of this message. They follow the active session and can be overridden with @AI.
@@ -78,9 +93,9 @@
       const [nextAgent, nextModel] = picked.id.split('/');
       agent = nextAgent as Agent;
       model = nextModel;
-      mentions = [...mentions.filter((entry) => entry.kind !== 'ai'), picked];
+      setMentions([...mentions.filter((entry) => entry.kind !== 'ai'), picked]);
     } else if (!mentions.some((entry) => entry.kind === picked.kind && entry.id === picked.id)) {
-      mentions = [...mentions, picked];
+      setMentions([...mentions, picked]);
     }
   }
 
@@ -96,10 +111,18 @@
     area.style.height = `${Math.min(area.scrollHeight, 180)}px`;
   }
 
+  // The textarea height follows the text of whichever session is open.
+  $effect(() => {
+    void sessionId;
+    void draft;
+    untrack(() => queueMicrotask(resize));
+  });
+
   function submit() {
-    draft = '';
-    mentions = [];
-    resize();
+    if (!draft.trim()) return;
+    sendMessage(draft);
+    setDraft('');
+    setMentions([]);
   }
 
   function onKeydown(event: KeyboardEvent) {
@@ -125,7 +148,7 @@
             type="button"
             class="grid size-4 cursor-pointer place-items-center rounded hover:bg-primary/20"
             aria-label="Remove {mention.label}"
-            onclick={() => (mentions = mentions.filter((entry) => entry !== mention))}
+            onclick={() => setMentions(mentions.filter((entry) => entry !== mention))}
           >
             <ZIcon zType="lucideX" class="size-3" />
           </button>
@@ -136,7 +159,7 @@
 
   <textarea
     bind:this={area}
-    bind:value={draft}
+    bind:value={() => draft, setDraft}
     oninput={resize}
     onkeydown={onKeydown}
     rows="1"

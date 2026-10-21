@@ -18,11 +18,32 @@ fn wanted(line: &str) -> bool {
     line.contains("\"type\":\"response_item\"") || line.contains("\"type\":\"session_meta\"")
 }
 
-pub(super) fn list(root: &Path) -> Vec<HistorySession> {
+pub(super) fn list(root: &Path, index: &Path) -> Vec<HistorySession> {
+    let names = thread_names(index);
     jsonl_files(root)
         .iter()
         .filter_map(|path| index_file(path))
+        .map(|mut session| {
+            // A name given in Codex (or by AgentDeck's rename) wins over the first prompt.
+            let id = session.id.strip_prefix("codex:").unwrap_or_default();
+            if let Some(name) = names.get(id) {
+                session.title = name.clone();
+            }
+            session
+        })
         .collect()
+}
+
+/// `session_index.jsonl` is append-only; the last line for an id is its current name.
+fn thread_names(index: &Path) -> HashMap<String, String> {
+    let mut names = HashMap::new();
+    for line in read_lines(index, |_| true).unwrap_or_default() {
+        let (id, name) = (str_of(&line, "id"), str_of(&line, "thread_name"));
+        if !id.is_empty() && !name.is_empty() {
+            names.insert(id.to_owned(), name.to_owned());
+        }
+    }
+    names
 }
 
 fn index_file(path: &Path) -> Option<HistorySession> {

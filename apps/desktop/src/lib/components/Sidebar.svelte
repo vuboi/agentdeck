@@ -1,9 +1,21 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
-  import { ZButton, ZIcon, ZLoading, ZTree } from '@shival99/z-ui-svelte';
-  import type { ZTreeNode } from '@shival99/z-ui-svelte';
+  import { tick, untrack } from 'svelte';
+  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree } from '@shival99/z-ui-svelte';
+  import type { ZDropdownMenuItem, ZTreeNode } from '@shival99/z-ui-svelte';
   import AgentStack from './AgentStack.svelte';
-  import { buildTree, forkSession, history, newSession, workspace, type TreeData } from '../sessions.svelte';
+  import SearchPalette from './SearchPalette.svelte';
+  import {
+    buildTree,
+    deleteSession,
+    forkSession,
+    history,
+    newChat,
+    newSession,
+    NO_PROJECT,
+    renameSession,
+    workspace,
+    type TreeData,
+  } from '../sessions.svelte';
 
   const nodes = $derived(buildTree());
 
@@ -43,6 +55,80 @@
     expanded = [...new Set([...expanded, `session:${sessionId}`])];
   }
 
+  // ---------- row menu: right click, or the three dots that replace the agent tag on hover ----------
+  let menu = $state<{ x: number; y: number; id: string; align: 'bottom-left' | 'bottom-right' } | null>(null);
+  let menuOpen = $state(false);
+  let searchOpen = $state(false);
+  const menuSession = $derived(menu ? workspace.sessions.find((item) => item.id === menu!.id) : undefined);
+
+  async function openMenu(event: MouseEvent, id: string, anchor?: HTMLElement) {
+    event.preventDefault();
+    event.stopPropagation();
+    menuOpen = false;
+    if (anchor) {
+      const rect = anchor.getBoundingClientRect();
+      menu = { x: rect.right, y: rect.bottom, id, align: 'bottom-right' };
+    } else {
+      menu = { x: event.clientX, y: event.clientY, id, align: 'bottom-left' };
+    }
+    await tick();
+    menuOpen = true;
+  }
+
+  const menuItems = $derived<ZDropdownMenuItem[]>([
+    { label: 'Rename', icon: 'lucidePencil', onClick: () => askRename() },
+    { label: 'Fork', icon: 'lucideGitFork', onClick: () => menu && fork(menu.id) },
+    { label: 'Delete', icon: 'lucideTrash2', divide: 'before', class: 'text-destructive', onClick: () => askDelete() },
+  ]);
+
+  // ---------- rename / delete (also written into the original tool's own storage) ----------
+  let renaming = $state(false);
+  let deleting = $state(false);
+  let target = $state('');
+  let title = $state('');
+  let busy = $state(false);
+  let failure = $state('');
+  const targetSession = $derived(workspace.sessions.find((item) => item.id === target));
+  const synced = $derived(Boolean(targetSession?.path));
+  const toolName = $derived(targetSession?.source === 'codex' ? 'Codex' : 'Claude');
+
+  function askRename() {
+    if (!menu) return;
+    target = menu.id;
+    title = menuSession?.title ?? '';
+    failure = '';
+    renaming = true;
+  }
+
+  function askDelete() {
+    if (!menu) return;
+    target = menu.id;
+    failure = '';
+    deleting = true;
+  }
+
+  async function run(action: () => Promise<void>, close: () => void) {
+    busy = true;
+    failure = '';
+    try {
+      await action();
+      close();
+    } catch (error) {
+      failure = String(error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  const doRename = () => run(() => renameSession(target, title), () => (renaming = false));
+  const doDelete = () => run(() => deleteSession(target), () => (deleting = false));
+
+  const projectId = (nodeId: string) => nodeId.replace(/^project:/, '');
+  function addSession(id: string) {
+    if (id === NO_PROJECT) newChat();
+    else newSession(id);
+  }
+
   const statusColor = { working: 'bg-success', waiting: 'bg-warning', idle: 'bg-muted-foreground/40' } as const;
   const agentLabel = (agent: string) => agent[0].toUpperCase() + agent.slice(1);
   // Each agent has its own tint so rows are readable at a glance.
@@ -58,16 +144,23 @@
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3" data-tauri-drag-region>
     <span class="grid size-5 place-items-center rounded-md bg-primary text-[11px] font-bold text-primary-foreground" data-tauri-drag-region>A</span>
     <span class="text-xs font-semibold" data-tauri-drag-region>AgentDeck</span>
-  </div>
-
-  <div class="px-2 pt-2">
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-full justify-start gap-2 px-2 text-xs" onclick={() => newSession()}>
-      <ZIcon zType="lucidePlus" class="size-3.5" />
-      New session
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto h-6 w-6 px-0" aria-label="Search chats (Ctrl+K)" title="Search chats (Ctrl+K)" onclick={() => (searchOpen = true)}>
+      <ZIcon zType="lucideSearch" class="size-3.5" />
     </ZButton>
   </div>
 
-  <div class="px-4 pt-3 pb-1.5 font-mono text-[10px] tracking-widest text-muted-foreground">PROJECTS</div>
+  <div class="border-b border-border px-2 py-2">
+    <div class="flex gap-1">
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 min-w-0 flex-1 justify-start gap-2 px-2 text-xs" onclick={() => newSession()}>
+        <ZIcon zType="lucidePlus" class="size-3.5" />
+        New session
+      </ZButton>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-7 shrink-0 px-0" aria-label="New chat without a project" title="New chat without a project" onclick={() => newChat()}>
+        <ZIcon zType="lucideMessageSquarePlus" class="size-3.5" />
+      </ZButton>
+    </div>
+  </div>
+
   {#if history.loading && workspace.sessions.length === 0}
     <div class="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground" role="status">
       <ZLoading zSpinner="orbit" zSize="xs" zColor="primary" />
@@ -90,13 +183,23 @@
     >
       {#snippet node(ctx)}
         {@const data = ctx.node.data}
-        <span class="relative flex min-w-0 flex-1 items-center gap-2">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <span
+          class="relative flex min-w-0 flex-1 items-center gap-2"
+          oncontextmenu={(event) => data?.kind === 'session' && data.session && openMenu(event, data.session.id)}
+        >
           {#if data?.kind === 'session' && data.session}
             <!-- A fork hangs off its parent: an elbow drops from the parent's dot to this row. -->
             {#if data.session.parentId}
               <span class="pointer-events-none absolute bottom-1/2 -left-[11.5px] h-[23px] w-[9.5px] border-b border-l border-muted-foreground/40" aria-hidden="true"></span>
             {/if}
-            <span class="size-1.5 shrink-0 rounded-full {statusColor[data.session.status]}" aria-label={data.session.status}></span>
+            {#if data.session.status === 'working'}
+              <span class="grid size-3 shrink-0 place-items-center text-success" role="status" aria-label="Running">
+                <ZLoading zSpinner="orbit" zSize="2xs" zColor="current" />
+              </span>
+            {:else}
+              <span class="size-1.5 shrink-0 rounded-full {statusColor[data.session.status]}" aria-label={data.session.status}></span>
+            {/if}
             <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}">{ctx.node.label}</span>
             <!-- One agent: a coloured name. Several agents in one chat: overlapping logos. -->
             {#if (data.session.agents?.length ?? 1) > 1}
@@ -107,18 +210,29 @@
             <button
               type="button"
               class="hidden shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground group-hover/row:inline-flex"
-              aria-label="Fork session"
-              title="Fork session"
-              onclick={(event) => {
-                event.stopPropagation();
-                fork(data.session!.id);
-              }}
+              aria-label="Session actions"
+              aria-haspopup="menu"
+              onclick={(event) => openMenu(event, data.session!.id, event.currentTarget)}
             >
-              <ZIcon zType="lucideGitFork" class="size-3.5" />
+              <ZIcon zType="lucideEllipsis" class="size-3.5" />
             </button>
           {:else}
             <ZIcon zType={ctx.node.icon ?? 'lucideFolder'} class="size-3.5 shrink-0 text-muted-foreground" />
             <span title={data?.path} class="min-w-0 flex-1 truncate {data?.kind === 'project' ? 'font-medium' : 'text-muted-foreground'}">{ctx.node.label}</span>
+            {#if data?.kind === 'project'}
+              <button
+                type="button"
+                class="hidden shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground group-hover/row:inline-flex"
+                aria-label="New session in {ctx.node.label}"
+                title="New session"
+                onclick={(event) => {
+                  event.stopPropagation();
+                  addSession(projectId(ctx.node.id));
+                }}
+              >
+                <ZIcon zType="lucidePlus" class="size-3.5" />
+              </button>
+            {/if}
           {/if}
         </span>
       {/snippet}
@@ -132,4 +246,39 @@
       <ZIcon zType="lucideEllipsis" class="size-3.5" />
     </ZButton>
   </div>
+
+  <!-- One shared menu, anchored to a 1px box at the click (or at the three dots). -->
+  {#if menu}
+    <div class="pointer-events-none fixed z-50 size-px" style:left="{menu.x}px" style:top="{menu.y}px">
+      <ZDropdownMenu zItems={menuItems} bind:open={menuOpen} zPosition={menu.align} zOffset={4} zMinWidth={176}>
+        <span class="block size-px"></span>
+      </ZDropdownMenu>
+    </div>
+  {/if}
 </aside>
+
+<SearchPalette bind:open={searchOpen} />
+
+<ZModal bind:open={renaming} zTitle="Rename chat" zWidth="420px" zOkText="Save" zCancelText="Cancel" zLoading={busy} zOkDisabled={!title.trim()} onOk={doRename}>
+  <div class="flex flex-col gap-2">
+    <ZInput bind:value={title} zPlaceholder="Chat name" onEnter={doRename} />
+    {#if synced}
+      <p class="text-xs text-muted-foreground">The new name is also written to the original {toolName} session.</p>
+    {/if}
+    {#if failure}<p class="text-xs text-destructive" role="alert">{failure}</p>{/if}
+  </div>
+</ZModal>
+
+<ZModal bind:open={deleting} zTitle="Delete chat" zWidth="440px" zOkText="Delete" zOkDestructive zCancelText="Cancel" zLoading={busy} onOk={doDelete}>
+  <div class="flex flex-col gap-2 text-sm">
+    <p>Delete “{targetSession?.title}”?</p>
+    <p class="text-xs text-muted-foreground">
+      {#if synced}
+        It is removed from {toolName} too: the file is moved to <code>~/.agentdeck/trash</code>, so it can still be restored by hand. A chat open in a running CLI cannot be deleted.
+      {:else}
+        This chat only exists in AgentDeck.
+      {/if}
+    </p>
+    {#if failure}<p class="text-xs text-destructive" role="alert">{failure}</p>{/if}
+  </div>
+</ZModal>

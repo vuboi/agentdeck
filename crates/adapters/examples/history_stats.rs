@@ -38,6 +38,15 @@ fn main() {
             Ok(messages) if messages.is_empty() => empty += 1,
             Ok(messages) => {
                 ok += 1;
+                let users = messages.iter().filter(|m| m.role == "user").count();
+                if users < 2 && messages.len() > 4 {
+                    println!(
+                        "{:?} {}: {users} user / {} messages",
+                        session.source,
+                        session.id,
+                        messages.len()
+                    );
+                }
                 for message in &messages {
                     blocks += message.blocks.len();
                     commands += message

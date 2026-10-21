@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { ZChatNavigator, createVirtualizer } from '@shival99/z-ui-svelte';
+  import { ZButton, ZChatNavigator, ZIcon, ZLoading, createVirtualizer } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
   import { activeSession, AGENTS, chat, openTranscript, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
@@ -90,6 +90,11 @@
     return Math.max(0, turnRows.filter((row) => row <= first).length - 1);
   });
 
+  // Jump-to-bottom button: shown while scrolled up or while the agent runs. Idle = arrow; running =
+  // a loading ring that turns into the arrow on hover.
+  const atEnd = $derived($virtualizer.isAtEnd(1));
+  const running = $derived(activeSession()?.status === 'working');
+
   function jumpToTurn(turn: number) {
     const row = turnRows[turn];
     if (row !== undefined) $virtualizer.scrollToIndex(row, { align: 'start', behavior: 'smooth' });
@@ -107,12 +112,33 @@
   </header>
 
   <div class="relative flex min-h-0 flex-1 flex-col">
-    <ZChatNavigator
-      class="absolute top-1/2 left-1 z-10 w-6 -translate-y-1/2"
-      turns={navigatorTurns}
-      activeIndex={activeTurn}
-      onSelect={jumpToTurn}
-    />
+    <!-- Keyed by session so the ruler never carries scroll/hover state over from the previous chat. -->
+    {#key workspace.activeId}
+      <ZChatNavigator
+        class="absolute top-1/2 left-1 z-10 w-6 -translate-y-1/2"
+        turns={navigatorTurns}
+        activeIndex={activeTurn}
+        onSelect={jumpToTurn}
+      />
+    {/key}
+
+    {#if !atEnd || running}
+      <ZButton
+        zWave={false}
+        zType="outline"
+        class="group/jump absolute bottom-3 left-1/2 z-20 size-8 -translate-x-1/2 rounded-full bg-card p-0 shadow-md"
+        aria-label="Scroll to latest"
+        title="Scroll to latest"
+        onclick={() => $virtualizer.scrollToEnd()}
+      >
+        {#if running}
+          <ZLoading class="group-hover/jump:hidden" zSpinner="conic" zSize="xs" zColor="primary" />
+          <ZIcon zType="lucideArrowDown" class="hidden size-4 group-hover/jump:block" />
+        {:else}
+          <ZIcon zType="lucideArrowDown" class="size-4" />
+        {/if}
+      </ZButton>
+    {/if}
 
     <!-- Same fade as ShowMore: messages dissolve into the page just above the composer instead of being cut. -->
     <div

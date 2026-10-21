@@ -1,11 +1,13 @@
-//! Read-only readers for the session files Claude Code and Codex already write to disk.
-//!
-//! Nothing here ever writes to those folders. Formats are not documented by the vendors, so the
+//! Readers for the session files Claude Code and Codex already write to disk, plus `manage`
+//! (rename, delete to trash). Only `manage` ever writes to those folders. Formats are not documented by the vendors, so the
 //! parsers are tolerant: unknown line types are skipped, never fatal. See PLAN.md section 3b.
 
 mod claude;
 mod codex;
+mod manage;
 mod util;
+
+pub use manage::{delete, rename};
 
 use std::path::{Path, PathBuf};
 
@@ -72,6 +74,10 @@ pub enum HistoryError {
     Io(#[from] std::io::Error),
     #[error("path is outside the Claude and Codex history folders")]
     OutsideRoots,
+    #[error("the session is open in a running tool; close it first")]
+    InUse,
+    #[error("{0}")]
+    Invalid(String),
 }
 
 /// Where each tool keeps its sessions.
@@ -79,6 +85,10 @@ pub enum HistoryError {
 pub struct Roots {
     pub claude: PathBuf,
     pub codex: PathBuf,
+    /// `~/.codex/session_index.jsonl`: Codex's list of chat names.
+    pub codex_index: PathBuf,
+    /// Deleted sessions are moved here, never destroyed.
+    pub trash: PathBuf,
 }
 
 impl Roots {
@@ -87,6 +97,8 @@ impl Roots {
         Self {
             claude: home.join(".claude").join("projects"),
             codex: home.join(".codex").join("sessions"),
+            codex_index: home.join(".codex").join("session_index.jsonl"),
+            trash: home.join(".agentdeck").join("trash"),
         }
     }
 }
@@ -94,7 +106,7 @@ impl Roots {
 /// Every session of both tools, newest first. Missing folders just yield nothing.
 pub fn list_all(roots: &Roots) -> Vec<HistorySession> {
     let mut sessions = claude::list(&roots.claude);
-    sessions.extend(codex::list(&roots.codex));
+    sessions.extend(codex::list(&roots.codex, &roots.codex_index));
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     sessions
 }
