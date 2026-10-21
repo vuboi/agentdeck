@@ -113,3 +113,9 @@ body {
   font-size: 0.6875rem;
   padding-block: 0.375rem;
 }
+
+/* While a popover is pre-opened at start-up to warm it, nobody should see it. */
+html[data-warming] [data-z-popover] {
+  visibility: hidden !important;
+  animation: none !important;
+}

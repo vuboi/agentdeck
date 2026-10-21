@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { ZButton, ZIcon, ZPopover, ZSwitch, ZTabs, zHoverGlide } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { AGENTS, MODELS, type Agent, type Effort, type Permission } from '../sessions.svelte';
@@ -12,6 +13,38 @@
   }: { agent: Agent; model: string; effort: Effort; fast: boolean; permission: Permission } = $props();
 
   let open = $state(false);
+  let warming = false;
+
+  // The first open after a reload used to hitch: the popover's parts (tabs, switch, glide, scrollbar)
+  // were still being loaded and measured while it appeared. Open it once, invisibly, right after
+  // start-up so every later open is already warm.
+  onMount(() => {
+    const root = document.documentElement;
+    const timers: number[] = [];
+    const warm = () => {
+      if (open || !trigger) return;
+      warming = true;
+      root.dataset.warming = '';
+      open = true;
+      timers.push(
+        window.setTimeout(() => {
+          open = false;
+          timers.push(
+            window.setTimeout(() => {
+              delete root.dataset.warming;
+              warming = false;
+            }, 500),
+          );
+        }, 350),
+      );
+    };
+    const idle = window.setTimeout(warm, 1200);
+    return () => {
+      clearTimeout(idle);
+      timers.forEach(clearTimeout);
+      delete root.dataset.warming;
+    };
+  });
   let trigger: HTMLElement | null = $state(null);
 
   const agentIcon: Record<Agent, ZIconName> = {
@@ -77,7 +110,7 @@
   zPosition="top-left"
   zOffset={8}
   zWidth={320}
-  onClosed={() => trigger?.focus()}
+  onClosed={() => !warming && trigger?.focus()}
 >
   {#snippet children()}
     <div class="flex max-h-[min(72vh,580px)] w-[320px] flex-col gap-2.5 overflow-y-auto p-3">
