@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick, untrack } from 'svelte';
+  import { untrack } from 'svelte';
   import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZTreeNode } from '@shival99/z-ui-svelte';
   import AgentStack from './AgentStack.svelte';
@@ -58,6 +58,7 @@
   // ---------- row menu: right click, or the three dots that replace the agent tag on hover ----------
   let menu = $state<{ x: number; y: number; id: string; align: 'bottom-left' | 'bottom-right' } | null>(null);
   let menuOpen = $state(false);
+  let menuKey = $state(0);
   let treeBox: HTMLDivElement | undefined = $state();
 
   // Right click anywhere on a row, not just on its text. Everywhere else in the tree the browser's own
@@ -83,21 +84,20 @@
   async function openMenu(event: MouseEvent, id: string, anchor?: HTMLElement) {
     event.preventDefault();
     event.stopPropagation();
-    menuOpen = false;
+    menuKey++; // a fresh menu at the new spot: no close-then-open flicker
     if (anchor) {
       const rect = anchor.getBoundingClientRect();
       menu = { x: rect.right, y: rect.bottom, id, align: 'bottom-right' };
     } else {
       menu = { x: event.clientX, y: event.clientY, id, align: 'bottom-left' };
     }
-    await tick();
     menuOpen = true;
   }
 
   const menuItems = $derived<ZDropdownMenuItem[]>([
-    { label: 'Rename', icon: 'lucidePencil', onClick: () => askRename() },
-    { label: 'Fork', icon: 'lucideGitFork', onClick: () => menu && fork(menu.id) },
-    { label: 'Delete', icon: 'lucideTrash2', divide: 'before', class: 'text-destructive', onClick: () => askDelete() },
+    { label: 'Rename', icon: 'lucidePencil', iconSize: '12', class: 'text-xs! py-1', onClick: () => askRename() },
+    { label: 'Fork', icon: 'lucideGitFork', iconSize: '12', class: 'text-xs! py-1', onClick: () => menu && fork(menu.id) },
+    { label: 'Delete', icon: 'lucideTrash2', iconSize: '12', divide: 'before', class: 'text-xs! py-1 text-destructive', onClick: () => askDelete() },
   ]);
 
   // ---------- rename / delete (also written into the original tool's own storage) ----------
@@ -269,11 +269,13 @@
 
   <!-- One shared menu, anchored to a 1px box at the click (or at the three dots). -->
   {#if menu}
+    {#key menuKey}
     <div class="pointer-events-none fixed z-50 size-px" style:left="{menu.x}px" style:top="{menu.y}px">
       <ZDropdownMenu zItems={menuItems} bind:open={menuOpen} zPosition={menu.align} zOffset={4} zMinWidth={160} zContentClass="p-1 text-xs">
         <span class="block size-px"></span>
       </ZDropdownMenu>
     </div>
+    {/key}
   {/if}
 </aside>
 
