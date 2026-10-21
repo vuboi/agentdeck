@@ -95,10 +95,29 @@
   }
 
   const menuItems = $derived<ZDropdownMenuItem[]>([
-    { label: 'Rename', icon: 'lucidePencil', iconSize: '12', class: 'text-xs! py-1', onClick: () => askRename() },
-    { label: 'Fork', icon: 'lucideGitFork', iconSize: '12', class: 'text-xs! py-1', onClick: () => menu && fork(menu.id) },
-    { label: 'Delete', icon: 'lucideTrash2', iconSize: '12', divide: 'before', class: 'text-xs! py-1 text-destructive', onClick: () => askDelete() },
+    { label: 'Rename', icon: 'lucidePencil', iconSize: '12', shortcut: 'R', class: 'text-xs! py-1', onClick: () => askRename() },
+    { label: 'Fork', icon: 'lucideGitFork', iconSize: '12', shortcut: 'F', class: 'text-xs! py-1', onClick: () => menu && fork(menu.id) },
+    { label: 'Delete', icon: 'lucideTrash2', iconSize: '12', shortcut: 'D', divide: 'before', class: 'text-xs! py-1 text-destructive', onClick: () => askDelete() },
   ]);
+
+  // The letters on the right are real shortcuts while the menu is open.
+  $effect(() => {
+    if (!menuOpen) return;
+    const keys: Record<string, () => void> = {
+      r: () => askRename(),
+      f: () => menu && fork(menu.id),
+      d: () => askDelete(),
+    };
+    const onKey = (event: KeyboardEvent) => {
+      const action = event.ctrlKey || event.metaKey || event.altKey ? undefined : keys[event.key.toLowerCase()];
+      if (!action) return;
+      event.preventDefault();
+      action();
+      menuOpen = false;
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   // ---------- rename / delete (also written into the original tool's own storage) ----------
   let renaming = $state(false);
