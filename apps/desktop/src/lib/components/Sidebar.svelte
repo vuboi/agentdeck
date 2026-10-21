@@ -94,7 +94,7 @@
           {#if data?.kind === 'session' && data.session}
             <!-- A fork hangs off its parent: an elbow drops from the parent's dot to this row. -->
             {#if data.session.parentId}
-              <span class="pointer-events-none absolute bottom-1/2 -left-3.5 h-7 w-3 border-b border-l border-muted-foreground/40" aria-hidden="true"></span>
+              <span class="pointer-events-none absolute bottom-1/2 -left-[11.5px] h-7 w-[9.5px] border-b border-l border-muted-foreground/40" aria-hidden="true"></span>
             {/if}
             <span class="size-1.5 shrink-0 rounded-full {statusColor[data.session.status]}" aria-label={data.session.status}></span>
             <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}">{ctx.node.label}</span>
