@@ -1,13 +1,14 @@
 <script lang="ts">
   import { ZCommand } from '@shival99/z-ui-svelte';
   import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
-  import { newSession, projectOf, workspace } from '../sessions.svelte';
+  import { projectOf, workspace } from '../sessions.svelte';
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
 
   // Enough to find things, not enough to scroll through: recents when idle, a capped list while searching.
   const RECENT = 8;
-  const PROJECTS = 2;
+  const PROJECTS = 5;
+  const PER_PROJECT = 40;
   const MAX_RESULTS = 12;
 
   let query = $state('');
@@ -43,7 +44,9 @@
       const project = projectOf(session);
       if (!project || seen.has(project.id)) continue;
       seen.add(project.id);
-      out.push({ id: `p:${project.id}`, label: project.name, icon: 'lucideFolder' as ZIconName, data: `project:${project.id}` });
+      // Choosing a project drills into its chats (Enter or click; Backspace goes back).
+      const chats = byRecent.filter((item) => item.projectId === project.id).slice(0, PER_PROJECT);
+      out.push({ id: `p:${project.id}`, label: project.name, icon: 'lucideFolder' as ZIconName, children: chats.map((item) => toItem(item.id)) });
       if (out.length === PROJECTS) break;
     }
     return out;
@@ -69,16 +72,7 @@
   });
 
   function select(item: ZCommandItem<string>) {
-    const target = item.data;
-    if (!target) return;
-    if (target.startsWith('project:')) {
-      const id = target.slice('project:'.length);
-      const latest = byRecent.find((session) => session.projectId === id);
-      if (latest) workspace.activeId = latest.id;
-      else newSession(id);
-    } else {
-      workspace.activeId = target;
-    }
+    if (item.data) workspace.activeId = item.data;
   }
 </script>
 
