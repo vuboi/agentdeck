@@ -188,6 +188,7 @@
   bind:open={paletteOpen}
   zGroups={groups}
   zSearch="fuzzy"
+  zSize="sm"
   zPlaceholder="Mention a session, project or AI…"
   zRootLabel="Mention"
   onSelect={pickMention}
