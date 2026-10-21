@@ -1,27 +1,40 @@
 <script lang="ts">
-  import { ZCard, ZIcon, ZLoading, ZShowMore } from '@shival99/z-ui-svelte';
+  import { ZIcon, ZLoading, ZShowMore } from '@shival99/z-ui-svelte';
   import type { Block } from '../mock';
 
   // `fade` is the surface behind the block; ZShowMore fades its clipped edge into that colour.
   let { block, fade }: { block: Block; fade?: string } = $props();
+
+  // Thinking starts folded. The body animates by growing its grid row from 0fr to 1fr.
+  let thinkingOpen = $state(false);
 
   const statusIcon = { running: 'lucideLoaderCircle', ok: 'lucideCircleCheck', fail: 'lucideCircleX' } as const;
   const statusTone = { running: 'text-warning', ok: 'text-success', fail: 'text-destructive' } as const;
 </script>
 
 {#if block.kind === 'thinking'}
-  <!-- ZCard animates the open and close of its body, so Thinking expands smoothly. -->
-  <ZCard collapsible collapsed zSize="sm" class="text-xs text-muted-foreground">
-    {#snippet header()}
-      <span class="flex items-center gap-2 font-medium">
-        <ZIcon zType="lucideBrain" class="size-3.5" />
-        Thinking
-      </span>
-    {/snippet}
-    <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="var(--card)" moreLabel="Show more" lessLabel="Show less">
-      <p class="m-0 whitespace-pre-wrap leading-relaxed">{block.text}</p>
-    </ZShowMore>
-  </ZCard>
+  <!-- Same flat style as the command blocks; the body slides open and shut. -->
+  <div class="rounded-lg border border-border bg-muted/30 text-xs text-muted-foreground">
+    <button
+      type="button"
+      class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      aria-expanded={thinkingOpen}
+      onclick={() => (thinkingOpen = !thinkingOpen)}
+    >
+      <ZIcon zType="lucideBrain" class="size-3.5" />
+      Thinking
+      <ZIcon zType="lucideChevronDown" class="ml-auto size-3.5 transition-transform duration-300 {thinkingOpen ? 'rotate-180' : ''}" />
+    </button>
+    <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {thinkingOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
+      <div class="min-h-0 overflow-hidden">
+        <div class="px-3 pb-2.5">
+          <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="var(--background)" moreLabel="Show more" lessLabel="Show less">
+            <p class="m-0 whitespace-pre-wrap leading-relaxed">{block.text}</p>
+          </ZShowMore>
+        </div>
+      </div>
+    </div>
+  </div>
 {:else if block.kind === 'response'}
   <div class="text-sm leading-relaxed text-foreground">
     <ZShowMore zMaxHeight={240} zButtonSize="sm" zBlurColor={fade ?? 'var(--background)'}>
