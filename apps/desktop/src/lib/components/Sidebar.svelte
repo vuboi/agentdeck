@@ -122,12 +122,14 @@
   // ---------- rename / delete (also written into the original tool's own storage) ----------
   let renaming = $state(false);
   let nameInput: { focus: () => void } | undefined = $state();
-  // Type straight away: focus the field and select the old name once the modal is on screen.
+  // Type straight away: focus the field once the modal is on screen.
   $effect(() => {
     if (!renaming) return;
     const timer = setTimeout(() => {
       nameInput?.focus();
-      (document.activeElement as HTMLInputElement | null)?.select?.();
+      // Caret at the end of the old name, nothing selected.
+      const field = document.activeElement as HTMLInputElement | null;
+      field?.setSelectionRange?.(field.value.length, field.value.length);
     }, 80);
     return () => clearTimeout(timer);
   });
