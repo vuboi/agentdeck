@@ -54,8 +54,8 @@ packages/
 
 ```
 Project { id, name, path }                       # a working folder; sessions group under it
-Session { id, project_id, title, agent: AgentKind, model, branch, created_at,
-          parent_id?, fork_seq? }                # parent_id + fork_seq = forked from parent at that event
+Session { id, project_id, title, agent: AgentKind, model, created_at,
+          git_branch?, parent_id?, fork_seq? }   # parent_id + fork_seq = forked from parent at that event
 Turn    { id, session_id, role: user|agent, started_at, ended_at }
 Event   { seq, id, session_id, turn_id?, ts, kind: EventKind, prev_hash, hash }
 EventKind =
@@ -72,26 +72,58 @@ ModelProfile { id, provider, tier, context_window, max_output, price_in, price_o
 
 ---
 
-## 3b. Session tree, forks and mentions
+## 3b. Session tree, forks, mentions and history import
 
-**Session tree (sidebar).** `Project > Branch > Session > Fork`, rendered with `ZTree`:
-- **Project**: a folder on disk. Sessions are grouped by `project_id`; a project can be collapsed.
-- **Branch**: the git branch the session works on (`branch`). Each session runs in its own worktree
-  (M5), so two sessions on different branches never touch the same files.
-- **Fork**: "branch the conversation". A fork copies the parent history up to `fork_seq` into a new
-  session (`parent_id` = parent, `fork_seq` = last shared event) and continues independently, possibly
-  with another agent/model. Forks nest under their parent and can be forked again.
-- Row shows status dot (working / waiting / idle), title and agent. Selecting a row switches the chat.
+**Session tree (sidebar).** `Project > Session > Fork`, rendered with `ZTree`. There is no "branch"
+level: a *branch* here means a fork of a chat session, not a git branch.
+- **Project**: a folder on disk (`cwd`). Sessions group by `project_id`; a project can be collapsed.
+- **Session**: one conversation with one agent + model. Its git branch, if any, is just metadata
+  (`git_branch`, shown as a small tag; each coding session gets its own worktree in M5).
+- **Fork**: what Claude Code and Codex call forking a conversation, so a long chat does not have to
+  carry everything forever. A fork copies the parent history up to `fork_seq` into a new session
+  (`parent_id` = parent, `fork_seq` = last shared event) and continues on its own, possibly with
+  another agent/model. Forks nest under their parent and can be forked again. The fork gets a short
+  handoff summary instead of the whole transcript when it switches provider (token saving).
+- Row: status dot (working / waiting / idle), title, agent. Hover shows Fork.
 
 **Composer.**
 - Agent and model are picked with `ZSelect` (model list depends on the agent).
-- `@` opens a mention palette (`ZCommand`) with three groups:
-  - **Sessions**: inject a short summary of another session (never the whole transcript, token saving).
-  - **Projects**: add another project path as extra context / working directory.
-  - **AI**: route this message to a specific agent + model (sets the selects for this message).
-- Picked mentions show as removable chips above the input; the daemon resolves them into the context
-  pack when the message is sent (see section 3, "Context pack").
+- `@` opens a mention palette (`ZCommand`) with three groups: **Sessions** (inject a short summary of
+  that session), **Projects** (extra path as context) and **AI** (route this message to an agent + model).
+- Mentions show as removable chips; the daemon resolves them into the context pack on send.
 - Later: `@file` (fuzzy index), `/command`, `#skill`.
+
+**Tools.** Right-panel tools (Preview, Diff, Workflow, Usage, Audit) can pop out into a `ZModal` and
+dock back; the active tool is shared state, so the modal and the panel always show the same view.
+
+**History import (read-only).** A `history` module reads what Claude Code and Codex already wrote to
+disk, so the user can switch to AgentDeck and still see old chats in the same UI. Nothing is ever
+written to those folders.
+
+| Source | Location | Unit | Notes |
+|---|---|---|---|
+| Claude Code (CLI and desktop Code tab) | `~/.claude/projects/<cwd with separators replaced by "-">/<session-uuid>.jsonl` | one file per session | Subagents live in `agent-*.jsonl` (`isSidechain: true`). |
+| Codex (CLI and desktop) | `~/.codex/sessions/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl` | one file per session | First line is `session_meta`. |
+
+Claude Code lines (observed): `user`, `assistant`, `system`, `attachment`, `ai-title` / `custom-title`
+(session title), `last-prompt` (`leafUuid`), `file-history-snapshot`, `queue-operation`, `permission-mode`,
+`cost-state`. Each message line has `uuid`, `parentUuid` (the conversation is a tree: two children of one
+parent = a rewind or fork point), `sessionId`, `cwd`, `gitBranch`, `timestamp`, `isSidechain`. Assistant
+`message.content` items are `text`, `thinking`, `tool_use`; user ones are text or `tool_result`.
+
+Codex lines (observed): `session_meta` (`id`, `cwd`, `git`, `cli_version`, `source`, `model_provider`),
+`turn_context`, `response_item` (`message`, `reasoning`, `function_call` / `function_call_output`,
+`custom_tool_call` / `custom_tool_call_output`), `event_msg` (`task_started`, `task_complete`,
+`token_count`, `turn_aborted`), `compacted`.
+
+Mapping into `EventKind`: assistant text -> `MessageDelta`; thinking / reasoning -> `Thinking`; tool
+use + result -> `ToolCall` (status from the result); token usage -> `Usage`; Codex `compacted` -> a
+`StatusChange`. Titles come from `ai-title` / `custom-title`; project from `cwd`; a session whose
+`uuid` chain shares a prefix with another becomes a fork (`parent_id`, `fork_seq`).
+
+Rules: tolerant parser (unknown line types are skipped and counted, never fatal); fixtures recorded from
+real files with the text redacted; lazy loading (index titles and timestamps first, parse bodies on open);
+formats are not documented by the vendors, so pin the CLI versions seen and keep contract tests.
 
 ---
 
@@ -129,9 +161,14 @@ Mỗi module có Definition of Done (DoD). Làm tuần tự, mỗi module = 1 co
 - Store Svelte 5 (`$state` class) cho sessions/events; batch update theo rAF.
 - Timeline virtualized, markdown + Shiki, tool card (collapsible, spinner, thời gian), terminal stream (xterm.js), diff (CodeMirror merge), status badge thinking/working/running cmd/waiting approval.
 - Composer: `ZSelect` agent/model/effort; mention `@session` / `@project` / `@AI` (palette `ZCommand`, chip có thể xoá), `@file` (fuzzy từ core), `/command`, đính ảnh.
-- Sidebar: cây `ZTree` Project > Branch > Session > Fork (fork lồng dưới session cha); tạo fork từ menu session; trạng thái working/waiting/idle.
+- Sidebar: cây `ZTree` Project > Session > Fork (fork lồng dưới session cha); tạo fork từ menu session; trạng thái working/waiting/idle.
 - Tích hợp bộ UI của user (thay `packages/ui`).
 - **DoD**: chat Claude end-to-end trong app, stream mượt, permission prompt hoạt động.
+
+### M3b — History import (đọc lịch sử Claude/Codex)
+- Module `history` trong `crates/adapters`: reader Claude Code (`~/.claude/projects/**/<uuid>.jsonl`) và Codex (`~/.codex/sessions/**/rollout-*.jsonl`), map sang `EventKind` (xem mục 3b).
+- Index nhanh (title, cwd, thời gian) rồi parse thân khi mở; session import là read-only, hiển thị cùng format với session thật; fork nhận diện qua chuỗi `parentUuid`.
+- **DoD**: test với fixture đã ẩn nội dung; import 1 session Claude + 1 session Codex thật và xem trong UI.
 
 ### M5 — Codex + Gemini + MCP + worktree
 - Codex: `codex app-server` (JSON-RPC) hoặc `codex-acp`; Gemini: ACP. Antigravity: verify khả năng headless, nếu không có thì đánh dấu deferred.

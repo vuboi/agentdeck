@@ -8,11 +8,6 @@
   // Everything starts open; a fork opens its parent so the new row is visible.
   let expanded = $state<string[]>([
     ...workspace.projects.map((project) => `project:${project.id}`),
-    ...workspace.projects.flatMap((project) =>
-      [...new Set(workspace.sessions.filter((item) => item.projectId === project.id).map((item) => item.branch))].map(
-        (branch) => `branch:${project.id}:${branch}`,
-      ),
-    ),
     ...workspace.sessions.map((item) => `session:${item.id}`),
   ]);
 
@@ -22,7 +17,7 @@
   });
 
   function onSelect(node: ZTreeNode<TreeData>) {
-    // Projects and branches only expand; only sessions switch the chat.
+    // Projects only expand; only sessions switch the chat.
     if (node.data?.kind === 'session' && node.data.session) workspace.activeId = node.data.session.id;
     else selected = [`session:${workspace.activeId}`];
   }
@@ -51,7 +46,9 @@
   </div>
 
   <div class="px-4 pt-3 pb-1.5 font-mono text-[10px] tracking-widest text-muted-foreground">PROJECTS</div>
-  <div class="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
+  <!-- The scroll container spans the whole sidebar so its scrollbar sits flush against the border; padding lives inside. -->
+  <div class="min-h-0 flex-1 overflow-y-auto">
+    <div class="px-1.5 pb-2">
     <ZTree
       {nodes}
       zSize="sm"
@@ -59,7 +56,7 @@
       zSelectable
       zExpandOnClick
       zMaxHeight="none"
-      zLabel="Projects, branches and sessions"
+      zLabel="Projects and sessions"
       bind:expanded
       bind:selected
       {onSelect}
@@ -90,6 +87,7 @@
         </span>
       {/snippet}
     </ZTree>
+    </div>
   </div>
 
   <div class="flex h-11 shrink-0 items-center gap-2 px-3 text-xs">

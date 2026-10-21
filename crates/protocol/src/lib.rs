@@ -32,10 +32,10 @@ pub struct Session {
     pub title: String,
     pub agent: AgentKind,
     pub model: String,
-    /// Git branch the session works on (each session has its own worktree).
-    pub branch: String,
     #[specta(type = specta_typescript::Number)]
     pub created_at: i64,
+    /// Git branch the session works on, if any. Not a conversation branch: that is `parent_id`.
+    pub git_branch: Option<String>,
     pub parent_id: Option<String>,
     #[specta(type = Option<specta_typescript::Number>)]
     pub fork_seq: Option<i64>,
@@ -258,8 +258,8 @@ mod tests {
             title: "Try codex".into(),
             agent: AgentKind::Codex,
             model: "gpt-6-luna".into(),
-            branch: "feat/fork".into(),
             created_at: 1,
+            git_branch: Some("feat/fork".into()),
             parent_id: Some("s1".into()),
             fork_seq: Some(42),
         };

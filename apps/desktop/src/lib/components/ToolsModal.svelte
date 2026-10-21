@@ -24,9 +24,9 @@
           <ZButton
             zWave={false}
             role="tab"
-            zType={layout.activeTool === tool.value ? 'subtle' : 'ghost'}
+            zType="ghost"
             zSize="sm"
-            class="h-7 w-8 px-0"
+            class="h-7 w-8 px-0 {layout.activeTool === tool.value ? 'bg-primary/15 text-primary hover:bg-primary/20' : 'hover:bg-primary/10 hover:text-primary'}"
             aria-selected={layout.activeTool === tool.value}
             aria-label={tool.label}
             title={tool.label}

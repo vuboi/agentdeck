@@ -22,9 +22,9 @@
   {/if}
   <ZButton
     zWave={false}
-    zType={layout.themePanelOpen ? 'subtle' : 'ghost'}
+    zType="ghost"
     zSize="sm"
-    class="h-7 w-7"
+    class="h-7 w-7 {layout.themePanelOpen ? 'bg-primary/15 text-primary hover:bg-primary/20' : 'hover:bg-primary/10 hover:text-primary'}"
     id="theme-trigger"
     bind:ref={trigger}
     aria-label="Theme colors"
@@ -35,7 +35,7 @@
   >
     <ZIcon zType="lucidePalette" class="size-4" />
   </ZButton>
-  <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-7" aria-label={layout.toolsOpen ? 'Hide tools panel' : 'Show tools panel'} title={layout.toolsOpen ? 'Hide tools' : 'Show tools'} onclick={toggleTools}>
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-7 hover:bg-primary/10 hover:text-primary" aria-label={layout.toolsOpen ? 'Hide tools panel' : 'Show tools panel'} title={layout.toolsOpen ? 'Hide tools' : 'Show tools'} onclick={toggleTools}>
     <ZIcon zType={layout.toolsOpen ? 'lucidePanelRightClose' : 'lucidePanelRightOpen'} class="size-4" />
   </ZButton>
 </div>

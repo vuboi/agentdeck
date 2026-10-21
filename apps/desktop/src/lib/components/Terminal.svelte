@@ -32,9 +32,9 @@
           <ZButton zWave={false}
             role="tab"
             aria-selected={tab.id === terminal.active}
-            zType={tab.id === terminal.active ? 'subtle' : 'ghost'}
+            zType="ghost"
             zSize="sm"
-            class="h-7 gap-1.5 px-2 text-xs"
+            class="h-7 gap-1.5 px-2 text-xs {tab.id === terminal.active ? 'bg-primary/15 text-primary hover:bg-primary/20' : 'hover:bg-primary/10 hover:text-primary'}"
             onclick={() => (terminal.active = tab.id)}
           >
             <ZIcon zType="lucideSquareTerminal" class="size-3.5" />

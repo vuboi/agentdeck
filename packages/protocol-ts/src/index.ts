@@ -68,9 +68,9 @@ export type Session = {
 	title: string,
 	agent: AgentKind,
 	model: string,
-	/**  Git branch the session works on (each session has its own worktree). */
-	branch: string,
 	created_at: number,
+	/**  Git branch the session works on, if any. Not a conversation branch: that is `parent_id`. */
+	git_branch: string | null,
 	parent_id: string | null,
 	fork_seq: number | null,
 };

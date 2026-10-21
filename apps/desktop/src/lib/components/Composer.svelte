@@ -1,8 +1,9 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { ZButton, ZCommand, ZIcon, ZSelect } from '@shival99/z-ui-svelte';
+  import { ZButton, ZCommand, ZIcon } from '@shival99/z-ui-svelte';
   import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
-  import { activeSession, AGENTS, MODELS, projectOf, workspace, type Agent } from '../sessions.svelte';
+  import { activeSession, AGENTS, MODELS, projectOf, workspace, type Agent, type Effort, type Permission } from '../sessions.svelte';
+  import ModelPicker from './ModelPicker.svelte';
 
   type Mention = { kind: 'session' | 'project' | 'ai'; id: string; label: string };
 
@@ -14,6 +15,9 @@
   // Agent + model of this message. They follow the active session and can be overridden with @AI.
   let agent = $state<Agent>('claude');
   let model = $state('sonnet-5-5');
+  let effort = $state<Effort>('medium');
+  let fast = $state(false);
+  let permission = $state<Permission>('ask');
   $effect(() => {
     const session = activeSession();
     if (!session) return;
@@ -24,17 +28,10 @@
   });
 
   const agentIcon: Record<Agent, ZIconName> = {
-    claude: 'lucideSparkles' as ZIconName,
-    codex: 'lucideTerminal' as ZIconName,
-    gemini: 'lucideGem' as ZIconName,
+    claude: 'brandClaude' as ZIconName,
+    codex: 'brandOpenai' as ZIconName,
+    gemini: 'brandGemini' as ZIconName,
   };
-  const agentOptions = AGENTS.map((item) => ({ label: item.label, value: item.value, icon: agentIcon[item.value] }));
-  const modelOptions = $derived(MODELS[agent].map((item) => ({ label: item.label, value: item.value })));
-
-  function onAgentChange(value: unknown) {
-    agent = value as Agent;
-    if (!MODELS[agent].some((item) => item.value === model)) model = MODELS[agent][0].value;
-  }
 
   // ---------- mentions ----------
   const groups = $derived<ZCommandGroup<Mention>[]>([
@@ -46,7 +43,7 @@
           id: `session:${item.id}`,
           label: item.title,
           icon: (item.parentId ? 'lucideGitFork' : 'lucideMessageSquare') as ZIconName,
-          keywords: [projectOf(item)?.name ?? '', item.branch, item.agent],
+          keywords: [projectOf(item)?.name ?? '', item.gitBranch ?? '', item.agent],
           data: { kind: 'session' as const, id: item.id, label: item.title },
         })),
     },
@@ -156,26 +153,7 @@
       <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-7" aria-label="Mention a session, project or AI" title="Mention (@)" onclick={() => (paletteOpen = true)}>
         <ZIcon zType="lucideAtSign" class="size-4" />
       </ZButton>
-      <ZSelect
-        class="w-32"
-        zSize="sm"
-        zVariant="ghost"
-        zOptions={agentOptions}
-        value={agent}
-        onValueChange={onAgentChange}
-        zDropdownWidth={160}
-        zPosition="top-left"
-      />
-      <ZSelect
-        class="w-40"
-        zSize="sm"
-        zVariant="ghost"
-        zOptions={modelOptions}
-        value={model}
-        onValueChange={(value) => (model = value as string)}
-        zDropdownWidth={176}
-        zPosition="top-left"
-      />
+      <ModelPicker bind:agent bind:model bind:effort bind:fast bind:permission />
     </div>
     <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" disabled={!draft.trim()} aria-label="Send message">
       <ZIcon zType="lucideArrowUp" class="size-4" />
