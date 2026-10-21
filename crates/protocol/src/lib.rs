@@ -15,15 +15,30 @@ pub enum AgentKind {
     Antigravity,
 }
 
+/// A working folder. Sessions are grouped under it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+}
+
+/// One conversation. `parent_id` + `fork_seq` mark a fork: the history of the parent up to that
+/// event is shared, everything after belongs to this session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct Session {
     pub id: String,
-    pub project_path: String,
+    pub project_id: String,
     pub title: String,
     pub agent: AgentKind,
     pub model: String,
+    /// Git branch the session works on (each session has its own worktree).
+    pub branch: String,
     #[specta(type = specta_typescript::Number)]
     pub created_at: i64,
+    pub parent_id: Option<String>,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub fork_seq: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -201,6 +216,7 @@ pub struct ModelProfile {
 pub fn export_typescript() -> Result<String, specta_typescript::Error> {
     let types = specta::Types::default()
         .register::<AgentKind>()
+        .register::<Project>()
         .register::<Session>()
         .register::<TurnRole>()
         .register::<Turn>()
@@ -232,6 +248,23 @@ mod tests {
         assert!(json.starts_with(r#"{"type":"tool_call""#));
         let back: EventKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, kind);
+    }
+
+    #[test]
+    fn forked_session_round_trips() {
+        let session = Session {
+            id: "s2".into(),
+            project_id: "p1".into(),
+            title: "Try codex".into(),
+            agent: AgentKind::Codex,
+            model: "gpt-6-luna".into(),
+            branch: "feat/fork".into(),
+            created_at: 1,
+            parent_id: Some("s1".into()),
+            fork_seq: Some(42),
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        assert_eq!(serde_json::from_str::<Session>(&json).unwrap(), session);
     }
 
     #[test]

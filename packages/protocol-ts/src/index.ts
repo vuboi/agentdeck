@@ -33,6 +33,13 @@ export type ModelProfile = {
 	tps_measured: number | null,
 };
 
+/**  A working folder. Sessions are grouped under it. */
+export type Project = {
+	id: string,
+	name: string,
+	path: string,
+};
+
 export type QuotaKind = "h5" | "weekly" | "daily" | "rpm" | "tpm";
 
 export type QuotaSource = "exact" | "estimated" | "reactive";
@@ -51,13 +58,21 @@ export type QuotaWindow = {
 	observed_at: number,
 };
 
+/**
+ *  One conversation. `parent_id` + `fork_seq` mark a fork: the history of the parent up to that
+ *  event is shared, everything after belongs to this session.
+ */
 export type Session = {
 	id: string,
-	project_path: string,
+	project_id: string,
 	title: string,
 	agent: AgentKind,
 	model: string,
+	/**  Git branch the session works on (each session has its own worktree). */
+	branch: string,
 	created_at: number,
+	parent_id: string | null,
+	fork_seq: number | null,
 };
 
 export type ToolStatus = "pending" | "running" | "ok" | "fail";

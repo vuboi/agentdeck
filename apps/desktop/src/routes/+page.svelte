@@ -3,6 +3,7 @@
   import { ZResizable } from '@shival99/z-ui-svelte';
   import WindowControls from '../lib/components/WindowControls.svelte';
   import ThemePanel from '../lib/components/ThemePanel.svelte';
+  import ToolsModal from '../lib/components/ToolsModal.svelte';
   import Sidebar from '../lib/components/Sidebar.svelte';
   import Chat from '../lib/components/Chat.svelte';
   import Terminal from '../lib/components/Terminal.svelte';
@@ -93,5 +94,6 @@
   </ZResizable>
 
   <ThemePanel />
+  <ToolsModal />
   <WindowControls />
 </div>

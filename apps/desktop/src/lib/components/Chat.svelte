@@ -3,6 +3,7 @@
   import { ZChatNavigator, ZIcon, createVirtualizer } from '@shival99/z-ui-svelte';
   import { messages } from '../mock';
   import { layout } from '../layout.svelte';
+  import { activeSession } from '../sessions.svelte';
   import ChatBlock from './ChatBlock.svelte';
   import Composer from './Composer.svelte';
   import ToolbarActions from './ToolbarActions.svelte';
@@ -87,8 +88,8 @@
 <main class="flex h-full min-h-0 min-w-0 flex-col" aria-label="Conversation">
   <header class="flex h-10 shrink-0 items-center border-b border-border {layout.toolsOpen ? '' : 'pr-33'}" data-tauri-drag-region>
     <!-- Title shares the message column, so it lines up with the messages below. -->
-    <div class="mx-auto flex w-full max-w-3xl min-w-0 flex-1 items-center px-6" data-tauri-drag-region>
-      <h1 class="min-w-0 truncate text-xs font-medium" data-tauri-drag-region>Build the settings panel</h1>
+    <div class="mx-auto flex w-full max-w-3xl min-w-0 flex-1 items-center pr-6 pl-12" data-tauri-drag-region>
+      <h1 class="min-w-0 truncate text-xs font-medium" data-tauri-drag-region>{activeSession()?.title ?? 'New session'}</h1>
     </div>
     <!-- Actions stay pinned to the right edge (next to the window controls), not to the centered column. -->
     {#if !layout.toolsOpen}<ToolbarActions divider={false} />{/if}
@@ -108,7 +109,7 @@
           {@const message = messages[row.index]}
           {#if message}
             <div class="absolute top-0 left-0 w-full" data-index={row.index} style:transform="translateY({row.start}px)" {@attach measureRow}>
-              <article class="mx-auto flex w-full max-w-3xl gap-3 px-6 py-3">
+              <article class="mx-auto flex w-full max-w-3xl gap-3 pr-6 pl-12 py-3">
                 {#if message.role === 'assistant'}
                   <div class="grid size-7 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
                     <ZIcon zType="lucideSparkles" class="size-3.5" />
@@ -134,7 +135,7 @@
   </div>
 
   <div class="shrink-0 px-6 pt-2 pb-4">
-    <div class="mx-auto w-full max-w-3xl">
+    <div class="mx-auto w-full max-w-3xl pl-6">
       <Composer />
       <p class="mt-2 text-center text-[10px] text-muted-foreground">AgentDeck can make mistakes. Review important changes.</p>
     </div>
