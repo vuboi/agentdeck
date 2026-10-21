@@ -1,0 +1,6 @@
+node_modules
+target
+apps/desktop/src-tauri/target
+apps/desktop/src-tauri/icons
+apps/desktop/build
+apps/desktop/.svelte-kit

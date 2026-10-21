@@ -1,0 +1,11 @@
+/node_modules/
+**/node_modules/
+/target/
+/apps/desktop/build/
+/apps/desktop/.svelte-kit/
+/packages/*/dist/
+*.db
+.env
+.env.*
+!*.env.example
+/apps/desktop/src-tauri/gen/

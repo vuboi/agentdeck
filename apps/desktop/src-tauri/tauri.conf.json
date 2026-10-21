@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AgentDeck",
+  "version": "0.0.0",
+  "identifier": "dev.agentdeck.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev:web",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      { "label": "main", "title": "AgentDeck", "width": 1280, "height": 800, "minWidth": 960, "minHeight": 600, "center": true, "decorations": false }
+    ],
+    "security": {
+      "capabilities": ["default"],
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:*",
+      "devCsp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:* ws://127.0.0.1:1420"
+    }
+  },
+  "bundle": { "active": true, "icon": ["icons/icon.ico", "icons/icon.png"] }
+}

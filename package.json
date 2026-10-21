@@ -1,0 +1,15 @@
+{
+  "name": "agentdeck",
+  "private": true,
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "dev": "pnpm --filter desktop tauri dev",
+    "check": "node scripts/cargo.mjs check --workspace && node scripts/cargo.mjs clippy --workspace -- -D warnings && pnpm -r check",
+    "test": "node scripts/cargo.mjs test --workspace && pnpm -r --if-present test",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "prettier": "^3.5.3",
+    "prettier-plugin-svelte": "^3.4.0"
+  }
+}

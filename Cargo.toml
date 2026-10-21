@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
+
+[workspace.package]
+edition = "2021"
+version = "0.0.0"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+ag-protocol = { path = "crates/protocol" }
+ag-store = { path = "crates/store" }
+ag-core = { path = "crates/core" }
+ag-adapters = { path = "crates/adapters" }
+ag-quota = { path = "crates/quota" }
+ag-orchestrator = { path = "crates/orchestrator" }
+ag-cdp = { path = "crates/cdp" }

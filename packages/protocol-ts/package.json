@@ -1,0 +1,8 @@
+{
+  "name": "@agentdeck/protocol-ts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "check": "tsc --noEmit" },
+  "devDependencies": { "typescript": "^5.8.3" }
+}
