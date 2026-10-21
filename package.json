@@ -6,6 +6,7 @@
     "dev": "pnpm --filter desktop tauri dev",
     "check": "node scripts/cargo.mjs check --workspace && node scripts/cargo.mjs clippy --workspace -- -D warnings && pnpm -r check",
     "test": "node scripts/cargo.mjs test --workspace && pnpm -r --if-present test",
+    "gen:types": "node scripts/cargo.mjs run -q -p ag-protocol --example export_ts",
     "format": "prettier --write ."
   },
   "devDependencies": {
