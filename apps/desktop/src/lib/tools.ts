@@ -4,6 +4,7 @@ export type Tool = { value: string; label: string; icon: ZIconName };
 
 /** Workspace tools: shown in the right panel, or detached into a modal. */
 export const TOOLS: Tool[] = [
+  { value: 'Explore', label: 'Explore', icon: 'lucideFolder' as ZIconName },
   { value: 'Preview', label: 'Preview', icon: 'lucideGlobe' as ZIconName },
   { value: 'Diff', label: 'Diff', icon: 'lucideGitCompare' as ZIconName },
   { value: 'Workflow', label: 'Workflow', icon: 'lucideWorkflow' as ZIconName },

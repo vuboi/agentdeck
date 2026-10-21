@@ -48,6 +48,15 @@ importers:
       boneyard-js:
         specifier: ^1.10.0
         version: 1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0))
+      dompurify:
+        specifier: 3.4.17
+        version: 3.4.17
+      marked:
+        specifier: 17.0.6
+        version: 17.0.6
+      shiki:
+        specifier: 4.5.0
+        version: 4.5.0
     devDependencies:
       '@ng-icons/lucide':
         specifier: ^36.1.0

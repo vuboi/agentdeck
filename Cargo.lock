@@ -78,6 +78,7 @@ name = "agentdeck-desktop"
 version = "0.0.0"
 dependencies = [
  "ag-adapters",
+ "base64 0.22.1",
  "tauri",
  "tauri-build",
 ]

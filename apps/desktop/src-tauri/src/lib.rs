@@ -53,6 +53,50 @@ async fn history_delete(source: Source, path: String) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+/// Text of one file for the file viewer. Read-only, text only, at most 2 MB, and the file must sit
+/// inside `root` (the project folder), so a path from the UI cannot reach outside it.
+#[tauri::command]
+async fn file_read(root: String, path: String) -> Result<String, String> {
+    const MAX_BYTES: u64 = 2 * 1024 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
+        let path = PathBuf::from(&path).canonicalize().map_err(|error| error.to_string())?;
+        if !path.starts_with(&root) {
+            return Err("file is outside the project folder".to_string());
+        }
+        let size = std::fs::metadata(&path).map_err(|error| error.to_string())?.len();
+        if size > MAX_BYTES {
+            return Err(format!("file is {size} bytes, the viewer stops at 2 MB"));
+        }
+        std::fs::read_to_string(&path).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Bytes of one file for previews (images, PDF, SVG), base64-encoded. Same rules as `file_read`:
+/// read-only, inside `root`, and at most 20 MB.
+#[tauri::command]
+async fn file_read_bytes(root: String, path: String) -> Result<String, String> {
+    use base64::Engine;
+    const MAX_BYTES: u64 = 20 * 1024 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
+        let path = PathBuf::from(&path).canonicalize().map_err(|error| error.to_string())?;
+        if !path.starts_with(&root) {
+            return Err("file is outside the project folder".to_string());
+        }
+        let size = std::fs::metadata(&path).map_err(|error| error.to_string())?.len();
+        if size > MAX_BYTES {
+            return Err(format!("file is {size} bytes, the preview stops at 20 MB"));
+        }
+        let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Starts the AgentDeck desktop window.
 pub fn run() {
     tauri::Builder::default()
@@ -60,7 +104,9 @@ pub fn run() {
             history_list,
             history_load,
             history_rename,
-            history_delete
+            history_delete,
+            file_read,
+            file_read_bytes
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AgentDeck desktop application");

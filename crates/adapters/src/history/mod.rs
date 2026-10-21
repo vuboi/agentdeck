@@ -104,10 +104,15 @@ impl Roots {
 }
 
 /// Every session of both tools, newest first. Missing folders just yield nothing.
+///
+/// Ids are unique: resuming a Codex thread writes a second rollout file whose `session_meta` keeps the
+/// original id, and two sessions with one id break keyed lists in the UI. The newest file wins.
 pub fn list_all(roots: &Roots) -> Vec<HistorySession> {
     let mut sessions = claude::list(&roots.claude);
     sessions.extend(codex::list(&roots.codex, &roots.codex_index));
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let mut seen = std::collections::HashSet::new();
+    sessions.retain(|session| seen.insert(session.id.clone()));
     sessions
 }
 

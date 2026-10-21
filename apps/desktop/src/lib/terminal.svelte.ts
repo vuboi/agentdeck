@@ -1,3 +1,5 @@
+import { getPref, setPref } from './prefs';
+
 export type TerminalTab = { id: string; name: string; lines: string[] };
 
 // Mock terminal state. Real PTY sessions arrive with agentd in M2.
@@ -7,6 +9,18 @@ export const terminal = $state({
   open: true,
   active: 'term-1',
   tabs: [{ id: 'term-1', name: 'zsh', lines: ['AgentDeck terminal (preview, no PTY yet)'] }] as TerminalTab[],
+});
+
+let terminalHydrated = false;
+getPref<boolean>('terminal.open').then((saved) => {
+  if (typeof saved === 'boolean') terminal.open = saved;
+  terminalHydrated = true;
+});
+$effect.root(() => {
+  $effect(() => {
+    const open = terminal.open;
+    if (terminalHydrated) setPref('terminal.open', open);
+  });
 });
 
 export function toggleTerminal() {

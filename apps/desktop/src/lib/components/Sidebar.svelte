@@ -3,7 +3,11 @@
   import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree, zModalService } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZTreeNode } from '@shival99/z-ui-svelte';
   import AgentStack from './AgentStack.svelte';
+  import { showSession } from '../content-tabs.svelte';
   import SearchPalette from './SearchPalette.svelte';
+  import DockZone from './DockZone.svelte';
+  import Splitter from './Splitter.svelte';
+  import { layout } from '../layout.svelte';
   import {
     buildTree,
     deleteSession,
@@ -46,7 +50,8 @@
 
   function onSelect(node: ZTreeNode<TreeData>) {
     // Projects only expand; only sessions switch the chat.
-    if (node.data?.kind === 'session' && node.data.session) workspace.activeId = node.data.session.id;
+    // Opens the session's chat tab even when it is already the active session (its tab may have been closed).
+    if (node.data?.kind === 'session' && node.data.session) showSession(node.data.session.id);
     else selected = [`session:${workspace.activeId}`];
   }
 
@@ -213,7 +218,7 @@
 <aside class="flex h-full min-w-0 flex-col bg-sidebar" aria-label="Sessions">
   <!-- Header row shared with the other panes: same height, one continuous bottom line. -->
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3" data-tauri-drag-region>
-    <span class="grid size-5 place-items-center rounded-md bg-primary text-[11px] font-bold text-primary-foreground" data-tauri-drag-region>A</span>
+    <span class="grid size-5 shrink-0 place-items-center rounded-md bg-primary text-[11px] font-bold text-primary-foreground" data-tauri-drag-region>A</span>
     <span class="text-xs font-semibold" data-tauri-drag-region>AgentDeck</span>
   </div>
 
@@ -310,6 +315,11 @@
       {/snippet}
     </ZTree>
   </div>
+
+  {#if layout.docked.sidebar.length > 0}
+    <Splitter axis="y" label="Resize sidebar zone" onDelta={(delta) => (layout.sizes.sidebarZone = Math.min(Math.max(layout.sizes.sidebarZone - delta, 96), window.innerHeight - 320))} />
+    <div class="flex shrink-0" style:height="{layout.sizes.sidebarZone}px"><DockZone zone="sidebar" /></div>
+  {/if}
 
   <div class="flex h-11 shrink-0 items-center gap-2 px-3 text-xs">
     <span class="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-[10px]">JD</span>

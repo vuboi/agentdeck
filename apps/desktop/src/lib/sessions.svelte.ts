@@ -10,6 +10,7 @@ import {
   type HistorySession,
 } from './history';
 import { messages as mockMessages, type Message } from './mock';
+import { modelCatalog } from './models';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
 export type Agent = 'claude' | 'codex' | 'gemini';
@@ -41,6 +42,16 @@ export type SessionItem = {
   draft?: boolean;
 };
 
+/**
+ * Brand colour per agent. The OpenAI logo's path has a hard-coded `fill="#fff"`, so text colour alone
+ * does not reach it: `[&_path]:fill-current` makes the path take the colour instead.
+ */
+export const AGENT_TEXT: Record<Agent, string> = {
+  claude: 'text-orange-500',
+  codex: 'text-emerald-500 [&_path]:fill-current',
+  gemini: 'text-sky-500',
+};
+
 /** Brand logo per agent (z-icon brand set). */
 export const AGENT_ICON: Record<Agent, ZIconName> = {
   claude: 'brandClaude' as ZIconName,
@@ -54,21 +65,8 @@ export const AGENTS: { value: Agent; label: string }[] = [
   { value: 'gemini', label: 'Gemini' },
 ];
 
-export const MODELS: Record<Agent, { value: string; label: string }[]> = {
-  claude: [
-    { value: 'opus-5-5', label: 'Opus 5.5' },
-    { value: 'sonnet-5-5', label: 'Sonnet 5.5' },
-    { value: 'haiku-5-5', label: 'Haiku 5.5' },
-  ],
-  codex: [
-    { value: 'gpt-6-luna', label: 'GPT-6 Luna' },
-    { value: 'gpt-5-6-luna', label: 'GPT-5.6 Luna' },
-  ],
-  gemini: [
-    { value: 'gemini-3-pro', label: 'Gemini 3 Pro' },
-    { value: 'gemini-3-flash', label: 'Gemini 3 Flash' },
-  ],
-};
+/** Models per agent, from the catalogue in models.ts. */
+export const MODELS = modelCatalog();
 
 const mockWorkspace = {
   activeId: 's1',
@@ -78,13 +76,13 @@ const mockWorkspace = {
     { id: 'p3', name: 'msg-new-template', path: 'E:\\WORK\\PROJECTS\\msg-new-template' },
   ] as Project[],
   sessions: [
-    { id: 's1', projectId: 'p1', title: 'Build the settings panel', agent: 'claude', model: 'sonnet-5-5', gitBranch: 'main', status: 'working' },
+    { id: 's1', projectId: 'p1', title: 'Build the settings panel', agent: 'claude', model: 'claude-sonnet-5-5', gitBranch: 'main', status: 'working' },
     { id: 's2', projectId: 'p1', title: 'Try it with Codex', agent: 'codex', agents: ['claude', 'codex'], model: 'gpt-6-luna', gitBranch: 'main', status: 'waiting', parentId: 's1' },
-    { id: 's3', projectId: 'p1', title: 'Codex, second attempt', agent: 'codex', model: 'gpt-5-6-luna', gitBranch: 'main', status: 'idle', parentId: 's2' },
-    { id: 's4', projectId: 'p1', title: 'Virtual chat list', agent: 'claude', agents: ['claude', 'codex', 'gemini'], model: 'opus-5-5', gitBranch: 'feat/chat-virtual', status: 'idle' },
-    { id: 's5', projectId: 'p2', title: 'Svelte 5 z-tabs styling', agent: 'claude', model: 'sonnet-5-5', gitBranch: 'main', status: 'idle' },
+    { id: 's3', projectId: 'p1', title: 'Codex, second attempt', agent: 'codex', model: 'gpt-5.6-luna', gitBranch: 'main', status: 'idle', parentId: 's2' },
+    { id: 's4', projectId: 'p1', title: 'Virtual chat list', agent: 'claude', agents: ['claude', 'codex', 'gemini'], model: 'claude-opus-5-5', gitBranch: 'feat/chat-virtual', status: 'idle' },
+    { id: 's5', projectId: 'p2', title: 'Svelte 5 z-tabs styling', agent: 'claude', model: 'claude-sonnet-5-5', gitBranch: 'main', status: 'idle' },
     { id: 's6', projectId: 'p2', title: 'Review the carousel API', agent: 'gemini', model: 'gemini-3-pro', gitBranch: 'feat/carousel', status: 'idle' },
-    { id: 's7', projectId: 'p3', title: 'Zoom check on mobile table', agent: 'claude', model: 'haiku-5-5', gitBranch: 'fix/mobile-zoom', status: 'waiting' },
+    { id: 's7', projectId: 'p3', title: 'Zoom check on mobile table', agent: 'claude', model: 'claude-haiku-5-5', gitBranch: 'fix/mobile-zoom', status: 'waiting' },
   ] as SessionItem[],
 };
 
@@ -120,9 +118,9 @@ function ensureNoProject() {
  * button from another session brings you back to the draft you left, input included. Only once a
  * message has been sent does the button start a new one.
  */
-export function newSession(projectId = activeSession()?.projectId ?? workspace.projects[0]?.id ?? NO_PROJECT) {
+export function newSession(projectId = activeSession()?.projectId ?? workspace.projects[0]?.id ?? NO_PROJECT, { reuseDraft = true } = {}) {
   if (projectId === NO_PROJECT) ensureNoProject();
-  const empty = workspace.sessions.find((item) => item.draft);
+  const empty = reuseDraft ? workspace.sessions.find((item) => item.draft) : undefined;
   if (empty) {
     empty.projectId = projectId;
     workspace.activeId = empty.id;
@@ -135,7 +133,7 @@ export function newSession(projectId = activeSession()?.projectId ?? workspace.p
     projectId,
     title: 'New session',
     agent: 'claude',
-    model: 'sonnet-5-5',
+    model: 'claude-sonnet-5-5',
     gitBranch: projectId === NO_PROJECT ? undefined : base?.gitBranch,
     status: 'idle',
     draft: true,
@@ -255,7 +253,11 @@ export async function importHistory() {
   }
 }
 
-function applyHistory(found: HistorySession[]) {
+function applyHistory(all: HistorySession[]) {
+  // One entry per id (first = newest): an older cache can still hold a duplicated Codex thread,
+  // and a repeated id breaks the sidebar's keyed tree.
+  const seen = new Set<string>();
+  const found = all.filter((item) => !seen.has(item.id) && seen.add(item.id));
   const ids = new Set(found.map((item) => item.id));
   const projectIds = new Map<string, string>();
   const projects: Project[] = [];

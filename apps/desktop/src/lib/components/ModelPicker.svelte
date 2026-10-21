@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { ZButton, ZIcon, ZPopover, ZSwitch, ZTabs, zHoverGlide } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { AGENTS, MODELS, type Agent, type Effort, type Permission } from '../sessions.svelte';
+  import { AGENT_TEXT, type Agent, type Effort, type Permission } from '../sessions.svelte';
+  import { modelSources, type ProviderId } from '../models';
 
   let {
     agent = $bindable(),
@@ -47,11 +48,24 @@
   });
   let trigger: HTMLElement | null = $state(null);
 
-  const agentIcon: Record<Agent, ZIconName> = {
-    claude: 'brandClaude' as ZIconName,
-    codex: 'brandOpenai' as ZIconName,
-    gemini: 'brandGemini' as ZIconName,
-  };
+  // Models per provider, from the catalogue. Providers are rows; the models open in a nested popover.
+  const sourceOf = (provider: ProviderId) => modelSources.find((source) => source.provider === provider)!;
+  const modelsOf = (provider: ProviderId) => sourceOf(provider).models();
+  const modelName = (provider: ProviderId, value: string) => modelsOf(provider).find((item) => item.value === value)?.label ?? value;
+
+  let subOpen = $state(false);
+  let subProvider = $state<ProviderId>('claude');
+  let subAnchor: HTMLElement | null = $state(null);
+  // Room above the trigger, so the panel never runs past the top of the window.
+  let panelMax = $state(600);
+
+  // Hovering a provider row opens its models; moving to another row switches. Nothing to click.
+  function openSub(provider: ProviderId, row: HTMLElement) {
+    if (subOpen && subProvider === provider) return;
+    subProvider = provider;
+    subAnchor = row;
+    subOpen = true;
+  }
 
   const efforts = [
     { value: 'low', label: 'Low' },
@@ -69,7 +83,7 @@
     { value: 'yolo', label: 'YOLO', hint: 'No prompts, full access to the machine', icon: 'lucideZap' as ZIconName, danger: true },
   ];
 
-  const modelLabel = $derived(MODELS[agent].find((item) => item.value === model)?.label ?? model);
+  const modelLabel = $derived(modelName(agent, model));
   const effortLabel = $derived(efforts.find((item) => item.value === effort)?.label ?? effort);
   const currentPermission = $derived(permissions.find((item) => item.value === permission) ?? permissions[0]);
 
@@ -91,14 +105,17 @@
   aria-haspopup="dialog"
   aria-expanded={open}
   aria-label="Model and permissions"
-  onclick={() => (open = !open)}
+  onclick={() => {
+    panelMax = Math.max(220, (trigger?.getBoundingClientRect().top ?? 600) - 16);
+    open = !open;
+  }}
 >
-  <ZIcon zType={agentIcon[agent]} class="size-3.5 shrink-0 text-primary" />
+  <ZIcon zType={sourceOf(agent).icon} class="size-3.5 shrink-0 {AGENT_TEXT[agent]}" />
   <span class="truncate">{modelLabel}</span>
-  <span class="text-muted-foreground">· {effortLabel}</span>
+  <span class="hidden text-muted-foreground min-[720px]:inline">· {effortLabel}</span>
   {#if fast}<ZIcon zType="lucideZap" class="size-3 shrink-0 text-warning" />{/if}
   {#if permission !== 'ask'}
-    <span class="rounded px-1 text-[10px] {currentPermission.danger ? 'bg-destructive/15 text-destructive' : 'bg-muted text-muted-foreground'}">{currentPermission.label}</span>
+    <span class="hidden rounded px-1 text-[10px] min-[720px]:inline {currentPermission.danger ? 'bg-destructive/15 text-destructive' : 'bg-muted text-muted-foreground'}">{currentPermission.label}</span>
   {/if}
   <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 text-muted-foreground" />
 </ZButton>
@@ -113,30 +130,27 @@
   onClosed={() => !warming && trigger?.focus()}
 >
   {#snippet children()}
-    <div class="flex max-h-[min(72vh,580px)] w-[320px] flex-col gap-2.5 overflow-y-auto p-3">
+    <div class="flex w-[320px] flex-col gap-2 overflow-y-auto px-2.5 py-2" style:max-height="{panelMax}px">
       <section aria-label="Model">
         <div class="mb-1 font-mono text-[10px] tracking-widest text-muted-foreground">MODEL</div>
-        <!-- Grouped by provider instead of tabs, so adding providers just adds a group. -->
         <div class="flex flex-col gap-0.5" {@attach glide()}>
-          {#each AGENTS as entry (entry.value)}
-            <div class="mt-1.5 flex items-center gap-1.5 px-2 text-[11px] text-muted-foreground first:mt-0">
-              <ZIcon zType={agentIcon[entry.value]} class="size-3.5" />
-              {entry.label}
-            </div>
-            {#each MODELS[entry.value] as item (item.value)}
-              {@const selected = agent === entry.value && model === item.value}
-              <button
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                data-glide-item
-                class="flex w-full cursor-pointer items-center justify-between rounded-md py-1 pr-2 pl-7 text-left text-xs outline-none focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''}"
-                onclick={() => pickModel(entry.value, item.value)}
-              >
-                {item.label}
-                {#if selected}<ZIcon zType="lucideCheck" class="size-3.5 text-primary" />{/if}
-              </button>
-            {/each}
+          {#each modelSources as source (source.provider)}
+            {@const current = agent === source.provider ? modelName(source.provider, model) : ''}
+            <button
+              type="button"
+              role="menuitem"
+              aria-haspopup="dialog"
+              aria-expanded={subOpen && subProvider === source.provider}
+              data-glide-item
+              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs outline-none focus-visible:bg-primary/10 {subOpen && subProvider === source.provider ? 'bg-primary/10' : ''}"
+              onpointerenter={(event) => openSub(source.provider, event.currentTarget)}
+              onfocus={(event) => openSub(source.provider, event.currentTarget)}
+            >
+              <ZIcon zType={source.icon} class="size-3.5 shrink-0 {AGENT_TEXT[source.provider]}" />
+              <span class="flex-1 truncate">{source.label}</span>
+              {#if current}<span class="truncate text-[11px] text-muted-foreground">{current}</span>{/if}
+              <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
+            </button>
           {/each}
         </div>
       </section>
@@ -156,7 +170,7 @@
         />
       </section>
 
-      <section aria-label="Speed" class="my-1 flex items-center justify-between gap-6 px-1">
+      <section aria-label="Speed" class="flex items-center justify-between gap-6 px-0.5">
         <div>
           <div class="flex items-center gap-1.5 text-xs font-medium">
             <ZIcon zType="lucideZap" class="size-3.5 text-warning" />
@@ -177,7 +191,7 @@
             role="radio"
             aria-checked={selected}
             data-glide-item
-            class="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1 text-left outline-none focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''}"
+            class="flex w-full cursor-pointer items-start gap-2 rounded-md px-1.5 py-0.5 text-left outline-none focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''}"
             onclick={() => (permission = item.value)}
           >
             <ZIcon zType={item.icon} class="mt-0.5 size-3.5 shrink-0 {item.danger ? 'text-destructive' : 'text-muted-foreground'}" />
@@ -192,6 +206,37 @@
         {/each}
         </div>
       </section>
+    </div>
+  {/snippet}
+</ZPopover>
+
+<ZPopover
+  anchor={subAnchor}
+  bind:open={subOpen}
+  zTrigger="manual"
+  zPosition="right-top"
+  zOffset={6}
+  zWidth={200}
+>
+  {#snippet children()}
+    <div class="flex w-[200px] flex-col gap-0.5 p-1" role="radiogroup" aria-label="{sourceOf(subProvider).label} models" {@attach glide()}>
+      {#each modelsOf(subProvider) as item (item.value)}
+        {@const selected = agent === subProvider && model === item.value}
+        <button
+          type="button"
+          role="radio"
+          aria-checked={selected}
+          data-glide-item
+          class="flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1 text-left text-xs outline-none focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''}"
+          onclick={() => {
+            pickModel(subProvider, item.value);
+            subOpen = false;
+          }}
+        >
+          {item.label}
+          {#if selected}<ZIcon zType="lucideCheck" class="size-3.5 text-primary" />{/if}
+        </button>
+      {/each}
     </div>
   {/snippet}
 </ZPopover>
