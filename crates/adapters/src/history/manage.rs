@@ -16,6 +16,9 @@ use serde_json::json;
 
 use super::{HistoryError, Roots, Source};
 
+/// Longest title accepted; the sidebar and the tools show one line.
+const TITLE_MAX: usize = 200;
+
 /// A session file written to more recently than this is probably open in a running CLI.
 const IN_USE: Duration = Duration::from_secs(90);
 
@@ -51,6 +54,11 @@ pub fn rename(roots: &Roots, source: Source, path: &Path, title: &str) -> Result
     let title = title.trim();
     if title.is_empty() {
         return Err(HistoryError::Invalid("the title is empty".into()));
+    }
+    if title.chars().count() > TITLE_MAX || title.chars().any(char::is_control) {
+        return Err(HistoryError::Invalid(format!(
+            "the title must be one line of at most {TITLE_MAX} characters"
+        )));
     }
     let path = checked(roots, source, path)?;
     let id = session_uuid(&path)

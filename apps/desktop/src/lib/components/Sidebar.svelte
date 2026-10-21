@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree, zModalService } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZTreeNode } from '@shival99/z-ui-svelte';
   import AgentStack from './AgentStack.svelte';
   import SearchPalette from './SearchPalette.svelte';
@@ -121,12 +121,25 @@
 
   // ---------- rename / delete (also written into the original tool's own storage) ----------
   let renaming = $state(false);
-  let deleting = $state(false);
+  let nameInput: { focus: () => void } | undefined = $state();
+  // Type straight away: focus the field and select the old name once the modal is on screen.
+  $effect(() => {
+    if (!renaming) return;
+    const timer = setTimeout(() => {
+      nameInput?.focus();
+      (document.activeElement as HTMLInputElement | null)?.select?.();
+    }, 80);
+    return () => clearTimeout(timer);
+  });
   let target = $state('');
   let title = $state('');
   let busy = $state(false);
   let failure = $state('');
   const targetSession = $derived(workspace.sessions.find((item) => item.id === target));
+  const TITLE_MAX = 100;
+  const titleError = $derived(
+    !title.trim() ? 'The name cannot be empty.' : title.trim().length > TITLE_MAX ? `Keep it under ${TITLE_MAX} characters.` : '',
+  );
   const synced = $derived(Boolean(targetSession?.path));
   const toolName = $derived(targetSession?.source === 'codex' ? 'Codex' : 'Claude');
 
@@ -138,11 +151,30 @@
     renaming = true;
   }
 
+  /** Confirmation dialog (z-modal "dialog" style); the OK button stays loading until the files are moved. */
   function askDelete() {
-    if (!menu) return;
-    target = menu.id;
-    failure = '';
-    deleting = true;
+    const session = menuSession;
+    if (!session) return;
+    const tool = session.source === 'codex' ? 'Codex' : 'Claude';
+    zModalService.danger({
+      zTitle: 'Delete chat?',
+      zContent: session.path
+        ? `“${session.title}” is also removed from ${tool}: the file moves to ~/.agentdeck/trash, so it can be restored by hand. A chat open in a running CLI cannot be deleted.`
+        : `“${session.title}” only exists in AgentDeck and will be removed.`,
+      zConfirmStyle: 'dialog',
+      zOkText: 'Delete',
+      zOkIcon: 'lucideTrash2',
+      zCancelText: 'Cancel',
+      zWidth: '400px',
+      onOk: async () => {
+        try {
+          await deleteSession(session.id);
+        } catch (error) {
+          zModalService.warning({ zTitle: 'Could not delete', zContent: String(error), zConfirmStyle: 'dialog', zCancelText: null, zOkText: 'OK' });
+        }
+        return true;
+      },
+    });
   }
 
   async function run(action: () => Promise<void>, close: () => void) {
@@ -158,8 +190,7 @@
     }
   }
 
-  const doRename = () => run(() => renameSession(target, title), () => (renaming = false));
-  const doDelete = () => run(() => deleteSession(target), () => (deleting = false));
+  const doRename = () => !titleError && run(() => renameSession(target, title), () => (renaming = false));
 
   const projectId = (nodeId: string) => nodeId.replace(/^project:/, '');
   function addSession(id: string) {
@@ -300,9 +331,13 @@
 
 <SearchPalette bind:open={searchOpen} />
 
-<ZModal bind:open={renaming} zTitle="Rename chat" zWidth="420px" zOkText="Save" zCancelText="Cancel" zLoading={busy} zOkDisabled={!title.trim()} onOk={doRename}>
+<ZModal bind:open={renaming} zTitle="Rename chat" zWidth="400px" zBodyClass="min-h-0! py-3" zOkText="Save" zCancelText="Cancel" zLoading={busy} zOkDisabled={Boolean(titleError)} onOk={doRename}>
   <div class="flex flex-col gap-2">
-    <ZInput bind:value={title} zPlaceholder="Chat name" onEnter={doRename} />
+    <ZInput bind:this={nameInput} bind:value={title} zPlaceholder="Chat name" onEnter={doRename} />
+    <div class="flex items-center justify-between text-xs">
+      <span class="text-destructive" role="alert">{title.length > 0 || title !== (targetSession?.title ?? '') ? titleError : ''}</span>
+      <span class="text-muted-foreground tabular-nums">{title.trim().length}/{TITLE_MAX}</span>
+    </div>
     {#if synced}
       <p class="text-xs text-muted-foreground">The new name is also written to the original {toolName} session.</p>
     {/if}
@@ -310,16 +345,3 @@
   </div>
 </ZModal>
 
-<ZModal bind:open={deleting} zTitle="Delete chat" zWidth="440px" zOkText="Delete" zOkDestructive zCancelText="Cancel" zLoading={busy} onOk={doDelete}>
-  <div class="flex flex-col gap-2 text-sm">
-    <p>Delete “{targetSession?.title}”?</p>
-    <p class="text-xs text-muted-foreground">
-      {#if synced}
-        It is removed from {toolName} too: the file is moved to <code>~/.agentdeck/trash</code>, so it can still be restored by hand. A chat open in a running CLI cannot be deleted.
-      {:else}
-        This chat only exists in AgentDeck.
-      {/if}
-    </p>
-    {#if failure}<p class="text-xs text-destructive" role="alert">{failure}</p>{/if}
-  </div>
-</ZModal>
