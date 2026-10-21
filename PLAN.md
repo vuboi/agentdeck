@@ -53,7 +53,9 @@ packages/
 ## 3. Model dữ liệu cốt lõi (crates/protocol)
 
 ```
-Session { id, project_path, title, agent: AgentKind, model, created_at }
+Project { id, name, path }                       # a working folder; sessions group under it
+Session { id, project_id, title, agent: AgentKind, model, branch, created_at,
+          parent_id?, fork_seq? }                # parent_id + fork_seq = forked from parent at that event
 Turn    { id, session_id, role: user|agent, started_at, ended_at }
 Event   { seq, id, session_id, turn_id?, ts, kind: EventKind, prev_hash, hash }
 EventKind =
@@ -67,6 +69,29 @@ AgentKind = claude | codex | gemini | antigravity
 QuotaWindow  { provider, account, kind: h5|weekly|daily|rpm|tpm, used, limit, unit: pct|tokens|requests, resets_at, source: exact|estimated|reactive, observed_at }
 ModelProfile { id, provider, tier, context_window, max_output, price_in, price_out, price_cache_read, price_cache_write, tps_measured }
 ```
+
+---
+
+## 3b. Session tree, forks and mentions
+
+**Session tree (sidebar).** `Project > Branch > Session > Fork`, rendered with `ZTree`:
+- **Project**: a folder on disk. Sessions are grouped by `project_id`; a project can be collapsed.
+- **Branch**: the git branch the session works on (`branch`). Each session runs in its own worktree
+  (M5), so two sessions on different branches never touch the same files.
+- **Fork**: "branch the conversation". A fork copies the parent history up to `fork_seq` into a new
+  session (`parent_id` = parent, `fork_seq` = last shared event) and continues independently, possibly
+  with another agent/model. Forks nest under their parent and can be forked again.
+- Row shows status dot (working / waiting / idle), title and agent. Selecting a row switches the chat.
+
+**Composer.**
+- Agent and model are picked with `ZSelect` (model list depends on the agent).
+- `@` opens a mention palette (`ZCommand`) with three groups:
+  - **Sessions**: inject a short summary of another session (never the whole transcript, token saving).
+  - **Projects**: add another project path as extra context / working directory.
+  - **AI**: route this message to a specific agent + model (sets the selects for this message).
+- Picked mentions show as removable chips above the input; the daemon resolves them into the context
+  pack when the message is sent (see section 3, "Context pack").
+- Later: `@file` (fuzzy index), `/command`, `#skill`.
 
 ---
 
@@ -103,7 +128,8 @@ Mỗi module có Definition of Done (DoD). Làm tuần tự, mỗi module = 1 co
 ### M4 — UI chat
 - Store Svelte 5 (`$state` class) cho sessions/events; batch update theo rAF.
 - Timeline virtualized, markdown + Shiki, tool card (collapsible, spinner, thời gian), terminal stream (xterm.js), diff (CodeMirror merge), status badge thinking/working/running cmd/waiting approval.
-- Composer: chọn agent/model/effort, `@file` (fuzzy từ core), `@session`, `/command`, đính ảnh.
+- Composer: `ZSelect` agent/model/effort; mention `@session` / `@project` / `@AI` (palette `ZCommand`, chip có thể xoá), `@file` (fuzzy từ core), `/command`, đính ảnh.
+- Sidebar: cây `ZTree` Project > Branch > Session > Fork (fork lồng dưới session cha); tạo fork từ menu session; trạng thái working/waiting/idle.
 - Tích hợp bộ UI của user (thay `packages/ui`).
 - **DoD**: chat Claude end-to-end trong app, stream mượt, permission prompt hoạt động.
 
