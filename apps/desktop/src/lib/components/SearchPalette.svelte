@@ -87,7 +87,7 @@
   bind:query
   zGroups={groups}
   zSearch="fuzzy"
-  zSize="sm"
+  zSize="default"
   zHotkey="mod+k"
   zPlaceholder="Search chats…"
   onSelect={select}
