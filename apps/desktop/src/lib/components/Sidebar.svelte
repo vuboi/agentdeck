@@ -215,9 +215,6 @@
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3" data-tauri-drag-region>
     <span class="grid size-5 place-items-center rounded-md bg-primary text-[11px] font-bold text-primary-foreground" data-tauri-drag-region>A</span>
     <span class="text-xs font-semibold" data-tauri-drag-region>AgentDeck</span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto h-6 w-6 px-0" aria-label="Search chats (Ctrl+K)" title="Search chats (Ctrl+K)" onclick={() => (searchOpen = true)}>
-      <ZIcon zType="lucideSearch" class="size-3.5" />
-    </ZButton>
   </div>
 
   <div class="border-b border-border px-2 py-2">
@@ -225,6 +222,9 @@
       <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 min-w-0 flex-1 justify-start gap-2 px-2 text-xs" onclick={() => newSession()}>
         <ZIcon zType="lucidePlus" class="size-3.5" />
         New session
+      </ZButton>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Search chats (Ctrl+K)" title="Search chats (Ctrl+K)" onclick={() => (searchOpen = true)}>
+        <ZIcon zType="lucideSearch" class="size-3.5" />
       </ZButton>
       <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="New chat without a project" title="New chat without a project" onclick={() => newChat()}>
         <ZIcon zType="lucideMessageSquarePlus" class="size-3.5" />
