@@ -114,6 +114,13 @@
       onSelect={jumpToTurn}
     />
 
+    <!-- Same fade as ShowMore: messages dissolve into the page just above the composer instead of being cut. -->
+    <div
+      class="pointer-events-none absolute right-2.5 bottom-0 left-0 z-10 h-12"
+      style="background-image: linear-gradient(to top, var(--background) 0%, transparent 100%)"
+      aria-hidden="true"
+    ></div>
+
     {#if chat.messages.length === 0}
       <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center text-xs text-muted-foreground">
         {#if chat.loading}
