@@ -1,92 +1,93 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { ZButton, ZDropdownMenu, ZIcon } from '@shival99/z-ui-svelte';
+  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import ToolbarActions from './ToolbarActions.svelte';
 
-  const tabs = ['Preview', 'Diff', 'Terminal', 'Workflow', 'Usage', 'Audit'] as const;
-  let active = $state<(typeof tabs)[number]>('Preview');
-  let width = $state(350);
-  let collapsed = $state(false);
-  let dragging = $state(false);
-  let resizeHandle = $state<HTMLDivElement | undefined>();
+  const tabs = [
+    { value: 'Preview', label: 'Preview', icon: 'lucideGlobe' as ZIconName },
+    { value: 'Diff', label: 'Diff', icon: 'lucideGitCompare' as ZIconName },
+    { value: 'Workflow', label: 'Workflow', icon: 'lucideWorkflow' as ZIconName },
+    { value: 'Usage', label: 'Usage', icon: 'lucideActivity' as ZIconName },
+    { value: 'Audit', label: 'Audit', icon: 'lucideShieldCheck' as ZIconName },
+  ];
+  let active = $state('Preview');
+  const current = $derived(tabs.find((tab) => tab.value === active) ?? tabs[0]);
+
+  // Tabs that do not fit fold into a hamburger dropdown instead of scrolling sideways.
+  const ACTIONS = 80; // short divider + palette + collapse
+  const TAB = 34; // 32px button + 2px gap
+  let headerWidth = $state(0);
+  let header: HTMLDivElement | undefined = $state();
 
   onMount(() => {
-    clampWidth(width);
+    if (!header) return;
+    const observer = new ResizeObserver(([entry]) => (headerWidth = entry.contentRect.width));
+    observer.observe(header);
+    return () => observer.disconnect();
   });
 
-  $effect(() => {
-    const root = document.documentElement;
-    root.classList.toggle('panel-resizing', dragging);
-    return () => root.classList.remove('panel-resizing');
+  const visibleCount = $derived.by(() => {
+    if (headerWidth === 0) return tabs.length;
+    const room = headerWidth - ACTIONS - 6; // contentRect already excludes the pr-33 padding
+    const fit = Math.floor((room + 2) / TAB);
+    return fit >= tabs.length ? tabs.length : Math.max(0, fit - 1);
   });
+  const visibleTabs = $derived(tabs.slice(0, visibleCount));
+  const hiddenTabs = $derived(tabs.slice(visibleCount));
 
-  function maxWidth() {
-    return Math.max(0, window.innerWidth - 260 - 480);
-  }
-
-  function clampWidth(nextWidth: number) {
-    width = Math.min(maxWidth(), Math.max(0, nextWidth));
-  }
-
-  function startResize(event: PointerEvent) {
-    if (!resizeHandle) return;
-    dragging = true;
-    resizeHandle.setPointerCapture(event.pointerId);
-    resizeFromPointer(event);
-  }
-
-  function resizeFromPointer(event: PointerEvent) {
-    if (dragging) clampWidth(window.innerWidth - event.clientX);
-  }
-
-  function endResize() {
-    dragging = false;
-  }
-
-  function onTabKeydown(event: KeyboardEvent) {
-    if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const index = tabs.indexOf(active);
-    if (event.key === 'Home') active = tabs[0];
-    else if (event.key === 'End') active = tabs[tabs.length - 1];
-    else active = tabs[(index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
-    document.getElementById(`tab-${active}`)?.focus();
-  }
+  // Standard z-ui dropdown: icon + text rows, check on the current tool, library focus handling and animation.
+  const menuItems = $derived(
+    hiddenTabs.map((tab) => ({
+      label: tab.label,
+      icon: tab.icon,
+      checked: tab.value === active,
+      onClick: () => (active = tab.value),
+    })),
+  );
 </script>
 
-<svelte:window onresize={() => clampWidth(width)} />
-
-{#if !collapsed}
-  <aside class="right-panel" class:dragging style={`width: ${width}px`} aria-label="Tools panel">
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-    <div
-      class="resize-handle"
-      class:dragging
-      bind:this={resizeHandle}
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize tools panel"
-      aria-valuenow={width}
-      aria-valuemin="0"
-      aria-valuemax={maxWidth()}
-      tabindex="0"
-      onpointerdown={startResize}
-      onpointermove={resizeFromPointer}
-      onpointerup={endResize}
-      onpointercancel={endResize}
-      onlostpointercapture={endResize}
-      onkeydown={(event) => {
-        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-        event.preventDefault();
-        clampWidth(width + (event.key === 'ArrowLeft' ? 16 : -16));
-      }}
-    ></div>
-    <div class="panel-heading"><span>Workspace</span><button aria-label="Collapse tools panel" onclick={() => (collapsed = true)}>›</button></div>
-    <div class="panel-tabs" role="tablist" aria-label="Workspace tools">
-      {#each tabs as tab}
-        <button role="tab" aria-selected={active === tab} id={`tab-${tab}`} aria-controls="tool-panel" tabindex={active === tab ? 0 : -1} onclick={() => (active = tab)} onkeydown={onTabKeydown}>{tab}</button>
+<aside class="flex h-full min-w-0 flex-col bg-sidebar" aria-label="Tools panel">
+  <!-- Header row: icon tabs (+ hamburger when cramped), then palette / mode / collapse after a short divider. -->
+  <div bind:this={header} class="flex h-10 shrink-0 items-center overflow-hidden border-b border-border pr-33" data-tauri-drag-region>
+    <div class="flex items-center gap-0.5 pl-1.5" role="tablist" aria-label="Workspace tools">
+      {#each visibleTabs as tab (tab.value)}
+        <ZButton
+          zWave={false}
+          role="tab"
+          zType={active === tab.value ? 'subtle' : 'ghost'}
+          zSize="sm"
+          class="h-7 w-8 shrink-0 px-0"
+          aria-selected={active === tab.value}
+          aria-label={tab.label}
+          title={tab.label}
+          onclick={() => (active = tab.value)}
+        >
+          <ZIcon zType={tab.icon} class="size-4" />
+        </ZButton>
       {/each}
+      {#if hiddenTabs.length > 0}
+        <ZDropdownMenu
+          zItems={menuItems}
+          zIcon="lucideMenu"
+          zLabel=""
+          zButtonType="ghost"
+          zButtonSize="sm"
+          zPosition="bottom-right"
+          zOffset={6}
+          zMinWidth={128}
+          zWave={false}
+        />
+      {/if}
     </div>
-    <div id="tool-panel" class="panel-empty" role="tabpanel" aria-labelledby={`tab-${active}`}><div class="empty-icon">{active === 'Preview' ? '▧' : '⌁'}</div><h2>{active}</h2><p>{active === 'Preview' ? 'Your browser preview will appear here.' : `No ${active.toLowerCase()} data yet.`}</p></div>
-  </aside>
-{:else}
-  <button class="expand-panel" aria-label="Expand tools panel" onclick={() => (collapsed = false)}>‹</button>
-{/if}
+    <ToolbarActions />
+  </div>
+
+  <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground" role="tabpanel" aria-label={current.label}>
+    <ZIcon zType={current.icon} class="size-8 opacity-60" />
+    <h2 class="text-sm font-medium text-foreground">{current.label}</h2>
+    <p class="m-0 max-w-56 text-xs leading-normal">
+      {current.value === 'Preview' ? 'Your browser preview will appear here.' : `No ${current.label.toLowerCase()} data yet.`}
+    </p>
+  </div>
+</aside>

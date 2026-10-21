@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
 
   let maximized = $state(false);
   const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -39,11 +40,15 @@
   }
 </script>
 
-<header class="titlebar" data-tauri-drag-region>
-  <div class="brand" data-tauri-drag-region><span class="brand-mark">A</span> AgentDeck</div>
-  <div class="window-actions" aria-label="Window controls">
-    <button aria-label="Minimize window" onclick={() => windowAction('minimize')}>−</button>
-    <button aria-label={maximized ? 'Restore window' : 'Maximize window'} onclick={() => windowAction('toggle')}>{maximized ? '❐' : '□'}</button>
-    <button class="close" aria-label="Close window" onclick={() => windowAction('close')}>×</button>
-  </div>
-</header>
+<!-- Pinned to the top-right corner, over the header row of whichever pane sits there. -->
+<div class="absolute top-0 right-0 z-50 flex h-[39px] items-center gap-0.5 pr-1.5" aria-label="Window controls">
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-9 items-center justify-center rounded-md" aria-label="Minimize window" onclick={() => windowAction('minimize')}>
+    <ZIcon zType="lucideMinus" class="size-3.5" zStrokeWidth={1.5} />
+  </ZButton>
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-9 items-center justify-center rounded-md" aria-label={maximized ? 'Restore window' : 'Maximize window'} onclick={() => windowAction('toggle')}>
+    <ZIcon zType={maximized ? "lucideCopy" : "lucideSquare"} class="size-3" zStrokeWidth={1.5} />
+  </ZButton>
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive hover:text-white" aria-label="Close window" onclick={() => windowAction('close')}>
+    <ZIcon zType="lucideX" class="size-3.5" zStrokeWidth={1.5} />
+  </ZButton>
+</div>

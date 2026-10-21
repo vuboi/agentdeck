@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nested Sidebar Menu"
+  short_description: "Build reliable nested sidebar menus"
+  default_prompt: "Use this skill when implementing or reviewing nested sidebar menus with collapsible children, popovers, mobile drawers, active states, and smooth expand/collapse animation."

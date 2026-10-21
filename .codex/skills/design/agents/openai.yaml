@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Design judgment'
+  short_description: 'Product-grounded UI direction and visual QA'
+  default_prompt: 'Use $design to ground, direct, anti-slop review, and browser-check this frontend UI.'
