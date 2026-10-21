@@ -2,7 +2,8 @@
   import { ZCard, ZIcon, ZLoading, ZShowMore } from '@shival99/z-ui-svelte';
   import type { Block } from '../mock';
 
-  let { block }: { block: Block } = $props();
+  // `fade` is the surface behind the block; ZShowMore fades its clipped edge into that colour.
+  let { block, fade }: { block: Block; fade?: string } = $props();
 
   const statusIcon = { running: 'lucideLoaderCircle', ok: 'lucideCircleCheck', fail: 'lucideCircleX' } as const;
   const statusTone = { running: 'text-warning', ok: 'text-success', fail: 'text-destructive' } as const;
@@ -17,13 +18,13 @@
         Thinking
       </span>
     {/snippet}
-    <ZShowMore zMaxHeight={160} zButtonSize="sm" moreLabel="Show more" lessLabel="Show less">
+    <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="var(--card)" moreLabel="Show more" lessLabel="Show less">
       <p class="m-0 whitespace-pre-wrap leading-relaxed">{block.text}</p>
     </ZShowMore>
   </ZCard>
 {:else if block.kind === 'response'}
   <div class="text-sm leading-relaxed text-foreground">
-    <ZShowMore zMaxHeight={240} zButtonSize="sm">
+    <ZShowMore zMaxHeight={240} zButtonSize="sm" zBlurColor={fade ?? 'var(--background)'}>
       <p class="m-0 whitespace-pre-wrap">{block.text}</p>
     </ZShowMore>
   </div>
@@ -43,7 +44,7 @@
     </div>
     {#if block.output}
       <div class="px-3 py-2 font-mono text-xs text-muted-foreground">
-        <ZShowMore zMaxHeight={120} zButtonSize="sm">
+        <ZShowMore zMaxHeight={120} zButtonSize="sm" zBlurColor="var(--background)">
           <pre class="m-0 whitespace-pre-wrap">{block.output}</pre>
         </ZShowMore>
       </div>

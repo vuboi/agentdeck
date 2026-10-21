@@ -139,7 +139,7 @@
                 {#if mine}
                   <div class="flex max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 py-2.5 text-sm {theme.chatLayout === 'split' ? 'rounded-br-md' : 'rounded-bl-md'}">
                     {#each message.blocks as block}
-                      <ChatBlock {block} />
+                      <ChatBlock {block} fade="var(--muted)" />
                     {/each}
                   </div>
                   <span class="mt-1 px-1 text-[10px] text-muted-foreground">{message.time}</span>
