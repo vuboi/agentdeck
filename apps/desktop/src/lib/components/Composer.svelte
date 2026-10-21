@@ -36,28 +36,54 @@
   let fast = $state(false);
   let permission = $state<Permission>('ask');
 
-  // Last picked model, effort, speed and approval mode come back after a reload.
-  let pickerHydrated = false;
-  getPref<{ agent: Agent; model: string; effort: Effort; fast: boolean; permission: Permission }>('composer.picker').then((saved) => {
+  // The picker belongs to each session: agent, model, effort, speed and approval mode are remembered per
+  // session in IndexedDB, so a reload brings back what that chat was using.
+  type Picker = { agent: Agent; model: string; effort: Effort; fast: boolean; permission: Permission };
+  let pickers: Record<string, Picker> = {};
+  let pickersLoaded = false;
+
+  function applyPickerFor(sessionId: string) {
+    const saved = pickers[sessionId];
     if (saved) {
       agent = saved.agent;
       model = saved.model;
       effort = saved.effort;
       fast = saved.fast;
       permission = saved.permission;
+      return;
     }
-    pickerHydrated = true;
-  });
-  $effect(() => {
-    const picker = { agent, model, effort, fast, permission };
-    if (pickerHydrated) setPref('composer.picker', picker);
-  });
-  $effect(() => {
-    const session = activeSession();
-    if (!session) return;
-    untrack(() => {
+    const session = workspace.sessions.find((item) => item.id === sessionId);
+    if (session) {
       agent = session.agent;
       model = session.model;
+    }
+  }
+
+  getPref<Record<string, Picker>>('composer.pickers').then((saved) => {
+    pickers = saved ?? {};
+    pickersLoaded = true;
+    if (workspace.activeId) untrack(() => applyPickerFor(workspace.activeId));
+  });
+
+  // Switching session: show that session's picker.
+  $effect(() => {
+    const id = workspace.activeId;
+    if (id) untrack(() => applyPickerFor(id));
+  });
+
+  // Any change of the picker: remember it for this session and make it the session's model.
+  $effect(() => {
+    const current: Picker = { agent, model, effort, fast, permission };
+    const id = workspace.activeId;
+    if (!pickersLoaded || !id) return;
+    untrack(() => {
+      pickers[id] = current;
+      setPref('composer.pickers', pickers);
+      const session = workspace.sessions.find((item) => item.id === id);
+      if (session) {
+        session.agent = current.agent;
+        session.model = current.model;
+      }
     });
   });
 

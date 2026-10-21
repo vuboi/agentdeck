@@ -239,7 +239,7 @@
 
   {#if history.loading && workspace.sessions.length === 0}
     <div class="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground" role="status">
-      <ZLoading zSpinner="orbit" zSize="xs" zColor="primary" />
+      <ZLoading zLoading zSpinner="orbit" zSize="xs" zColor="primary" />
       Loading your Claude and Codex history…
     </div>
   {/if}
@@ -272,7 +272,7 @@
             {/if}
             {#if data.session.status === 'working'}
               <span class="grid size-3 shrink-0 place-items-center text-success" role="status" aria-label="Running">
-                <ZLoading zSpinner="orbit" zSize="2xs" zColor="current" />
+                <ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="current" />
               </span>
             {:else}
               <span class="size-1.5 shrink-0 rounded-full {statusColor[data.session.status]}" aria-label={data.session.status}></span>
@@ -286,7 +286,7 @@
             {/if}
             <button
               type="button"
-              class="hidden shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground group-hover/row:inline-flex"
+              class="inline-flex shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
               aria-label="Session actions"
               aria-haspopup="menu"
               onclick={(event) => openMenu(event, data.session!.id, event.currentTarget)}
@@ -299,7 +299,7 @@
             {#if data?.kind === 'project'}
               <button
                 type="button"
-                class="hidden shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground group-hover/row:inline-flex"
+                class="inline-flex shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
                 aria-label="New session in {ctx.node.label}"
                 title="New session"
                 onclick={(event) => {

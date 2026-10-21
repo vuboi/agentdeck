@@ -1,4 +1,5 @@
 import { workspace } from './sessions.svelte';
+import { getPref, setPref } from './prefs';
 
 // Browser-style tabs over the conversation area. A tab is either a chat (one session) or a file.
 // Chats and files share one list; `active` is a tab id, or '' when every tab is closed.
@@ -9,6 +10,22 @@ export type ContentTab =
 export const contentTabs = $state({
   active: '' as string,
   tabs: [] as ContentTab[],
+});
+
+// Open tabs survive a reload. Restored once, then saved on every change.
+let tabsHydrated = false;
+getPref<{ active: string; tabs: ContentTab[] }>('content.tabs').then((saved) => {
+  if (saved) {
+    contentTabs.tabs = saved.tabs ?? [];
+    contentTabs.active = saved.active ?? '';
+  }
+  tabsHydrated = true;
+});
+$effect.root(() => {
+  $effect(() => {
+    const snapshot = { active: contentTabs.active, tabs: contentTabs.tabs.map((tab) => ({ ...tab })) };
+    if (tabsHydrated) setPref('content.tabs', snapshot);
+  });
 });
 
 const chatId = (sessionId: string) => `chat:${sessionId}`;

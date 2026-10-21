@@ -2,8 +2,8 @@ export type Agent = 'claude' | 'codex' | 'gemini';
 export type Session = { id: string; title: string; agent: Agent; status: 'working' | 'idle' | 'waiting' };
 
 export type Block =
-  | { kind: 'thinking'; text: string }
-  | { kind: 'response'; text: string }
+  | { kind: 'thinking'; text: string; streaming?: boolean }
+  | { kind: 'response'; text: string; streaming?: boolean }
   | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail' }
   | { kind: 'loading'; label: string };
 

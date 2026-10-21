@@ -8,11 +8,20 @@
   // Thinking starts folded. The body animates by growing its grid row from 0fr to 1fr.
   let thinkingOpen = $state(false);
 
+  // Each kind of work gets its own loader: searching, running a command and fetching look different.
+  const SEARCH_TOOLS = /^(Read|Grep|Glob|LS|WebSearch)\b/;
+  const FETCH_TOOLS = /^(WebFetch|Fetch)\b/;
+  function spinnerFor(command: string): 'scan' | 'comet' | 'conic' {
+    if (SEARCH_TOOLS.test(command)) return 'scan';
+    if (FETCH_TOOLS.test(command)) return 'comet';
+    return 'conic';
+  }
+
   const statusIcon = { running: 'lucideLoaderCircle', ok: 'lucideCircleCheck', fail: 'lucideCircleX' } as const;
   const statusTone = { running: 'text-warning', ok: 'text-success', fail: 'text-destructive' } as const;
 </script>
 
-{#if block.kind === 'thinking'}
+{#if block.kind === 'thinking' && block.text.trim()}
   <!-- Same flat style as the command blocks; the body slides open and shut. -->
   <div class="rounded-lg border border-border bg-muted/30 text-xs text-muted-foreground">
     <button
@@ -22,6 +31,7 @@
       onclick={() => (thinkingOpen = !thinkingOpen)}
     >
       <ZIcon zType="lucideBrain" class="size-3.5" />
+      {#if block.streaming}<ZLoading zLoading zSpinner="pulse" zSize="2xs" zColor="primary" />{/if}
       Thinking
       <ZIcon zType="lucideChevronDown" class="ml-auto size-3.5 transition-transform duration-300 {thinkingOpen ? 'rotate-180' : ''}" />
     </button>
@@ -38,7 +48,7 @@
 {:else if block.kind === 'response'}
   <div class="text-sm leading-relaxed text-foreground">
     <ZShowMore zMaxHeight={240} zButtonSize="sm" zBlurColor={fade ?? 'var(--background)'}>
-      <p class="m-0 whitespace-pre-wrap">{block.text}</p>
+      <p class="m-0 whitespace-pre-wrap">{block.text}{#if block.streaming}<span class="ml-0.5 inline-block h-4 w-[2px] translate-y-[3px] animate-pulse bg-foreground" aria-hidden="true"></span>{/if}</p>
     </ZShowMore>
   </div>
 {:else if block.kind === 'command'}
@@ -48,7 +58,7 @@
       <span class="truncate">{block.command}</span>
       <span class="ml-auto flex items-center gap-1 {statusTone[block.status]}">
         {#if block.status === 'running'}
-          <ZLoading zSpinner="orbit" zSize="2xs" zColor="current" />
+          <ZLoading zLoading zSpinner={spinnerFor(block.command)} zSize="2xs" zColor="current" />
         {:else}
           <ZIcon zType={statusIcon[block.status]} class="size-3.5" />
         {/if}
@@ -65,8 +75,7 @@
   </div>
 {:else if block.kind === 'loading'}
   <div class="flex items-center gap-2 text-xs text-muted-foreground">
-    <ZLoading zSpinner="orbit" zSize="xs" zColor="primary" />
-    <ZLoading zSpinner="scramble" zSize="xs" zColor="primary" />
+    <ZLoading zLoading zSpinner="ring" zSize="xs" zColor="primary" />
     <span>{block.label}</span>
   </div>
 {/if}

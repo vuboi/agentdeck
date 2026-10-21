@@ -61,7 +61,7 @@
     scrollEndThreshold: 80,
     overscan: 8,
     paddingStart: 8,
-    paddingEnd: 8,
+    paddingEnd: 24,
   });
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>(virtualOptions());
 
@@ -255,7 +255,7 @@
         <!-- Own grid so the spinner and the arrow sit dead centre; the button's inline content box drifted down-right. -->
         <span class="grid size-full place-items-center">
           {#if running}
-            <ZLoading class="group-hover/jump:hidden" zSpinner="conic" zSize="xs" zColor="primary" />
+            <span class="group-hover/jump:hidden grid place-items-center"><ZLoading zLoading zSpinner="ring" zSize="sm" zColor="primary" /></span>
             <ZIcon zType="lucideArrowDown" class="hidden size-4 group-hover/jump:block" />
           {:else}
             <ZIcon zType="lucideArrowDown" class="size-4" />
@@ -325,7 +325,7 @@
   <!-- The composer sits on its own layer, above anything the conversation area paints at its edge. -->
   <!-- Hidden while a file tab is on screen: the file gets the full height. -->
   {#if !fileActive}
-    <div class="relative z-30 shrink-0 bg-background px-2 pt-2 pb-4 min-[720px]:px-6">
+    <div class="relative z-30 shrink-0 bg-background px-2 pt-4 pb-4 min-[720px]:px-6">
       <div class="mx-auto w-full min-w-0 max-w-3xl px-0 min-[720px]:min-w-[440px] min-[720px]:px-6">
         <Composer />
         <p class="mt-2 hidden text-center text-[10px] text-muted-foreground min-[720px]:block">AgentDeck can make mistakes. Review important changes.</p>

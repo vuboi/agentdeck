@@ -14,4 +14,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 ag-adapters.workspace = true
+serde.workspace = true
+tokio.workspace = true
 base64 = "0.22"

@@ -10,6 +10,9 @@ import {
   type HistorySession,
 } from './history';
 import { messages as mockMessages, type Message } from './mock';
+import { listenAgentEvents, sendAgentTurn, type AgentEvent } from './agent';
+import { applyAgentEvent } from './agent-reply';
+import { getPref, setPref } from './prefs';
 import { modelCatalog } from './models';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
@@ -40,6 +43,10 @@ export type SessionItem = {
   messageCount?: number;
   /** Created in the app and still empty. */
   draft?: boolean;
+  /** The agent CLI's conversation id: sent with `--session-id` on the first turn, `--resume` after. */
+  agentSession?: string;
+  /** The CLI already has this conversation (first turn sent): later turns resume it. */
+  agentStarted?: boolean;
 };
 
 /**
@@ -101,6 +108,50 @@ export const drafts = $state<Record<string, string>>({});
 export const draftMentions = $state<Record<string, Mention[]>>({});
 /** Messages of sessions that live only in this app (new chats), by session id. */
 const localMessages: Record<string, Message[]> = {};
+
+/** Sessions that only exist in the app (drafts, new chats, live agent chats) and their messages. */
+function localSessions(): SessionItem[] {
+  return workspace.sessions.filter((item) => !item.path && (item.draft || localMessages[item.id]));
+}
+
+/** Save the local sessions, their messages and the open session to IndexedDB. Call after any change. */
+export function persistLocal() {
+  const sessions = localSessions();
+  const messages = Object.fromEntries(sessions.map((item) => [item.id, localMessages[item.id] ?? []]));
+  // Plain copies: the store holds proxies that IndexedDB cannot store.
+  setPref('local.state', JSON.parse(JSON.stringify({ sessions, messages, activeId: workspace.activeId })));
+}
+
+/** Read the saved local sessions back. Runs once at start-up, before the history import merges them. */
+const localReady = getPref<{ sessions: SessionItem[]; messages: Record<string, Message[]>; activeId?: string }>('local.state').then(
+  (saved) => {
+    if (!saved) return;
+    for (const item of saved.sessions ?? []) {
+      if (!workspace.sessions.some((existing) => existing.id === item.id)) workspace.sessions.push(item);
+    }
+    for (const [id, list] of Object.entries(saved.messages ?? {})) localMessages[id] = list;
+    if (saved.activeId && !workspace.activeId) workspace.activeId = saved.activeId;
+  },
+  () => {
+    // Nothing saved, or no IndexedDB: start empty.
+  },
+);
+
+// The open session is saved on its own, so switching sessions survives a reload even without a send.
+const activeReady = getPref<string>('workspace.activeId').then(
+  (id) => id ?? '',
+  () => '',
+);
+// Set the open session only after its local messages are back, so the chat opens with them.
+const restored = Promise.all([localReady, activeReady]).then(([, id]) => {
+  if (id && !workspace.activeId) workspace.activeId = id;
+});
+$effect.root(() => {
+  $effect(() => {
+    const id = workspace.activeId;
+    if (id) setPref('workspace.activeId', id);
+  });
+});
 const mockIds = new Set(mockWorkspace.sessions.map((item) => item.id));
 
 /** Sessions that belong to no project: a plain chat with the computer. */
@@ -127,18 +178,21 @@ export function newSession(projectId = activeSession()?.projectId ?? workspace.p
     return;
   }
   const base = workspace.sessions.find((item) => item.projectId === projectId);
-  const id = nextId();
+  const uuid = crypto.randomUUID();
+  const id = `claude:${uuid}`;
   workspace.sessions.push({
     id,
     projectId,
     title: 'New session',
     agent: 'claude',
+    agentSession: uuid,
     model: 'claude-sonnet-5-5',
     gitBranch: projectId === NO_PROJECT ? undefined : base?.gitBranch,
     status: 'idle',
     draft: true,
   });
   workspace.activeId = id;
+  persistLocal();
 }
 
 /** A new chat outside any project. */
@@ -147,6 +201,37 @@ export function newChat() {
 }
 
 /** Adds the typed message to the open session. The first message turns a draft into a real session. */
+/** The assistant message each live turn is writing into, per session. */
+const replies: Record<string, string> = {};
+
+/** Messages of a session: the live list for the active one, the remembered list for the others. */
+function messagesOf(sessionId: string): Message[] {
+  if (sessionId === workspace.activeId) {
+    if (chat.messages === mockMessages) chat.messages = [...mockMessages];
+    return chat.messages;
+  }
+  return (localMessages[sessionId] ??= []);
+}
+
+/** Apply one agent event to the reply it belongs to. */
+export function handleAgentEvent(sessionId: string, event: AgentEvent) {
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  const reply = messagesOf(sessionId).find((item) => item.id === replies[sessionId]);
+  if (!reply || !session) return;
+  const update = applyAgentEvent(reply.blocks, event);
+  reply.blocks = update.blocks;
+  if (update.agentSession) session.agentSession = update.agentSession;
+  if (update.finished) {
+    delete replies[sessionId];
+    session.status = 'idle';
+    persistLocal();
+  }
+}
+
+if (inTauri()) {
+  void listenAgentEvents(({ session, event }) => handleAgentEvent(session, event));
+}
+
 export function sendMessage(text: string) {
   const session = activeSession();
   const body = text.trim();
@@ -158,8 +243,23 @@ export function sendMessage(text: string) {
     time: clock(new Date().toISOString()),
     blocks: [{ kind: 'response', text: body }],
   });
+  if (inTauri() && session.agent === 'claude') {
+    // A claude chat talks to the CLI: one `claude -p` per message, linked by the conversation id.
+    const cliId = session.agentSession ?? (session.id.startsWith('claude:') ? session.id.slice('claude:'.length) : crypto.randomUUID());
+    session.agentSession = cliId;
+    const resume = session.agentStarted ?? !!session.path;
+    session.agentStarted = true;
+    const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), blocks: [{ kind: 'loading', label: 'Thinking' }] };
+    messagesOf(session.id).push(reply);
+    replies[session.id] = reply.id;
+    session.status = 'working';
+    void sendAgentTurn({ session: session.id, agent: session.agent, prompt: body, agentSession: session.agentSession, resume, model: session.model ?? null, cwd: workspace.projects.find((project) => project.id === session.projectId)?.path ?? null }).catch((error: unknown) => {
+      handleAgentEvent(session.id, { kind: 'error', message: String(error) });
+    });
+  }
   // Imported sessions reload from disk; sessions that only exist here keep their messages in memory.
   if (!session.path) localMessages[session.id] = chat.messages;
+  persistLocal();
   if (session.draft) {
     session.draft = false;
     const firstLine = body.split('\n')[0];
@@ -168,6 +268,11 @@ export function sendMessage(text: string) {
 }
 
 /** A fork keeps the project and branch of its parent and nests under it in the tree. */
+// Leaving or reloading the page keeps the open session and the local chats.
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => persistLocal());
+}
+
 export function forkSession(sourceId: string) {
   const source = workspace.sessions.find((item) => item.id === sourceId);
   if (!source) return;
@@ -223,6 +328,7 @@ export async function importHistory() {
     history.loading = false;
     return;
   }
+  await restored;
   // Show the last known index at once, then refresh it: indexing every file takes a moment.
   try {
     const cached = JSON.parse(localStorage.getItem(CACHE_KEY) ?? '[]') as HistorySession[];
@@ -287,7 +393,7 @@ function applyHistory(all: HistorySession[]) {
   projects.sort((a, b) => latest(b.id).localeCompare(latest(a.id)));
 
   // Sessions that only exist here (drafts, new chats) survive the import.
-  const local = workspace.sessions.filter((item) => !item.path && (item.draft || localMessages[item.id]));
+  const local = localSessions().filter((item) => !ids.has(item.id));
   const noProject = workspace.projects.find((item) => item.id === NO_PROJECT);
   const keepActive = local.some((item) => item.id === workspace.activeId) ? workspace.activeId : undefined;
   if (noProject && local.some((item) => item.projectId === NO_PROJECT)) projects.unshift(noProject);

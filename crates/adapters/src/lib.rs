@@ -3,6 +3,7 @@
 //! For now this crate holds the read-only history readers (`history`). The live adapters
 //! (Claude stream-json, ACP, Codex app-server) arrive with M3 and M5.
 
+pub mod agent;
 pub mod history;
 
 /// Identifies this crate as part of the AgentDeck scaffold.
