@@ -512,9 +512,19 @@ export function buildTree(): ZTreeNode<TreeData>[] {
     if (!a.updatedAt || !b.updatedAt) return Number(!b.updatedAt) - Number(!a.updatedAt);
     return b.updatedAt.localeCompare(a.updatedAt);
   };
-  const forksOf = (parent: SessionItem): ZTreeNode<TreeData>[] =>
+  // Two levels, as in Claude: every fork, a fork of a fork too, sits right under the chat it all started from.
+  const rootOf = (item: SessionItem): string => {
+    let cursor = item;
+    for (let depth = 0; cursor.parentId && depth < 50; depth++) {
+      const parent = workspace.sessions.find((other) => other.id === cursor.parentId);
+      if (!parent) break;
+      cursor = parent;
+    }
+    return cursor.id;
+  };
+  const forksOf = (root: SessionItem): ZTreeNode<TreeData>[] =>
     workspace.sessions
-      .filter((item) => item.parentId === parent.id)
+      .filter((item) => item.parentId && item.id !== root.id && rootOf(item) === root.id)
       .sort(newest)
       .map(sessionNode);
 
@@ -522,7 +532,7 @@ export function buildTree(): ZTreeNode<TreeData>[] {
     id: `session:${session.id}`,
     label: session.title,
     icon: session.parentId ? 'lucideGitFork' : 'lucideMessageSquare',
-    children: forksOf(session),
+    children: session.parentId ? [] : forksOf(session),
     data: { kind: 'session', session },
   });
 
