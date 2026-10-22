@@ -96,7 +96,8 @@
     scrollEndThreshold: 80,
     overscan: 8,
     paddingStart: 8,
-    paddingEnd: 24,
+    // Clears the fade above the composer (h-12) so the last message ends above it.
+    paddingEnd: 56,
   });
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>(virtualOptions());
 

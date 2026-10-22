@@ -254,6 +254,24 @@ fn tail(lines: Vec<Value>, limit: usize) -> Value {
     Value::Array(lines.into_iter().skip(skip).collect())
 }
 
+/// The MIME type of a file, from its extension, for the file the agent uploads.
+fn mime_of(name: &str) -> &'static str {
+    match name.rsplit('.').next().unwrap_or_default().to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "txt" | "md" => "text/plain",
+        "csv" => "text/csv",
+        "json" => "application/json",
+        "html" => "text/html",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
+}
+
 pub(crate) async fn answer(
     app: &AppHandle,
     path: &str,
@@ -280,6 +298,8 @@ pub(crate) async fn answer(
             "GET /type?text=": "types text into the focused field, as a keyboard",
             "GET /key?key=": "presses a key: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, Space",
             "GET /fill?selector=&value=": "sets a field's value and fires input and change",
+            "GET /drag?from=&to=": "drags one element onto another (HTML5 drag and drop), both as CSS selectors",
+            "GET /upload?selector=&path=": "uploads a file from disk: set on an input type=file, or dropped on a drop zone",
             "GET /press?x=&y=": "a real mouse press at a point (moves the user's mouse, brings the app to the front); /click is usually enough",
         })),
         "/page" => {
@@ -439,6 +459,32 @@ pub(crate) async fn answer(
             let selector = params.get("selector").cloned().ok_or("send ?selector=&value=")?;
             let value = params.get("value").cloned().unwrap_or_default();
             let report = ask(app, &active, "fill", json!({ "selector": selector, "value": value })).await?;
+            match report["error"].as_str() {
+                Some(error) => Err(error.to_string()),
+                None => Ok(report["result"].clone()),
+            }
+        }
+        "/drag" => {
+            let from = params.get("from").cloned().ok_or("send ?from=&to= as CSS selectors")?;
+            let to = params.get("to").cloned().ok_or("send ?from=&to= as CSS selectors")?;
+            let report = ask(app, &active, "drag", json!({ "from": from, "to": to })).await?;
+            match report["error"].as_str() {
+                Some(error) => Err(error.to_string()),
+                None => Ok(report["result"].clone()),
+            }
+        }
+        "/upload" => {
+            let selector = params.get("selector").cloned().ok_or("send ?selector=&path=")?;
+            let path = params.get("path").cloned().ok_or("send ?selector=&path= with an absolute file path")?;
+            let bytes = std::fs::read(&path).map_err(|error| format!("{path}: {error}"))?;
+            if bytes.len() > 25 * 1024 * 1024 {
+                return Err(format!("{path} is over 25 MB"));
+            }
+            let name = std::path::Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or("file").to_string();
+            use base64::Engine;
+            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let mime = mime_of(&name);
+            let report = ask(app, &active, "upload", json!({ "selector": selector, "name": name, "type": mime, "data": data })).await?;
             match report["error"].as_str() {
                 Some(error) => Err(error.to_string()),
                 None => Ok(report["result"].clone()),

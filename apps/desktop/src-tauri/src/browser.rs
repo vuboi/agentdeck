@@ -15,6 +15,49 @@ const PREFIX: &str = "browser-";
 /// Opening can be asked for twice at once (resize and navigation); only one may create a webview.
 static CREATING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// The address each tab asked for, by tab id. A failed load shows the tab's own error page at this address.
+static REQUESTED: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> = std::sync::Mutex::new(None);
+
+/// Marks the error page AgentDeck shows in place of the browser's own (Chromium's `chrome-error://` page).
+const ERROR_MARK: &str = "<!--agentdeck-error-->";
+
+fn requested(tab: &str) -> Option<String> {
+    REQUESTED.lock().ok()?.as_ref()?.get(tab).cloned()
+}
+
+fn remember(tab: &str, url: &str) {
+    if let Ok(mut map) = REQUESTED.lock() {
+        map.get_or_insert_with(Default::default).insert(tab.to_string(), url.to_string());
+    }
+}
+
+/// The error page as a `data:` address: same tab, same URL in the address bar, a Refresh that tries again.
+fn error_page(target: &str) -> Result<tauri::Url, String> {
+    let shown = target.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
+    let go = target.replace('\\', "\\\\").replace('\'', "\\'").replace('"', "%22");
+    let html = format!(
+        "{ERROR_MARK}<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>\
+<title>Can't reach this page</title><style>\
+body{{margin:0;min-height:100vh;display:grid;place-items:center;font:14px/1.5 system-ui,sans-serif;background:#1f1f1f;color:#e6e6e6}}\
+main{{max-width:440px;padding:24px;text-align:center}}h1{{font-size:20px;margin:0 0 12px;font-weight:600}}\
+code{{color:#9cc3ff;word-break:break-all}}\
+button{{margin-top:16px;padding:8px 18px;border:0;border-radius:6px;background:#2f6fe4;color:#fff;font:inherit;cursor:pointer}}\
+small{{display:block;margin-top:16px;color:#8a8a8a}}</style>\
+<main><h1>Can't reach this page</h1><p><code>{shown}</code> did not load.</p>\
+<button onclick=\"location.replace('{go}')\">Refresh</button>\
+<small>Check that the server is running, then Refresh.</small></main>"
+    );
+    let mut encoded = String::from("data:text/html;charset=utf-8,");
+    for byte in html.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    tauri::Url::parse(&encoded).map_err(|error| error.to_string())
+}
+
 /// Where the page posts its reports: the custom scheme, which WebView2 serves under a localhost name.
 fn base() -> &'static str {
     if cfg!(windows) {
@@ -103,15 +146,33 @@ pub async fn browser_show(
                 PageLoadEvent::Started => "started",
                 PageLoadEvent::Finished => "finished",
             };
-            if event == "started" {
-                crate::bridge::page_started(view.label().trim_start_matches(PREFIX), payload.url().as_str());
+            let tab = view.label().trim_start_matches(PREFIX).to_string();
+            let url = payload.url().to_string();
+            // The browser's own error page (Chromium's chrome-error:// address) is replaced by AgentDeck's, at the same tab.
+            let failed = url.starts_with("chrome-error:");
+            // Our error page is a data: address; the tab keeps showing the address that was asked for.
+            let ours = url.starts_with("data:text/html;charset=utf-8,%3C%21--agentdeck-error");
+            if failed {
+                if event == "finished" {
+                    if let Some(target) = requested(&tab) {
+                        if let Ok(page) = error_page(&target) {
+                            let _ = view.navigate(page);
+                        }
+                    }
+                }
+                return;
             }
+            if event == "started" && !ours {
+                remember(&tab, &url);
+                crate::bridge::page_started(&tab, &url);
+            }
+            let shown = if ours { requested(&tab).unwrap_or_else(|| url.clone()) } else { url };
             let _ = view.app_handle().emit(
                 "browser-load",
                 serde_json::json!({
                     "label": view.label(),
                     "event": event,
-                    "url": payload.url().to_string(),
+                    "url": shown,
                 }),
             );
         });

@@ -21,8 +21,8 @@ export function segments(blocks: Block[]): Segment[] {
   return out;
 }
 
-/** The tool name of a `Name  argument` command line. */
-export const toolOf = (command: string) => command.split(/\s+/, 1)[0] ?? '';
+/** The tool name of a `Name  argument` command line; an MCP name (`mcp__agentdeck__browser_click`) is shown without its server. */
+export const toolOf = (command: string) => (command.split(/\s+/, 1)[0] ?? '').replace(/^mcp__.*__/, '');
 /** The argument part of the line. */
 export const argOf = (command: string) => command.slice(toolOf(command).length).trim();
 
@@ -32,6 +32,11 @@ const READ = /^Read$/;
 const SEARCH = /^(Grep|Glob|LS|WebSearch)$/;
 const FETCH = /^(WebFetch|Fetch)$/;
 const AGENT = /^(Task|Agent)$/;
+// The AgentDeck browser tools: what the agent did on the Preview page.
+const PAGE_ACT = /^browser_(click|type|key|scroll|hover|fill|drag|upload)$/;
+const PAGE_SCRIPT = /^browser_eval$/;
+const PAGE_LOOK = /^browser_screenshot$/;
+const PAGE_READ = /^browser_(dom|console|network|frames|page)$/;
 
 const basename = (path: string) => path.split(/[\\/]+/).filter(Boolean).at(-1) ?? path;
 
@@ -64,6 +69,10 @@ export function describeStep(item: CommandBlock): Step {
   if (SEARCH.test(tool)) return { verb: verbs('Searched', 'Searching'), subject };
   if (FETCH.test(tool)) return { verb: verbs('Fetched', 'Fetching'), subject };
   if (AGENT.test(tool)) return { verb: verbs('Ran agent', 'Running agent'), subject };
+  if (PAGE_ACT.test(tool)) return { verb: verbs('Interacted with page', 'Interacting with page'), subject: '' };
+  if (PAGE_SCRIPT.test(tool)) return { verb: verbs('Ran page script', 'Running page script'), subject: '' };
+  if (PAGE_LOOK.test(tool)) return { verb: verbs('Looked at page', 'Looking at page'), subject: '' };
+  if (PAGE_READ.test(tool)) return { verb: verbs('Found on page', 'Finding on page'), subject: '' };
   return { verb: verbs('Used', 'Using'), subject: `${tool} ${subject}`.trim() };
 }
 
@@ -106,6 +115,9 @@ export function liveState(blocks: Block[]): { label: string; spinner: ZLoadingSp
     if (SEARCH.test(tool)) return { label: 'Searching', spinner: LOADER.check };
     if (FETCH.test(tool)) return { label: 'Fetching', spinner: LOADER.fetch };
     if (AGENT.test(tool)) return { label: 'Running agent', spinner: LOADER.background };
+    if (PAGE_ACT.test(tool)) return { label: 'Interacting with page', spinner: LOADER.action };
+    if (PAGE_SCRIPT.test(tool)) return { label: 'Running page script', spinner: LOADER.command };
+    if (PAGE_LOOK.test(tool) || PAGE_READ.test(tool)) return { label: 'Looking at page', spinner: LOADER.check };
     return { label: 'Running command', spinner: LOADER.command };
   }
   return { label: 'Thinking', spinner: LOADER.thinking };

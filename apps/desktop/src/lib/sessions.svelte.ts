@@ -709,8 +709,8 @@ export function buildTree(): ZTreeNode<TreeData>[] {
     data: { kind: 'session', session, last },
   });
 
-  // An empty new chat shows only while it is the one open.
-  const shown = (item: SessionItem) => item.id === workspace.activeId || !isEmptyDraft(item);
+  // A new chat joins the list only after its first message; an empty one stays out even while it is open.
+  const shown = (item: SessionItem) => !isEmptyDraft(item);
   return workspace.projects.map((project) => ({
     id: `project:${project.id}`,
     label: project.name,

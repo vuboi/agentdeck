@@ -241,6 +241,46 @@
         } catch (error) {
           post({ kind: 'fill', id, error: String(error.message || error) });
         }
+      } else if (kind === 'drag') {
+        // HTML5 drag and drop from one element onto another: the events a browser sends for the same gesture.
+        try {
+          const from = document.querySelector(arg.from);
+          const to = document.querySelector(arg.to);
+          if (!from) throw new Error('no element matches ' + arg.from);
+          if (!to) throw new Error('no element matches ' + arg.to);
+          const data = new DataTransfer();
+          const fire = (el, type) => el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, composed: true, dataTransfer: data }));
+          fire(from, 'dragstart');
+          fire(to, 'dragenter');
+          fire(to, 'dragover');
+          fire(to, 'drop');
+          fire(from, 'dragend');
+          post({ kind: 'drag', id, result: { from: from.tagName.toLowerCase(), to: to.tagName.toLowerCase() } });
+        } catch (error) {
+          post({ kind: 'drag', id, error: String(error.message || error) });
+        }
+      } else if (kind === 'upload') {
+        // A file as the user gives it: set on a file input, or dropped onto any element.
+        try {
+          const el = document.querySelector(arg.selector);
+          if (!el) throw new Error('no element matches ' + arg.selector);
+          const bytes = Uint8Array.from(atob(arg.data), (c) => c.charCodeAt(0));
+          const file = new File([bytes], arg.name, { type: arg.type });
+          const data = new DataTransfer();
+          data.items.add(file);
+          if (el.tagName === 'INPUT' && el.type === 'file') {
+            el.files = data.files;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          } else {
+            for (const type of ['dragenter', 'dragover', 'drop']) {
+              el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, composed: true, dataTransfer: data }));
+            }
+          }
+          post({ kind: 'upload', id, result: { name: file.name, size: file.size, target: el.tagName.toLowerCase() } });
+        } catch (error) {
+          post({ kind: 'upload', id, error: String(error.message || error) });
+        }
       } else if (kind === 'eval') {
         Promise.resolve()
           .then(() => (0, eval)(String(arg)))
