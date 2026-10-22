@@ -10,7 +10,7 @@ import {
   type HistorySession,
 } from './history';
 import { messages as mockMessages, type Message } from './mock';
-import { listenAgentEvents, sendAgentTurn, type AgentEvent } from './agent';
+import { listenAgentEvents, saveAttachment, sendAgentTurn, type AgentEvent } from './agent';
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
 import { modelCatalog } from './models';
@@ -106,6 +106,10 @@ export type Mention = { kind: 'session' | 'project' | 'ai'; id: string; label: s
 /** What was typed but not sent, per session: switch away and back and it is still there. */
 export const drafts = $state<Record<string, string>>({});
 export const draftMentions = $state<Record<string, Mention[]>>({});
+
+/** An image waiting to be sent: a data URL, already scaled down. */
+export type Attachment = { id: string; name: string; mime: string; src: string };
+export const draftImages = $state<Record<string, Attachment[]>>({});
 /** Messages of sessions that live only in this app (new chats), by session id. */
 const localMessages: Record<string, Message[]> = {};
 
@@ -248,16 +252,16 @@ if (inTauri()) {
   });
 }
 
-export function sendMessage(text: string) {
+export function sendMessage(text: string, images: Attachment[] = []) {
   const session = activeSession();
   const body = text.trim();
-  if (!session || !body || replies[session.id]) return; // one turn at a time per chat
+  if (!session || (!body && images.length === 0) || replies[session.id]) return; // one turn at a time per chat
   if (chat.messages === mockMessages) chat.messages = [...mockMessages];
   chat.messages.push({
     id: nextId(),
     role: 'user',
     time: clock(new Date().toISOString()),
-    blocks: [{ kind: 'response', text: body }],
+    blocks: [...images.map((image) => ({ kind: 'image' as const, src: image.src, name: image.name })), ...(body ? [{ kind: 'response' as const, text: body }] : [])],
     at: new Date().toISOString(),
   });
   if (inTauri() && session.agent === 'claude') {
@@ -269,7 +273,15 @@ export function sendMessage(text: string) {
     messagesOf(session.id).push(reply);
     replies[session.id] = reply.id;
     session.status = 'working';
-    void sendAgentTurn({ session: session.id, agent: session.agent, prompt: body, agentSession: session.agentSession, resume, model: session.model ?? null, cwd: workspace.projects.find((project) => project.id === session.projectId)?.path ?? null }).catch((error: unknown) => {
+    const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
+    void (async () => {
+      // Images go to disk first: the CLI is told where to find them and opens them itself.
+      const paths = await Promise.all(images.map((image) => saveAttachment(image.mime, image.src.slice(image.src.indexOf(',') + 1))));
+      const prompt = paths.length
+        ? `${body || 'Look at the attached image.'}\n\nAttached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
+        : body;
+      await sendAgentTurn({ session: session.id, agent: session.agent, prompt, agentSession: cliId, resume, model: session.model ?? null, cwd });
+    })().catch((error: unknown) => {
       handleAgentEvent(session.id, { kind: 'error', message: String(error) });
     });
   }
@@ -286,7 +298,7 @@ export function sendMessage(text: string) {
   persistLocal();
   if (session.draft) {
     session.draft = false;
-    const firstLine = body.split('\n')[0];
+    const firstLine = body.split('\n')[0] || 'Image';
     session.title = firstLine.length > 60 ? `${firstLine.slice(0, 57)}…` : firstLine;
   }
 }
@@ -542,6 +554,7 @@ export async function deleteSession(id: string) {
   workspace.sessions = workspace.sessions.filter((item) => item.id !== id);
   delete drafts[id];
   delete draftMentions[id];
+  delete draftImages[id];
   delete localMessages[id];
   patchCache((list) => list.filter((item) => item.id !== id));
   if (workspace.activeId === id) {

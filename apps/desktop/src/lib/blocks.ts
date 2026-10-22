@@ -31,24 +31,64 @@ const SEARCH = /^(Grep|Glob|LS|WebSearch)$/;
 const FETCH = /^(WebFetch|Fetch)$/;
 const AGENT = /^(Task|Agent)$/;
 
-/** Row title of one command: "Ran a command", "Edited a file", … */
-export function commandTitle(item: CommandBlock): string {
+const basename = (path: string) => path.split(/[\\/]+/).filter(Boolean).at(-1) ?? path;
+
+export type Step = {
+  /** Small muted word: "Ran", "Created", "Read". */
+  verb: string;
+  /** What it was done to: the command, the file name, the pattern. */
+  subject: string;
+  /** Lines added and removed, for file changes. */
+  change?: { added: number; removed: number };
+};
+
+/** One row of the activity list. Wording follows the tool; a running step says "Running", a failed one "Failed". */
+export function describeStep(item: CommandBlock): Step {
   const tool = toolOf(item.command);
   const running = item.status === 'running';
-  if (RUN.test(tool)) return item.status === 'fail' ? 'Command failed' : running ? 'Running a command' : 'Ran a command';
-  if (EDIT.test(tool)) return running ? 'Editing a file' : 'Edited a file';
-  if (READ.test(tool)) return running ? 'Reading a file' : 'Read a file';
-  if (SEARCH.test(tool)) return running ? 'Searching' : 'Searched';
-  if (FETCH.test(tool)) return running ? 'Fetching a page' : 'Fetched a page';
-  if (AGENT.test(tool)) return running ? 'Running an agent' : 'Ran an agent';
-  return running ? `Using ${tool}` : `Used ${tool}`;
+  const verbs = (done: string, doing: string) => (item.status === 'fail' ? 'Failed' : running ? doing : done);
+  if (item.change) {
+    const created = item.change.create === true;
+    return {
+      verb: verbs(created ? 'Created' : 'Edited', created ? 'Creating' : 'Editing'),
+      subject: basename(item.change.path),
+      change: { added: item.change.added, removed: item.change.removed },
+    };
+  }
+  const subject = argOf(item.command);
+  if (RUN.test(tool)) return { verb: verbs('Ran', 'Running'), subject };
+  if (EDIT.test(tool)) return { verb: verbs('Edited', 'Editing'), subject: basename(subject) };
+  if (READ.test(tool)) return { verb: verbs('Read', 'Reading'), subject: basename(subject) };
+  if (SEARCH.test(tool)) return { verb: verbs('Searched', 'Searching'), subject };
+  if (FETCH.test(tool)) return { verb: verbs('Fetched', 'Fetching'), subject };
+  if (AGENT.test(tool)) return { verb: verbs('Ran agent', 'Running agent'), subject };
+  return { verb: verbs('Used', 'Using'), subject: `${tool} ${subject}`.trim() };
 }
 
-/** Group title: "Ran 2 commands", or "actions" when the tools are mixed. */
-export function groupTitle(items: CommandBlock[]): string {
-  const allCommands = items.every((item) => RUN.test(toolOf(item.command)));
-  const noun = allCommands ? 'command' : 'action';
-  return items.length === 1 ? `Ran ${allCommands ? 'a command' : 'an action'}` : `Ran ${items.length} ${noun}s`;
+const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+
+/** "Created 2 files, ran 8 commands": what a group of steps did, files first. */
+export function summarize(items: CommandBlock[]): string {
+  const files = (create: boolean) => new Set(items.filter((item) => item.change && (item.change.create === true) === create).map((item) => item.change!.path)).size;
+  const created = files(true);
+  const edited = files(false);
+  const ran = items.filter((item) => !item.change && RUN.test(toolOf(item.command))).length;
+  const looked = items.filter((item) => !item.change && !RUN.test(toolOf(item.command))).length;
+  const parts = [
+    created && `created ${plural(created, 'file')}`,
+    edited && `edited ${plural(edited, 'file')}`,
+    ran && `ran ${plural(ran, 'command')}`,
+    looked && `looked at ${plural(looked, 'thing')}`,
+  ].filter(Boolean) as string[];
+  const text = parts.join(', ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Total lines added and removed by a group, or null when it wrote no files. */
+export function totalChange(items: CommandBlock[]): { added: number; removed: number } | null {
+  const changes = items.flatMap((item) => (item.change ? [item.change] : []));
+  if (changes.length === 0) return null;
+  return { added: changes.reduce((sum, c) => sum + c.added, 0), removed: changes.reduce((sum, c) => sum + c.removed, 0) };
 }
 
 /** What the agent is doing right now, and the loader that goes with it. */

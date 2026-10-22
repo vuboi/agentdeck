@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::{summarize_tool_input, AgentEvent, Provider, TurnRequest};
+use super::{file_change, summarize_tool_input, AgentEvent, Provider, TurnRequest};
 
 pub struct Claude;
 
@@ -137,6 +137,7 @@ impl Provider for Claude {
                         id: block["id"].as_str().unwrap_or_default().to_string(),
                         name: name.to_string(),
                         input: summarize_tool_input(name, &block["input"]),
+                        change: file_change(name, &block["input"]),
                     }
                 })
                 .collect(),
@@ -243,9 +244,38 @@ mod tests {
             vec![AgentEvent::ToolCall {
                 id: "t1".into(),
                 name: "Bash".into(),
-                input: "ls -la".into()
+                input: "ls -la".into(),
+                change: None
             }]
         );
+    }
+
+    #[test]
+    fn writes_and_edits_report_what_they_change() {
+        let write = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w","name":"Write","input":{"file_path":"a.txt","content":"x\ny\nz"}}]}}"#;
+        let events = Claude.parse_line(write);
+        let AgentEvent::ToolCall {
+            change: Some(change),
+            ..
+        } = &events[0]
+        else {
+            panic!("no change: {events:?}")
+        };
+        assert_eq!(
+            (change.path.as_str(), change.added, change.removed),
+            ("a.txt", 3, 0)
+        );
+
+        let edit = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e","name":"Edit","input":{"file_path":"a.txt","old_string":"x","new_string":"p\nq"}}]}}"#;
+        let events = Claude.parse_line(edit);
+        let AgentEvent::ToolCall {
+            change: Some(change),
+            ..
+        } = &events[0]
+        else {
+            panic!("no change: {events:?}")
+        };
+        assert_eq!((change.added, change.removed), (2, 1));
         let result = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"a\nb"}],"is_error":true}]}}"#;
         assert_eq!(
             Claude.parse_line(result),

@@ -2,6 +2,7 @@
   import { ZIcon, ZLoading, ZShowMore } from '@shival99/z-ui-svelte';
   import { LOADER, loaderFor } from '../loaders';
   import type { Block } from '../mock';
+  import Markdown from './Markdown.svelte';
 
   // `fade` is the surface behind the block; ZShowMore fades its clipped edge into that colour.
   let { block, fade }: { block: Block; fade?: string } = $props();
@@ -37,10 +38,14 @@
       </div>
     </div>
   </div>
+{:else if block.kind === 'response' && fade === undefined}
+  <!-- An agent's answer: rendered as markdown, full length. -->
+  <div class="block-in text-sm leading-relaxed text-foreground"><Markdown text={block.text} streaming={block.streaming} /></div>
 {:else if block.kind === 'response'}
+  <!-- Your own message: plain text, folded when long. -->
   <div class="block-in text-sm leading-relaxed text-foreground">
-    <ZShowMore zMaxHeight={240} zButtonSize="sm" zBlurColor={fade ?? 'var(--background)'}>
-      <p class="m-0 whitespace-pre-wrap">{block.text}{#if block.streaming}<span class="ml-0.5 inline-block h-4 w-[2px] translate-y-[3px] animate-pulse bg-foreground" aria-hidden="true"></span>{/if}</p>
+    <ZShowMore zMaxHeight={240} zButtonSize="sm" zBlurColor={fade}>
+      <p class="m-0 whitespace-pre-wrap">{block.text}</p>
     </ZShowMore>
   </div>
 {:else if block.kind === 'command'}
@@ -65,6 +70,8 @@
       </div>
     {/if}
   </div>
+{:else if block.kind === 'image'}
+  <img src={block.src} alt={block.name} class="block-in max-h-56 max-w-full self-start rounded-lg border border-border object-contain" />
 {:else if block.kind === 'loading'}
   <div class="block-in flex items-center gap-2 text-xs text-muted-foreground">
     <ZLoading zLoading zSpinner={LOADER.thinking} zSize="xs" zColor="primary" />

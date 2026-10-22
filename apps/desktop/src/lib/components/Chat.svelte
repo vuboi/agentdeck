@@ -335,19 +335,23 @@
                   </div>
                   <span class="mt-1 px-1 text-[10px] text-muted-foreground">{message.time}</span>
                 {:else}
+                  {@const parts = segments(message.blocks)}
+                  {@const tail = parts.at(-1)}
+                  {@const working = tail?.kind === 'commands' && tail.items.some((item) => item.status === 'running')}
                   <div class="mb-1.5 flex items-baseline gap-2 text-xs">
                     <span class="font-semibold {agentText[agent]}">{agentName(agent)}</span>
                     <span class="text-muted-foreground">{message.time}</span>
                   </div>
                   <div class="flex w-full min-w-0 flex-col gap-3">
-                    {#each segments(message.blocks) as segment}
+                    {#each parts as segment, position (position)}
                       {#if segment.kind === 'commands'}
-                        <CommandGroup items={segment.items} />
+                        <!-- The newest group of a running reply is the live line; it carries the only loader. -->
+                        <CommandGroup items={segment.items} live={Boolean(message.live) && working && position === parts.length - 1} startedAt={message.startedAt} />
                       {:else}
                         <ChatBlock block={segment.block} />
                       {/if}
                     {/each}
-                    {#if message.live}
+                    {#if message.live && !working}
                       <LiveStatus {message} />
                     {/if}
                   </div>

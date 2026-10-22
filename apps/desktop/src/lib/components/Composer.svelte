@@ -6,6 +6,7 @@
   import {
     activeSession,
     AGENTS,
+    draftImages,
     draftMentions,
     drafts,
     MODELS,
@@ -14,6 +15,7 @@
     workspace,
     type Agent,
     type Effort,
+    type Attachment,
     type Mention,
     type Permission,
   } from '../sessions.svelte';
@@ -25,6 +27,10 @@
   const mentions = $derived(draftMentions[sessionId] ?? []);
   const setDraft = (value: string) => (drafts[sessionId] = value);
   const setMentions = (value: Mention[]) => (draftMentions[sessionId] = value);
+  const images = $derived(draftImages[sessionId] ?? []);
+  const setImages = (value: Attachment[]) => (draftImages[sessionId] = value);
+  let fileInput: HTMLInputElement | undefined = $state();
+  let dragging = $state(false);
   let area: HTMLTextAreaElement | undefined = $state();
   let paletteOpen = $state(false);
   let innerW = $state(typeof window === 'undefined' ? 1280 : window.innerWidth);
@@ -163,11 +169,51 @@
     untrack(() => queueMicrotask(resize));
   });
 
+  // ---------- images: paste, drop or pick ----------
+  const MAX_SIDE = 1568; // larger than this the model downsizes it anyway
+  const MAX_IMAGES = 6;
+
+  /** The image scaled to at most MAX_SIDE, as a data URL (PNG stays PNG, the rest becomes JPEG). */
+  async function toAttachment(file: File): Promise<Attachment | null> {
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return null;
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const mime = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+    return { id: crypto.randomUUID(), name: file.name || 'pasted image', mime, src: canvas.toDataURL(mime, 0.88) };
+  }
+
+  async function addFiles(files: File[]) {
+    const room = MAX_IMAGES - images.length;
+    const added = (await Promise.all(files.slice(0, Math.max(0, room)).map((file) => toAttachment(file).catch(() => null)))).filter((item): item is Attachment => item !== null);
+    if (added.length) setImages([...images, ...added]);
+  }
+
+  function onPaste(event: ClipboardEvent) {
+    const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'));
+    if (files.length === 0) return; // plain text pastes as usual
+    event.preventDefault();
+    void addFiles(files);
+  }
+
+  function onDrop(event: DragEvent) {
+    dragging = false;
+    const files = [...(event.dataTransfer?.files ?? [])];
+    if (files.length === 0) return;
+    event.preventDefault();
+    void addFiles(files);
+  }
+
   function submit() {
-    if (!draft.trim()) return;
-    sendMessage(draft);
+    if (!draft.trim() && images.length === 0) return;
+    sendMessage(draft, images);
     setDraft('');
     setMentions([]);
+    setImages([]);
   }
 
   function onKeydown(event: KeyboardEvent) {
@@ -183,7 +229,30 @@
 </script>
 
 <svelte:window bind:innerWidth={innerW} />
-<form class="min-w-0 rounded-2xl border border-input bg-card p-2.5 shadow-lg min-[720px]:p-3 transition-shadow focus-within:ring-2 focus-within:ring-ring/40" onsubmit={(event) => { event.preventDefault(); submit(); }}>
+<form
+  class="min-w-0 rounded-2xl border bg-card p-2.5 shadow-lg min-[720px]:p-3 transition-shadow focus-within:ring-2 focus-within:ring-ring/40 {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
+  onsubmit={(event) => { event.preventDefault(); submit(); }}
+  ondragover={(event) => { if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); dragging = true; } }}
+  ondragleave={() => (dragging = false)}
+  ondrop={onDrop}
+>
+  {#if images.length > 0}
+    <div class="mb-2 flex flex-wrap gap-2" aria-label="Attached images">
+      {#each images as image (image.id)}
+        <div class="group/img relative">
+          <img src={image.src} alt={image.name} class="size-14 rounded-lg border border-border object-cover" />
+          <button
+            type="button"
+            class="absolute -top-1.5 -right-1.5 grid size-4 cursor-pointer place-items-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover/img:opacity-100 focus-visible:opacity-100"
+            aria-label="Remove {image.name}"
+            onclick={() => setImages(images.filter((entry) => entry !== image))}
+          >
+            <ZIcon zType="lucideX" class="size-3" />
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
   {#if mentions.length > 0}
     <div class="mb-2 flex flex-wrap gap-1.5" aria-label="Mentions">
       {#each mentions as mention (mention.kind + mention.id)}
@@ -208,6 +277,7 @@
     bind:value={() => draft, setDraft}
     oninput={resize}
     onkeydown={onKeydown}
+    onpaste={onPaste}
     rows="1"
     wrap="soft"
     aria-label="Message"
@@ -217,15 +287,16 @@
 
   <div class="flex min-w-0 items-center justify-between gap-2">
     <div class="flex min-w-0 items-center gap-1">
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-7 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Attach file">
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-7 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Attach image" title="Attach image (or paste / drop)" onclick={() => fileInput?.click()}>
         <ZIcon zType="lucidePaperclip" class="size-4" />
       </ZButton>
+      <input bind:this={fileInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onchange={(event) => { void addFiles([...(event.currentTarget.files ?? [])]); event.currentTarget.value = ''; }} />
       <ZButton zWave={false} zType="ghost" zSize="sm" class="hidden h-7 w-7 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary min-[720px]:inline-flex" aria-label="Mention a session, project or AI" title="Mention (@)" onclick={() => (paletteOpen = true)}>
         <ZIcon zType="lucideAtSign" class="size-4" />
       </ZButton>
       <ModelPicker bind:agent bind:model bind:effort bind:fast bind:permission />
     </div>
-    <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" disabled={!draft.trim()} aria-label="Send message">
+    <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" disabled={!draft.trim() && images.length === 0} aria-label="Send message">
       <ZIcon zType="lucideArrowUp" class="size-4" />
     </ZButton>
   </div>

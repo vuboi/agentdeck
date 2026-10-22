@@ -134,3 +134,43 @@ html[data-warming] [data-z-popover] {
     animation: none;
   }
 }
+
+/* ---- Markdown in answers ---- */
+.md {
+  font-size: 0.875rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 0.75rem; }
+.md h1, .md h2, .md h3, .md h4 { margin: 1.1rem 0 0.5rem; font-weight: 600; line-height: 1.35; }
+.md h1 { font-size: 1.15rem; }
+.md h2 { font-size: 1.05rem; }
+.md h3, .md h4 { font-size: 0.95rem; }
+.md ul, .md ol { margin: 0 0 0.75rem; padding-left: 1.4rem; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li { margin: 0.2rem 0; }
+.md li > p { margin: 0; }
+.md li::marker { color: var(--muted-foreground); }
+.md a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.md blockquote { margin: 0 0 0.75rem; padding: 0.1rem 0.9rem; border-left: 3px solid var(--border); color: var(--muted-foreground); }
+.md hr { margin: 1rem 0; border: 0; border-top: 1px solid var(--border); }
+.md strong { font-weight: 600; }
+.md :not(pre) > code {
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.3rem;
+  background: var(--muted);
+  font-size: 0.8em;
+}
+.md table { display: block; max-width: 100%; margin: 0 0 0.75rem; overflow-x: auto; border-collapse: collapse; font-size: 0.8125rem; }
+.md th, .md td { padding: 0.35rem 0.7rem; border: 1px solid var(--border); text-align: left; }
+.md th { background: var(--muted); font-weight: 600; }
+.md img { max-width: 100%; border-radius: 0.5rem; }
+.md-code { margin: 0 0 0.75rem; overflow: hidden; border: 1px solid var(--border); border-radius: 0.6rem; background: var(--muted); }
+.md-code-head { display: flex; align-items: center; justify-content: space-between; padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 0.6875rem; }
+.md-code-head button { cursor: pointer; padding: 0.1rem 0.4rem; border-radius: 0.3rem; font: inherit; }
+.md-code-head button:hover { background: var(--accent); color: var(--foreground); }
+.md-code pre { margin: 0; padding: 0.7rem 0.85rem; overflow-x: auto; background: transparent; }
+.md-code code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.78rem; line-height: 1.6; white-space: pre; }

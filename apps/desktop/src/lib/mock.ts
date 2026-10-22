@@ -1,11 +1,15 @@
+/** A file a tool wrote: lines added and removed, and the text for a small diff. `create` once the result says so. */
+export type FileChange = { path: string; added: number; removed: number; before: string; after: string; create?: boolean };
+
 export type Agent = 'claude' | 'codex' | 'gemini';
 export type Session = { id: string; title: string; agent: Agent; status: 'working' | 'idle' | 'waiting' };
 
 export type Block =
   | { kind: 'thinking'; text: string; streaming?: boolean }
   | { kind: 'response'; text: string; streaming?: boolean }
-  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string }
-  | { kind: 'loading'; label: string };
+  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; change?: FileChange }
+  | { kind: 'loading'; label: string }
+  | { kind: 'image'; src: string; name: string };
 
 export type Message = {
   id: string;
@@ -81,3 +85,38 @@ for (let i = 1; i <= 80; i += 1) {
     },
   );
 }
+
+// A reply with rich text and file changes, to see the markdown and activity styles without running an agent.
+messages.push(
+  { id: 'u-demo', role: 'user', time: '11:20', blocks: [{ kind: 'response', text: 'Show me what a full answer looks like.' }] },
+  {
+    id: 'a-demo',
+    role: 'assistant',
+    time: '11:20',
+    at: new Date(Date.now() - 4 * 60_000).toISOString(),
+    ms: 24_000,
+    blocks: [
+      { kind: 'command', id: 'c1', command: 'Bash  pnpm --filter desktop check', output: '0 errors, 0 warnings', status: 'ok' },
+      {
+        kind: 'command',
+        id: 'c2',
+        command: 'Write  src/lib/blocks.ts',
+        output: 'File created successfully',
+        status: 'ok',
+        change: { path: 'src/lib/blocks.ts', added: 136, removed: 0, before: '', after: 'export const a = 1;\nexport const b = 2;', create: true },
+      },
+      {
+        kind: 'command',
+        id: 'c3',
+        command: 'Edit  src/lib/app.css',
+        output: '',
+        status: 'ok',
+        change: { path: 'src/lib/app.css', added: 3, removed: 1, before: 'color: red;', after: 'color: blue;\nmargin: 0;\npadding: 0;' },
+      },
+      {
+        kind: 'response',
+        text: '## Done\n\nHere is what changed:\n\n- **Blocks**: new `blocks.ts` with the helpers\n- Styles: a *softer* colour\n  - nested item\n- [Docs](https://example.com)\n\n1. First step\n2. Second step\n\n> A note worth keeping.\n\n```ts\nexport function add(a: number, b: number) {\n  return a + b;\n}\n```\n\n| File | Lines |\n| --- | --- |\n| blocks.ts | 136 |\n| app.css | 4 |\n',
+      },
+    ],
+  },
+);

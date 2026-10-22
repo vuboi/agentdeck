@@ -4,10 +4,13 @@
 export type AgentEvent =
   | { kind: 'delta'; text: string }
   | { kind: 'thinking'; text: string }
-  | { kind: 'tool_call'; id: string; name: string; input: string }
+  | { kind: 'tool_call'; id: string; name: string; input: string; change: FileChange | null }
   | { kind: 'tool_result'; id: string; output: string; is_error: boolean }
   | { kind: 'done'; session_id: string | null; text: string; cost_usd: number | null }
   | { kind: 'error'; message: string };
+
+/** What a Write or Edit does to a file. */
+export type FileChange = { path: string; added: number; removed: number; before: string; after: string };
 
 export type AgentEnvelope = { session: string; event: AgentEvent };
 
@@ -23,6 +26,12 @@ export async function sendAgentTurn(args: {
 }): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('agent_send', args);
+}
+
+/** Saves an image (base64, no prefix) where the agent CLI can open it, and returns its path. */
+export async function saveAttachment(mime: string, data: string): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('attachment_save', { mime, data });
 }
 
 /** Subscribe to every agent event. Returns the unlisten function. */

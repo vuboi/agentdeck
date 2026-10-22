@@ -49,13 +49,22 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
     }
     case 'tool_call':
       close(blocks, false);
-      blocks.push({ kind: 'command', id: event.id, command: `${event.name}  ${event.input}`.trim(), output: '', status: 'running' });
+      blocks.push({
+        kind: 'command',
+        id: event.id,
+        command: `${event.name}  ${event.input}`.trim(),
+        output: '',
+        status: 'running',
+        ...(event.change ? { change: { ...event.change, create: event.name === 'Write' && event.change.removed === 0 } } : {}),
+      });
       return { blocks, finished: false };
     case 'tool_result': {
       const call = blocks.find((block) => block.kind === 'command' && block.id === event.id);
       if (call?.kind === 'command') {
         call.output = event.output.length > 6000 ? `${event.output.slice(0, 6000)}…` : event.output;
         call.status = event.is_error ? 'fail' : 'ok';
+        // A Write over an existing file is an edit, not a creation: the tool's own message says which.
+        if (call.change?.create && /updated|overwr/i.test(event.output)) call.change.create = false;
       }
       return { blocks, finished: false };
     }

@@ -15,6 +15,43 @@ fn roots() -> Result<Roots, String> {
     Ok(Roots::from_home(&home))
 }
 
+/// Saves a pasted or dropped image under `~/.agentdeck/attachments` so the agent CLI can open it by path.
+/// `data` is the base64 of the file. Returns the path.
+#[tauri::command]
+async fn attachment_save(mime: String, data: String) -> Result<String, String> {
+    use base64::Engine;
+    const MAX_BYTES: usize = 15 * 1024 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        let extension = match mime.as_str() {
+            "image/png" => "png",
+            "image/jpeg" => "jpg",
+            "image/gif" => "gif",
+            "image/webp" => "webp",
+            other => return Err(format!("{other} is not a supported image type")),
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .map_err(|error| error.to_string())?;
+        if bytes.len() > MAX_BYTES {
+            return Err("the image is larger than 15 MB".to_string());
+        }
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+            .ok_or("cannot find the home folder")?;
+        let folder = home.join(".agentdeck").join("attachments");
+        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let path = folder.join(format!("image-{stamp:x}.{extension}"));
+        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Sessions Claude Code and Codex already saved on this machine. Read-only.
 #[tauri::command]
 async fn history_list() -> Result<Vec<HistorySession>, String> {
@@ -178,7 +215,8 @@ pub fn run() {
             history_delete,
             file_read,
             file_read_bytes,
-            agent_send
+            agent_send,
+            attachment_save
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AgentDeck desktop application");

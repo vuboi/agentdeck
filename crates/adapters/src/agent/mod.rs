@@ -22,6 +22,8 @@ pub enum AgentEvent {
         id: String,
         name: String,
         input: String,
+        /// Set when the tool writes a file: what it adds and removes.
+        change: Option<FileChange>,
     },
     /// What a tool printed. `is_error` marks a failed call.
     ToolResult {
@@ -97,5 +99,81 @@ pub fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {
         cut
     } else {
         text
+    }
+}
+
+/// What one Write or Edit does to a file, for the "created 2 files +222 -0" summary and its diff.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FileChange {
+    pub path: String,
+    pub added: usize,
+    pub removed: usize,
+    /// Text that was replaced (empty for a new file), cut to a few thousand characters.
+    pub before: String,
+    /// Text that took its place, cut the same way.
+    pub after: String,
+}
+
+const DIFF_TEXT_MAX: usize = 3000;
+
+fn line_count(text: &str) -> usize {
+    text.lines().count()
+}
+
+fn cut(text: &str) -> String {
+    if text.chars().count() > DIFF_TEXT_MAX {
+        let mut shortened: String = text.chars().take(DIFF_TEXT_MAX).collect();
+        shortened.push('…');
+        shortened
+    } else {
+        text.to_owned()
+    }
+}
+
+/// The file change a tool call makes, if it is one of the file-writing tools.
+pub fn file_change(name: &str, input: &serde_json::Value) -> Option<FileChange> {
+    let text =
+        |value: &serde_json::Value, key: &str| value[key].as_str().unwrap_or_default().to_owned();
+    let path = ["file_path", "notebook_path"]
+        .iter()
+        .find_map(|key| input[*key].as_str())?
+        .to_owned();
+    match name {
+        "Write" => {
+            let content = text(input, "content");
+            Some(FileChange {
+                path,
+                added: line_count(&content),
+                removed: 0,
+                before: String::new(),
+                after: cut(&content),
+            })
+        }
+        "Edit" => {
+            let (old, new) = (text(input, "old_string"), text(input, "new_string"));
+            Some(FileChange {
+                path,
+                added: line_count(&new),
+                removed: line_count(&old),
+                before: cut(&old),
+                after: cut(&new),
+            })
+        }
+        "MultiEdit" => {
+            let edits = input["edits"].as_array()?;
+            let (mut before, mut after) = (Vec::new(), Vec::new());
+            for edit in edits {
+                before.push(text(edit, "old_string"));
+                after.push(text(edit, "new_string"));
+            }
+            Some(FileChange {
+                path,
+                added: after.iter().map(|part| line_count(part)).sum(),
+                removed: before.iter().map(|part| line_count(part)).sum(),
+                before: cut(&before.join("\n…\n")),
+                after: cut(&after.join("\n…\n")),
+            })
+        }
+        _ => None,
     }
 }
