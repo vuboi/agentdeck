@@ -44,7 +44,9 @@
   let shot = $state<{ data: string; w: number; h: number } | null>(null);
   let busy = $state('');
   let notice = $state('');
+  /** A dialog is open: the page hides. A menu is open: the page steps aside (see avoidMenus). */
   let covered = $state(false);
+  let menuOpen = $state(false);
   /** Where the phone / tablet sits in the stage (stage coordinates), for its frame. */
   let deviceBox = $state<{ x: number; y: number; w: number; h: number; zoom: number } | null>(null);
 
@@ -58,10 +60,25 @@
   });
 
   /** The webview's rectangle in window coordinates: the stage itself, or a phone / tablet frame centred in it. */
+  /** A menu open over the page: the page gives up the part of its area the menu covers (a native layer cannot sit under it). */
+  function avoidMenus(box: DOMRect): DOMRect {
+    const menus = [...document.querySelectorAll<HTMLElement>('[data-z-popover]:not(.z-tooltip-host)')].map((menu) => menu.getBoundingClientRect());
+    const hit = menus.filter((menu) => menu.width > 0 && menu.right > box.left && menu.left < box.right && menu.bottom > box.top && menu.top < box.bottom);
+    if (hit.length === 0) return box;
+    const left = Math.min(...hit.map((menu) => menu.left));
+    const bottom = Math.max(...hit.map((menu) => menu.bottom));
+    // Cut from the top or from the right, whichever takes less of the page.
+    const cutTop = Math.max(0, bottom + 6 - box.top);
+    const cutRight = Math.max(0, box.right - (left - 6));
+    const byTop = cutTop * box.width <= cutRight * box.height;
+    return byTop ? new DOMRect(box.x, box.y + cutTop, box.width, Math.max(40, box.height - cutTop)) : new DOMRect(box.x, box.y, Math.max(120, box.width - cutRight), box.height);
+  }
+
   function frame(): { rect: Rect; zoom: number } | null {
     if (!stage) return null;
-    const box = stage.getBoundingClientRect();
-    if (box.width < 20 || box.height < 20) return null;
+    const full = stage.getBoundingClientRect();
+    if (full.width < 20 || full.height < 20) return null;
+    const box = menuOpen ? avoidMenus(full) : full;
     const device = DEVICES[browser.device];
     if (!device.w) return { rect: { x: box.x, y: box.y, w: box.width, h: box.height }, zoom: 1 };
     const [dw, dh] = browser.landscape ? [device.h, device.w] : [device.w, device.h];
@@ -119,7 +136,8 @@
   }
 
   // The page is a native layer above the app: a menu or dialog opened over it would hide behind it.
-  const OVERLAYS = '[data-z-popover], [role="dialog"]:not([aria-label="Annotate screenshot"]), [data-z-modal]';
+  const OVERLAYS = '[role="dialog"]:not([aria-label="Annotate screenshot"]):not([aria-label="Preview"]), [data-z-modal]';
+  const MENUS = '[data-z-popover]:not(.z-tooltip-host)';
   let observer: MutationObserver | undefined;
   let resizer: ResizeObserver | undefined;
 
@@ -131,6 +149,11 @@
     }
     observer = new MutationObserver(() => {
       const now = document.querySelector(OVERLAYS) !== null;
+      const menus = document.querySelector(MENUS) !== null;
+      if (menus !== menuOpen) {
+        menuOpen = menus;
+        void sync();
+      }
       if (now === covered) return;
       covered = now;
       if (now) void hideBrowser();

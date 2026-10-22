@@ -190,3 +190,24 @@ html[data-warming] [data-z-popover] {
 .md li > * + * { margin-top: 0.5rem; }
 .md li > .md-code, .md li > .md-table { margin-bottom: 0.5rem; }
 .md li > ul, .md li > ol { margin-bottom: 0; }
+
+/* Tooltips: a small card in the app's own colours instead of the inverted default. */
+.z-tooltip-host.z-tooltip {
+  background: var(--popover) !important;
+  color: var(--popover-foreground) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 0.5rem !important;
+  box-shadow: 0 10px 24px -10px rgb(0 0 0 / 0.55) !important;
+}
+.z-tooltip-host.z-tooltip > div:not(:last-child) {
+  display: none; /* the arrow */
+}
+.z-tooltip-host.z-tooltip > div:last-child {
+  background: transparent !important;
+  border-radius: 0 !important;
+  padding: 0.3rem 0.6rem !important;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
