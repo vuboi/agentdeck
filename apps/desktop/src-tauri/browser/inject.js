@@ -178,7 +178,7 @@
     document.addEventListener('mousemove', move, true);
     document.addEventListener('click', click, true);
     document.addEventListener('keydown', key, true);
-    picker = { overlay, move, click, key };
+    picker = { overlay, move, click, key, id };
   };
 
   // A phone or tablet has no desktop scrollbars and no hover cursor; show the page that way.
@@ -283,7 +283,15 @@
         }
       } else if (kind === 'eval') {
         Promise.resolve()
-          .then(() => (0, eval)(String(arg)))
+          .then(() => {
+            try {
+              return (0, eval)(String(arg));
+            } catch (error) {
+              // Top-level await is not valid in eval: run it inside an async function instead.
+              if (!(error instanceof SyntaxError) || !/await/.test(error.message)) throw error;
+              return (0, eval)('(async () => {' + String(arg) + '\n})()');
+            }
+          })
           .then(
             (value) => post({ kind: 'eval', id, result: cut(show(value), 20000) }),
             (error) => post({ kind: 'eval', id, error: String((error && error.stack) || error) }),
@@ -315,6 +323,8 @@
       } else if (kind === 'pick') {
         startPicking(id);
       } else if (kind === 'unpick') {
+        // The app is still waiting on this pick: answer it, so its Inspect button turns off.
+        if (picker) post({ kind: 'pick', id: picker.id, element: null });
         stopPicking();
       }
     },

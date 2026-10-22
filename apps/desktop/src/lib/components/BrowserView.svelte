@@ -334,6 +334,8 @@
     busy = 'Capturing the page…';
     browser.error = '';
     try {
+      // The inspector's outline would be captured with the page, and stay there after the markup closes.
+      if (browser.picking) await cancelPick();
       const taken = await screenshot();
       await hideBrowser();
       shot = taken;
@@ -472,7 +474,7 @@
               <ZIcon zType={'lucideRotateCw' as ZIconName} class="size-3.5" />
             </button>
         </div>
-        <button type="button" class={icon} aria-label="Mark up the page" disabled={!started || busy !== ''} {@attach zTooltip({ content: 'Mark up the page for the agent', position: 'top' })} onclick={annotate}>
+        <button type="button" class="{icon} {shot ? 'bg-primary/15 text-primary' : ''}" aria-label="Mark up the page" aria-pressed={!!shot} disabled={!started || busy !== ''} {@attach zTooltip({ content: shot ? 'Close the markup' : 'Mark up the page for the agent', position: 'top' })} onclick={() => (shot ? cancelAnnotation() : annotate())}>
           <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
         </button>
         <button type="button" class="{icon} relative {browser.devtools ? 'bg-primary/15 text-primary' : ''}" aria-label="Developer tools" aria-pressed={browser.devtools} {@attach zTooltip({ content: 'Developer tools', position: 'top' })} onclick={() => (browser.devtools = !browser.devtools)}>

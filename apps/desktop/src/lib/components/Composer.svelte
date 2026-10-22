@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { getPref, setPref } from '../prefs';
-  import { ZButton, ZCommand, ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZButton, ZCommand, ZIcon, ZPopover, zSortable, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
     activeSession,
@@ -15,6 +15,7 @@
     MODELS,
     projectOf,
     queued,
+    steerQueued,
     sendMessage,
     stopTurn,
     turnOptions,
@@ -38,6 +39,15 @@
   const elements = $derived(draftElements[sessionId] ?? []);
   const running = $derived(isRunning(sessionId));
   const waiting = $derived(queued[sessionId] ?? []);
+
+  // Queued messages are reordered by dragging their handle (zSortable: the rows glide, Escape cancels).
+  function moveQueued(from: number, to: number) {
+    if (from === to) return;
+    const list = [...waiting];
+    const [item] = list.splice(from, 1);
+    list.splice(to, 0, item);
+    queued[sessionId] = list;
+  }
   const hasInput = $derived(draft.trim().length > 0 || images.length > 0 || elements.length > 0);
   let detail = $state<string | null>(null);
   let chipAnchors = $state<Record<string, HTMLElement | null>>({});
@@ -253,27 +263,36 @@
 </script>
 
 <svelte:window bind:innerWidth={innerW} />
+{#if waiting.length > 0}
+  <!-- Messages typed while the agent works sit on a tray behind the composer: they go out one by one when it is
+       free, or now with Steer. The composer overlaps the tray's lower edge. -->
+  <div class="mx-3 -mb-4 overflow-hidden rounded-t-2xl border border-b-0 border-border bg-card pb-4 shadow-md" role="list" aria-label="Queued messages" {@attach zSortable({ onSort: moveQueued, handle: '[data-handle]' })}>
+    {#each waiting as item, index (item)}
+      <div class="flex items-center gap-2.5 bg-card px-4 py-1 text-xs {index > 0 ? 'border-t border-border' : ''}" role="listitem">
+        <!-- The list icon turns into a drag handle while the pointer is on it. -->
+        <span data-handle class="group/handle grid size-3.5 shrink-0 cursor-grab touch-none place-items-center text-muted-foreground active:cursor-grabbing" aria-label="Drag to reorder">
+          <ZIcon zType={'lucideListChecks' as ZIconName} class="size-3.5 group-hover/handle:hidden" />
+          <ZIcon zType={'lucideGripVertical' as ZIconName} class="hidden size-3.5 group-hover/handle:block" />
+        </span>
+        <span class="min-w-0 flex-1 truncate text-foreground">{item.text || (item.images.length ? 'Image' : 'Element')}</span>
+        <button type="button" class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => steerQueued(sessionId, item)}>
+          <ZIcon zType={'lucideArrowRight' as ZIconName} class="size-3" />
+          <span>Steer</span>
+        </button>
+        <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-accent hover:text-destructive" aria-label="Remove from the queue" onclick={() => (queued[sessionId] = waiting.filter((entry) => entry !== item))}>
+          <ZIcon zType={'lucideTrash2' as ZIconName} class="size-3.5" />
+        </button>
+      </div>
+    {/each}
+  </div>
+{/if}
 <form
-  class="min-w-0 rounded-2xl border bg-card px-2.5 pt-2 pb-1.5 shadow-lg min-[720px]:px-3 min-[720px]:pt-2.5 min-[720px]:pb-1.5 transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
+  class="relative z-10 min-w-0 rounded-2xl border bg-card px-2.5 pt-2 pb-1.5 shadow-lg min-[720px]:px-3 min-[720px]:pt-2.5 min-[720px]:pb-1.5 transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
   onsubmit={(event) => { event.preventDefault(); submit(); }}
   ondragover={(event) => { if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); dragging = true; } }}
   ondragleave={() => (dragging = false)}
   ondrop={onDrop}
 >
-  {#if waiting.length > 0}
-    <!-- Messages typed while the agent works: they go out one by one when it is free. -->
-    <div class="mb-2 flex flex-col gap-1" aria-label="Queued messages">
-      {#each waiting as item, index (index)}
-        <div class="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
-          <ZIcon zType={'lucideClock' as ZIconName} class="size-3 shrink-0" />
-          <span class="min-w-0 flex-1 truncate">{item.text || (item.images.length ? 'Image' : 'Element')}</span>
-          <button type="button" class="grid size-4 shrink-0 cursor-pointer place-items-center rounded hover:bg-accent" aria-label="Remove from the queue" onclick={() => (queued[sessionId] = waiting.filter((entry) => entry !== item))}>
-            <ZIcon zType="lucideX" class="size-3" />
-          </button>
-        </div>
-      {/each}
-    </div>
-  {/if}
   {#if elements.length > 0}
     <!-- Elements picked in the browser travel with the message; click one to see what is included. -->
     <div class="mb-2 flex flex-wrap gap-1.5" aria-label="Picked elements">

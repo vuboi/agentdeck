@@ -587,6 +587,15 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
   send(session.id, text, images, elements);
 }
 
+/** Sends a queued message now: the reply running in the chat is stopped (what it wrote stays), and this one goes out. */
+export function steerQueued(sessionId: string, item: Queued) {
+  const rest = (queued[sessionId] ?? []).filter((entry) => entry !== item);
+  if (rest.length) queued[sessionId] = rest;
+  else delete queued[sessionId];
+  if (replies[sessionId]) stopTurn(sessionId);
+  send(sessionId, item.text, item.images, item.elements);
+}
+
 /** A message as it is recognised again in the chat's file (where it has another id than the one it got here). */
 const signature = (message: Message) =>
   `${message.role}|${message.blocks.map((block) => (block.kind === 'response' ? block.text.trim() : '')).join('').slice(0, 300)}`;

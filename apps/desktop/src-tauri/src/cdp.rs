@@ -189,7 +189,8 @@ fn remember(label: &str, event: &str, value: &Value) {
 
 /// Runs a script in the page (or in a frame's session) and returns its value.
 pub async fn evaluate(view: &Webview, script: &str, session: Option<String>) -> Result<Value, String> {
-    let params = json!({ "expression": script, "returnByValue": true, "awaitPromise": true, "userGesture": true });
+    // replMode: top-level await works, as in the DevTools console.
+    let params = json!({ "expression": script, "returnByValue": true, "awaitPromise": true, "userGesture": true, "replMode": true });
     let answer = call(view, "Runtime.evaluate", params, session).await?;
     if let Some(details) = answer.get("exceptionDetails") {
         let text = details["exception"]["description"]

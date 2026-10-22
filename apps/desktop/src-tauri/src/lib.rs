@@ -42,11 +42,7 @@ async fn attachment_save(mime: String, data: String) -> Result<String, String> {
         if bytes.len() > MAX_BYTES {
             return Err("the image is larger than 15 MB".to_string());
         }
-        let home = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(PathBuf::from)
-            .ok_or("cannot find the home folder")?;
-        let folder = home.join(".agentdeck").join("attachments");
+        let folder = home_folder()?.join(".agentdeck").join("attachments");
         std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -105,6 +101,50 @@ async fn history_rename(source: Source, path: String, title: String) -> Result<(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())
+}
+
+fn home_folder() -> Result<PathBuf, String> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "cannot find the home folder".to_string())
+}
+
+/// The Audit log: `~/.agentdeck/audit.jsonl`, one JSON line per finished tool call or chat error.
+fn audit_file() -> Result<PathBuf, String> {
+    Ok(home_folder()?.join(".agentdeck").join("audit.jsonl"))
+}
+
+#[tauri::command]
+fn audit_append(line: String) -> Result<(), String> {
+    use std::io::Write;
+    let path = audit_file()?;
+    std::fs::create_dir_all(path.parent().ok_or("no folder for the audit log")?).map_err(|error| error.to_string())?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    writeln!(file, "{line}").map_err(|error| error.to_string())
+}
+
+/// Everything in the Audit log; empty when nothing was recorded yet.
+#[tauri::command]
+fn audit_read() -> Result<String, String> {
+    match std::fs::read_to_string(audit_file()?) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn audit_clear() -> Result<(), String> {
+    match std::fs::remove_file(audit_file()?) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// Moves a saved session to `~/.agentdeck/trash` (not destroyed), so it leaves Claude and Codex too.
@@ -301,6 +341,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             history_list,
+            audit_append,
+            audit_read,
+            audit_clear,
             models_list,
             history_load,
             history_rename,

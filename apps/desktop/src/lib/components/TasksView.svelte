@@ -1,19 +1,54 @@
 <script lang="ts">
   import { ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { activity, clearActivity, type Activity } from '../activity.svelte';
+  import { activity, audit, clearAudit, type Activity } from '../activity.svelte';
   import { elapsed } from '../blocks';
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
 
   // Tasks: what the agents are running now, background shells and sub-agents included.
-  // Audit (`log`): every tool call of every chat, newest first.
+  // Audit (`log`): every finished tool call and chat error, kept on disk, grouped by month and day.
   let { log = false }: { log?: boolean } = $props();
 
   let open = $state<Record<string, boolean>>({});
+  let failedOnly = $state(false);
+  let copied = $state(false);
+  let month = $state('');
+
   const live = (item: Activity) => item.status === 'running' || item.status === 'background';
-  const items = $derived(log ? [...activity].reverse() : activity.filter(live).reverse());
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const dayKey = (at: number) => {
+    const day = new Date(at);
+    return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+  };
+  const monthKey = (at: number) => dayKey(at).slice(0, 7);
+
+  // Audit: the months that have entries, newest first; the chosen one (or the newest) is shown.
+  const months = $derived([...new Set(audit.map((item) => monthKey(item.startedAt)))].sort().reverse());
+  const current = $derived(month && months.includes(month) ? month : (months[0] ?? ''));
+  const inMonth = $derived(audit.filter((item) => monthKey(item.startedAt) === current && (!failedOnly || item.status === 'fail')).reverse());
+  const days = $derived.by(() => {
+    const groups: { key: string; at: number; items: Activity[] }[] = [];
+    for (const item of inMonth) {
+      const key = dayKey(item.startedAt);
+      const last = groups.at(-1);
+      if (last?.key === key) last.items.push(item);
+      else groups.push({ key, at: item.startedAt, items: [item] });
+    }
+    return groups;
+  });
+  const failures = $derived(audit.filter((item) => item.status === 'fail'));
+
+  const items = $derived(activity.filter(live).reverse());
   const recent = $derived(log ? [] : activity.filter((item) => !live(item) && item.background).slice(-20).reverse());
+
+  // The failures as plain text, for pasting into a chat to fix them.
+  async function copyFailures() {
+    const text = failures.map((item) => `[${dayKey(item.startedAt)} ${clock(item.startedAt)}] ${item.title} | ${item.name} ${item.input}\n${item.output ?? ''}`).join('\n\n');
+    await navigator.clipboard.writeText(text);
+    copied = true;
+    setTimeout(() => (copied = false), 1500);
+  }
 
   const STATUS: Record<Activity['status'], { label: string; tone: string }> = {
     running: { label: 'Running', tone: 'text-primary' },
@@ -24,6 +59,17 @@
   };
   const took = (item: Activity) => elapsed((item.endedAt ?? ticker.sec) - item.startedAt);
   const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const monthLabel = (key: string) => {
+    const [year, number] = key.split('-').map(Number);
+    return new Date(year, number - 1).toLocaleDateString([], { month: 'short', year: 'numeric' });
+  };
+  const dayLabel = (key: string, at: number) => {
+    const today = dayKey(Date.now());
+    const yesterday = dayKey(Date.now() - 86_400_000);
+    if (key === today) return 'Today';
+    if (key === yesterday) return 'Yesterday';
+    return new Date(at).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  };
 </script>
 
 {#snippet row(item: Activity)}
@@ -62,7 +108,7 @@
   </li>
 {/snippet}
 
-{#if items.length === 0 && recent.length === 0}
+{#if log ? audit.length === 0 : items.length === 0 && recent.length === 0}
   <!-- Empty: centred, like the other panels. -->
   <div class="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground" role="tabpanel" aria-label={log ? 'Audit log' : 'Tasks'}>
     <ZIcon zType={(log ? 'lucideShieldCheck' : 'lucideListChecks') as ZIconName} class="size-8 opacity-60" />
@@ -75,28 +121,57 @@
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label={log ? 'Audit log' : 'Tasks'}>
   <div class="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
     <span class="font-medium">{log ? 'Audit log' : 'Running now'}</span>
-    <span class="text-muted-foreground tabular-nums">{items.length}</span>
-    {#if log && activity.length > 0}
-      <button type="button" class="ml-auto grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear the log" {@attach zTooltip({ content: 'Clear', position: 'top' })} onclick={clearActivity}>
+    <span class="text-muted-foreground tabular-nums">{log ? inMonth.length : items.length}</span>
+    {#if log}
+      <button type="button" class="ml-auto grid size-6 cursor-pointer place-items-center rounded {failedOnly ? 'bg-destructive/15 text-destructive' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" aria-label="Failed only" aria-pressed={failedOnly} {@attach zTooltip({ content: 'Failed only', position: 'top' })} onclick={() => (failedOnly = !failedOnly)}>
+        <ZIcon zType={'lucideCircleX' as ZIconName} class="size-3.5" />
+      </button>
+      <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-40" aria-label="Copy the failures" disabled={failures.length === 0} {@attach zTooltip({ content: copied ? 'Copied' : `Copy ${failures.length} failure${failures.length === 1 ? '' : 's'}`, position: 'top' })} onclick={copyFailures}>
+        <ZIcon zType={(copied ? 'lucideCheck' : 'lucideCopy') as ZIconName} class="size-3.5" />
+      </button>
+      <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear the whole log" {@attach zTooltip({ content: 'Clear all', position: 'top' })} onclick={clearAudit}>
         <ZIcon zType={'lucideBan' as ZIconName} class="size-3.5" />
       </button>
     {/if}
   </div>
+  {#if log}
+    <!-- Months with entries, newest first. -->
+    <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-1.5" role="tablist" aria-label="Months">
+      {#each months as key (key)}
+        <button type="button" role="tab" aria-selected={key === current} class="shrink-0 cursor-pointer rounded-full px-2.5 py-0.5 text-[11px] {key === current ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (month = key)}>
+          {monthLabel(key)}
+        </button>
+      {/each}
+    </div>
+  {/if}
   <div class="min-h-0 flex-1 overflow-y-auto">
-    {#if items.length === 0}
-      <div class="p-4 text-center text-xs text-muted-foreground">
-        {log ? 'Nothing yet. Every command, file edit and search an agent makes is listed here.' : 'Nothing running. Commands, background shells and sub-agents show here while they work.'}
-      </div>
+    {#if log}
+      {#if days.length === 0}
+        <div class="p-4 text-center text-xs text-muted-foreground">No failures this month.</div>
+      {/if}
+      {#each days as day (day.key)}
+        <div class="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-background/95 px-3 pt-2 pb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+          <span>{dayLabel(day.key, day.at)}</span>
+          <span class="tabular-nums normal-case">{day.items.length}</span>
+        </div>
+        <ul class="m-0 list-none p-0">
+          {#each day.items as item (item.key)}{@render row(item)}{/each}
+        </ul>
+      {/each}
     {:else}
-      <ul class="m-0 list-none p-0">
-        {#each items as item (item.key)}{@render row(item)}{/each}
-      </ul>
-    {/if}
-    {#if recent.length > 0}
-      <div class="border-t border-border px-3 pt-2.5 pb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">Background, finished</div>
-      <ul class="m-0 list-none p-0">
-        {#each recent as item (item.key)}{@render row(item)}{/each}
-      </ul>
+      {#if items.length === 0}
+        <div class="p-4 text-center text-xs text-muted-foreground">Nothing running. Commands, background shells and sub-agents show here while they work.</div>
+      {:else}
+        <ul class="m-0 list-none p-0">
+          {#each items as item (item.key)}{@render row(item)}{/each}
+        </ul>
+      {/if}
+      {#if recent.length > 0}
+        <div class="border-t border-border px-3 pt-2.5 pb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">Background, finished</div>
+        <ul class="m-0 list-none p-0">
+          {#each recent as item (item.key)}{@render row(item)}{/each}
+        </ul>
+      {/if}
     {/if}
   </div>
 </div>

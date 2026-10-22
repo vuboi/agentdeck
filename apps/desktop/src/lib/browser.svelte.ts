@@ -243,9 +243,11 @@ export const isLocalUrl = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1|
 
 /** Shows `url` in the browser: in the front tab when that is blank, in a new tab otherwise. */
 export function openInPreview(url: string) {
-  const tab = activeTab();
-  if (tab.url && tab.url !== url) newTab(url);
-  else tab.url = url;
+  // A page already open in a tab is shown as it is; any other address gets a tab of its own, never the open page's.
+  const shown = browser.tabs.find((tab) => tab.url === url);
+  if (shown) browser.activeId = shown.id;
+  else if (activeTab().url) newTab(url);
+  else activeTab().url = url;
   browser.autostart = url;
   layout.activeTool = 'Preview';
   layout.toolsOpen = true;
