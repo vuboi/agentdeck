@@ -185,3 +185,8 @@ html[data-warming] [data-z-popover] {
   outline: none !important;
   box-shadow: none !important;
 }
+
+/* Blocks inside a list item (a code card under "1. Do this:") get the same breathing room as elsewhere. */
+.md li > * + * { margin-top: 0.5rem; }
+.md li > .md-code, .md li > .md-table { margin-bottom: 0.5rem; }
+.md li > ul, .md li > ol { margin-bottom: 0; }
