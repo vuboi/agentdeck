@@ -4,6 +4,7 @@
 //! [`AgentEvent`], so adding a CLI means adding one [`Provider`] impl and nothing else.
 
 pub mod claude;
+pub mod runner;
 
 use serde::Serialize;
 

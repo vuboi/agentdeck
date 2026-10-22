@@ -11,6 +11,42 @@ use super::{AgentEvent, Provider, TurnRequest};
 
 pub struct Claude;
 
+/// Where the Claude Code CLI usually lives, per platform. A desktop app started from the Dock, the Start
+/// menu or a launcher does not get the shell's PATH, so the usual install locations are tried first.
+fn candidates_for(os: &str, home: Option<PathBuf>, appdata: Option<PathBuf>) -> Vec<PathBuf> {
+    let exe = if os == "windows" {
+        "claude.exe"
+    } else {
+        "claude"
+    };
+    let mut found = Vec::new();
+    if let Some(home) = &home {
+        // The native installer, then the older self-updating install.
+        found.push(home.join(".local").join("bin").join(exe));
+        found.push(home.join(".claude").join("local").join(exe));
+    }
+    match os {
+        "macos" => {
+            found.push(PathBuf::from("/opt/homebrew/bin/claude"));
+            found.push(PathBuf::from("/usr/local/bin/claude"));
+        }
+        "windows" => {
+            // npm's global bin is %APPDATA%\npm, where the CLI is a .cmd shim.
+            if let Some(appdata) = &appdata {
+                found.push(appdata.join("npm").join("claude.cmd"));
+            }
+        }
+        _ => {
+            found.push(PathBuf::from("/usr/local/bin/claude"));
+            found.push(PathBuf::from("/usr/bin/claude"));
+            if let Some(home) = &home {
+                found.push(home.join(".npm-global").join("bin").join("claude"));
+            }
+        }
+    }
+    found
+}
+
 impl Provider for Claude {
     fn id(&self) -> &'static str {
         "claude"
@@ -21,15 +57,9 @@ impl Provider for Claude {
     }
 
     fn candidates(&self) -> Vec<PathBuf> {
-        // The installer puts it in ~/.local/bin, which a desktop app started outside a shell may not see.
-        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-        let name = if cfg!(windows) {
-            "claude.exe"
-        } else {
-            "claude"
-        };
-        home.map(|home| vec![PathBuf::from(home).join(".local").join("bin").join(name)])
-            .unwrap_or_default()
+        let env_path = |key: &str| std::env::var_os(key).map(PathBuf::from);
+        let home = env_path("HOME").or_else(|| env_path("USERPROFILE"));
+        candidates_for(std::env::consts::OS, home, env_path("APPDATA"))
     }
 
     fn args(&self, req: &TurnRequest) -> Vec<String> {
@@ -179,5 +209,29 @@ mod tests {
             .parse_line(r#"{"type":"system","subtype":"init"}"#)
             .is_empty());
         assert!(Claude.parse_line("not json").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::*;
+
+    fn home() -> Option<PathBuf> {
+        Some(PathBuf::from("/h"))
+    }
+
+    #[test]
+    fn each_platform_gets_its_own_install_locations() {
+        let win = candidates_for(
+            "windows",
+            Some(PathBuf::from("C:/u")),
+            Some(PathBuf::from("C:/a")),
+        );
+        assert!(win[0].ends_with("claude.exe") && win.iter().any(|p| p.ends_with("claude.cmd")));
+        let mac = candidates_for("macos", home(), None);
+        assert!(mac.contains(&PathBuf::from("/opt/homebrew/bin/claude")));
+        assert!(mac[0].ends_with("claude") && !mac[0].to_string_lossy().ends_with(".exe"));
+        let linux = candidates_for("linux", home(), None);
+        assert!(linux.contains(&PathBuf::from("/usr/bin/claude")));
     }
 }
