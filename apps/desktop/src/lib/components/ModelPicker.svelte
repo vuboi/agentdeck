@@ -127,7 +127,7 @@
   zPosition="top-left"
   zOffset={8}
   zWidth={320}
-  onClosed={() => !warming && trigger?.focus()}
+  onClosed={() => !warming && document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()}
 >
   {#snippet children()}
     <div class="flex w-[320px] flex-col gap-2 overflow-y-auto px-2.5 py-2" style:max-height="{panelMax}px">
