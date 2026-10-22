@@ -24,6 +24,8 @@ pub enum AgentEvent {
         input: String,
         /// Set when the tool writes a file: what it adds and removes.
         change: Option<FileChange>,
+        /// Runs on its own while the agent carries on: a shell started in the background, or a sub-agent.
+        background: bool,
     },
     /// What a tool printed. `is_error` marks a failed call.
     ToolResult {

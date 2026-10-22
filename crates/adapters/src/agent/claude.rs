@@ -185,6 +185,8 @@ impl Provider for Claude {
                         name: name.to_string(),
                         input: summarize_tool_input(name, &block["input"]),
                         change: file_change(name, &block["input"]),
+                        background: block["input"]["run_in_background"].as_bool() == Some(true)
+                            || matches!(name, "Agent" | "Task"),
                     }
                 })
                 .collect(),
@@ -327,9 +329,19 @@ mod tests {
                 id: "t1".into(),
                 name: "Bash".into(),
                 input: "ls -la".into(),
-                change: None
+                change: None,
+                background: false
             }]
         );
+    }
+
+    #[test]
+    fn background_shells_and_sub_agents_are_marked() {
+        let shell = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"pnpm dev","run_in_background":true}}]}}"#;
+        let agent = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Agent","input":{"prompt":"look"}}]}}"#;
+        for line in [shell, agent] {
+            assert!(matches!(Claude.parse_line(line)[0], AgentEvent::ToolCall { background: true, .. }));
+        }
     }
 
     #[test]

@@ -11,6 +11,7 @@ import {
 } from './history';
 import { messages as mockMessages, type Message } from './mock';
 import { isLocalUrl, openInPreview } from './browser.svelte';
+import { trackActivity } from './activity.svelte';
 import { listenAgentEvents, saveAttachment, sendAgentTurn, stopAgentTurn, type AgentEvent } from './agent';
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
@@ -384,6 +385,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
   // reloaded) and the turn must still finish, or the chat would spin for ever.
   const reply = liveReplies[sessionId] ?? messagesOf(sessionId).find((item) => item.id === replies[sessionId]);
   if (!session) return;
+  trackActivity(sessionId, session.title, event);
   if (!reply) {
     if (event.kind === 'done' || event.kind === 'error') {
       delete replies[sessionId];
@@ -504,7 +506,7 @@ export function forkSession(sourceId: string) {
 
 // ---------- tree: Project > Session > Fork ----------
 // A fork is a branch of the conversation (not a git branch): it nests under the session it came from.
-export type TreeData = { kind: 'project' | 'session'; session?: SessionItem; path?: string };
+export type TreeData = { kind: 'project' | 'session'; session?: SessionItem; path?: string; /** The last fork under its chat: its branch line ends there. */ last?: boolean };
 
 export function buildTree(): ZTreeNode<TreeData>[] {
   // A session with no time yet is new: it goes first.
@@ -526,14 +528,14 @@ export function buildTree(): ZTreeNode<TreeData>[] {
     workspace.sessions
       .filter((item) => item.parentId && item.id !== root.id && rootOf(item) === root.id)
       .sort(newest)
-      .map(sessionNode);
+      .map((item, index, list) => sessionNode(item, index === list.length - 1));
 
-  const sessionNode = (session: SessionItem): ZTreeNode<TreeData> => ({
+  const sessionNode = (session: SessionItem, last = false): ZTreeNode<TreeData> => ({
     id: `session:${session.id}`,
     label: session.title,
     icon: session.parentId ? 'lucideGitFork' : 'lucideMessageSquare',
     children: session.parentId ? [] : forksOf(session),
-    data: { kind: 'session', session },
+    data: { kind: 'session', session, last },
   });
 
   // An empty new chat shows only while it is the one open.

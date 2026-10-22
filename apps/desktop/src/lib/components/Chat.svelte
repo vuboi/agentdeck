@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, createVirtualizer } from '@shival99/z-ui-svelte';
+  import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
   import { LOADER } from '../loaders';
   import { activeSession, AGENTS, answerPermission, chat, forkSession, newSession, openTranscript, workspace } from '../sessions.svelte';
@@ -11,6 +11,7 @@
   import CommandGroup from './CommandGroup.svelte';
   import LiveStatus from './LiveStatus.svelte';
   import MessageFooter from './MessageFooter.svelte';
+  import { estimateCost, shortCount, tokenDetail, totalTokens, usd } from '../usage';
   import PermissionCard from './PermissionCard.svelte';
   import Composer from './Composer.svelte';
   import ToolbarActions from './ToolbarActions.svelte';
@@ -370,6 +371,10 @@
                   <div class="mb-1.5 flex items-baseline gap-2 text-xs">
                     <span class="font-semibold {agentText[agent]}">{agentName(agent)}</span>
                     <span class="text-muted-foreground">{message.time}</span>
+                    {#if message.tokens}
+                      {@const cost = message.cost ?? estimateCost(message.tokens, message.model)}
+                      <span class="text-[11px] text-muted-foreground tabular-nums" {@attach zTooltip({ content: `${tokenDetail(message.tokens)}${message.cost == null ? ' · cost estimated from list prices' : ''}`, position: 'top' })}>· {shortCount(totalTokens(message.tokens))} tokens{cost != null ? ` · ${message.cost == null ? '~' : ''}${usd(cost)}` : ''}</span>
+                    {/if}
                   </div>
                   <div class="flex w-full min-w-0 flex-col gap-2">
                     {#each parts as segment, position (position)}

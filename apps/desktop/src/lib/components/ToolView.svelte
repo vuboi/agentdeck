@@ -3,6 +3,7 @@
   import { toolOf } from '../tools';
   import BrowserView from './BrowserView.svelte';
   import FileExplorer from './FileExplorer.svelte';
+  import TasksView from './TasksView.svelte';
 
   // The body of a workspace tool. Same view in the right panel and in the detached modal.
   let { tool }: { tool: string } = $props();
@@ -13,6 +14,8 @@
   <FileExplorer />
 {:else if tool === 'Preview'}
   <BrowserView />
+{:else if tool === 'Tasks' || tool === 'Audit'}
+  <TasksView log={tool === 'Audit'} />
 {:else}
 
 <div class="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground" role="tabpanel" aria-label={current.label}>
