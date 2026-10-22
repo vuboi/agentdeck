@@ -2,6 +2,7 @@
   import { ZIcon, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { browser } from '../browser.svelte';
+  import Splitter from './Splitter.svelte';
 
   // Console and network of the page, laid out like a browser's devtools: tabs, a filter, a bar to resize it.
   let { onresize }: { onresize?: (height: number) => void } = $props();
@@ -48,29 +49,15 @@
     else browser.network = [];
   }
 
-  // Drag the top edge to change the height.
-  function startResize(event: PointerEvent) {
-    const bar = event.currentTarget as HTMLElement;
-    const startY = event.clientY;
-    const start = browser.devtoolsHeight;
-    bar.setPointerCapture(event.pointerId);
-    const move = (e: PointerEvent) => {
-      browser.devtoolsHeight = Math.min(Math.max(start + (startY - e.clientY), 96), Math.round(window.innerHeight * 0.7));
-      onresize?.(browser.devtoolsHeight);
-    };
-    const stop = () => {
-      bar.removeEventListener('pointermove', move);
-      bar.removeEventListener('pointerup', stop);
-    };
-    bar.addEventListener('pointermove', move);
-    bar.addEventListener('pointerup', stop);
-  }
+  // The same divider as every other pane: a hairline with the primary glow on hover and while dragging.
+  const resize = (delta: number) => {
+    browser.devtoolsHeight = Math.min(Math.max(browser.devtoolsHeight - delta, 96), Math.round(window.innerHeight * 0.7));
+    onresize?.(browser.devtoolsHeight);
+  };
 </script>
 
-<section class="flex shrink-0 flex-col border-t border-border bg-background" style:height="{browser.devtoolsHeight}px" aria-label="Developer tools">
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="-mt-0.5 h-1 shrink-0 cursor-row-resize hover:bg-primary/40" onpointerdown={startResize} aria-hidden="true"></div>
-
+<Splitter axis="y" label="Resize developer tools" onDelta={resize} />
+<section class="flex shrink-0 flex-col bg-background" style:height="{browser.devtoolsHeight}px" aria-label="Developer tools">
   <div class="flex shrink-0 items-center gap-1 border-b border-border px-1.5 py-1" role="tablist">
     {#each [['console', 'Console'], ['network', 'Network']] as [value, label] (value)}
       <button
