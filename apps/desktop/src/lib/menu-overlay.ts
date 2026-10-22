@@ -78,6 +78,13 @@ export function mirrorMenus(area: () => DOMRect | null): () => void {
       current?.removeAttribute('data-mirrored');
       current = menu;
       fresh = true;
+      // z-hover-glide makes its highlight box on the first hover; make it now so the mirror has it to move.
+      for (const host of menu.querySelectorAll<HTMLElement>('[data-z-hover-glide]')) {
+        const item = host.querySelector('[data-glide-item]:not([aria-checked="true"])');
+        if (!item || host.querySelector(':scope > [data-z-hover-glide-highlight]')) continue;
+        item.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+        item.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: document.body }));
+      }
       sendStyles();
     }
     menu.setAttribute('data-mirrored', '');
@@ -89,7 +96,8 @@ export function mirrorMenus(area: () => DOMRect | null): () => void {
     const top = parseFloat(menu.style.top);
     const x = Number.isFinite(left) ? left : r.left + r.width / 2 - w / 2;
     const y = Number.isFinite(top) ? top : r.top + r.height / 2 - h / 2;
-    const html = menu.outerHTML;
+    // The glide highlight moves on its own in the mirror; its position here is left out of the copy.
+    const html = menu.outerHTML.replace(/(data-z-hover-glide-highlight=""[^>]*?) style="[^"]*"/g, '$1');
     const key = `${Math.round(x)},${Math.round(y)},${w},${h}|${document.documentElement.className}|${html}`;
     if (key === lastKey) return;
     const moved = !lastKey.startsWith(`${Math.round(x)},${Math.round(y)},${w},${h}|`);
@@ -112,10 +120,14 @@ export function mirrorMenus(area: () => DOMRect | null): () => void {
   let unlisten: (() => void) | undefined;
   void import('@tauri-apps/api/event').then(({ listen }) =>
     listen<{ kind: string; index?: number; key?: string }>('browser-report', ({ payload }) => {
+      if (payload.kind === 'page-pointer') {
+        // A press on the page is a press outside the menu: it closes as it would on any outside click.
+        if (current) document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
+        return;
+      }
       if (!current) return;
       const target = typeof payload.index === 'number' ? current.querySelectorAll<HTMLElement>(PICK)[payload.index] : undefined;
       if (payload.kind === 'overlay-click') target?.click();
-      else if (payload.kind === 'overlay-hover') target?.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false }));
       else if (payload.kind === 'overlay-key' && payload.key) {
         document.dispatchEvent(new KeyboardEvent('keydown', { key: payload.key, bubbles: true }));
       }

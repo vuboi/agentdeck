@@ -2,8 +2,10 @@
 <!-- The menu overlay of the AgentDeck browser: see src-tauri/src/overlay.rs. --><html><head><meta charset="utf-8"><style id="app"></style><style>
 html,body{margin:0;padding:0;background:transparent!important;overflow:hidden}
 #root{position:absolute}
+#root [data-z-hover-glide-highlight]{position:absolute;top:0;left:0;margin:0;z-index:-1;pointer-events:none;opacity:0}
 #root>*{position:static!important;inset:auto!important;transform:none!important;margin:0!important;opacity:1!important;visibility:visible!important}
-#root *{animation:none!important;transition-property:background-color,color,border-color,opacity!important}
+#root *{animation:none!important}
+#root *:not([data-z-hover-glide-highlight]){transition-property:background-color,color,border-color,opacity!important}
 </style></head><body><div id="root"></div><script>
 const BASE = navigator.userAgent.includes('Windows') ? 'http://agentdeck.localhost/' : 'agentdeck://localhost/';
 const post = (message) => fetch(BASE + 'r', { method: 'POST', body: JSON.stringify(message), mode: 'no-cors' }).catch(() => {});
@@ -45,9 +47,23 @@ root.addEventListener('click', (event) => {
   event.preventDefault();
   post({ kind: 'overlay-click', index: [...root.querySelectorAll(PICK)].indexOf(target) });
 });
+// z-hover-glide: the highlight box glides to the hovered item, as in the app.
+let lastItem = null;
 root.addEventListener('pointerover', (event) => {
-  const target = event.target.closest(PICK);
-  if (target) post({ kind: 'overlay-hover', index: [...root.querySelectorAll(PICK)].indexOf(target) });
+  const item = event.target.closest('[data-glide-item]');
+  const host = item && item.closest('[data-z-hover-glide]');
+  if (!item || item === lastItem || !host) return;
+  const box = host.querySelector(':scope > [data-z-hover-glide-highlight]');
+  if (!box || item.matches('[aria-checked="true"],[aria-disabled="true"],:disabled')) return;
+  const from = lastItem && lastItem.closest('[data-z-hover-glide]') === host;
+  lastItem = item;
+  const a = host.getBoundingClientRect();
+  const b = item.getBoundingClientRect();
+  box.style.cssText = `position:absolute;top:0;left:0;margin:0;z-index:-1;pointer-events:none;width:${b.width}px;height:${b.height}px;transform:translate(${b.left - a.left + host.scrollLeft}px, ${b.top - a.top + host.scrollTop}px);opacity:1;transition:${from ? 'transform 150ms cubic-bezier(0.16,1,0.3,1), width 150ms, height 150ms, opacity 120ms' : 'opacity 120ms ease-out'}`;
+});
+root.addEventListener('pointerleave', () => {
+  lastItem = null;
+  for (const box of root.querySelectorAll('[data-z-hover-glide-highlight]')) box.style.opacity = '0';
 });
 addEventListener('keydown', (event) => post({ kind: 'overlay-key', key: event.key }));
 </script></body></html>

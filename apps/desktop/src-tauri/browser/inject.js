@@ -40,6 +40,10 @@
     post({ kind: 'console', level: 'error', text: cut('Unhandled rejection: ' + show(event.reason), 2000), at: Date.now() }),
   );
 
+  // ---- presses ----
+  // The app cannot see clicks on the page; a menu of the app open over it closes on this.
+  addEventListener('pointerdown', () => post({ kind: 'page-pointer' }), true);
+
   // ---- network ----
   const record = (method, url, status, started, body) =>
     post({ kind: 'network', method, url: cut(String(url), 400), status, ms: Math.round(performance.now() - started), at: Date.now(), body: body ? cut(String(body), 1500) : undefined });
