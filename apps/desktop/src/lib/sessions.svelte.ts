@@ -243,7 +243,7 @@ function withElements(text: string, elements: PageElement[]): string {
 /** How the Composer's permission setting maps onto the CLI's `--permission-mode`; "ask" passes none. */
 const PERMISSION_MODE: Record<Permission, string | null> = { ask: null, edits: 'acceptEdits', plan: 'plan', auto: 'auto', yolo: 'bypassPermissions' };
 /** The permission setting of the Composer, read when a turn starts. */
-export const turnOptions = $state<{ permission: Permission }>({ permission: 'ask' });
+export const turnOptions = $state<{ permission: Permission; effort: Effort }>({ permission: 'ask', effort: 'medium' });
 
 /** Tools the user approved with "Always allow", per chat. */
 const approved: Record<string, string[]> = {};
@@ -275,6 +275,7 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       resume,
       model: session.model ?? null,
       permissionMode: PERMISSION_MODE[turnOptions.permission],
+      effort: turnOptions.effort,
       allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
       cwd,
     });
@@ -505,7 +506,8 @@ function applyHistory(all: HistorySession[]) {
     projectId: projectIds.get(item.cwd)!,
     title: item.title,
     agent: item.source,
-    model: MODELS[item.source][0].value,
+    // Sonnet unless the chat was changed: the first model of the list is the biggest one.
+    model: item.source === 'claude' ? 'claude-sonnet-5-5' : MODELS[item.source][0].value,
     status: 'idle',
     parentId: item.parent_id && ids.has(item.parent_id) ? item.parent_id : undefined,
     source: item.source,

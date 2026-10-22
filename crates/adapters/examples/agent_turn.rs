@@ -12,6 +12,7 @@ async fn turn(prompt: &str, id: &str, resume: bool, cwd: &std::path::Path) -> Ve
         resume,
         model: Some("claude-haiku-5-5".into()),
         permission_mode: None,
+        effort: None,
         allowed_tools: Vec::new(),
         cwd: Some(cwd.to_path_buf()),
     };

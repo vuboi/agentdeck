@@ -46,7 +46,7 @@
       <span class="truncate font-medium">{summarize(items)}</span>
       {#if total}{@render chips(total)}{/if}
     {/if}
-    <ZIcon zType="lucideChevronDown" class="size-3.5 shrink-0 transition-transform duration-300 {open ? 'rotate-180' : ''}" />
+    <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 transition-transform duration-300 {open ? 'rotate-180' : ''}" />
   </button>
 
   <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">

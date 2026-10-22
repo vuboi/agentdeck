@@ -194,6 +194,7 @@ async fn agent_send(
     resume: bool,
     model: Option<String>,
     permission_mode: Option<String>,
+    effort: Option<String>,
     allowed_tools: Vec<String>,
     cwd: Option<String>,
 ) -> Result<(), String> {
@@ -204,6 +205,7 @@ async fn agent_send(
         resume,
         model,
         permission_mode,
+        effort,
         allowed_tools,
         cwd: cwd.map(Into::into),
     };

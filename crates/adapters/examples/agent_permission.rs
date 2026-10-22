@@ -18,6 +18,7 @@ async fn turn(
         resume,
         model: Some("claude-haiku-5-5".into()),
         permission_mode: None,
+        effort: None,
         allowed_tools: allowed,
         cwd: Some(cwd.to_path_buf()),
     };

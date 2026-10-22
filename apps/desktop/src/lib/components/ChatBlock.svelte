@@ -24,10 +24,10 @@
       aria-expanded={thinkingOpen}
       onclick={() => (thinkingOpen = !thinkingOpen)}
     >
-      <ZIcon zType="lucideBrain" class="size-3.5" />
+      <ZIcon zType="lucideBrain" class="size-3" />
       {#if block.streaming}<ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="primary" />{/if}
       Thinking
-      <ZIcon zType="lucideChevronDown" class="ml-auto size-3.5 transition-transform duration-300 {thinkingOpen ? 'rotate-180' : ''}" />
+      <ZIcon zType="lucideChevronDown" class="ml-auto size-3 transition-transform duration-300 {thinkingOpen ? 'rotate-180' : ''}" />
     </button>
     <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {thinkingOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
       <div class="min-h-0 overflow-hidden">

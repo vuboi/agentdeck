@@ -27,6 +27,7 @@ export async function sendAgentTurn(args: {
   resume: boolean;
   model: string | null;
   permissionMode: string | null;
+  effort: string | null;
   allowedTools: string[];
   cwd: string | null;
 }): Promise<void> {

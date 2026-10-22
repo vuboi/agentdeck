@@ -103,6 +103,10 @@ impl Provider for Claude {
             args.push("--model".to_string());
             args.push(model.clone());
         }
+        if let Some(effort) = &req.effort {
+            args.push("--effort".to_string());
+            args.push(effort.clone());
+        }
         if let Some(mode) = &req.permission_mode {
             args.push("--permission-mode".to_string());
             args.push(mode.clone());
@@ -221,6 +225,7 @@ mod tests {
             resume,
             model: None,
             permission_mode: None,
+            effort: None,
             allowed_tools: Vec::new(),
             cwd: None,
         }

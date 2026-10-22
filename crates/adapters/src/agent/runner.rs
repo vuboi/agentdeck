@@ -174,6 +174,7 @@ mod unix_tests {
             resume: false,
             model: None,
             permission_mode: None,
+            effort: None,
             allowed_tools: Vec::new(),
             cwd: None,
         }

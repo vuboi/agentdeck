@@ -12,7 +12,7 @@
 
 <div class="block-in overflow-hidden rounded-xl border {block.state === 'pending' ? 'border-warning/50 bg-warning/5' : 'border-border bg-muted/20'} text-xs" role="group" aria-label="Permission request">
   <div class="flex items-center gap-2 px-3 py-2 font-medium">
-    <ZIcon zType={block.state === 'denied' ? 'lucideShieldX' : block.state === 'allowed' ? 'lucideShieldCheck' : 'lucideShieldAlert'} class="size-4 {block.state === 'pending' ? 'text-warning' : 'text-muted-foreground'}" />
+    <ZIcon zType={block.state === 'denied' ? 'lucideShieldX' : block.state === 'allowed' ? 'lucideShieldCheck' : 'lucideShieldAlert'} class="size-3.5 {block.state === 'pending' ? 'text-warning' : 'text-muted-foreground'}" />
     <span>{block.state === 'pending' ? wants : block.state === 'allowed' ? 'Allowed' : 'Denied'}</span>
   </div>
   <div class="flex flex-col gap-1 px-3 pb-2">

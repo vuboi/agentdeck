@@ -54,6 +54,8 @@ pub struct TurnRequest {
     pub model: Option<String>,
     /// The CLI's permission mode (`acceptEdits`, `plan`, `auto`, `bypassPermissions`); `None` asks for every tool.
     pub permission_mode: Option<String>,
+    /// Reasoning effort (`low`, `medium`, `high`, `max`); `None` leaves the CLI's default.
+    pub effort: Option<String>,
     /// Tools approved by the user, as the CLI writes them: `Bash(git status)`, `Write`.
     pub allowed_tools: Vec<String>,
     /// Folder the CLI runs in. Claude files a conversation under the folder it ran from, so this is the project.

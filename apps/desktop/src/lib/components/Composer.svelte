@@ -49,6 +49,7 @@
   let permission = $state<Permission>('ask');
   $effect(() => {
     turnOptions.permission = permission;
+    turnOptions.effort = effort;
   });
 
   // The picker belongs to each session: agent, model, effort, speed and approval mode are remembered per
@@ -241,7 +242,7 @@
 
 <svelte:window bind:innerWidth={innerW} />
 <form
-  class="min-w-0 rounded-2xl border bg-card p-2.5 shadow-lg min-[720px]:p-3 transition-shadow focus-within:ring-2 focus-within:ring-ring/40 {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
+  class="min-w-0 rounded-2xl border bg-card p-2.5 shadow-lg min-[720px]:p-3 transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
   onsubmit={(event) => { event.preventDefault(); submit(); }}
   ondragover={(event) => { if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); dragging = true; } }}
   ondragleave={() => (dragging = false)}
