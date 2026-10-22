@@ -110,6 +110,8 @@ impl Provider for Claude {
         args.push("--append-system-prompt".to_string());
         let mut context = APP_CONTEXT.to_string();
         let bridge = std::env::var("AGENTDECK_BRIDGE").ok();
+        // In the z-ui workspace the two apps have their own start scripts (the bare `pnpm start` asks interactively).
+        context.push_str(" In the z-ui workspace, start the app the user asked for with its own script: `pnpm start:svelte` for the Svelte 5 app (default http://localhost:4301) and `pnpm start:angular` for the Angular app (default http://localhost:4200). Never open the Angular server when the user asks for Svelte, Svelte 5 or z-ui-svelte.");
         if let Some(bridge) = &bridge {
             context.push_str(" You CAN see and operate the page open in the Preview panel yourself, with the agentdeck tools: browser_screenshot to look, browser_click / browser_type / browser_key / browser_scroll / browser_hover to act as a user would (coordinates are CSS pixels of the screenshot; browser_eval with getBoundingClientRect() finds an element's point), browser_eval and browser_dom to read the page, browser_console and browser_network for errors. Never tell the user you cannot click or test in Preview, and do not ask them to do it for you. Test step by step: look, act, look again, check the console and network.");
             context.push_str(&format!(" The same actions are plain HTTP too if a tool is missing: curl {bridge}/help."));
