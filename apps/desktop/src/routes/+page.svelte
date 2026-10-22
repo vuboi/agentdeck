@@ -91,11 +91,13 @@
     let stop: (() => void) | undefined;
     void import('@tauri-apps/api/event').then(({ listen }) =>
       listen<string>('dev-preview', ({ payload }) => {
-        const [address, device] = payload.split('|');
+        const [address, device, then] = payload.split('|');
         if (device === 'mobile' || device === 'tablet') browser.device = device;
         browser.autostart = address;
         layout.activeTool = 'Preview';
         layout.toolsOpen = true;
+        // `|menu`: open the page menu once the page is up, to check menus drawn over it.
+        if (then === 'menu') setTimeout(() => document.querySelector<HTMLElement>('[data-page-menu] button')?.click(), 6000);
       }).then((unlisten) => (stop = unlisten)),
     );
     return () => stop?.();

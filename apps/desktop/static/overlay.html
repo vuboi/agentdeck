@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- The menu overlay of the AgentDeck browser: see src-tauri/src/overlay.rs. --><html><head><meta charset="utf-8"><style id="app"></style><style>
+html,body{margin:0;padding:0;background:transparent!important;overflow:hidden}
+#root{position:absolute}
+#root>*{position:static!important;inset:auto!important;transform:none!important;margin:0!important;opacity:1!important;visibility:visible!important}
+#root *{animation:none!important;transition-property:background-color,color,border-color,opacity!important}
+</style></head><body><div id="root"></div><script>
+const BASE = navigator.userAgent.includes('Windows') ? 'http://agentdeck.localhost/' : 'agentdeck://localhost/';
+const post = (message) => fetch(BASE + 'r', { method: 'POST', body: JSON.stringify(message), mode: 'no-cors' }).catch(() => {});
+const root = document.getElementById('root');
+const PICK = 'button,a,[role=menuitem],[role=menuitemradio],[role=menuitemcheckbox],[role=option],[role=radio],[role=checkbox]';
+window.__overlay = {
+  css(text) { document.getElementById('app').textContent = text; },
+  render(html, attrs, x, y, w) {
+    const doc = document.documentElement;
+    for (const name of [...doc.getAttributeNames()]) doc.removeAttribute(name);
+    for (const [name, value] of Object.entries(attrs.html)) doc.setAttribute(name, value);
+    document.body.className = attrs.body;
+    root.style.left = x + 'px';
+    root.style.top = y + 'px';
+    root.style.width = w + 'px';
+    root.innerHTML = html;
+    // A popover-API element is hidden unless opened in the top layer; the mirror is plain markup.
+    for (const node of root.querySelectorAll('[popover]')) node.removeAttribute('popover');
+  },
+};
+root.addEventListener('click', (event) => {
+  const target = event.target.closest(PICK);
+  if (!target) return;
+  event.preventDefault();
+  post({ kind: 'overlay-click', index: [...root.querySelectorAll(PICK)].indexOf(target) });
+});
+root.addEventListener('pointerover', (event) => {
+  const target = event.target.closest(PICK);
+  if (target) post({ kind: 'overlay-hover', index: [...root.querySelectorAll(PICK)].indexOf(target) });
+});
+addEventListener('keydown', (event) => post({ kind: 'overlay-key', key: event.key }));
+</script></body></html>

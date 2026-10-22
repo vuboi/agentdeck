@@ -216,3 +216,8 @@ body {
   scrollbar-gutter: auto;
   overflow: hidden;
 }
+
+/* A menu over a browser page is shown by its mirror above the page (menu-overlay.ts); the original stays, unseen. */
+[data-mirrored] {
+  opacity: 0 !important;
+}

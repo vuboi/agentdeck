@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 mod bridge;
 mod browser;
+mod overlay;
 
 use ag_adapters::agent::claude::Claude;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
@@ -257,6 +258,9 @@ pub fn run() {
         })
         .setup(|app| {
             bridge::start(app.handle().clone());
+            if let Err(error) = overlay::create(app.handle()) {
+                eprintln!("menu overlay: {error}");
+            }
             if let Ok(url) = std::env::var("AGENTDECK_BROWSER_SELFTEST") {
                 browser::selftest(app.handle().clone(), url);
             }
@@ -292,6 +296,9 @@ pub fn run() {
             browser::browser_zoom,
             browser::browser_close,
             browser::browser_capture,
+            overlay::overlay_eval,
+            overlay::overlay_show,
+            overlay::overlay_hide,
             browser::open_external
         ])
         .run(tauri::generate_context!())

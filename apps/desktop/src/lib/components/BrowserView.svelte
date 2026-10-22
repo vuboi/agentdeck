@@ -3,7 +3,6 @@
   import { ZDropdownMenu, ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
-    capturePage,
     activeTab,
     back,
     browser,
@@ -31,6 +30,7 @@
     type Rect,
   } from '../browser.svelte';
   import { inTauri } from '../history';
+  import { mirrorMenus } from '../menu-overlay';
   import { layout } from '../layout.svelte';
   import { draftElements, draftImages, drafts, workspace } from '../sessions.svelte';
   import AnnotationEditor from './AnnotationEditor.svelte';
@@ -41,21 +41,11 @@
   let stage: HTMLDivElement | undefined = $state();
   let address = $state('');
   let editing = $state(false);
-  // A picture taken the moment a button is pressed, before the menu it opens appears: the menu then never waits for it.
-  let early: { picture: Promise<string>; at: number } | null = null;
-  function pressEarly() {
-    if (!inTauri() || !tab.opened || frozen) return;
-    const picture = capturePage();
-    picture.catch(() => {});
-    early = { picture, at: Date.now() };
-  }
-  let frozen = $state<{ src: string; x: number; y: number; w: number; h: number } | null>(null);
   let shot = $state<{ data: string; w: number; h: number } | null>(null);
   let busy = $state('');
   let notice = $state('');
-  /** A dialog is open: the page hides. A menu is open: the page steps aside (see avoidMenus). */
+  /** A dialog is open: the page hides. Menus are mirrored above the page instead (menu-overlay.ts). */
   let covered = $state(false);
-  let menuOpen = $state(false);
   /** Where the phone / tablet sits in the stage (stage coordinates), for its frame. */
   let deviceBox = $state<{ x: number; y: number; w: number; h: number; zoom: number } | null>(null);
 
@@ -69,20 +59,6 @@
   });
 
   /** The webview's rectangle in window coordinates: the stage itself, or a phone / tablet frame centred in it. */
-  /** A menu open over the page: the page gives up the part of its area the menu covers (a native layer cannot sit under it). */
-  function avoidMenus(box: DOMRect): DOMRect {
-    const menus = [...document.querySelectorAll<HTMLElement>('[data-z-popover]:not(.z-tooltip-host)')].map((menu) => menu.getBoundingClientRect());
-    const hit = menus.filter((menu) => menu.width > 0 && menu.right > box.left && menu.left < box.right && menu.bottom > box.top && menu.top < box.bottom);
-    if (hit.length === 0) return box;
-    const left = Math.min(...hit.map((menu) => menu.left));
-    const bottom = Math.max(...hit.map((menu) => menu.bottom));
-    // Cut from the top or from the right, whichever takes less of the page.
-    const cutTop = Math.max(0, bottom + 6 - box.top);
-    const cutRight = Math.max(0, box.right - (left - 6));
-    const byTop = cutTop * box.width <= cutRight * box.height;
-    return byTop ? new DOMRect(box.x, box.y + cutTop, box.width, Math.max(40, box.height - cutTop)) : new DOMRect(box.x, box.y, Math.max(120, box.width - cutRight), box.height);
-  }
-
   function frame(): { rect: Rect; zoom: number } | null {
     if (!stage) return null;
     const full = stage.getBoundingClientRect();
@@ -125,25 +101,6 @@
       return;
     }
     const origin = stage!.getBoundingClientRect();
-    // A menu over the page: a native page cannot sit under HTML, so a picture of it stands in until the menu closes.
-    const full = stage!.getBoundingClientRect();
-    if (menuOpen && tab.opened && avoidMenus(full) !== full) {
-      if (!frozen) {
-        try {
-          const src = await (early && Date.now() - early.at < 1500 ? early.picture : capturePage());
-          // Decoded first, so the picture is on screen the instant the page is hidden (no blank frame).
-          const decoded = new Image();
-          decoded.src = src;
-          await decoded.decode().catch(() => {});
-          frozen = { src, x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h };
-          await tick();
-        } catch {
-          // No picture: the page simply hides.
-        }
-        await hideBrowser();
-      }
-      return;
-    }
     deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
     try {
       // Only the tab in front is on screen.
@@ -152,8 +109,6 @@
       else await showBrowser(place.rect);
       if (tab.opened) await showBrowser(place.rect);
       await zoomBrowser(place.zoom);
-      if (frozen) setTimeout(() => (frozen = null), 50); // the live page is back on top first
-
     } catch (error) {
       browser.error = String(error);
     }
@@ -184,26 +139,21 @@
     }
   }
 
-  // The page is a native layer above the app: a menu or dialog opened over it would hide behind it.
+  // The page is a native layer above the app: a dialog opened over it would hide behind it.
   const OVERLAYS = '[role="dialog"]:not([aria-label="Annotate screenshot"]):not([aria-label="Preview"]), [data-z-modal]';
-  const MENUS = '[data-z-popover]:not(.z-tooltip-host)';
   let observer: MutationObserver | undefined;
   let resizer: ResizeObserver | undefined;
+  let stopMirror: (() => void) | undefined;
 
   onMount(() => {
     void listenToPage();
-    document.addEventListener('pointerdown', pressEarly, true);
+    stopMirror = mirrorMenus(() => (tab.opened && !covered && !shot && stage ? stage.getBoundingClientRect() : null));
     if (stage) {
       resizer = new ResizeObserver(() => void sync());
       resizer.observe(stage);
     }
     observer = new MutationObserver(() => {
       const now = document.querySelector(OVERLAYS) !== null;
-      const menus = document.querySelector(MENUS) !== null;
-      if (menus !== menuOpen) {
-        menuOpen = menus;
-        void sync();
-      }
       if (now === covered) return;
       covered = now;
       if (now) void hideBrowser();
@@ -217,12 +167,7 @@
     let frameId = 0;
     const watch = () => {
       const box = stage?.getBoundingClientRect();
-      // A menu that has just opened is positioned a moment after it appears: follow it too.
-      const menus = [...document.querySelectorAll(MENUS)].map((menu) => {
-        const r = menu.getBoundingClientRect();
-        return `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`;
-      });
-      const key = (box ? `${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)},${Math.round(box.height)}` : '') + '|' + menus.join(';');
+      const key = box ? `${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)},${Math.round(box.height)}` : '';
       // While a drag or a dialog holds the page back nothing is placed, so the change is kept for when it ends.
       if (key !== last && !layout.dragging && !covered && !shot) {
         last = key;
@@ -236,7 +181,7 @@
   const onResize = () => void sync();
 
   onDestroy(() => {
-    document.removeEventListener('pointerdown', pressEarly, true);
+    stopMirror?.();
     resizer?.disconnect();
     observer?.disconnect();
     window.removeEventListener('resize', onResize);
@@ -458,7 +403,7 @@
           <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
           {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
         </button>
-<div class="flex items-center [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
+<div data-page-menu class="flex items-center [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
                   <ZDropdownMenu zItems={menuItems} zIcon={'lucideEllipsisVertical' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
         </div>
       </div>
@@ -489,8 +434,6 @@
           </button>
         </div>
       {/if}
-      <!-- Over the bezel: the picture of the page that stands in while a menu covers it. -->
-      {#if frozen}<img src={frozen.src} alt="" class="pointer-events-none absolute select-none" style:left="{frozen.x}px" style:top="{frozen.y}px" style:width="{frozen.w}px" style:height="{frozen.h}px" />{/if}
       {#if !started}
         <div class="absolute inset-0 grid place-items-center p-6 text-center text-xs text-muted-foreground">
           <div class="flex flex-col items-center gap-2">
