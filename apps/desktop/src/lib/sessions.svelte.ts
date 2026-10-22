@@ -305,6 +305,47 @@ void getPref<Record<string, string[]>>('permissions.allowed').then((saved) => {
   if (saved) Object.assign(approved, saved);
 });
 
+/** The chat's model if its agent offers it, else that agent's first model. */
+function modelFor(session: SessionItem): string | null {
+  const list = MODELS[session.agent] ?? [];
+  if (session.model && list.some((item) => item.value === session.model)) return session.model;
+  const fallback = list[0]?.value ?? null;
+  if (fallback) session.model = fallback;
+  return fallback;
+}
+
+const agentLabel = (agent?: Agent) => (agent === 'codex' ? 'Codex' : agent === 'gemini' ? 'Gemini' : 'Claude');
+
+/**
+ * What the other agents of this chat said since this agent last spoke, as text to put before the prompt.
+ * Each agent keeps its own conversation, so one that joins (or comes back to) a chat would not know the turns
+ * it missed. `list` ends with the message being sent. The newest turns are kept when it is long.
+ */
+function missedTurns(session: SessionItem, list: Message[]): string {
+  const before = list.slice(0, -1);
+  const writer = (message: Message) => message.agent ?? session.source ?? session.agent;
+  let start = 0;
+  for (let index = before.length - 1; index >= 0; index--) {
+    if (before[index].role === 'assistant' && writer(before[index]) === session.agent) {
+      start = index + 1;
+      break;
+    }
+  }
+  const missed = before.slice(start);
+  if (!missed.some((message) => message.role === 'assistant')) return '';
+  const lines = missed.map((message) => {
+    const text = message.blocks
+      .flatMap((block) => (block.kind === 'response' ? [block.text] : block.kind === 'command' ? [`(ran: ${block.command.slice(0, 160)})`] : []))
+      .join('\n')
+      .trim();
+    const cut = text.length > 2500 ? `${text.slice(0, 2500)}…` : text;
+    return `${message.role === 'user' ? 'User' : agentLabel(writer(message))}: ${cut}`;
+  });
+  let digest = lines.join('\n\n');
+  if (digest.length > 16000) digest = `…${digest.slice(-16000)}`;
+  return `Earlier in this chat, other agents answered these turns (you were not part of them):\n\n${digest}\n\n---\nNow the user says:\n`;
+}
+
 /** One CLI run (`claude -p`, `codex exec`) in `session`, with a fresh live reply. Images go to disk first so the CLI can open them. */
 function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = []) {
   if (images.length || !allow.length) lastPrompt[session.id] = text;
@@ -330,6 +371,7 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   turns[session.id] = turn;
   const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent };
   const list = messagesOf(session.id);
+  const context = missedTurns(session, list);
   list.push(reply);
   liveReplies[session.id] = list[list.length - 1]; // the stored (reactive) object
   replies[session.id] = reply.id;
@@ -337,9 +379,11 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
   void (async () => {
     const paths = await Promise.all(images.map((image) => saveAttachment(image.mime, image.src.slice(image.src.indexOf(',') + 1))));
-    const prompt = paths.length
-      ? `${text || 'Look at the attached image.'}\n\nAttached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
-      : text;
+    const prompt =
+      context +
+      (paths.length
+        ? `${text || 'Look at the attached image.'}\n\nAttached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
+        : text);
     await sendAgentTurn({
       session: session.id,
       turn,
@@ -347,7 +391,8 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       prompt,
       agentSession: cliId,
       resume,
-      model: session.model ?? null,
+      // A model of another agent (left over from a switch) is never sent: the agent's own first model goes instead.
+      model: modelFor(session),
       permissionMode: PERMISSION_MODE[turnOptions.permission],
       effort: turnOptions.effort,
       allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
@@ -746,7 +791,12 @@ async function fetchTranscript(session: SessionItem): Promise<Message[]> {
     role: message.role,
     time: clock(message.time),
     at: message.time || undefined,
-    blocks: toBlocks(message.blocks),
+    // A prompt sent with the turns this agent missed shows only what the user typed.
+    blocks: toBlocks(message.blocks).map((block) =>
+      message.role === 'user' && block.kind === 'response' && block.text.startsWith('Earlier in this chat, other agents answered')
+        ? { ...block, text: block.text.slice(block.text.indexOf('Now the user says:\n') + 'Now the user says:\n'.length) }
+        : block,
+    ),
     // Tokens come from the transcript itself, so every reply shows them again when the chat is reopened.
     ...(message.usage
       ? { tokens: { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cache_read, cacheWrite: message.usage.cache_write }, model: message.model }
