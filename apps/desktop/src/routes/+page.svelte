@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { ZDrawer } from '@shival99/z-ui-svelte';
+  import LinkMenu from '../lib/components/LinkMenu.svelte';
   import WindowControls from '../lib/components/WindowControls.svelte';
   import ThemePanel from '../lib/components/ThemePanel.svelte';
   import ToolsModal from '../lib/components/ToolsModal.svelte';
@@ -183,6 +184,7 @@
     </div>
   </ZDrawer>
 
+  <LinkMenu />
   <ThemePanel />
   <ToolsModal />
   <WindowControls />

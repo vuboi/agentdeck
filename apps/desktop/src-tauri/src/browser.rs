@@ -11,6 +11,9 @@ use tauri::{
 
 const LABEL: &str = "browser";
 
+/// Opening can be asked for twice at once (resize and navigation); only one may create the webview.
+static CREATING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Where the page posts its reports: the custom scheme, which WebView2 serves under a localhost name.
 fn base() -> &'static str {
     if cfg!(windows) {
@@ -74,6 +77,7 @@ pub async fn browser_show(
     w: f64,
     h: f64,
 ) -> Result<(), String> {
+    let _creating = CREATING.lock().await;
     if let Ok(view) = webview(&app) {
         place(&view, x, y, w, h)?;
         return view.show().map_err(|error| error.to_string());
@@ -178,4 +182,29 @@ pub fn selftest(app: AppHandle, url: String) {
         tokio::time::sleep(Duration::from_secs(8)).await;
         app.exit(0);
     });
+}
+
+/// Opens a web address in the system browser. Only http(s) addresses.
+#[tauri::command]
+pub fn open_external(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("only http and https addresses can be opened".into());
+    }
+    let mut command = if cfg!(windows) {
+        let mut command = std::process::Command::new("rundll32");
+        command.args(["url.dll,FileProtocolHandler", &url]);
+        command
+    } else if cfg!(target_os = "macos") {
+        let mut command = std::process::Command::new("open");
+        command.arg(&url);
+        command
+    } else {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(&url);
+        command
+    };
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }

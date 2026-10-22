@@ -255,7 +255,8 @@ pub fn run() {
             browser::browser_navigate,
             browser::browser_eval,
             browser::browser_zoom,
-            browser::browser_close
+            browser::browser_close,
+            browser::open_external
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AgentDeck desktop application");

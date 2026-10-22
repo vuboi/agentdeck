@@ -23,10 +23,12 @@
   };
 
   // ---- console ----
+  let quiet = false; // while the app takes a screenshot, the library's own warnings are not the page's
   for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
     const original = console[level].bind(console);
     console[level] = (...args) => {
       original(...args);
+      if (quiet) return;
       post({ kind: 'console', level, text: cut(args.map(show).join(' '), 2000), at: Date.now() });
     };
   }
@@ -163,10 +165,12 @@
       } else if (kind === 'shot') {
         const lib = window.htmlToImage;
         if (!lib) return post({ kind: 'shot', id, error: 'screenshot library missing' });
+        quiet = true;
         lib
-          .toPng(document.documentElement, { cacheBust: true, pixelRatio: 1, width: innerWidth, height: innerHeight, style: { transform: `translate(${-scrollX}px, ${-scrollY}px)`, transformOrigin: 'top left' } })
+          .toPng(document.documentElement, { cacheBust: true, skipFonts: true, imagePlaceholder: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', filter: (node) => !['IFRAME', 'VIDEO', 'SCRIPT'].includes(node.tagName), pixelRatio: 1, width: innerWidth, height: innerHeight, style: { transform: `translate(${-scrollX}px, ${-scrollY}px)`, transformOrigin: 'top left' } })
           .then((data) => post({ kind: 'shot', id, data, w: innerWidth, h: innerHeight }))
-          .catch((error) => post({ kind: 'shot', id, error: String(error) }));
+          .catch((error) => post({ kind: 'shot', id, error: error && error.message ? error.message : error && error.type ? 'an image or style on the page could not be read (' + error.type + ')' : String(error) }))
+          .finally(() => (quiet = false));
       } else if (kind === 'pick') {
         startPicking(id);
       } else if (kind === 'unpick') {

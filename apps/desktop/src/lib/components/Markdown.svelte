@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { isLocalUrl, openInPreview } from '../browser.svelte';
+  import { isLocalUrl, linkMenu, openExternal, openInPreview } from '../browser.svelte';
   import { inTauri } from '../history';
   import { renderMarkdown } from '../markdown';
   import { theme } from '../theme.svelte';
@@ -41,12 +41,23 @@
     untrack(() => void colour(container, dark));
   });
 
+  const linkOf = (event: Event) => (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
+
+  // Right click on a link: open it in the AgentDeck browser, the system browser, or copy it.
+  function oncontextmenu(event: MouseEvent) {
+    const link = linkOf(event);
+    if (!link || !inTauri()) return;
+    event.preventDefault();
+    Object.assign(linkMenu, { open: true, url: link.href, x: event.clientX, y: event.clientY });
+  }
+
   function onclick(event: MouseEvent) {
-    // A link to a local dev server opens in the AgentDeck browser.
-    const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
-    if (link && inTauri() && isLocalUrl(link.href)) {
+    // A link to a local dev server opens in the AgentDeck browser; any other address in the system browser.
+    const link = linkOf(event);
+    if (link && inTauri()) {
       event.preventDefault();
-      openInPreview(link.href);
+      if (isLocalUrl(link.href)) openInPreview(link.href);
+      else void openExternal(link.href);
       return;
     }
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-copy]');
@@ -60,4 +71,4 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (the copy buttons inside are real buttons) -->
-<div bind:this={root} class="md" {onclick}>{@html html}</div>
+<div bind:this={root} class="md" {onclick} {oncontextmenu}>{@html html}</div>

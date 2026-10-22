@@ -32,6 +32,7 @@ export type PickedElement = {
   box: { x: number; y: number; w: number; h: number };
   style: Record<string, string>;
 };
+export type PageComment = { id: string; selector: string; html: string; box: PickedElement['box']; note: string };
 export type PageSnapshot = { url: string; title: string; viewport: { w: number; h: number; dpr: number }; html: string };
 
 const LIMIT = 300;
@@ -48,6 +49,10 @@ export const browser = $state({
   error: '',
   /** Open the page at once when the browser view mounts (used by the developer hook). */
   autostart: false,
+  /** Comments pinned to elements of the page, waiting to be sent to the chat. */
+  comments: [] as PageComment[],
+  devtools: false,
+  devtoolsHeight: 220,
 });
 
 async function call<T = void>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -105,7 +110,13 @@ function ask<T extends Report>(kind: string, timeout = 15000): Promise<T> {
 // ---- commands ----
 export type Rect = { x: number; y: number; w: number; h: number };
 
-export async function showBrowser(rect: Rect) {
+let showing: Promise<void> | null = null;
+export function showBrowser(rect: Rect): Promise<void> {
+  // One open at a time: a resize and a navigation arriving together must not both create the page.
+  showing ??= openBrowser(rect).finally(() => (showing = null));
+  return showing;
+}
+async function openBrowser(rect: Rect) {
   await call('browser_show', { url: browser.url, userAgent: DEVICES[browser.device].ua ?? null, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
   browser.opened = true;
 }
@@ -161,3 +172,16 @@ export async function recreateBrowser() {
   await call('browser_close');
   browser.opened = false;
 }
+
+/** Pins a note to the picked element. */
+export function addComment(note: string) {
+  const picked = browser.picked;
+  if (!picked || !note.trim()) return;
+  browser.comments.push({ id: crypto.randomUUID(), selector: picked.selector, html: picked.html, box: picked.box, note: note.trim() });
+  browser.picked = null;
+}
+
+export const openExternal = (url: string) => call('open_external', { url });
+
+/** The right-click menu of a link, shown by LinkMenu. */
+export const linkMenu = $state({ open: false, url: '', x: 0, y: 0 });

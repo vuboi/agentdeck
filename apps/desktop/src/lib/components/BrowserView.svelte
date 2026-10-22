@@ -5,6 +5,7 @@
   import {
     back,
     browser,
+    addComment,
     cancelPick,
     DEVICES,
     forward,
@@ -25,6 +26,7 @@
   import { inTauri } from '../history';
   import { draftImages, drafts, workspace } from '../sessions.svelte';
   import AnnotationEditor from './AnnotationEditor.svelte';
+  import DevTools from './DevTools.svelte';
 
   // The AgentDeck browser: any page (a local dev server, a site) in a real webview, with device sizes, an
   // element picker, a console and network log, and a freeze-frame annotation view whose result goes to the chat.
@@ -32,7 +34,8 @@
   let address = $state(browser.url);
   let started = $state(browser.opened);
   let shot = $state<{ data: string; w: number; h: number } | null>(null);
-  let drawer = $state<'console' | 'network' | null>(null);
+  let commentText = $state('');
+  let commentInput: HTMLInputElement | undefined = $state();
   let busy = $state('');
   let notice = $state('');
   let covered = $state(false);
@@ -187,6 +190,21 @@
     setTimeout(() => (notice = ''), 2500);
   }
 
+  function commentOn() {
+    addComment(commentText);
+    commentText = '';
+  }
+
+  /** The pinned comments as text for the composer: which element, what to change, and its markup. */
+  async function sendComments() {
+    const lines = [`Browser: ${browser.title || 'page'} — ${browser.url} (${browser.device})`, 'Comments on elements of the page:'];
+    browser.comments.forEach((comment, index) => {
+      lines.push(`${index + 1}. \`${comment.selector}\` (${comment.box.w}×${comment.box.h}) — ${comment.note}`, '```html', clip(comment.html, 1200), '```');
+    });
+    addToDraft(lines.join('\n'));
+    browser.comments = [];
+  }
+
   async function pick() {
     if (browser.picking) {
       void cancelPick();
@@ -194,7 +212,8 @@
     }
     browser.error = '';
     try {
-      await pickElement();
+      const element = await pickElement();
+      if (element) setTimeout(() => commentInput?.focus(), 80);
     } catch (error) {
       browser.error = String(error);
     }
@@ -227,12 +246,6 @@
     void sync();
   }
 
-  function toggleDrawer(kind: 'console' | 'network') {
-    drawer = drawer === kind ? null : kind;
-  }
-
-  const levelTone = (level: string) => (level === 'error' ? 'text-destructive' : level === 'warn' ? 'text-warning' : 'text-muted-foreground');
-  const statusTone = (status: number) => (status === 0 || status >= 400 ? 'text-destructive' : 'text-success');
 </script>
 
 <div class="flex h-full min-h-0 flex-1 flex-col" aria-label="Browser">
@@ -284,24 +297,34 @@
         <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
       </ZButton>
       <div class="ml-auto flex items-center gap-1">
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="relative size-7! p-0 {drawer === 'console' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Console" aria-pressed={drawer === 'console'} onclick={() => toggleDrawer('console')} {@attach zTooltip({ content: 'Console', position: 'top' })}>
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="relative size-7! p-0 {browser.devtools ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Developer tools" aria-pressed={browser.devtools} onclick={() => (browser.devtools = !browser.devtools)} {@attach zTooltip({ content: 'Developer tools', position: 'top' })}>
           <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
           {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
-        </ZButton>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 {drawer === 'network' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Network" aria-pressed={drawer === 'network'} onclick={() => toggleDrawer('network')} {@attach zTooltip({ content: 'Network', position: 'top' })}>
-          <ZIcon zType={'lucideNetwork' as ZIconName} class="size-4" />
         </ZButton>
       </div>
     </div>
 
     {#if browser.picked}
-      <div class="flex shrink-0 items-center gap-2 border-b border-border bg-primary/5 px-2 py-1 text-xs">
+      <!-- The element you clicked: write a note that belongs to it, like a comment on a line of code. -->
+      <form class="flex shrink-0 items-center gap-1.5 border-b border-border bg-primary/5 px-2 py-1.5 text-xs" onsubmit={(event) => { event.preventDefault(); commentOn(); }}>
         <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 shrink-0 text-primary" />
-        <code class="min-w-0 flex-1 truncate" title={browser.picked.selector}>{browser.picked.selector}</code>
-        <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 px-2 text-xs" onclick={async () => addToDraft(await pageContext())}>Add to chat</ZButton>
+        <code class="max-w-40 shrink-0 truncate" title={browser.picked.selector}>{browser.picked.selector}</code>
+        <input bind:value={commentText} bind:this={commentInput} class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-2 outline-none focus:border-primary" placeholder="Comment on this element…" aria-label="Comment" />
+        <ZButton zWave={false} type="submit" zType="default" zSize="sm" class="h-6 px-2 text-xs" disabled={!commentText.trim()}>Comment</ZButton>
         <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-accent" aria-label="Clear selection" onclick={() => (browser.picked = null)}>
           <ZIcon zType="lucideX" class="size-3" />
         </button>
+      </form>
+    {/if}
+    {#if browser.comments.length > 0}
+      <div class="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1 text-xs">
+        {#each browser.comments as comment, index (comment.id)}
+          <span class="inline-flex max-w-52 items-center gap-1 rounded-md bg-muted py-0.5 pr-0.5 pl-1.5" title="{comment.selector}: {comment.note}">
+            <span class="font-medium text-primary">{index + 1}</span><span class="truncate">{comment.note}</span>
+            <button type="button" class="grid size-4 shrink-0 cursor-pointer place-items-center rounded hover:bg-accent" aria-label="Remove comment {index + 1}" onclick={() => (browser.comments = browser.comments.filter((item) => item !== comment))}><ZIcon zType="lucideX" class="size-3" /></button>
+          </span>
+        {/each}
+        <ZButton zWave={false} zType="outline" zSize="sm" class="ml-auto h-6 px-2 text-xs" onclick={sendComments}>Add {browser.comments.length} to chat</ZButton>
       </div>
     {/if}
     {#if browser.error || notice || busy}
@@ -344,22 +367,8 @@
       {/if}
     </div>
 
-    {#if drawer}
-      <div class="h-40 shrink-0 overflow-auto border-t border-border bg-background font-mono text-[11px]" role="log" aria-label={drawer}>
-        {#if drawer === 'console'}
-          {#each browser.console as line, index (index)}
-            <div class="flex gap-2 border-b border-border/50 px-2 py-0.5 {levelTone(line.level)}"><span class="shrink-0 uppercase">{line.level}</span><span class="min-w-0 break-all whitespace-pre-wrap text-foreground">{line.text}</span></div>
-          {:else}
-            <div class="p-3 text-muted-foreground">Nothing logged yet.</div>
-          {/each}
-        {:else}
-          {#each browser.network as line, index (index)}
-            <div class="flex gap-2 border-b border-border/50 px-2 py-0.5"><span class="w-9 shrink-0 text-muted-foreground">{line.method}</span><span class="w-8 shrink-0 {statusTone(line.status)}">{line.status || 'ERR'}</span><span class="min-w-0 flex-1 truncate" title={line.url}>{line.url}</span><span class="shrink-0 text-muted-foreground">{line.ms}ms</span></div>
-          {:else}
-            <div class="p-3 text-muted-foreground">No requests yet.</div>
-          {/each}
-        {/if}
-      </div>
+    {#if browser.devtools}
+      <DevTools />
     {/if}
   {/if}
 </div>
