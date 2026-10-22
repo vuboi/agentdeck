@@ -3,6 +3,7 @@
   import { ZDropdownMenu, ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
+    capturePage,
     activeTab,
     back,
     browser,
@@ -40,6 +41,7 @@
   let stage: HTMLDivElement | undefined = $state();
   let address = $state('');
   let editing = $state(false);
+  let frozen = $state<{ src: string; x: number; y: number; w: number; h: number } | null>(null);
   let shot = $state<{ data: string; w: number; h: number } | null>(null);
   let busy = $state('');
   let notice = $state('');
@@ -77,8 +79,6 @@
     if (!stage) return null;
     const full = stage.getBoundingClientRect();
     if (full.width < 20 || full.height < 20) return null;
-    // A menu over the page: the page steps aside entirely (a shifted or cut page looked broken).
-    if (menuOpen && avoidMenus(full) !== full) return null;
     const box = full;
     const device = DEVICES[browser.device];
     if (!device.w) return { rect: { x: box.x, y: box.y, w: box.width, h: box.height }, zoom: 1 };
@@ -117,6 +117,21 @@
       return;
     }
     const origin = stage!.getBoundingClientRect();
+    // A menu over the page: a native page cannot sit under HTML, so a picture of it stands in until the menu closes.
+    const full = stage!.getBoundingClientRect();
+    if (menuOpen && tab.opened && avoidMenus(full) !== full) {
+      if (!frozen) {
+        try {
+          const src = await capturePage();
+          frozen = { src, x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h };
+          await tick();
+        } catch {
+          // No picture: the page simply hides.
+        }
+        await hideBrowser();
+      }
+      return;
+    }
     deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
     try {
       // Only the tab in front is on screen.
@@ -125,6 +140,8 @@
       else await showBrowser(place.rect);
       if (tab.opened) await showBrowser(place.rect);
       await zoomBrowser(place.zoom);
+      if (frozen) setTimeout(() => (frozen = null), 50); // the live page is back on top first
+
     } catch (error) {
       browser.error = String(error);
     }
@@ -440,7 +457,9 @@
 
     <!-- The page itself lives in a native webview placed over this area. -->
     <div class="relative min-h-0 flex-1 bg-muted/30">
-      <div bind:this={stage} class="absolute inset-0"></div>
+      <div bind:this={stage} class="absolute inset-0">
+        {#if frozen}<img src={frozen.src} alt="" class="pointer-events-none absolute select-none" style:left="{frozen.x}px" style:top="{frozen.y}px" style:width="{frozen.w}px" style:height="{frozen.h}px" />{/if}
+      </div>
       {#if deviceBox && !shot}
         <!-- The device: a bezel around the page (the page itself is the native layer above) and its caption. -->
         <div

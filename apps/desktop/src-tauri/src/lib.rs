@@ -291,6 +291,7 @@ pub fn run() {
             browser::browser_eval,
             browser::browser_zoom,
             browser::browser_close,
+            browser::browser_capture,
             browser::open_external
         ])
         .run(tauri::generate_context!())

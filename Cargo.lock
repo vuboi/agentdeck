@@ -85,6 +85,8 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tokio",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]

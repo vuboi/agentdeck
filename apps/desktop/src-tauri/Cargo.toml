@@ -18,3 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Memory"] }

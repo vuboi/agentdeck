@@ -172,6 +172,8 @@ async function openBrowser(rect: Rect) {
 }
 export const moveBrowser = (rect: Rect) => call('browser_bounds', { tab: activeTab().id, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
 export const hideBrowser = () => call('browser_hide');
+/** A picture of the front page taken by the engine (PNG data URL). */
+export const capturePage = () => call<string>('browser_capture', { tab: activeTab().id });
 export const zoomBrowser = (factor: number) => call('browser_zoom', { tab: activeTab().id, factor });
 
 export async function goTo(url: string) {

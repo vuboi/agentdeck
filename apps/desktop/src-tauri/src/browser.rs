@@ -177,6 +177,91 @@ pub fn browser_zoom(app: AppHandle, tab: String, factor: f64) -> Result<(), Stri
         .map_err(|error| error.to_string())
 }
 
+/// A picture of what a tab shows now, taken by the browser engine itself (works on any page, whatever its
+/// policies), as a PNG data URL. The app shows it in place of the page while a menu is open over it.
+#[tauri::command]
+pub async fn browser_capture(app: AppHandle, tab: String) -> Result<String, String> {
+    let view = webview(&app, &tab)?;
+    let (sender, receiver) = tokio::sync::oneshot::channel::<Result<Vec<u8>, String>>();
+    capture(&view, sender)?;
+    let bytes = receiver
+        .await
+        .map_err(|_| "the capture was dropped".to_string())??;
+    use base64::Engine;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+#[cfg(windows)]
+fn capture(
+    view: &Webview,
+    sender: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+) -> Result<(), String> {
+    use webview2_com::CapturePreviewCompletedHandler;
+    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG;
+    use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
+    use windows::Win32::System::Com::{IStream, STREAM_SEEK_SET};
+
+    view.with_webview(move |platform| {
+        let started = (|| -> Result<(), String> {
+            // SAFETY: WebView2 COM calls on the thread that owns the webview, as `with_webview` runs us.
+            unsafe {
+                let core = platform
+                    .controller()
+                    .CoreWebView2()
+                    .map_err(|e| e.to_string())?;
+                let stream: IStream =
+                    CreateStreamOnHGlobal(Default::default(), true).map_err(|e| e.to_string())?;
+                let reader = stream.clone();
+                let mut sender = Some(sender);
+                let handler = CapturePreviewCompletedHandler::create(Box::new(move |result| {
+                    let bytes = (|| -> Result<Vec<u8>, String> {
+                        result.map_err(|e| e.to_string())?;
+                        reader
+                            .Seek(0, STREAM_SEEK_SET, None)
+                            .map_err(|e| e.to_string())?;
+                        let mut out = Vec::new();
+                        let mut chunk = vec![0u8; 64 * 1024];
+                        loop {
+                            let mut read = 0u32;
+                            let _ = reader.Read(
+                                chunk.as_mut_ptr().cast(),
+                                chunk.len() as u32,
+                                Some(&mut read),
+                            );
+                            if read == 0 {
+                                break;
+                            }
+                            out.extend_from_slice(&chunk[..read as usize]);
+                        }
+                        Ok(out)
+                    })();
+                    if let Some(sender) = sender.take() {
+                        let _ = sender.send(bytes);
+                    }
+                    Ok(())
+                }));
+                core.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, &stream, &handler)
+                    .map_err(|e| e.to_string())
+            }
+        })();
+        if let Err(error) = started {
+            eprintln!("capture failed: {error}");
+        }
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn capture(
+    _view: &Webview,
+    _sender: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+) -> Result<(), String> {
+    Err("not supported on this platform".into())
+}
+
 #[tauri::command]
 pub fn browser_close(app: AppHandle, tab: String) -> Result<(), String> {
     match webview(&app, &tab) {
