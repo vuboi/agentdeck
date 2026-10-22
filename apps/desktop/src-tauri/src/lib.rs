@@ -296,6 +296,7 @@ pub fn run() {
             browser::browser_zoom,
             browser::browser_close,
             browser::browser_capture,
+            browser::browser_press,
             overlay::overlay_eval,
             overlay::overlay_show,
             overlay::overlay_hide,

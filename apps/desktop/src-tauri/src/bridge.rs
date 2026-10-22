@@ -221,6 +221,7 @@ async fn answer(
             "GET /shot": "a PNG of the page as shown now; answers with the file path",
             "GET /click?x=&y=": "presses at a point of the page (CSS pixels, as in /shot), with the events of a real press",
             "GET /fill?selector=&value=": "types a value into a field and fires input and change",
+            "GET /press?x=&y=": "a real mouse press at a point (moves the user's mouse, brings the app to the front)",
         })),
         "/page" => {
             let state = STATE.lock().map_err(|_| "busy".to_string())?;
@@ -297,6 +298,28 @@ async fn answer(
                 Some(error) => Err(error.to_string()),
                 None => Ok(report["result"].clone()),
             }
+        }
+        "/press" => {
+            // A real mouse press at a point of the page (CSS pixels, as in /shot): this moves the user's mouse.
+            let x = params
+                .get("x")
+                .and_then(|v| v.parse::<f64>().ok())
+                .ok_or("send ?x=&y= in CSS pixels, as in /shot")?;
+            let y = params
+                .get("y")
+                .and_then(|v| v.parse::<f64>().ok())
+                .ok_or("send ?x=&y= in CSS pixels, as in /shot")?;
+            // The page's zoom: the width the window shows over the width the page lays out at.
+            let report = ask(app, &active, "dom", Value::Null).await?;
+            let viewport = report["viewport"]["w"].as_f64().unwrap_or(1.0).max(1.0);
+            let view = app
+                .get_webview(&format!("browser-{active}"))
+                .ok_or("no page is open in the AgentDeck browser")?;
+            let logical = view.size().map_err(|error| error.to_string())?;
+            let scale = view.window().scale_factor().map_err(|error| error.to_string())?;
+            let zoom = (logical.width as f64 / scale) / viewport;
+            crate::browser::browser_press(app.clone(), active.clone(), x, y, zoom)?;
+            Ok(json!({ "pressed": true, "x": x, "y": y }))
         }
         "/fill" => {
             let selector = params.get("selector").cloned().ok_or("send ?selector=&value=")?;

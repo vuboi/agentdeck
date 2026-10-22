@@ -119,15 +119,76 @@ pub async fn browser_show(
     if let Some(agent) = user_agent.as_deref() {
         builder = builder.user_agent(agent);
     }
-    window
+    let view = window
         .add_child(
             builder,
             LogicalPosition::new(x, y),
             LogicalSize::new(w.max(1.0), h.max(1.0)),
         )
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    allow_password_saving(&view);
+    Ok(())
 }
+
+/// The page's own password manager: the browser offers to save a password after a sign-in and fills it next time,
+/// as Edge or Chrome do. The setting belongs to the WebView2 profile, so it covers every page.
+fn allow_password_saving(view: &Webview) {
+    let _ = view.with_webview(|platform| {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4;
+        use windows::core::Interface;
+        // SAFETY: WebView2 calls on the thread that owns the webview, as `with_webview` runs us.
+        unsafe {
+            let Ok(core) = platform.controller().CoreWebView2() else {
+                return;
+            };
+            let Ok(settings) = core.Settings() else {
+                return;
+            };
+            if let Ok(settings) = settings.cast::<ICoreWebView2Settings4>() {
+                let _ = settings.SetIsPasswordAutosaveEnabled(true);
+                let _ = settings.SetIsGeneralAutofillEnabled(true);
+            }
+        }
+    });
+}
+
+/// A real press at a point of the page, as a person's mouse would make it. `x` and `y` are CSS pixels of the page
+/// and `zoom` is the page's zoom (1 at 100%).
+#[tauri::command]
+pub fn browser_press(app: AppHandle, tab: String, x: f64, y: f64, zoom: f64) -> Result<(), String> {
+    let view = webview(&app, &tab)?;
+    let window = app.get_window("main").ok_or("no main window")?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let origin = window.inner_position().map_err(|error| error.to_string())?;
+    let at = view.position().map_err(|error| error.to_string())?;
+    // Physical pixels: the window's client area, then the page inside it, then the point.
+    let px = origin.x as f64 + at.x as f64 + x * zoom * scale;
+    let py = origin.y as f64 + at.y as f64 + y * zoom * scale;
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+    press_at(hwnd.0 as isize, px.round() as i32, py.round() as i32);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn press_at(hwnd: isize, x: i32, y: i32) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        mouse_event, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{SetCursorPos, SetForegroundWindow};
+    // SAFETY: plain Win32 input calls, for the app's own window.
+    unsafe {
+        let _ = SetForegroundWindow(HWND(hwnd as *mut _));
+        let _ = SetCursorPos(x, y);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+    }
+}
+
+#[cfg(not(windows))]
+fn press_at(_hwnd: isize, _x: i32, _y: i32) {}
 
 /// Follows the panel when it moves or resizes.
 #[tauri::command]
