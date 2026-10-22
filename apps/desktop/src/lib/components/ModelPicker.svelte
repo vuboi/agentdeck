@@ -261,10 +261,10 @@
   zTrigger="manual"
   zPosition="right-top"
   zOffset={6}
-  zWidth={200}
+  zWidth={156}
 >
   {#snippet children()}
-    <div class="flex w-[200px] flex-col gap-0.5 p-1" role="radiogroup" aria-label="{sourceOf(subProvider).label} models" {@attach glide()}>
+    <div class="flex w-[156px] flex-col gap-0.5 p-1" role="radiogroup" aria-label="{sourceOf(subProvider).label} models" {@attach glide()}>
       {#each modelsOf(subProvider) as item (item.value)}
         {@const selected = agent === subProvider && model === item.value}
         <button
