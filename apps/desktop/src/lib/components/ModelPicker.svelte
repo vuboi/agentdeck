@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ZDivider, ZButton, ZIcon, ZPopover, ZSwitch, ZTabs, zHoverGlide } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZPopover, ZSwitch, ZTabs, zHoverGlide } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { AGENT_TEXT, setWhileRunning, turnOptions, type Agent, type Effort, type Permission } from '../sessions.svelte';
   import { modelSources, type ProviderId } from '../models';
+  import SectionTitle from './SectionTitle.svelte';
 
   let {
     agent = $bindable(),
@@ -14,6 +15,16 @@
   }: { agent: Agent; model: string; effort: Effort; fast: boolean; permission: Permission } = $props();
 
   let open = $state(false);
+  // The popover scales in; tabs measured during that are off-centre. They are drawn again once it has settled.
+  let settled = $state(false);
+  $effect(() => {
+    if (!open) {
+      settled = false;
+      return;
+    }
+    const timer = setTimeout(() => (settled = true), 280);
+    return () => clearTimeout(timer);
+  });
   let warming = false;
 
   // The first open after a reload used to hitch: the popover's parts (tabs, switch, glide, scrollbar)
@@ -130,9 +141,9 @@
   onClosed={() => !warming && document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()}
 >
   {#snippet children()}
-    <div class="flex w-[320px] flex-col gap-2 overflow-y-auto px-2.5 py-2" style:max-height="{panelMax}px">
+    <div class="flex w-[320px] flex-col gap-3 overflow-y-auto px-2.5 py-2.5" style:max-height="{panelMax}px">
       <section aria-label="Model">
-        <ZDivider zLabel="MODEL" zAlign="start" zSize="sm" class="mb-1.5 text-[10px] tracking-widest text-muted-foreground" />
+        <SectionTitle label="MODEL" />
         <div class="flex flex-col gap-0.5" {@attach glide()}>
           {#each modelSources as source (source.provider)}
             {@const current = agent === source.provider ? modelName(source.provider, model) : ''}
@@ -156,7 +167,8 @@
       </section>
 
       <section aria-label="Reasoning effort">
-        <ZDivider zLabel="EFFORT" zAlign="start" zSize="sm" class="mb-1.5 text-[10px] tracking-widest text-muted-foreground" />
+        <SectionTitle label="EFFORT" />
+        {#key settled}
         <ZTabs
           zTabs={efforts}
           zType="segmented"
@@ -168,6 +180,7 @@
           activeTab={effort}
           onTabChange={(value) => (effort = value as Effort)}
         />
+        {/key}
       </section>
 
       <section aria-label="Speed" class="flex items-center justify-between gap-6 px-0.5">
@@ -182,7 +195,7 @@
       </section>
 
       <section aria-label="Permissions">
-        <ZDivider zLabel="PERMISSIONS" zAlign="start" zSize="sm" class="mb-1.5 text-[10px] tracking-widest text-muted-foreground" />
+        <SectionTitle label="PERMISSIONS" />
         <div class="flex flex-col gap-0.5" {@attach glide()}>
         {#each permissions as item (item.value)}
           {@const selected = permission === item.value}
@@ -208,7 +221,8 @@
       </section>
 
       <section aria-label="While it works">
-        <ZDivider zLabel="WHILE IT WORKS" zAlign="start" zSize="sm" class="mb-1.5 text-[10px] tracking-widest text-muted-foreground" />
+        <SectionTitle label="WHILE IT WORKS" />
+        {#key settled}
         <ZTabs
           zTabs={[
             { value: 'queue', label: 'Queue' },
@@ -223,6 +237,7 @@
           activeTab={turnOptions.whileRunning}
           onTabChange={(value) => setWhileRunning(value as 'queue' | 'interrupt')}
         />
+        {/key}
       </section>
     </div>
   {/snippet}
