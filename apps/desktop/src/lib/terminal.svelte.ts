@@ -58,21 +58,30 @@ export function cycleTerminal(step: 1 | -1) {
 export function handleTerminalShortcut(event: KeyboardEvent): boolean {
   const mod = event.ctrlKey || event.metaKey;
   if (!mod) return false;
-  if (event.key === '`' && event.shiftKey) {
-    newTerminal();
-  } else if (event.key === '`') {
-    toggleTerminal();
-  } else if (event.key === 'j' && !event.shiftKey) {
-    toggleTerminal();
-  } else if (event.key === 'W' && event.shiftKey) {
-    closeTerminal();
-  } else if (event.key === 'PageDown') {
-    cycleTerminal(1);
-  } else if (event.key === 'PageUp') {
-    cycleTerminal(-1);
-  } else {
-    return false;
+
+  switch (event.key) {
+    case '`':
+      if (event.shiftKey) newTerminal();
+      else toggleTerminal();
+      break;
+    case 'j':
+      if (event.shiftKey) return false;
+      toggleTerminal();
+      break;
+    case 'W':
+      if (!event.shiftKey) return false;
+      closeTerminal();
+      break;
+    case 'PageDown':
+      cycleTerminal(1);
+      break;
+    case 'PageUp':
+      cycleTerminal(-1);
+      break;
+    default:
+      return false;
   }
+
   event.preventDefault();
   return true;
 }

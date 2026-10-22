@@ -111,6 +111,7 @@ fn index_file(path: &Path) -> Option<Indexed> {
             id: format!("claude:{stem}"),
             source: Source::Claude,
             title,
+            model: None,
             cwd,
             started_at: started,
             updated_at: updated,

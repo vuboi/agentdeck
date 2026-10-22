@@ -51,6 +51,22 @@ pub fn visible_view(app: &AppHandle) -> Option<Webview> {
     }
 }
 
+/// Draws the agent cursor above a mirrored menu. The page cursor cannot cross this native webview layer.
+pub fn pointer(app: &AppHandle, x: f64, y: f64, kind: &str) {
+    let Some(view) = visible_view(app) else {
+        return;
+    };
+    let Ok(position) = view.position() else {
+        return;
+    };
+    let local_x = x - f64::from(position.x);
+    let local_y = y - f64::from(position.y);
+    let script = format!(
+        "window.__overlay && window.__overlay.pointer({local_x}, {local_y}, {kind:?})"
+    );
+    let _ = view.eval(&script);
+}
+
 /// Runs `script` (the menu markup) and puts the overlay at a rectangle of the window, above every page, in one
 /// call: the menu appears without a round trip in between.
 #[tauri::command]

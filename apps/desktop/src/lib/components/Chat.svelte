@@ -499,7 +499,7 @@
   <!-- The composer sits on its own layer, above anything the conversation area paints at its edge. -->
   <!-- Hidden while a file tab is on screen: the file gets the full height. -->
   {#if !fileActive}
-    <div class="relative z-30 shrink-0 bg-background px-2 pt-4 pb-4 min-[720px]:px-6">
+    <div class="relative z-30 shrink-0 bg-background px-2 pt-4 pb-2 min-[720px]:px-6">
       <div class="mx-auto w-full min-w-0 max-w-3xl px-0 min-[720px]:min-w-[440px] min-[720px]:pr-6 min-[720px]:pl-12">
         <!-- A pending approval sits right above the input, where the eye already is. -->
         {#if pendingApproval}
@@ -508,7 +508,6 @@
           </div>
         {/if}
         <Composer />
-        <p class="mt-2 hidden text-center text-[10px] text-muted-foreground min-[720px]:block">AgentDeck can make mistakes. Review important changes.</p>
       </div>
     </div>
   {/if}

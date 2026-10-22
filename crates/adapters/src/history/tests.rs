@@ -262,7 +262,7 @@ fn codex_transcript_skips_injected_context_and_reads_tools() {
             json!({"timestamp":"t","type":"response_item",
                    "payload":{"type":"function_call_output","call_id":"c1","output":"{\"output\":\"boom\",\"metadata\":{\"exit_code\":1}}"}}),
             msg("assistant", "output_text", "it failed"),
-            json!({"timestamp":"t","type":"event_msg","payload":{"type":"token_count"}}),
+            json!({"timestamp":"t","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-6.1-sol"}}}),
         ],
     );
 
@@ -271,6 +271,7 @@ fn codex_transcript_skips_injected_context_and_reads_tools() {
     assert_eq!(sessions[0].id, "codex:abc123");
     assert_eq!(sessions[0].title, "list files");
     assert_eq!(sessions[0].cwd, "C:\\work\\demo");
+    assert_eq!(sessions[0].model.as_deref(), Some("gpt-6.1-sol"));
     assert_eq!(sessions[0].message_count, 2);
 
     let messages = load(&home.roots(), Source::Codex, &path).unwrap();

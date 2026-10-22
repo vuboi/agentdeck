@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::Webview;
+use tauri::{Manager, Webview};
 
 /// A frame of another origin, attached to its own DevTools session.
 #[derive(Clone, Serialize)]
@@ -249,6 +249,7 @@ const CURSOR: &str = r##"((x, y, kind) => {
 async fn show_pointer(view: &Webview, x: f64, y: f64, kind: &str) {
     let script = format!("{CURSOR}({x}, {y}, {kind:?})");
     if evaluate(view, &script, None).await.is_ok() {
+        crate::overlay::pointer(view.app_handle(), x, y, kind);
         tokio::time::sleep(std::time::Duration::from_millis(520)).await;
     }
 }

@@ -155,7 +155,7 @@ async fn serve(mut stream: TcpStream, app: AppHandle) -> std::io::Result<()> {
         .collect();
     // The same browser as an MCP server, for agents that take tools rather than curl.
     if path == "/mcp" {
-        let reply = if head.starts_with("POST") {
+        let reply = if is_post_request(&head) {
             match crate::mcp::handle(&app, &body).await {
                 Some(text) => format!(
                     "HTTP/1.1 200 OK
@@ -198,6 +198,12 @@ Connection: close
     stream.shutdown().await
 }
 
+fn is_post_request(head: &str) -> bool {
+    head.lines()
+        .next()
+        .is_some_and(|line| line.to_ascii_lowercase().starts_with("post "))
+}
+
 fn decode(text: &str) -> String {
     let bytes = text.replace('+', " ").into_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -214,6 +220,25 @@ fn decode(text: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_post_request;
+
+    #[test]
+    fn accepts_post_method_regardless_of_case() {
+        assert!(is_post_request("POST /mcp HTTP/1.1\r\n"));
+        assert!(is_post_request("post /mcp HTTP/1.1\r\n"));
+        assert!(is_post_request("PoSt /mcp HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn rejects_other_methods_and_prefixes() {
+        assert!(!is_post_request("GET /mcp HTTP/1.1\r\n"));
+        assert!(!is_post_request("POSTX /mcp HTTP/1.1\r\n"));
+        assert!(!is_post_request("POST"));
+    }
 }
 
 fn level_group(level: &str) -> &str {

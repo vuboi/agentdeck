@@ -10,13 +10,14 @@ import {
   type HistorySession,
 } from './history';
 import { messages as mockMessages, type Message } from './mock';
-import { isLocalUrl, openInPreview } from './browser.svelte';
+import { openInPreview } from './browser.svelte';
 import { trackActivity } from './activity.svelte';
 import { listenAgentEvents, saveAttachment, sendAgentTurn, stopAgentTurn, type AgentEvent } from './agent';
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
 import { estimateCost, recordUsage } from './usage';
 import { modelCatalog } from './models.svelte';
+import { dequeue, enqueue } from './queue';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
 export type Agent = 'claude' | 'codex' | 'gemini';
@@ -50,6 +51,10 @@ export type SessionItem = {
   agentSession?: string;
   /** The CLI already has this conversation (first turn sent): later turns resume it. */
   agentStarted?: boolean;
+  /** Model used by the current CLI conversation; changing it starts a fresh conversation. */
+  conversationModel?: string;
+  /** Model used by each additional agent conversation in a mixed chat. */
+  agentModels?: Partial<Record<Agent, string>>;
   /** Per agent: its own conversation id and whether it has one yet. `agentSession` / `agentStarted` belong to
    *  the chat's first agent; an agent the chat moved to later keeps its ids here. */
   agentIds?: Partial<Record<Agent, { id: string; started: boolean }>>;
@@ -233,6 +238,30 @@ export function newChat() {
 const lastPrompt: Record<string, string> = {};
 const OPEN_WORDS = /(open|opened|preview|browser|run|running|start|started|serve)|mở|chạy|xem thử/i;
 
+/** Pick the requested framework's address when a turn starts more than one local dev server. */
+function previewUrl(text: string, prompt: string): string | undefined {
+  const wantsSvelte = /\bsvelte(?:\s*5)?\b|z-ui-svelte/i.test(`${prompt}\n${text}`);
+  const urls = [...text.matchAll(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?[^\s`'")\]>]*/gi)].map((match) => ({
+    url: match[0],
+    at: match.index ?? 0,
+  }));
+  const unique = urls.filter((item, index) => urls.findIndex((other) => other.url === item.url) === index);
+  return unique
+    .map((item) => {
+      const lineStart = text.lastIndexOf('\n', item.at) + 1;
+      const lineEnd = text.indexOf('\n', item.at);
+      const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd);
+      let score = item.at;
+      if (wantsSvelte) {
+        if (/svelte|vite|z-ui-svelte/i.test(line)) score += 100000;
+        if (/angular|4200/.test(line)) score -= 100000;
+        if (/:(?:4310|4301)\b/.test(item.url)) score += 50000;
+      }
+      return { ...item, score };
+    })
+    .sort((a, b) => b.score - a.score)[0]?.url;
+}
+
 /** After a turn: if you asked to open or run something and a local address came out of it, show it in the AgentDeck browser. */
 function openServedPage(sessionId: string, reply: Message) {
   if (!inTauri()) return;
@@ -241,7 +270,7 @@ function openServedPage(sessionId: string, reply: Message) {
     .join('\n');
   // You asked for it, or the answer says the page is open or running.
   if (!OPEN_WORDS.test(lastPrompt[sessionId] ?? '') && !OPEN_WORDS.test(text)) return;
-  const found = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?[^\s`'")\]>]*/gi)?.find(isLocalUrl);
+  const found = previewUrl(text, lastPrompt[sessionId] ?? '');
   if (found) openInPreview(found);
 }
 
@@ -283,6 +312,7 @@ const turns: Record<string, string> = {};
 /** Messages typed while the agent was still busy, waiting their turn. */
 export type Queued = { text: string; images: Attachment[]; elements: PageElement[] };
 export const queued = $state<Record<string, Queued[]>>({});
+
 /** Whether a chat has a reply in progress (for the send / stop button). */
 export const isRunning = (sessionId: string) => workspace.sessions.find((item) => item.id === sessionId)?.status === 'working';
 
@@ -355,17 +385,27 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   const prefix = `${session.agent}:`;
   let cliId: string | null;
   let resume: boolean;
+  const selectedModel = modelFor(session);
   if (session.agent === first) {
     const known = session.agentSession ?? (session.id.startsWith(prefix) ? session.id.slice(prefix.length) : undefined);
     cliId = known ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
+    const modelChanged = Boolean(session.conversationModel && session.conversationModel !== selectedModel);
+    if (modelChanged) {
+      cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
+      session.agentStarted = false;
+    }
     if (cliId) session.agentSession = cliId;
-    resume = cliId !== null && (session.agentStarted ?? !!session.path);
+    resume = cliId !== null && !modelChanged && (session.agentStarted ?? !!session.path);
+    session.conversationModel = selectedModel ?? undefined;
   } else {
     // Another agent in this chat: its own conversation, started the first time it is used here.
     const own = session.agentIds?.[session.agent];
     cliId = own?.id ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
     if (cliId && !own) (session.agentIds ??= {})[session.agent] = { id: cliId, started: false };
-    resume = cliId !== null && Boolean(own?.started);
+    const modelChanged = Boolean(session.agentModels?.[session.agent] && session.agentModels[session.agent] !== selectedModel);
+    if (modelChanged) cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
+    resume = cliId !== null && !modelChanged && Boolean(own?.started);
+    (session.agentModels ??= {})[session.agent] = selectedModel ?? '';
   }
   const turn = nextId();
   turns[session.id] = turn;
@@ -392,7 +432,7 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       agentSession: cliId,
       resume,
       // A model of another agent (left over from a switch) is never sent: the agent's own first model goes instead.
-      model: modelFor(session),
+      model: selectedModel,
       permissionMode: PERMISSION_MODE[turnOptions.permission],
       effort: turnOptions.effort,
       allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
@@ -515,7 +555,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     transcripts.delete(sessionId);
     if (!session.path) void importHistory({ refresh: true });
     // Messages typed while it worked go next, one at a time.
-    const next = queued[sessionId]?.shift();
+    const next = dequeue(queued, sessionId);
     if (next) setTimeout(() => send(sessionId, next.text, next.images, next.elements), 0);
   }
 }
@@ -539,7 +579,7 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
   if (!session || (!text.trim() && images.length === 0 && elements.length === 0)) return;
   if (replies[session.id]) {
     if (turnOptions.whileRunning === 'queue') {
-      (queued[session.id] ??= []).push({ text, images, elements });
+      enqueue(queued, session.id, { text, images, elements });
       return;
     }
     stopTurn(session.id);
@@ -756,7 +796,8 @@ function applyHistory(all: HistorySession[]) {
     title: item.title,
     agent: mixed[item.id]?.agents?.at(-1) ?? item.source,
     // Sonnet unless the chat was changed: the first model of the list is the biggest one.
-    model: item.source === 'claude' ? 'claude-sonnet-5-5' : MODELS[item.source][0].value,
+    model: item.model ?? (item.source === 'claude' ? 'claude-sonnet-5-5' : MODELS[item.source][0].value),
+    conversationModel: item.model ?? undefined,
     status: 'idle',
     parentId: item.parent_id && ids.has(item.parent_id) ? item.parent_id : undefined,
     source: item.source,

@@ -28,6 +28,8 @@ pub struct HistorySession {
     pub id: String,
     pub source: Source,
     pub title: String,
+    /// The model recorded by the source CLI when it is available.
+    pub model: Option<String>,
     /// Working folder of the session; sessions group into projects by it.
     pub cwd: String,
     pub started_at: Option<String>,

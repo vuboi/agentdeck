@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::{AgentEvent, FileChange, Provider, TurnRequest};
 
 /// Added to Codex's instructions on every turn (the same facts Claude is given).
-const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app with its own built-in browser (the Preview panel). To show a web page or a local dev server, start the server if needed and write its full address (for example http://localhost:4200) in your reply: AgentDeck opens it in Preview. You can see and operate that page yourself with the agentdeck MCP tools (browser_screenshot, browser_click, browser_type, browser_key, browser_scroll, browser_eval, browser_dom, browser_console, browser_network); never tell the user you cannot test in Preview.";
+const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app with its own built-in browser (the Preview panel). To show a web page or a local dev server, start the server if needed and write the full address of the server you actually started in your reply: AgentDeck opens it in Preview. Before starting a dev server, inspect the workspace scripts and identify the requested framework. In the z-ui workspace, use `pnpm start:svelte` for the Svelte 5 app (default http://localhost:4310) and `pnpm start:angular` for the Angular app (default http://localhost:4200); never use the Angular 4200 server when the user asks for Svelte, Svelte 5, or z-ui-svelte. When the user asks you to inspect or interact with that page, you MUST use the AgentDeck MCP tools on the Preview page: call browser_screenshot first, then browser_click/browser_type/browser_key/browser_scroll as needed, and call browser_screenshot or browser_dom again to verify the result. Do not use an external Chrome tab, do not merely navigate to or mention the URL, and do not claim an interaction happened without a matching MCP result. You can also use browser_eval, browser_console, and browser_network for inspection. Never tell the user you cannot test in Preview.";
 
 /// What one run of the parser remembers between lines: the thread id for the final event, which commands
 /// were already announced, and whether the last thing written was answer text.
@@ -110,6 +110,9 @@ impl Provider for Codex {
             *turn = Turn::default();
         }
         let mut args = vec!["exec".to_string()];
+        if req.permission_mode.as_deref() == Some("auto") {
+            args.push("--approve-for-me".to_string());
+        }
         // Codex names its own threads, so only a thread it reported before can be resumed.
         if let (Some(id), true) = (&req.session_id, req.resume) {
             args.push("resume".to_string());
@@ -136,7 +139,9 @@ impl Provider for Codex {
         };
         if let Some(mode) = sandbox {
             config("sandbox_mode", toml_string(mode));
-            config("approval_policy", toml_string("never"));
+            if req.permission_mode.as_deref() != Some("auto") {
+                config("approval_policy", toml_string("never"));
+            }
         }
         config("developer_instructions", toml_string(APP_CONTEXT));
         if let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") {
@@ -313,6 +318,15 @@ mod tests {
         assert_eq!(args.last().map(String::as_str), Some("hi"));
         // A first turn starts a new thread: Codex names it.
         assert_eq!(Codex::default().args(&req(false))[1], "--json");
+    }
+
+    #[test]
+    fn auto_approve_routes_mcp_approvals_to_automatic_review() {
+        let mut request = req(false);
+        request.permission_mode = Some("auto".into());
+        let args = Codex::default().args(&request);
+        assert!(args.contains(&"--approve-for-me".to_string()));
+        assert!(!args.iter().any(|arg| arg == "approval_policy=\"never\""));
     }
 
     #[test]

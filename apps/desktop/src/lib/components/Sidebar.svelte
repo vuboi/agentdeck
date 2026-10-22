@@ -303,22 +303,27 @@
             <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}">{ctx.node.label}</span>
             <!-- The agent tag and the three dots share one cell: hovering swaps them without moving anything. -->
             <span class="grid shrink-0 place-items-center">
-              <span class="col-start-1 row-start-1 transition-opacity group-hover/tree-row:opacity-0 group-focus-within/tree-row:opacity-0">
+              <span class="col-start-1 row-start-1 transition-opacity {!ctx.selected ? 'group-hover/tree-row:opacity-0 group-focus-within/tree-row:opacity-0' : ''}">
                 {#if (data.session.agents?.length ?? 1) > 1}
                   <AgentStack agents={data.session.agents!} />
                 {:else}
                   <span class="block rounded px-1.5 py-px text-[10px] font-medium {agentTag[data.session.agent]}">{agentLabel(data.session.agent)}</span>
                 {/if}
               </span>
-              <button
-                type="button"
-                class="col-start-1 row-start-1 inline-flex cursor-pointer rounded p-0.5 text-muted-foreground opacity-0 transition-opacity outline-none group-hover/tree-row:opacity-100 group-focus-within/tree-row:opacity-100 hover:bg-accent hover:text-foreground"
-                aria-label="Session actions"
-                aria-haspopup="menu"
-                onclick={(event) => openMenu(event, data.session!.id, event.currentTarget)}
-              >
-                <ZIcon zType="lucideEllipsis" class="size-3.5" />
-              </button>
+              {#if !ctx.selected}
+                <button
+                  type="button"
+                  class="col-start-1 row-start-1 inline-flex cursor-pointer rounded p-0.5 text-muted-foreground opacity-0 transition-opacity outline-none group-hover/tree-row:opacity-100 group-focus-within/tree-row:opacity-100 hover:bg-accent hover:text-foreground"
+                  aria-label="Session actions"
+                  aria-haspopup="menu"
+                  onpointerdown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onclick={(event) => openMenu(event, data.session!.id, event.currentTarget)}
+                >
+                  <ZIcon zType="lucideEllipsis" class="size-3.5" />
+                </button>
+              {/if}
             </span>
           {:else}
             <ZIcon zType={ctx.node.icon ?? 'lucideFolder'} class="size-3.5 shrink-0 text-muted-foreground" />
@@ -383,4 +388,3 @@
     {#if failure}<p class="text-xs text-destructive" role="alert">{failure}</p>{/if}
   </div>
 </ZModal>
-

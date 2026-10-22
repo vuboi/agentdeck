@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { slide } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import { ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { browser } from '../browser.svelte';
@@ -58,8 +60,9 @@
   };
 </script>
 
-<Splitter axis="y" label="Resize developer tools" onDelta={resize} />
-<section class="flex shrink-0 flex-col bg-background" style:height="{browser.devtoolsHeight}px" aria-label="Developer tools">
+<div class="flex min-h-0 shrink-0 flex-col overflow-hidden" style:height="{browser.devtoolsHeight + 1}px" transition:slide={{ duration: 260, easing: cubicOut }}>
+  <Splitter axis="y" label="Resize developer tools" onDelta={resize} />
+  <section class="flex shrink-0 flex-col bg-background" style:height="{browser.devtoolsHeight}px" aria-label="Developer tools">
   <div class="flex shrink-0 items-center gap-1 border-b border-border px-1.5 py-1" role="tablist">
     {#each [['console', 'Console'], ['network', 'Network']] as [value, label] (value)}
       <button
@@ -152,3 +155,4 @@
     {/if}
   </div>
 </section>
+</div>

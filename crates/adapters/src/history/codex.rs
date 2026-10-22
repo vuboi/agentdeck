@@ -15,7 +15,9 @@ const OUTPUT_LIMIT: usize = 6_000;
 
 /// Only these lines matter; the rest of a rollout is token counts and turn bookkeeping.
 fn wanted(line: &str) -> bool {
-    line.contains("\"type\":\"response_item\"") || line.contains("\"type\":\"session_meta\"")
+    line.contains("\"type\":\"response_item\"")
+        || line.contains("\"type\":\"session_meta\"")
+        || line.contains("\"type\":\"event_msg\"")
 }
 
 pub(super) fn list(root: &Path, index: &Path) -> Vec<HistorySession> {
@@ -75,10 +77,21 @@ fn index_file(path: &Path) -> Option<HistorySession> {
         return None;
     }
 
+    let model = lines.iter().rev().find_map(|line| {
+        let payload = line.get("payload")?;
+        if str_of(line, "type") != "event_msg" || str_of(payload, "type") != "thread_settings_applied" {
+            return None;
+        }
+        let settings = payload.get("thread_settings")?;
+        let model = str_of(settings, "model");
+        (!model.is_empty()).then(|| model.to_owned())
+    });
+
     Some(HistorySession {
         id: format!("codex:{id}"),
         source: Source::Codex,
         title: title.unwrap_or_else(|| "Untitled session".to_owned()),
+        model,
         cwd: str_of(payload, "cwd").to_owned(),
         started_at: Some(str_of(payload, "timestamp").to_owned()).filter(|stamp| !stamp.is_empty()),
         updated_at: updated,

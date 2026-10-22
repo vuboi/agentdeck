@@ -91,11 +91,6 @@ body {
   opacity: 1;
 }
 
-/* Row that has its context menu open stays highlighted like a hover. */
-.z-tree [role='treeitem'][data-menu-row] {
-  background-color: var(--accent);
-}
-
 /* Command palettes (mentions, chat search): compact rows and text. */
 .z-command .z-command-item {
   padding-block: 0.375rem;
@@ -182,6 +177,11 @@ html[data-warming] [data-z-popover] {
 .z-tree [role='treeitem']:focus-visible,
 .z-chat-navigator-viewport:focus,
 .z-chat-navigator-viewport:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+.z-tree [role='treeitem'] button:focus,
+.z-tree [role='treeitem'] button:focus-visible {
   outline: none !important;
   box-shadow: none !important;
 }

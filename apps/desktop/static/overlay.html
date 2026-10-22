@@ -40,6 +40,20 @@ window.__overlay = {
       root.animate([{ opacity: 0, transform: 'scale(0.96)' }, { opacity: 1, transform: 'scale(1)' }], { duration: 150, easing: 'cubic-bezier(0.16, 1, 0.3, 1)', fill: 'backwards' });
     }
   },
+  pointer(x, y, kind) {
+    let cursor = document.getElementById('__agentdeck_overlay_cursor');
+    if (!cursor) {
+      cursor = document.createElement('div');
+      cursor.id = '__agentdeck_overlay_cursor';
+      cursor.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;opacity:0;will-change:transform;transition:transform 520ms cubic-bezier(.2,.9,.25,1),opacity 220ms ease';
+      cursor.innerHTML = `<div style="position:absolute;left:-14px;top:-14px;width:40px;height:40px;border-radius:50%;background:radial-gradient(circle,rgba(124,92,255,.35),rgba(124,92,255,0) 70%);filter:blur(2px)"></div><svg width="20" height="20" viewBox="0 0 20 20" style="position:relative;display:block;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.35)) drop-shadow(0 4px 10px rgba(0,0,0,.18))"><path d="M2.2 1.6c-.3-.2-.7.1-.6.5l3.9 15.1c.1.4.7.5.9.1l2.5-4.9c.1-.2.3-.3.5-.3l5.4-.4c.4 0 .6-.5.3-.8L2.2 1.6z" fill="#111827" stroke="#ffffff" stroke-width="1.4" stroke-linejoin="round"/></svg>`;
+      document.body.appendChild(cursor);
+    }
+    cursor.style.opacity = '1';
+    cursor.style.transform = `translate(${x - 2}px, ${y - 2}px)`;
+    clearTimeout(window.__agentdeckOverlayCursorTimer);
+    window.__agentdeckOverlayCursorTimer = setTimeout(() => (cursor.style.opacity = '0'), 3000);
+  },
 };
 root.addEventListener('click', (event) => {
   const target = event.target.closest(PICK);

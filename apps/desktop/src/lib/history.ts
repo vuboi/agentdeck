@@ -8,6 +8,7 @@ export type HistorySession = {
   id: string;
   source: HistorySource;
   title: string;
+  model: string | null;
   cwd: string;
   started_at: string | null;
   updated_at: string | null;
