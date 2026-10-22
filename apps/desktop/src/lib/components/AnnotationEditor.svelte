@@ -41,6 +41,10 @@
   let image: HTMLImageElement | undefined;
   let ready = $state(false);
   let status = $state('');
+  /** The element under the pointer while the select tool is active: outlined live, committed by a click. */
+  let hover = $state<PickedElement | null>(null);
+  let asking = false;
+  let lastAsk = 0;
 
   const LINE = $derived(Math.max(3, Math.round(shot.w / 280)));
 
@@ -127,11 +131,12 @@
     const [x, y] = at(event);
     if (tool === 'text') return openNote(x, y, event);
     if (tool === 'select') {
-      status = 'Finding the element…';
+      status = hover ? '' : 'Finding the element…';
       try {
-        const element = await inspect(x, y);
+        const element = hover ?? (await inspect(x, y));
         if (!element) return;
         draft = null;
+        hover = null;
         shapes = [...shapes, { t: 'hl', color, x: element.box.x, y: element.box.y, w: element.box.w, h: element.box.h }];
         openNote(element.box.x + element.box.w / 2, element.box.y + element.box.h / 2, event, element);
       } catch {
@@ -145,7 +150,24 @@
     draft = tool === 'pen' ? { t: 'pen', color, pts: [[x, y]] } : { t: shapeKind, color, x1: x, y1: y, x2: x, y2: y };
   }
 
+  async function hoverAt(event: PointerEvent) {
+    const now = performance.now();
+    if (asking || now - lastAsk < 60) return;
+    asking = true;
+    lastAsk = now;
+    const [x, y] = at(event);
+    try {
+      const element = await inspect(x, y);
+      if (tool === 'select' && !noteAt) hover = element;
+    } catch {
+      hover = null;
+    } finally {
+      asking = false;
+    }
+  }
+
   function move(event: PointerEvent) {
+    if (tool === 'select' && ready && !noteAt) void hoverAt(event);
     if (!draft) return;
     const [x, y] = at(event);
     if (draft.t === 'pen') draft.pts.push([x, y]);
@@ -211,7 +233,20 @@
         onpointerdown={down}
         onpointermove={move}
         onpointerup={up}
+        onpointerleave={() => (hover = null)}
       ></canvas>
+      {#if hover && tool === 'select' && !noteAt}
+        <!-- Live outline of the element the pointer is over, like an inspector. -->
+        <div
+          class="pointer-events-none absolute border border-dashed border-primary bg-primary/10"
+          style:left="{(hover.box.x / shot.w) * 100}%"
+          style:top="{(hover.box.y / shot.h) * 100}%"
+          style:width="{(hover.box.w / shot.w) * 100}%"
+          style:height="{(hover.box.h / shot.h) * 100}%"
+        >
+          <span class="absolute -top-5 left-0 max-w-64 truncate rounded bg-primary px-1.5 py-0.5 font-mono text-[10px] text-primary-foreground">{hover.tag} · {hover.box.w}×{hover.box.h}</span>
+        </div>
+      {/if}
       {#if noteAt}
         <div class="absolute z-10 flex w-64 flex-col gap-1 rounded-lg border border-border bg-popover p-1.5 text-xs shadow-md" style:left="{noteAt.px}px" style:top="{noteAt.py + 8}px">
           {#if noteAt.element}<code class="truncate px-1 text-[10px] text-muted-foreground" title={noteAt.element.selector}>{noteAt.element.selector}</code>{/if}
