@@ -110,7 +110,7 @@ impl Provider for Claude {
         args.push("--append-system-prompt".to_string());
         let mut context = APP_CONTEXT.to_string();
         if let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") {
-            context.push_str(&format!(" To debug a page open there, read it from the app instead of guessing: curl {bridge}/console?level=error (console and uncaught JavaScript errors), curl \"{bridge}/network?failed=1\" (failed requests with the start of the response body), curl \"{bridge}/dom?selector=.css\" (elements), curl -d \"document.title\" {bridge}/eval (run JavaScript in the page), curl {bridge}/page (address), curl {bridge}/help."));
+            context.push_str(&format!(" The Preview page is yours to test: act on it with curl, no browser tool needed. Read first: curl {bridge}/page (address), curl {bridge}/dom?selector=CSS (elements, the page's HTML), curl {bridge}/console?level=error (console and uncaught errors), curl \"{bridge}/network?failed=1\" (failed requests with the start of the response body). Act: curl \"{bridge}/click?x=X&y=Y\" presses at a point in CSS pixels (take the point from a screenshot or the DOM); curl \"{bridge}/fill?selector=CSS&value=TEXT\" types into a field; curl -d \"JS\" {bridge}/eval runs JavaScript in the page; curl \"{bridge}/shot\" gives a PNG path you can open to see the page. After each action, check /console and /network for errors. Full list: curl {bridge}/help."));
         }
         args.push(context);
         if let Some(effort) = &req.effort {
