@@ -436,6 +436,9 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     session.status = 'idle';
     persistLocal();
     // The CLI wrote the conversation to disk: pick it up so the row gets its path, in place (same id).
+    // The cached transcript of this chat is now behind the file: a new time makes the next open read it again.
+    session.updatedAt = new Date().toISOString();
+    transcripts.delete(sessionId);
     if (!session.path) void importHistory({ refresh: true });
     // Messages typed while it worked go next, one at a time.
     const next = queued[sessionId]?.shift();

@@ -6,11 +6,13 @@ import type { Block } from './mock';
 export type CommandBlock = Extract<Block, { kind: 'command' }>;
 export type Segment = { kind: 'block'; block: Block } | { kind: 'commands'; items: CommandBlock[] };
 
-/** Consecutive commands become one group; everything else stays as it is. */
+/** Consecutive commands become one group; everything else stays as it is. Reasoning with no text draws nothing,
+ *  so it does not split a group either: the steps then count up on one line, as in Claude and Codex. */
 export function segments(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
   for (const block of blocks) {
     if (block.kind === 'loading') continue;
+    if (block.kind === 'thinking' && !block.text.trim()) continue;
     const last = out.at(-1);
     if (block.kind !== 'command') out.push({ kind: 'block', block });
     else if (last?.kind === 'commands') last.items.push(block);
