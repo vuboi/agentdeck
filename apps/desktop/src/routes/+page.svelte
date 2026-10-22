@@ -90,7 +90,9 @@
     let stop: (() => void) | undefined;
     void import('@tauri-apps/api/event').then(({ listen }) =>
       listen<string>('dev-preview', ({ payload }) => {
-        browser.url = payload;
+        const [address, device] = payload.split('|');
+        browser.url = address;
+        if (device === 'mobile' || device === 'tablet') browser.device = device;
         browser.autostart = true;
         layout.activeTool = 'Preview';
         layout.toolsOpen = true;

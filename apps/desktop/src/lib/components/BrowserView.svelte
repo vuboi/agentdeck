@@ -13,6 +13,7 @@
     listenToPage,
     moveBrowser,
     pickElement,
+    recreateBrowser,
     reload,
     screenshot,
     showBrowser,
@@ -35,6 +36,8 @@
   let busy = $state('');
   let notice = $state('');
   let covered = $state(false);
+  /** Where the phone / tablet sits in the stage (stage coordinates), for its frame. */
+  let deviceBox = $state<{ x: number; y: number; w: number; h: number; zoom: number } | null>(null);
 
   const DEVICE_ICON: Record<Device, ZIconName> = {
     desktop: 'lucideMonitor' as ZIconName,
@@ -50,17 +53,21 @@
     if (box.width < 20 || box.height < 20) return null;
     const device = DEVICES[browser.device];
     if (!device.w) return { rect: { x: box.x, y: box.y, w: box.width, h: box.height }, zoom: 1 };
+    const [dw, dh] = browser.landscape ? [device.h, device.w] : [device.w, device.h];
     // A narrower page is a zoomed-out one: the page lays out at the device width, the panel just shows it smaller.
-    const zoom = Math.min(1, (box.width - 16) / device.w, (box.height - 16) / device.h);
-    const w = device.w * zoom;
-    const h = device.h * zoom;
-    return { rect: { x: box.x + (box.width - w) / 2, y: box.y + (box.height - h) / 2, w, h }, zoom };
+    // Room is left around it for the frame and its caption.
+    const zoom = Math.min(1, (box.width - 44) / dw, (box.height - 68) / dh);
+    const w = dw * zoom;
+    const h = dh * zoom;
+    return { rect: { x: box.x + (box.width - w) / 2, y: box.y + (box.height - h) / 2 + 6, w, h }, zoom };
   }
 
   async function sync() {
     if (!inTauri() || !started || shot || covered) return;
     const place = frame();
     if (!place) return;
+    const origin = stage!.getBoundingClientRect();
+    deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
     try {
       if (browser.opened) await moveBrowser(place.rect);
       else await showBrowser(place.rect);
@@ -129,7 +136,17 @@
     if (browser.opened) void goTo(browser.url);
   });
 
+  // A new device means a new user agent, which only a new page can have: the page is created again at the same address.
+  let lastDevice = browser.device;
   $effect(() => {
+    const device = browser.device;
+    if (device === lastDevice) return;
+    lastDevice = device;
+    untrack(() => void recreateBrowser().then(sync));
+  });
+
+  $effect(() => {
+    void browser.landscape;
     void browser.device;
     void covered;
     void started;
@@ -294,6 +311,23 @@
     <!-- The page itself lives in a native webview placed over this area. -->
     <div class="relative min-h-0 flex-1 bg-muted/30">
       <div bind:this={stage} class="absolute inset-0"></div>
+      {#if deviceBox && !shot}
+        <!-- The device: a bezel around the page (the page itself is the native layer above) and its caption. -->
+        <div
+          class="pointer-events-none absolute border border-border bg-black shadow-lg {browser.device === 'mobile' ? 'rounded-[2rem]' : 'rounded-3xl'}"
+          style:left="{deviceBox.x - 10}px"
+          style:top="{deviceBox.y - 10}px"
+          style:width="{deviceBox.w + 20}px"
+          style:height="{deviceBox.h + 20}px"
+          aria-hidden="true"
+        ></div>
+        <div class="absolute flex items-center justify-center gap-2 text-[11px] text-muted-foreground" style:left="{deviceBox.x - 10}px" style:width="{deviceBox.w + 20}px" style:top="{deviceBox.y - 34}px">
+          <span>{DEVICES[browser.device].name} · {browser.landscape ? `${DEVICES[browser.device].h}×${DEVICES[browser.device].w}` : `${DEVICES[browser.device].w}×${DEVICES[browser.device].h}`}{deviceBox.zoom < 1 ? ` · ${Math.round(deviceBox.zoom * 100)}%` : ''}</span>
+          <button type="button" class="grid size-5 cursor-pointer place-items-center rounded hover:bg-accent hover:text-foreground" aria-label="Rotate" title="Rotate" onclick={() => (browser.landscape = !browser.landscape)}>
+            <ZIcon zType={'lucideRotateCw' as ZIconName} class="size-3" />
+          </button>
+        </div>
+      {/if}
       {#if !started}
         <div class="absolute inset-0 grid place-items-center p-6 text-center text-xs text-muted-foreground">
           <div class="flex flex-col items-center gap-2">

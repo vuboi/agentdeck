@@ -68,6 +68,7 @@ fn place(view: &Webview, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
 pub async fn browser_show(
     app: AppHandle,
     url: String,
+    user_agent: Option<String>,
     x: f64,
     y: f64,
     w: f64,
@@ -78,8 +79,12 @@ pub async fn browser_show(
         return view.show().map_err(|error| error.to_string());
     }
     let window = app.get_window("main").ok_or("no main window")?;
-    let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(parse(&url)?))
+    let mut builder = WebviewBuilder::new(LABEL, WebviewUrl::External(parse(&url)?))
         .initialization_script(injected_script());
+    // A phone or tablet identifies itself as one, so sites send their mobile layout.
+    if let Some(agent) = user_agent.as_deref() {
+        builder = builder.user_agent(agent);
+    }
     window
         .add_child(
             builder,
@@ -150,7 +155,7 @@ pub fn selftest(app: AppHandle, url: String) {
         tokio::time::sleep(Duration::from_secs(5)).await;
         eprintln!(
             "show: {:?}",
-            browser_show(app.clone(), url, 280.0, 60.0, 600.0, 500.0).await
+            browser_show(app.clone(), url, None, 280.0, 60.0, 600.0, 500.0).await
         );
         tokio::time::sleep(Duration::from_secs(5)).await;
         eprintln!(

@@ -4,10 +4,22 @@ import { inTauri } from './history';
 import { layout } from './layout.svelte';
 
 export type Device = 'desktop' | 'tablet' | 'mobile';
-export const DEVICES: Record<Device, { label: string; w: number; h: number }> = {
-  desktop: { label: 'Desktop', w: 0, h: 0 }, // fills the panel
-  tablet: { label: 'Tablet', w: 820, h: 1180 },
-  mobile: { label: 'Mobile', w: 390, h: 844 },
+export const DEVICES: Record<Device, { label: string; name: string; w: number; h: number; ua?: string }> = {
+  desktop: { label: 'Desktop', name: 'Desktop', w: 0, h: 0 }, // fills the panel
+  tablet: {
+    label: 'Tablet',
+    name: 'iPad Air',
+    w: 820,
+    h: 1180,
+    ua: 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+  },
+  mobile: {
+    label: 'Mobile',
+    name: 'iPhone 14',
+    w: 390,
+    h: 844,
+    ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+  },
 };
 
 export type ConsoleLine = { level: string; text: string; at: number };
@@ -27,6 +39,7 @@ export const browser = $state({
   url: 'http://localhost:3000',
   title: '',
   device: 'desktop' as Device,
+  landscape: false,
   opened: false,
   picking: false,
   picked: null as PickedElement | null,
@@ -93,7 +106,7 @@ function ask<T extends Report>(kind: string, timeout = 15000): Promise<T> {
 export type Rect = { x: number; y: number; w: number; h: number };
 
 export async function showBrowser(rect: Rect) {
-  await call('browser_show', { url: browser.url, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
+  await call('browser_show', { url: browser.url, userAgent: DEVICES[browser.device].ua ?? null, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
   browser.opened = true;
 }
 export const moveBrowser = (rect: Rect) => call('browser_bounds', { x: rect.x, y: rect.y, w: rect.w, h: rect.h });
@@ -140,4 +153,11 @@ export function openInPreview(url: string) {
   browser.autostart = true;
   layout.activeTool = 'Preview';
   layout.toolsOpen = true;
+}
+
+/** The page is created again with the new device's user agent (it cannot change on a live page), at the same address. */
+export async function recreateBrowser() {
+  if (!browser.opened) return;
+  await call('browser_close');
+  browser.opened = false;
 }
