@@ -10,6 +10,7 @@ export type Block =
   | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; change?: FileChange }
   | { kind: 'loading'; label: string }
   | { kind: 'image'; src: string; name: string }
+  | { kind: 'element'; tag: string; text: string; selector: string }
   | { kind: 'permission'; requests: { id: string; tool: string; summary: string; allow: string }[]; state: 'pending' | 'allowed' | 'denied' };
 
 export type Message = {

@@ -111,6 +111,10 @@ export const draftMentions = $state<Record<string, Mention[]>>({});
 /** An image waiting to be sent: a data URL, already scaled down. */
 export type Attachment = { id: string; name: string; mime: string; src: string };
 export const draftImages = $state<Record<string, Attachment[]>>({});
+
+/** A part of a web page picked in the AgentDeck browser, waiting to go with the next message. */
+export type PageElement = { id: string; tag: string; text: string; selector: string; html: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string>; url: string; title: string };
+export const draftElements = $state<Record<string, PageElement[]>>({});
 /** Messages of sessions that live only in this app (new chats), by session id. */
 const localMessages: Record<string, Message[]> = {};
 
@@ -218,6 +222,22 @@ function openServedPage(sessionId: string, reply: Message) {
     .join('\n');
   const found = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?[^\s`'")\]>]*/gi)?.find(isLocalUrl);
   if (found) openInPreview(found);
+}
+
+/** The picked page elements as text the agent can use: where they are, what they look like, their markup. */
+function withElements(text: string, elements: PageElement[]): string {
+  if (elements.length === 0) return text;
+  const parts = elements.map((item, index) =>
+    [
+      `Element ${index + 1} on ${item.title || 'the page'} (${item.url}): \`${item.selector}\` ${item.box.w}×${item.box.h}`,
+      `Text: ${item.text || '(none)'}`,
+      `Styles: ${Object.entries(item.style).map(([key, value]) => `${key}: ${value}`).join('; ')}`,
+      '```html',
+      item.html,
+      '```',
+    ].join('\n'),
+  );
+  return `${text || 'Look at the element(s) below.'}\n\n${parts.join('\n\n')}`;
 }
 
 /** How the Composer's permission setting maps onto the CLI's `--permission-mode`; "ask" passes none. */
@@ -334,19 +354,23 @@ if (inTauri()) {
   });
 }
 
-export function sendMessage(text: string, images: Attachment[] = []) {
+export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = []) {
   const session = activeSession();
   const body = text.trim();
-  if (!session || (!body && images.length === 0) || replies[session.id]) return; // one turn at a time per chat
+  if (!session || (!body && images.length === 0 && elements.length === 0) || replies[session.id]) return; // one turn at a time per chat
   if (chat.messages === mockMessages) chat.messages = [...mockMessages];
   chat.messages.push({
     id: nextId(),
     role: 'user',
     time: clock(new Date().toISOString()),
-    blocks: [...images.map((image) => ({ kind: 'image' as const, src: image.src, name: image.name })), ...(body ? [{ kind: 'response' as const, text: body }] : [])],
+    blocks: [
+      ...images.map((image) => ({ kind: 'image' as const, src: image.src, name: image.name })),
+      ...elements.map((item) => ({ kind: 'element' as const, tag: item.tag, text: item.text, selector: item.selector })),
+      ...(body ? [{ kind: 'response' as const, text: body }] : []),
+    ],
     at: new Date().toISOString(),
   });
-  if (inTauri() && session.agent === 'claude') startTurn(session, body, images);
+  if (inTauri() && session.agent === 'claude') startTurn(session, withElements(body, elements), images);
   else if (inTauri()) {
     messagesOf(session.id).push({
       id: nextId(),
@@ -617,6 +641,7 @@ export async function deleteSession(id: string) {
   delete drafts[id];
   delete draftMentions[id];
   delete draftImages[id];
+  delete draftElements[id];
   delete localMessages[id];
   patchCache((list) => list.filter((item) => item.id !== id));
   if (workspace.activeId === id) {

@@ -4,7 +4,6 @@
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
     activeTab,
-    addComment,
     back,
     browser,
     cancelPick,
@@ -32,7 +31,7 @@
   } from '../browser.svelte';
   import { inTauri } from '../history';
   import { layout } from '../layout.svelte';
-  import { draftImages, drafts, workspace } from '../sessions.svelte';
+  import { draftElements, draftImages, drafts, workspace } from '../sessions.svelte';
   import AnnotationEditor from './AnnotationEditor.svelte';
   import DevTools from './DevTools.svelte';
 
@@ -264,10 +263,7 @@
     setTimeout(() => (notice = ''), 2500);
   }
 
-  /** The inspector button: click an element in the live page; it is pinned as a comment right under the bar. */
-  let commentText = $state('');
-  let commentInput: HTMLInputElement | undefined = $state();
-
+  /** The inspector: point at an element in the live page, click, write a comment there; it goes to the message box. */
   async function pick() {
     if (browser.picking) {
       void cancelPick();
@@ -275,24 +271,16 @@
     }
     browser.error = '';
     try {
-      const element = await pickElement();
-      if (element) setTimeout(() => commentInput?.focus(), 80);
+      const picked = await pickElement();
+      if (!picked) return;
+      const { element, url, title } = picked;
+      const id = workspace.activeId;
+      draftElements[id] = [...(draftElements[id] ?? []), { id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), box: element.box, style: element.style, url, title }];
+      notice = 'Element added to the message box.';
+      setTimeout(() => (notice = ''), 2500);
     } catch (error) {
       browser.error = String(error);
     }
-  }
-
-  function comment() {
-    if (!browser.picked) return;
-    addComment(browser.picked, commentText);
-    browser.picked = null;
-    commentText = '';
-  }
-
-  async function sendComments() {
-    const notes: Note[] = browser.comments.map((item, index) => ({ n: index + 1, text: item.note, x: item.box.x, y: item.box.y, selector: item.selector, html: item.html, box: item.box }));
-    addToDraft(await pageContext(notes));
-    browser.comments = [];
   }
 
   /** The markup button: freeze the page and mark it up (box, arrow, line, text, or an element with a comment). */
@@ -388,7 +376,7 @@
         <button type="button" class={icon} aria-label={tab.loading ? 'Stop' : 'Reload'} {@attach zTooltip({ content: tab.loading ? 'Stop loading' : 'Reload', position: 'top' })} onclick={() => void (tab.loading ? stop() : reload())}>
           {#if tab.loading}<ZLoading zLoading zSpinner="spinner" zSize="xs" zColor="primary" />{:else}<ZIcon zType={'lucideRotateCw' as ZIconName} class="size-4" />{/if}
         </button>
-        <button type="button" class={icon} aria-label="Inspect an element" disabled={!started || busy !== ''} {@attach zTooltip({ content: 'Inspect an element and comment on it', position: 'top' })} onclick={annotate}>
+        <button type="button" class="{icon} {browser.picking ? 'bg-primary/15 text-primary' : ''}" aria-label="Inspect an element" disabled={!started} aria-pressed={browser.picking} {@attach zTooltip({ content: browser.picking ? 'Stop inspecting' : 'Inspect an element and comment on it', position: 'top' })} onclick={pick}>
           <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-4" />
         </button>
       </div>

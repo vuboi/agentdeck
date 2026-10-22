@@ -214,13 +214,12 @@ export async function elementAt(x: number, y: number): Promise<PickedElement | n
   return report.element;
 }
 
-/** Lets the user click an element in the page; resolves with it, or null when cancelled. */
-export async function pickElement(): Promise<PickedElement | null> {
+/** Lets the user click an element in the live page; resolves with it (and where it is), or null when cancelled. */
+export async function pickElement(): Promise<{ element: PickedElement; url: string; title: string } | null> {
   browser.picking = true;
   try {
-    const report = await ask<Report & { element: PickedElement | null }>('pick', null, 120000);
-    browser.picked = report.element;
-    return report.element;
+    const report = await ask<Report & { element: PickedElement | null; url?: string; title?: string }>('pick', null, 300000);
+    return report.element ? { element: report.element, url: report.url ?? '', title: report.title ?? '' } : null;
   } finally {
     browser.picking = false;
   }

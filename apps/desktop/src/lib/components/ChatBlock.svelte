@@ -74,6 +74,11 @@
 {:else if block.kind === 'permission'}
   <!-- Pending requests are shown above the input; the conversation keeps only the answered ones. -->
   {#if block.state !== 'pending'}<PermissionCard {block} {onanswer} />{/if}
+{:else if block.kind === 'element'}
+  <span class="block-in inline-flex max-w-full items-center gap-1.5 self-start rounded-md border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground" title={block.selector}>
+    <ZIcon zType="lucideMousePointerClick" class="size-3 shrink-0 text-primary" />
+    <span class="truncate">&lt;{block.tag} /&gt; {block.text}</span>
+  </span>
 {:else if block.kind === 'image'}
   <img src={block.src} alt={block.name} class="block-in max-h-56 max-w-full self-start rounded-lg border border-border object-contain" />
 {:else if block.kind === 'loading'}

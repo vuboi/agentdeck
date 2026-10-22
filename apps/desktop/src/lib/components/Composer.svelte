@@ -1,11 +1,12 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { getPref, setPref } from '../prefs';
-  import { ZButton, ZCommand, ZIcon } from '@shival99/z-ui-svelte';
+  import { ZButton, ZCommand, ZIcon, ZPopover } from '@shival99/z-ui-svelte';
   import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
     activeSession,
     AGENTS,
+    draftElements,
     draftImages,
     draftMentions,
     drafts,
@@ -30,6 +31,9 @@
   const setDraft = (value: string) => (drafts[sessionId] = value);
   const setMentions = (value: Mention[]) => (draftMentions[sessionId] = value);
   const images = $derived(draftImages[sessionId] ?? []);
+  const elements = $derived(draftElements[sessionId] ?? []);
+  let detail = $state<string | null>(null);
+  let chipAnchors = $state<Record<string, HTMLElement | null>>({});
   const setImages = (value: Attachment[]) => (draftImages[sessionId] = value);
   let fileInput: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
@@ -214,8 +218,10 @@
   }
 
   function submit() {
-    if (!draft.trim() && images.length === 0) return;
-    sendMessage(draft, images);
+    if (!draft.trim() && images.length === 0 && elements.length === 0) return;
+    sendMessage(draft, images, elements);
+    draftElements[sessionId] = [];
+    detail = null;
     setDraft('');
     setMentions([]);
     setImages([]);
@@ -241,6 +247,42 @@
   ondragleave={() => (dragging = false)}
   ondrop={onDrop}
 >
+  {#if elements.length > 0}
+    <!-- Elements picked in the browser travel with the message; click one to see what is included. -->
+    <div class="mb-2 flex flex-wrap gap-1.5" aria-label="Picked elements">
+      {#each elements as item (item.id)}
+        <div class="group/chip relative" bind:this={chipAnchors[item.id]}>
+          <button type="button" class="flex h-8 max-w-60 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 font-mono text-[11px] text-muted-foreground outline-none hover:bg-muted" aria-label="Details of {item.selector}" onclick={() => (detail = detail === item.id ? null : item.id)}>
+            <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 shrink-0 text-primary" />
+            <span class="truncate">&lt;{item.tag} /&gt; {item.text}</span>
+          </button>
+          <button type="button" class="absolute -top-1.5 -right-1.5 grid size-4 cursor-pointer place-items-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100" aria-label="Remove element" onclick={() => (draftElements[sessionId] = elements.filter((entry) => entry !== item))}>
+            <ZIcon zType="lucideX" class="size-3" />
+          </button>
+        </div>
+      {/each}
+    </div>
+    {#each elements.filter((item) => item.id === detail) as item (item.id)}
+      <ZPopover anchor={chipAnchors[item.id]} open={true} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={360} onClose={() => (detail = null)}>
+        {#snippet children()}
+          <div class="flex max-h-[min(60vh,420px)] w-[360px] flex-col gap-2 overflow-y-auto p-3 text-xs">
+            <div class="flex items-center gap-1.5 font-medium"><ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 text-primary" />Included with your message</div>
+            <dl class="m-0 grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1.5">
+              <dt class="text-muted-foreground">Element</dt><dd class="m-0 font-mono">&lt;{item.tag} /&gt;</dd>
+              <dt class="text-muted-foreground">Text</dt><dd class="m-0">{item.text || '—'}</dd>
+              <dt class="text-muted-foreground">Page</dt><dd class="m-0 break-all">{item.url}</dd>
+              <dt class="text-muted-foreground">Selector</dt><dd class="m-0 rounded bg-muted/60 px-1.5 py-1 font-mono text-[11px] break-all">{item.selector}</dd>
+              <dt class="text-muted-foreground">Size</dt><dd class="m-0">{item.box.w}×{item.box.h}</dd>
+            </dl>
+            <div class="text-muted-foreground">Computed styles</div>
+            <dl class="m-0 grid grid-cols-[7rem_1fr] gap-x-2 gap-y-0.5 font-mono text-[11px]">
+              {#each Object.entries(item.style) as [key, value] (key)}<dt class="text-muted-foreground">{key}</dt><dd class="m-0 break-all">{value}</dd>{/each}
+            </dl>
+          </div>
+        {/snippet}
+      </ZPopover>
+    {/each}
+  {/if}
   {#if images.length > 0}
     <div class="mb-2 flex flex-wrap gap-2" aria-label="Attached images">
       {#each images as image (image.id)}
@@ -303,7 +345,7 @@
       </ZButton>
       <ModelPicker bind:agent bind:model bind:effort bind:fast bind:permission />
     </div>
-    <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" disabled={!draft.trim() && images.length === 0} aria-label="Send message">
+    <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" disabled={!draft.trim() && images.length === 0 && elements.length === 0} aria-label="Send message">
       <ZIcon zType="lucideArrowUp" class="size-4" />
     </ZButton>
   </div>

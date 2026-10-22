@@ -118,6 +118,7 @@
     };
   };
 
+  // The inspector: the element under the pointer is outlined live with its tag and size; a click picks it.
   let picker = null;
   const stopPicking = () => {
     if (!picker) return;
@@ -131,18 +132,22 @@
     stopPicking();
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;border:2px solid #7c5cff;background:rgba(124,92,255,.15);border-radius:2px;transition:all .05s';
+    const tag = document.createElement('span');
+    tag.style.cssText = 'position:absolute;left:-2px;bottom:100%;margin-bottom:2px;padding:1px 6px;border-radius:4px;background:#7c5cff;color:#fff;font:11px ui-monospace,monospace;white-space:nowrap';
+    overlay.appendChild(tag);
     document.documentElement.appendChild(overlay);
     let target = null;
     const move = (event) => {
       target = document.elementFromPoint(event.clientX, event.clientY);
       if (!target || target === overlay) return;
       const rect = target.getBoundingClientRect();
-      Object.assign(overlay.style, { left: rect.x + 'px', top: rect.y + 'px', width: rect.width + 'px', height: rect.height + 'px' });
+      Object.assign(overlay.style, { left: rect.x + 'px', top: Math.max(0, rect.y) + 'px', width: rect.width + 'px', height: rect.height + 'px' });
+      tag.textContent = `${target.tagName.toLowerCase()} · ${Math.round(rect.width)}×${Math.round(rect.height)}`;
     };
     const click = (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (target) post({ kind: 'pick', id, element: describe(target) });
+      if (target) post({ kind: 'pick', id, element: describe(target), url: location.href, title: document.title });
       stopPicking();
     };
     const key = (event) => {
