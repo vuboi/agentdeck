@@ -126,7 +126,8 @@
   }
 
   async function down(event: PointerEvent) {
-    if (!ready || noteAt) return;
+    if (!ready) return;
+    if (noteAt) commitNote();
     shapeMenu = false;
     const [x, y] = at(event);
     if (tool === 'text') return openNote(x, y, event);
@@ -268,16 +269,16 @@
 
   {#if status}<div class="absolute top-2 left-1/2 -translate-x-1/2 rounded-md bg-popover px-2 py-1 text-xs text-muted-foreground shadow" role="status">{status}</div>{/if}
 
-  <!-- The floating toolbar: select, pen, shape, text | colour, undo | done, close. -->
+  <!-- The floating toolbar: select, pen, shape, text | undo | add to chat, close. -->
   <div class="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-xl border border-border bg-popover p-1 shadow-lg">
     <button type="button" class={button(tool === 'select')} aria-label="Select an element" aria-pressed={tool === 'select'} {@attach zTooltip({ content: 'Select an element and comment on it', position: 'top' })} onclick={() => (tool = 'select')}>
       <ZIcon zType={'lucideMousePointer2' as ZIconName} class="size-4" />
     </button>
-    <button type="button" class={button(tool === 'pen')} aria-label="Draw a line" aria-pressed={tool === 'pen'} {@attach zTooltip({ content: 'Draw a line', position: 'top' })} onclick={() => (tool = 'pen')}>
+    <button type="button" class={button(tool === 'pen')} aria-label="Draw a line" aria-pressed={tool === 'pen'} {@attach zTooltip({ content: 'Draw a line', position: 'top' })} onclick={() => (tool = tool === 'pen' ? 'select' : 'pen')}>
       <ZIcon zType={'lucidePencil' as ZIconName} class="size-4" />
     </button>
     <div class="relative flex items-center">
-      <button type="button" class={button(tool === 'shape')} aria-label="Shape" aria-pressed={tool === 'shape'} {@attach zTooltip({ content: shapeKind === 'rect' ? 'Draw a box' : 'Draw an arrow', position: 'top' })} onclick={() => (tool = 'shape')}>
+      <button type="button" class={button(tool === 'shape')} aria-label="Shape" aria-pressed={tool === 'shape'} {@attach zTooltip({ content: shapeKind === 'rect' ? 'Draw a box' : 'Draw an arrow', position: 'top' })} onclick={() => (tool = tool === 'shape' ? 'select' : 'shape')}>
         <ZIcon zType={(shapeKind === 'rect' ? 'lucideSquare' : 'lucideMoveUpRight') as ZIconName} class="size-4" />
       </button>
       <button type="button" class="grid h-8 w-4 cursor-pointer place-items-center rounded-lg text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Shape type" aria-haspopup="menu" aria-expanded={shapeMenu} onclick={() => (shapeMenu = !shapeMenu)}>
@@ -293,19 +294,16 @@
         </div>
       {/if}
     </div>
-    <button type="button" class={button(tool === 'text')} aria-label="Add a note" aria-pressed={tool === 'text'} {@attach zTooltip({ content: 'Add a note', position: 'top' })} onclick={() => (tool = 'text')}>
+    <button type="button" class={button(tool === 'text')} aria-label="Add a note" aria-pressed={tool === 'text'} {@attach zTooltip({ content: 'Add a note', position: 'top' })} onclick={() => (tool = tool === 'text' ? 'select' : 'text')}>
       <ZIcon zType={'lucideType' as ZIconName} class="size-4" />
     </button>
     <span class="mx-1 h-5 w-px bg-border" aria-hidden="true"></span>
-    <button type="button" class={button(false)} aria-label="Colour" {@attach zTooltip({ content: 'Colour', position: 'top' })} onclick={() => (color = COLORS[(COLORS.indexOf(color) + 1) % COLORS.length])}>
-      <span class="size-4 rounded-full border-2 border-background ring-1 ring-border" style:background={color}></span>
-    </button>
     <button type="button" class={button(false)} aria-label="Undo" disabled={shapes.length === 0} {@attach zTooltip({ content: 'Undo (Ctrl+Z)', position: 'top' })} onclick={() => (shapes = shapes.slice(0, -1))}>
       <ZIcon zType={'lucideUndo2' as ZIconName} class="size-4" />
     </button>
     <span class="mx-1 h-5 w-px bg-border" aria-hidden="true"></span>
-    <button type="button" class="grid size-8 cursor-pointer place-items-center rounded-lg bg-primary text-primary-foreground outline-none hover:bg-primary/90" aria-label="Add to chat" {@attach zTooltip({ content: 'Add to chat', position: 'top' })} onclick={done}>
-      <ZIcon zType="lucideCheck" class="size-4" />
+    <button type="button" class={button(false)} aria-label="Add to chat" {@attach zTooltip({ content: 'Add to chat', position: 'top' })} onclick={done}>
+      <ZIcon zType={'lucideMessageSquarePlus' as ZIconName} class="size-4" />
     </button>
     <button type="button" class={button(false)} aria-label="Close" {@attach zTooltip({ content: 'Close', position: 'top' })} onclick={oncancel}>
       <ZIcon zType="lucideX" class="size-4" />
