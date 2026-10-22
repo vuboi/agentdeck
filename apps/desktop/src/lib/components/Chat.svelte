@@ -371,7 +371,7 @@
                     <span class="font-semibold {agentText[agent]}">{agentName(agent)}</span>
                     <span class="text-muted-foreground">{message.time}</span>
                   </div>
-                  <div class="flex w-full min-w-0 flex-col gap-3">
+                  <div class="flex w-full min-w-0 flex-col gap-2">
                     {#each parts as segment, position (position)}
                       {#if segment.kind === 'commands'}
                         <!-- The newest group of a running reply is the live line; it carries the only loader. -->

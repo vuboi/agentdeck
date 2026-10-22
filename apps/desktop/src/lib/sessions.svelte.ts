@@ -10,6 +10,7 @@ import {
   type HistorySession,
 } from './history';
 import { messages as mockMessages, type Message } from './mock';
+import { isLocalUrl, openInPreview } from './browser.svelte';
 import { listenAgentEvents, saveAttachment, sendAgentTurn, type AgentEvent } from './agent';
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
@@ -205,6 +206,22 @@ export function newChat() {
   newSession(NO_PROJECT);
 }
 
+/** The last thing asked in each chat: "open it", "run the app" decides whether a served page opens by itself. */
+const lastPrompt: Record<string, string> = {};
+const OPEN_WORDS = /(open|preview|browser|run|start|serve)|mở|chạy|xem thử/i;
+
+/** After a turn: if you asked to open or run something and a local address came out of it, show it in the AgentDeck browser. */
+function openServedPage(sessionId: string, reply: Message) {
+  if (!inTauri() || !OPEN_WORDS.test(lastPrompt[sessionId] ?? '')) return;
+  const text = reply.blocks
+    .map((block) => (block.kind === 'response' ? block.text : block.kind === 'command' ? `${block.command}
+${block.output}` : ''))
+    .join('
+');
+  const found = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?[^\s`'")\]>]*/gi)?.find(isLocalUrl);
+  if (found) openInPreview(found);
+}
+
 /** How the Composer's permission setting maps onto the CLI's `--permission-mode`; "ask" passes none. */
 const PERMISSION_MODE: Record<Permission, string | null> = { ask: null, edits: 'acceptEdits', plan: 'plan', auto: 'auto', yolo: 'bypassPermissions' };
 /** The permission setting of the Composer, read when a turn starts. */
@@ -218,6 +235,7 @@ void getPref<Record<string, string[]>>('permissions.allowed').then((saved) => {
 
 /** One `claude -p` run in `session`, with a fresh live reply. Images go to disk first so the CLI can open them. */
 function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = []) {
+  if (images.length || !allow.length) lastPrompt[session.id] = text;
   const cliId = session.agentSession ?? (session.id.startsWith('claude:') ? session.id.slice('claude:'.length) : crypto.randomUUID());
   session.agentSession = cliId;
   const resume = session.agentStarted ?? !!session.path;
@@ -296,6 +314,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent) {
   if (update.finished) {
     reply.live = false;
     if (reply.startedAt) reply.ms = Date.now() - reply.startedAt;
+    openServedPage(sessionId, reply);
     delete replies[sessionId];
     session.status = 'idle';
     persistLocal();

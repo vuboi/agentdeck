@@ -29,7 +29,7 @@
   </span>
 {/snippet}
 
-<div class="block-in flex flex-col gap-2 text-xs">
+<div class="block-in flex flex-col gap-1.5 text-xs">
   <button
     type="button"
     class="flex w-fit max-w-full cursor-pointer items-center gap-2 rounded-md py-0.5 text-left text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
