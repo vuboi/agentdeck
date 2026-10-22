@@ -336,7 +336,7 @@
           {#if message}
             <div class="absolute top-0 left-0 w-full" data-index={row.index} style:transform="translateY({row.start}px)" {@attach measureRow}>
               <!-- No avatars: your messages are a bubble (right side, or left in one-sided mode); the agent is just its coloured name. -->
-              <article class="mx-auto flex w-full min-w-0 max-w-3xl flex-col break-words py-2.5 px-3 min-[720px]:pr-6 min-[720px]:pl-12 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
+              <article class="group/msg mx-auto flex w-full min-w-0 max-w-3xl flex-col break-words py-2.5 px-3 min-[720px]:pr-6 min-[720px]:pl-12 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
                 {#if mine}
                   {@const pictures = message.blocks.flatMap((block) => (block.kind === 'image' ? [block] : []))}
                   {@const words = message.blocks.filter((block) => block.kind !== 'image')}
@@ -362,7 +362,9 @@
                       {/each}
                     </div>
                   {/if}
-                  <span class="mt-1 px-1 text-[10px] text-muted-foreground">{message.time}</span>
+                  <div class="mt-1.5 flex items-center gap-1 px-1 text-[11px] text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100">
+                    <span>{message.time}</span>
+                  </div>
                 {:else}
                   {@const parts = segments(message.blocks)}
                   {@const tail = parts.at(-1)}

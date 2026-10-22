@@ -19,12 +19,12 @@
   }
 </script>
 
-<div class="mt-1 flex items-center gap-0.5 text-muted-foreground">
-  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0" aria-label="Copy answer" onclick={copy} {@attach zTooltip({ content: copied ? 'Copied' : 'Copy', position: 'top' })}>
-    <ZIcon zType={copied ? 'lucideCheck' : 'lucideCopy'} class="size-3.5" />
+<div class="mt-2 flex items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 focus-within:opacity-100">
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0" aria-label="Copy answer" onclick={copy} {@attach zTooltip({ content: copied ? 'Copied' : 'Copy', position: 'top' })}>
+    <ZIcon zType={copied ? 'lucideCheck' : 'lucideCopy'} class="size-3" />
   </ZButton>
-  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0" aria-label="Fork chat from here" onclick={onfork} {@attach zTooltip({ content: 'Fork chat', position: 'top' })}>
-    <ZIcon zType="lucideGitFork" class="size-3.5" />
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0" aria-label="Fork chat from here" onclick={onfork} {@attach zTooltip({ content: 'Fork chat', position: 'top' })}>
+    <ZIcon zType="lucideGitFork" class="size-3" />
   </ZButton>
   <span class="ml-1.5 flex items-center gap-1.5 text-[11px]">
     {#if message.ms}<span class="tabular-nums">Worked for {elapsed(message.ms)}</span><span aria-hidden="true">·</span>{/if}
