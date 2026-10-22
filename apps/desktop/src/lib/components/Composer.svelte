@@ -52,7 +52,7 @@
   let model = $state('claude-sonnet-5-5');
   let effort = $state<Effort>('medium');
   let fast = $state(false);
-  let permission = $state<Permission>('ask');
+  let permission = $state<Permission>('auto');
   $effect(() => {
     turnOptions.permission = permission;
     turnOptions.effort = effort;

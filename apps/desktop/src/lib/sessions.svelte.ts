@@ -262,7 +262,7 @@ function withElements(text: string, elements: PageElement[]): string {
 const PERMISSION_MODE: Record<Permission, string | null> = { ask: null, edits: 'acceptEdits', plan: 'plan', auto: 'auto', yolo: 'bypassPermissions' };
 /** The permission setting of the Composer, read when a turn starts. */
 export const turnOptions = $state<{ permission: Permission; effort: Effort; /** What Enter does while a reply is running. */ whileRunning: 'queue' | 'interrupt' }>({
-  permission: 'ask',
+  permission: 'auto',
   effort: 'medium',
   whileRunning: 'queue',
 });
