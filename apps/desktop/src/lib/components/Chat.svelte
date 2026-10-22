@@ -11,7 +11,8 @@
   import CommandGroup from './CommandGroup.svelte';
   import LiveStatus from './LiveStatus.svelte';
   import MessageFooter from './MessageFooter.svelte';
-  import { estimateCost, shortCount, tokenDetail, totalTokens, usd } from '../usage';
+  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { costParts, estimateCost, shortCount, totalTokens, usd } from '../usage';
   import PermissionCard from './PermissionCard.svelte';
   import Composer from './Composer.svelte';
   import ToolbarActions from './ToolbarActions.svelte';
@@ -373,8 +374,34 @@
                     <span class="text-muted-foreground">{message.time}</span>
                     {#if message.tokens}
                       {@const cost = message.cost ?? estimateCost(message.tokens, message.model)}
+                      {@const tokens = message.tokens}
+                      {@const parts = costParts(tokens, message.model)}
+                      {#snippet usageTip()}
+                        <div class="flex min-w-44 flex-col gap-1 py-0.5 text-[11px] tabular-nums">
+                          {#each [
+                            { label: 'Input', count: tokens.input, cost: parts?.input, icon: 'lucideArrowDownToLine', tone: 'text-sky-400' },
+                            { label: 'Cache read', count: tokens.cacheRead, cost: parts?.cacheRead, icon: 'lucideDatabase', tone: 'text-violet-400' },
+                            { label: 'Cache write', count: tokens.cacheWrite, cost: parts?.cacheWrite, icon: 'lucideDatabaseZap', tone: 'text-amber-400' },
+                            { label: 'Output', count: tokens.output, cost: parts?.output, icon: 'lucideArrowUpFromLine', tone: 'text-emerald-400' },
+                          ] as row (row.label)}
+                            <div class="flex items-center gap-2">
+                              <ZIcon zType={row.icon as ZIconName} zSize="12" class="size-3! shrink-0 {row.tone}" />
+                              <span class="flex-1 text-white/80">{row.label}</span>
+                              <span class="font-medium text-white">{shortCount(row.count)}</span>
+                              {#if row.cost != null}<span class="w-12 text-right text-white/60">{usd(row.cost)}</span>{/if}
+                            </div>
+                          {/each}
+                          {#if cost != null}
+                            <div class="mt-0.5 flex items-center gap-2 border-t border-white/10 pt-1.5">
+                              <ZIcon zType={'lucideCoins' as ZIconName} zSize="12" class="size-3! shrink-0 text-green-400" />
+                              <span class="flex-1 text-white/80">Total</span>
+                              <span class="font-semibold text-green-400">{message.cost == null ? '≈ ' : ''}{usd(cost)}</span>
+                            </div>
+                          {/if}
+                        </div>
+                      {/snippet}
                       <!-- Tokens and cost as two small chips; hover for the breakdown. -->
-                      <span class="ml-0.5 flex items-center gap-1 text-[10px] tabular-nums" {@attach zTooltip({ content: tokenDetail(message.tokens, message.cost == null), position: 'top' })}>
+                      <span class="ml-0.5 flex items-center gap-1 text-[10px] tabular-nums" {@attach zTooltip({ content: usageTip, position: 'top' })}>
                         <span class="rounded bg-muted px-1.5 py-px text-muted-foreground">{shortCount(totalTokens(message.tokens))} tokens</span>
                         {#if cost != null}<span class="rounded bg-success/10 px-1.5 py-px font-medium text-success">{message.cost == null ? '≈ ' : ''}{usd(cost)}</span>{/if}
                       </span>
