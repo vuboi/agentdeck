@@ -182,10 +182,22 @@
         const lib = window.htmlToImage;
         if (!lib) return post({ kind: 'shot', id, error: 'screenshot library missing' });
         quiet = true;
+        const options = {
+          cacheBust: true,
+          skipFonts: true,
+          imagePlaceholder: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+          pixelRatio: 1,
+          width: innerWidth,
+          height: innerHeight,
+          style: { transform: `translate(${-scrollX}px, ${-scrollY}px)`, transformOrigin: 'top left' },
+        };
+        const media = ['IFRAME', 'VIDEO', 'SCRIPT'];
+        // First try with pictures; a page whose images cannot be read still gets a layout-only capture.
         lib
-          .toPng(document.documentElement, { cacheBust: true, skipFonts: true, imagePlaceholder: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', filter: (node) => !['IFRAME', 'VIDEO', 'SCRIPT'].includes(node.tagName), pixelRatio: 1, width: innerWidth, height: innerHeight, style: { transform: `translate(${-scrollX}px, ${-scrollY}px)`, transformOrigin: 'top left' } })
+          .toPng(document.documentElement, { ...options, filter: (node) => !media.includes(node.tagName) })
+          .catch(() => lib.toPng(document.documentElement, { ...options, filter: (node) => ![...media, 'IMG', 'PICTURE', 'CANVAS', 'SVG', 'LINK'].includes(String(node.tagName).toUpperCase()) }))
           .then((data) => post({ kind: 'shot', id, data, w: innerWidth, h: innerHeight }))
-          .catch((error) => post({ kind: 'shot', id, error: error && error.message ? error.message : error && error.type ? 'an image or style on the page could not be read (' + error.type + ')' : String(error) }))
+          .catch((error) => post({ kind: 'shot', id, error: error && error.message ? error.message : 'the page could not be captured (' + (error && error.type ? error.type : 'unknown') + ')' }))
           .finally(() => (quiet = false));
       } else if (kind === 'at') {
         const element = document.elementFromPoint(arg.x, arg.y);
