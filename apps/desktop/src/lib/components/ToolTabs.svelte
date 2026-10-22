@@ -4,7 +4,7 @@
   import { TOOLS } from '../tools';
 
   // Tabs that do not fit fold into a hamburger dropdown instead of squeezing the title.
-  const TAB = 34; // 32px button + 2px gap
+  const TAB = 30; // 28px button + 2px gap
 
   // Room (px) this group may use. Undefined until the header is measured: show every tab.
   let { room }: { room: number | undefined } = $props();
@@ -46,7 +46,7 @@
       role="tab"
       zType="ghost"
       zSize="sm"
-      class="h-7 w-8 shrink-0 px-0 {layout.activeTool === tool.value ? 'bg-primary/15 text-primary hover:bg-primary/20' : '!bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary'}"
+      class="size-7! shrink-0 p-0 {layout.activeTool === tool.value ? 'bg-primary/15 text-primary hover:bg-primary/20' : '!bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary'}"
       aria-selected={layout.activeTool === tool.value}
       aria-label={tool.label}
       title={tool.label}
