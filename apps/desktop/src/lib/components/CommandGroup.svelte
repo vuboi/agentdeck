@@ -51,7 +51,7 @@
 
   <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
     <div class="min-h-0 overflow-hidden">
-      <div class="divide-y divide-border overflow-hidden rounded-xl border border-border">
+      <div class="mt-1 divide-y divide-border overflow-hidden rounded-xl border border-border">
         {#each items as item, index (item.id ?? index)}
           {@const step = describeStep(item)}
           <div>
@@ -72,7 +72,7 @@
             </button>
             <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {rows[index] ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
               <div class="min-h-0 overflow-hidden">
-                <div class="flex flex-col gap-2 px-3 pb-3">
+                <div class="flex flex-col gap-2 px-3 pt-1 pb-3">
                   {#if item.change}
                     <div class="max-h-60 overflow-auto rounded-md border border-border bg-background py-1 font-mono text-[11px] leading-relaxed">
                       <div class="px-3 pb-1 text-muted-foreground">{item.change.path}</div>

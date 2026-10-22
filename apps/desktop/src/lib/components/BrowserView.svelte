@@ -341,7 +341,7 @@
     <div class="grid flex-1 place-items-center p-6 text-center text-xs text-muted-foreground">The browser runs in the AgentDeck desktop app.</div>
   {:else}
     <!-- Tabs -->
-    <div class="flex shrink-0 items-center gap-1 px-2 pt-1.5" role="tablist" aria-label="Browser tabs">
+    <div class="flex shrink-0 items-center gap-1 px-2 py-1.5" role="tablist" aria-label="Browser tabs">
       <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {#each browser.tabs as item (item.id)}
           <div
@@ -373,11 +373,10 @@
     </div>
 
     <!-- Address bar: navigation and inspector on the left, the address in the middle, markup / devtools / menu on the right -->
-    <div class="flex shrink-0 items-center gap-1.5 px-2 py-1.5">
-      <div class="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5">
+    <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 pb-1.5">
+      <div class="flex shrink-0 items-center gap-0.5">
         <button type="button" class={icon} aria-label="Back" {@attach zTooltip({ content: 'Back', position: 'top' })} onclick={() => void back()}><ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-4" /></button>
         <button type="button" class={icon} aria-label="Forward" {@attach zTooltip({ content: 'Forward', position: 'top' })} onclick={() => void forward()}><ZIcon zType={'lucideArrowRight' as ZIconName} class="size-4" /></button>
-        <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
         <button type="button" class={icon} aria-label={tab.loading ? 'Stop' : 'Reload'} {@attach zTooltip({ content: tab.loading ? 'Stop loading' : 'Reload', position: 'top' })} onclick={() => void (tab.loading ? stop() : reload())}>
           {#if tab.loading}<ZLoading zLoading zSpinner="spinner" zSize="xs" zColor="primary" />{:else}<ZIcon zType={'lucideRotateCw' as ZIconName} class="size-4" />{/if}
         </button>
@@ -388,7 +387,7 @@
       <form class="min-w-0 flex-1" onsubmit={(event) => { event.preventDefault(); void go(); }}>
         <input
           bind:value={address}
-          class="h-8 w-full rounded-lg border border-transparent bg-muted/60 px-4 text-center text-xs outline-none transition-colors focus:border-primary focus:bg-background focus:text-left"
+          class="h-7 w-full rounded-md border border-border bg-muted/40 px-3 text-xs outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:bg-background"
           placeholder="Search or enter an address"
           aria-label="Address"
           spellcheck="false"
@@ -397,7 +396,7 @@
           onblur={() => (editing = false)}
         />
       </form>
-      <div class="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5">
+      <div class="flex shrink-0 items-center gap-0.5">
         <button type="button" class={icon} aria-label="Mark up the page" disabled={!started || busy !== ''} {@attach zTooltip({ content: 'Mark up the page for the agent', position: 'top' })} onclick={annotate}>
           <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
         </button>
