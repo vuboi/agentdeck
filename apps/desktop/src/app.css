@@ -202,3 +202,11 @@ html[data-warming] [data-z-popover] {
   line-height: 1.4;
   white-space: nowrap;
 }
+
+/* The app is one screen, never a scrolling page: z-ui reserves a scrollbar gutter on <html>, which left a 10px strip
+   at the right edge. */
+html,
+body {
+  scrollbar-gutter: auto;
+  overflow: hidden;
+}
