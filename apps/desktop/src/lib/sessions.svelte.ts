@@ -547,6 +547,45 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
   send(session.id, text, images, elements);
 }
 
+/** A message as it is recognised again in the chat's file (where it has another id than the one it got here). */
+const signature = (message: Message) =>
+  `${message.role}|${message.blocks.map((block) => (block.kind === 'response' ? block.text.trim() : '')).join('').slice(0, 300)}`;
+
+/** Messages taken out of a saved chat by an edit: its file still has them, so they are hidden when it is read. */
+const hidden: Record<string, string[]> = {};
+void getPref<Record<string, string[]>>('chat.hidden').then((saved) => {
+  if (saved) Object.assign(hidden, saved);
+});
+
+/**
+ * Edits one of your messages, as in ChatGPT: it and everything after it go, and the new text is sent in its
+ * place (with the same pictures). A reply still running is stopped first.
+ */
+export function editMessage(messageId: string, text: string) {
+  const session = activeSession();
+  if (!session || !text.trim()) return;
+  const list = messagesOf(session.id);
+  const index = list.findIndex((message) => message.id === messageId && message.role === 'user');
+  if (index === -1) return;
+  if (replies[session.id]) stopTurn(session.id);
+  delete queued[session.id];
+  const images: Attachment[] = list[index].blocks.flatMap((block) =>
+    block.kind === 'image' ? [{ id: nextId(), name: block.name, mime: block.src.slice(5, block.src.indexOf(';')) || 'image/png', src: block.src }] : [],
+  );
+  const removed = list.splice(index);
+  if (session.path) {
+    hidden[session.id] = [...new Set([...(hidden[session.id] ?? []), ...removed.flatMap((message) => [message.id, signature(message)])])];
+    setPref('chat.hidden', hidden);
+    const others = otherTurns[session.id];
+    if (others) otherTurns[session.id] = others.filter((message) => !removed.includes(message));
+    transcripts.delete(session.id);
+  } else {
+    localMessages[session.id] = list;
+    persistLocal();
+  }
+  send(session.id, text, images, []);
+}
+
 function send(sessionId: string, text: string, images: Attachment[], elements: PageElement[]) {
   const session = workspace.sessions.find((item) => item.id === sessionId);
   const body = text.trim();
@@ -803,8 +842,11 @@ async function fetchTranscript(session: SessionItem): Promise<Message[]> {
       : {}),
   }));
   const others = otherTurns[session.id] ?? [];
-  if (!others.length) return own;
-  return [...own, ...others].sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
+  const gone = new Set(hidden[session.id] ?? []);
+  const out = (message: Message) => gone.has(message.id) || gone.has(signature(message));
+  const shown = gone.size ? own.filter((message) => !out(message)) : own;
+  if (!others.length) return shown;
+  return [...shown, ...others.filter((message) => !out(message))].sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
 }
 
 function remember(session: SessionItem, messages: Message[]) {

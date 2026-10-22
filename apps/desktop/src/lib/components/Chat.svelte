@@ -3,7 +3,7 @@
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
   import { LOADER } from '../loaders';
-  import { activeSession, AGENTS, answerPermission, chat, forkSession, newSession, openTranscript, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, answerPermission, chat, editMessage, forkSession, newSession, openTranscript, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
   import { openImages, preview } from '../preview.svelte';
@@ -12,6 +12,20 @@
   import LiveStatus from './LiveStatus.svelte';
   import MessageFooter from './MessageFooter.svelte';
   import type { Segment } from '../blocks';
+  import type { Message } from '../mock';
+
+  // Editing one of your messages in place (ChatGPT-style): Send replaces it and what came after it.
+  let editingId = $state<string | null>(null);
+  let editText = $state('');
+  function startEdit(message: Message) {
+    editText = message.blocks.map((block) => (block.kind === 'response' ? block.text : '')).join('\n').trim();
+    editingId = message.id;
+  }
+  function finishEdit(id: string) {
+    if (!editText.trim()) return;
+    editMessage(id, editText);
+    editingId = null;
+  }
 
   // Whether the part before this one, skipping blocks that draw nothing (empty reasoning), is also a step line.
   function afterSteps(parts: Segment[], position: number) {
@@ -369,14 +383,47 @@
                       {/each}
                     </div>
                   {/if}
-                  {#if words.length > 0}
-                    <div class="flex max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 py-2.5 text-sm {theme.chatLayout === 'split' ? 'rounded-br-md' : 'rounded-bl-md'}">
-                      {#each words as block}
-                        <ChatBlock {block} fade="var(--muted)" />
-                      {/each}
+                  {#if editingId === message.id}
+                    <!-- Editing: the message becomes a box; Send replaces it and everything after it. -->
+                    <div class="flex w-full max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 pt-3 pb-2.5 text-sm">
+                      <textarea
+                        bind:value={editText}
+                        {@attach (node: HTMLTextAreaElement) => {
+                          node.focus();
+                          node.setSelectionRange(node.value.length, node.value.length);
+                          node.style.height = `${Math.min(node.scrollHeight, 240)}px`;
+                        }}
+                        oninput={(event) => {
+                          const node = event.currentTarget;
+                          node.style.height = 'auto';
+                          node.style.height = `${Math.min(node.scrollHeight, 240)}px`;
+                        }}
+                        onkeydown={(event) => {
+                          if (event.key === 'Escape') editingId = null;
+                          if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+                            event.preventDefault();
+                            finishEdit(message.id);
+                          }
+                        }}
+                        aria-label="Edit message"
+                        rows="1"
+                        class="w-full resize-none border-0 bg-transparent p-0 text-sm leading-relaxed outline-none"
+                      ></textarea>
+                      <div class="flex justify-end gap-2">
+                        <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-3 text-xs" onclick={() => (editingId = null)}>Cancel</ZButton>
+                        <ZButton zWave={false} zSize="sm" class="h-7 px-3 text-xs" disabled={!editText.trim()} onclick={() => finishEdit(message.id)}>Send</ZButton>
+                      </div>
                     </div>
+                  {:else}
+                    {#if words.length > 0}
+                      <div class="flex max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 py-2.5 text-sm {theme.chatLayout === 'split' ? 'rounded-br-md' : 'rounded-bl-md'}">
+                        {#each words as block}
+                          <ChatBlock {block} fade="var(--muted)" />
+                        {/each}
+                      </div>
+                    {/if}
+                    <MessageFooter {message} end={theme.chatLayout === 'split'} onfork={() => forkSession(workspace.activeId)} onedit={() => startEdit(message)} />
                   {/if}
-                  <MessageFooter {message} end={theme.chatLayout === 'split'} onfork={() => forkSession(workspace.activeId)} />
                 {:else}
                   {@const parts = segments(message.blocks)}
                   {@const tail = parts.at(-1)}

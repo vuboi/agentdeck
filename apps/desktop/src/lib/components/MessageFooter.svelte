@@ -2,10 +2,11 @@
   import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
   import { ticker } from '../clock.svelte';
   import { ago, answerText, elapsed, fullDate } from '../blocks';
+  import type { ZIconName } from '@shival99/z-ui-svelte';
   import type { Message } from '../mock';
 
   // Under each answer: copy, fork, how long it took, and how long ago it was (hover for the date).
-  let { message, onfork, end = false }: { message: Message; onfork: () => void; end?: boolean } = $props();
+  let { message, onfork, onedit, end = false }: { message: Message; onfork: () => void; onedit?: () => void; end?: boolean } = $props();
 
   let copied = $state(false);
   async function copy() {
@@ -26,6 +27,11 @@
   <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Fork chat from here" onclick={onfork} {@attach zTooltip({ content: 'Fork chat', position: 'top' })}>
     <ZIcon zType="lucideGitBranchPlus" zSize="14" class="size-[14px]!" />
   </ZButton>
+  {#if onedit}
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Edit message" onclick={onedit} {@attach zTooltip({ content: 'Edit', position: 'top' })}>
+      <ZIcon zType={'lucidePencil' as ZIconName} zSize="14" class="size-[14px]!" />
+    </ZButton>
+  {/if}
   <span class="mx-1 flex items-center gap-1.5 text-[11px]">
     {#if message.ms}<span class="tabular-nums">Worked for {elapsed(message.ms)}</span><span aria-hidden="true">·</span>{/if}
     {#if message.at}
