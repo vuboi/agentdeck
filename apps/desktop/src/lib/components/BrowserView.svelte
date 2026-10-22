@@ -41,6 +41,14 @@
   let stage: HTMLDivElement | undefined = $state();
   let address = $state('');
   let editing = $state(false);
+  // A picture taken the moment a button is pressed, before the menu it opens appears: the menu then never waits for it.
+  let early: { picture: Promise<string>; at: number } | null = null;
+  function pressEarly() {
+    if (!inTauri() || !tab.opened || frozen) return;
+    const picture = capturePage();
+    picture.catch(() => {});
+    early = { picture, at: Date.now() };
+  }
   let frozen = $state<{ src: string; x: number; y: number; w: number; h: number } | null>(null);
   let shot = $state<{ data: string; w: number; h: number } | null>(null);
   let busy = $state('');
@@ -122,7 +130,11 @@
     if (menuOpen && tab.opened && avoidMenus(full) !== full) {
       if (!frozen) {
         try {
-          const src = await capturePage();
+          const src = await (early && Date.now() - early.at < 1500 ? early.picture : capturePage());
+          // Decoded first, so the picture is on screen the instant the page is hidden (no blank frame).
+          const decoded = new Image();
+          decoded.src = src;
+          await decoded.decode().catch(() => {});
           frozen = { src, x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h };
           await tick();
         } catch {
@@ -180,6 +192,7 @@
 
   onMount(() => {
     void listenToPage();
+    document.addEventListener('pointerdown', pressEarly, true);
     if (stage) {
       resizer = new ResizeObserver(() => void sync());
       resizer.observe(stage);
@@ -223,6 +236,7 @@
   const onResize = () => void sync();
 
   onDestroy(() => {
+    document.removeEventListener('pointerdown', pressEarly, true);
     resizer?.disconnect();
     observer?.disconnect();
     window.removeEventListener('resize', onResize);
