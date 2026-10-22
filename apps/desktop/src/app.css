@@ -197,9 +197,10 @@ html[data-warming] [data-z-popover] {
 }
 .z-tooltip-host.z-tooltip,
 .z-tooltip-host.z-tooltip > div:last-child {
-  background-color: #0f1115 !important;
-  color: #f4f4f5 !important;
-  border-color: #2a2d34 !important;
+  /* Follows the theme: the popover surface of light or dark mode. */
+  background-color: var(--popover) !important;
+  color: var(--popover-foreground) !important;
+  border-color: var(--border) !important;
 }
 .z-tooltip-host.z-tooltip > div:last-child {
   padding: 0.3rem 0.6rem !important;

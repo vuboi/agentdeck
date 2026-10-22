@@ -201,8 +201,46 @@ pub async fn evaluate(view: &Webview, script: &str, session: Option<String>) -> 
     Ok(answer["result"]["value"].clone())
 }
 
+/// The agent's pointer, drawn in the page so the user sees where it acts: a cursor glides to the point, then a
+/// ring pulses for a click. It never takes events and fades after a moment of rest.
+const CURSOR: &str = r##"((x, y, kind) => {
+  const id = '__agentdeck_cursor';
+  let box = document.getElementById(id);
+  if (!box) {
+    box = document.createElement('div');
+    box.id = id;
+    box.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;transition:transform 420ms cubic-bezier(.22,1,.36,1),opacity 200ms;opacity:0;will-change:transform';
+    box.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" style="filter:drop-shadow(0 2px 4px rgba(0,0,0,.45))"><path d="M4 2l15 9.2-6.6 1.5 3.8 7.4-2.9 1.4-3.8-7.4L4 19z" fill="#8b5cf6" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg><span style="position:absolute;left:18px;top:18px;padding:1px 6px;border-radius:6px;background:#8b5cf6;color:#fff;font:600 10px/16px system-ui,sans-serif;white-space:nowrap">AI</span>';
+    (document.body || document.documentElement).appendChild(box);
+    box.style.transform = `translate(${x - 40}px, ${y - 40}px)`;
+  }
+  box.getBoundingClientRect();
+  box.style.opacity = '1';
+  box.style.transform = `translate(${x - 3}px, ${y - 2}px)`;
+  if (kind === 'click') {
+    setTimeout(() => {
+      const ring = document.createElement('div');
+      ring.style.cssText = `position:fixed;left:${x - 14}px;top:${y - 14}px;width:28px;height:28px;border-radius:50%;border:2px solid #8b5cf6;background:rgba(139,92,246,.18);z-index:2147483646;pointer-events:none`;
+      (document.body || document.documentElement).appendChild(ring);
+      ring.animate([{ transform: 'scale(.4)', opacity: 1 }, { transform: 'scale(1.6)', opacity: 0 }], { duration: 500, easing: 'ease-out' }).onfinish = () => ring.remove();
+    }, 380);
+  }
+  clearTimeout(window.__agentdeckCursorTimer);
+  window.__agentdeckCursorTimer = setTimeout(() => (box.style.opacity = '0'), 2500);
+  return true;
+})"##;
+
+/// Shows the agent's pointer moving to a point; returns once it has arrived.
+async fn show_pointer(view: &Webview, x: f64, y: f64, kind: &str) {
+    let script = format!("{CURSOR}({x}, {y}, {kind:?})");
+    if evaluate(view, &script, None).await.is_ok() {
+        tokio::time::sleep(std::time::Duration::from_millis(420)).await;
+    }
+}
+
 /// A press at a point of the page (CSS pixels of the viewport), as the browser's own mouse events.
 pub async fn click(view: &Webview, x: f64, y: f64) -> Result<(), String> {
+    show_pointer(view, x, y, "click").await;
     let at = |kind: &str, buttons: u8| {
         json!({ "type": kind, "x": x, "y": y, "button": "left", "buttons": buttons, "clickCount": 1 })
     };
@@ -214,12 +252,14 @@ pub async fn click(view: &Webview, x: f64, y: f64) -> Result<(), String> {
 
 /// Moves the mouse over a point (hover menus, tooltips).
 pub async fn hover(view: &Webview, x: f64, y: f64) -> Result<(), String> {
+    show_pointer(view, x, y, "hover").await;
     call(view, "Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": x, "y": y }), None).await?;
     Ok(())
 }
 
 /// Scrolls at a point, as a mouse wheel would.
 pub async fn scroll(view: &Webview, x: f64, y: f64, dx: f64, dy: f64) -> Result<(), String> {
+    show_pointer(view, x, y, "scroll").await;
     let params = json!({ "type": "mouseWheel", "x": x, "y": y, "deltaX": dx, "deltaY": dy });
     call(view, "Input.dispatchMouseEvent", params, None).await?;
     Ok(())
