@@ -65,7 +65,7 @@
               {#if item.status === 'running'}
                 <ZShimmerText class="min-w-0 truncate font-medium" zText={step.subject || '…'} />
               {:else}
-                <span class="min-w-0 truncate font-medium text-foreground">{step.subject}</span>
+                <span class="min-w-0 truncate font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}">{step.subject}</span>
               {/if}
               {#if step.change}{@render chips(step.change)}{/if}
               <ZIcon zType="lucideChevronRight" class="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform duration-300 {rows[index] ? 'rotate-90' : ''}" />
@@ -84,7 +84,7 @@
                     <pre class="m-0 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all">{shown(item)}</pre>
                   {/if}
                   {#if item.output && !item.change}
-                    <pre class="m-0 max-h-60 overflow-auto px-1 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-muted-foreground">{item.output}</pre>
+                    <pre class="m-0 max-h-60 overflow-auto px-1 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
                   {/if}
                 </div>
               </div>
