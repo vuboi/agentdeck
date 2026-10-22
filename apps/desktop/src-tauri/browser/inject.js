@@ -157,6 +157,15 @@
     picker = { overlay, move, click, key };
   };
 
+  // A phone or tablet has no desktop scrollbars and no hover cursor; show the page that way.
+  if (/iPhone|iPad/.test(navigator.userAgent)) {
+    document.addEventListener('DOMContentLoaded', () => {
+      const style = document.createElement('style');
+      style.textContent = '::-webkit-scrollbar{display:none!important}html{scrollbar-width:none!important}*{-webkit-tap-highlight-color:transparent}';
+      (document.head || document.documentElement).appendChild(style);
+    });
+  }
+
   // ---- requests from the app ----
   window.__agentdeck = {
     run(id, kind, arg) {

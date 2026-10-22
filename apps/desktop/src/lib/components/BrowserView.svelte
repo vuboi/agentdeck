@@ -316,7 +316,7 @@
     { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
   ]);
 
-  const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-full text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
+  const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
 </script>
 
@@ -358,7 +358,7 @@
 
     <!-- Address bar: navigation and inspector on the left, the address in the middle, markup / devtools / menu on the right -->
     <div class="flex shrink-0 items-center gap-1.5 px-2 py-1.5">
-      <div class="flex shrink-0 items-center rounded-full bg-muted/60 p-0.5">
+      <div class="flex shrink-0 items-center rounded-lg bg-muted/60 p-0.5">
         <button type="button" class={icon} aria-label="Back" {@attach zTooltip({ content: 'Back', position: 'top' })} onclick={() => void back()}><ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-4" /></button>
         <button type="button" class={icon} aria-label="Forward" {@attach zTooltip({ content: 'Forward', position: 'top' })} onclick={() => void forward()}><ZIcon zType={'lucideArrowRight' as ZIconName} class="size-4" /></button>
         <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
@@ -372,7 +372,7 @@
       <form class="min-w-0 flex-1" onsubmit={(event) => { event.preventDefault(); void go(); }}>
         <input
           bind:value={address}
-          class="h-8 w-full rounded-full border border-transparent bg-muted/60 px-4 text-center text-xs outline-none transition-colors focus:border-primary focus:bg-background focus:text-left"
+          class="h-8 w-full rounded-lg border border-transparent bg-muted/60 px-4 text-center text-xs outline-none transition-colors focus:border-primary focus:bg-background focus:text-left"
           placeholder="Search or enter an address"
           aria-label="Address"
           spellcheck="false"
@@ -381,7 +381,7 @@
           onblur={() => (editing = false)}
         />
       </form>
-      <div class="flex shrink-0 items-center rounded-full bg-muted/60 p-0.5">
+      <div class="flex shrink-0 items-center rounded-lg bg-muted/60 p-0.5">
         <button type="button" class={icon} aria-label="Mark up the page" disabled={!started || busy !== ''} {@attach zTooltip({ content: 'Mark up the page for the agent', position: 'top' })} onclick={annotate}>
           <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
         </button>
@@ -425,7 +425,7 @@
       {#if deviceBox && !shot}
         <!-- The device: a bezel around the page (the page itself is the native layer above) and its caption. -->
         <div
-          class="pointer-events-none absolute border border-border bg-black shadow-lg {browser.device === 'mobile' ? 'rounded-[2rem]' : 'rounded-3xl'}"
+          class="pointer-events-none absolute border border-border bg-black shadow-lg {browser.device === 'mobile' ? 'rounded-2xl' : 'rounded-xl'}"
           style:left="{deviceBox.x - 10}px"
           style:top="{deviceBox.y - 10}px"
           style:width="{deviceBox.w + 20}px"
