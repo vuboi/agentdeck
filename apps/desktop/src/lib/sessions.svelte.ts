@@ -670,7 +670,8 @@ let transcriptToken = 0;
 // A transcript is valid while the session's index entry (last update + message count) is unchanged.
 type Transcript = { stamp: string; messages: Message[] };
 const transcripts = new Map<string, Transcript>();
-const stampOf = (session: SessionItem) => `${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
+// The format version leads the stamp: a cached transcript from an older app version is read again (v2: token usage).
+const stampOf = (session: SessionItem) => `v2|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
 const MAX_SAVED = 12;
 
 async function fetchTranscript(session: SessionItem): Promise<Message[]> {
