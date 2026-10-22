@@ -3,7 +3,7 @@
   import { ZButton, ZIcon, ZPopover, ZSwitch, ZTabs, zHoverGlide } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { AGENT_TEXT, setWhileRunning, turnOptions, type Agent, type Effort, type Permission } from '../sessions.svelte';
-  import { modelSources, type ProviderId } from '../models';
+  import { findModel, modelSources, type ProviderId } from '../models.svelte';
   import SectionTitle from './SectionTitle.svelte';
 
   let {
@@ -83,12 +83,19 @@
     subOpen = true;
   }
 
-  const efforts = [
-    { value: 'low', label: 'Low' },
-    { value: 'medium', label: 'Medium' },
-    { value: 'high', label: 'High' },
-    { value: 'max', label: 'Max' },
-  ];
+  // The reasoning levels the chosen model takes (from its CLI's catalogue).
+  const EFFORT_LABEL: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-High', max: 'Max', ultra: 'Ultra' };
+  const efforts = $derived(
+    (findModel(agent, model)?.efforts?.length ? findModel(agent, model)!.efforts! : ['low', 'medium', 'high', 'max']).map((value) => ({
+      value,
+      label: EFFORT_LABEL[value] ?? value,
+    })),
+  );
+  // A model that does not take the chosen level falls back to its own default.
+  $effect(() => {
+    const levels = efforts.map((item) => item.value);
+    if (!levels.includes(effort)) effort = (findModel(agent, model)?.defaultEffort ?? levels[Math.min(1, levels.length - 1)]) as Effort;
+  });
 
   // The approval modes every agent CLI offers in some form.
   const permissions: { value: Permission; label: string; hint: string; icon: ZIconName; danger?: boolean }[] = [
@@ -254,10 +261,10 @@
   zTrigger="manual"
   zPosition="right-top"
   zOffset={6}
-  zWidth={200}
+  zWidth={240}
 >
   {#snippet children()}
-    <div class="flex w-[200px] flex-col gap-0.5 p-1" role="radiogroup" aria-label="{sourceOf(subProvider).label} models" {@attach glide()}>
+    <div class="flex w-[240px] flex-col gap-0.5 p-1" role="radiogroup" aria-label="{sourceOf(subProvider).label} models" {@attach glide()}>
       {#each modelsOf(subProvider) as item (item.value)}
         {@const selected = agent === subProvider && model === item.value}
         <button
@@ -271,8 +278,11 @@
             subOpen = false;
           }}
         >
-          {item.label}
-          {#if selected}<ZIcon zType="lucideCheck" class="size-3.5 text-primary" />{/if}
+          <span class="min-w-0">
+            <span class="block truncate">{item.label}</span>
+            {#if item.description}<span class="block truncate text-[10.5px] text-muted-foreground">{item.description}</span>{/if}
+          </span>
+          {#if selected}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
         </button>
       {/each}
     </div>

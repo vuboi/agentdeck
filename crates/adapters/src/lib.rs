@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod history;
+pub mod models;
 
 /// Identifies this crate as part of the AgentDeck scaffold.
 pub const ADAPTERS_STUB: &str = "ag-adapters";

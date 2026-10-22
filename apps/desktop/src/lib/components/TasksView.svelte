@@ -62,6 +62,16 @@
   </li>
 {/snippet}
 
+{#if items.length === 0 && recent.length === 0}
+  <!-- Empty: centred, like the other panels. -->
+  <div class="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground" role="tabpanel" aria-label={log ? 'Audit log' : 'Tasks'}>
+    <ZIcon zType={(log ? 'lucideShieldCheck' : 'lucideListChecks') as ZIconName} class="size-8 opacity-60" />
+    <h2 class="text-sm font-medium text-foreground">{log ? 'Audit' : 'Tasks'}</h2>
+    <p class="m-0 max-w-56 text-xs leading-normal">
+      {log ? 'Every command, file edit and search an agent makes is listed here.' : 'Commands, background shells and sub-agents show here while they work.'}
+    </p>
+  </div>
+{:else}
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label={log ? 'Audit log' : 'Tasks'}>
   <div class="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
     <span class="font-medium">{log ? 'Audit log' : 'Running now'}</span>
@@ -90,3 +100,4 @@
     {/if}
   </div>
 </div>
+{/if}

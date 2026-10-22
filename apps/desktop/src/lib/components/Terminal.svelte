@@ -42,7 +42,7 @@
             <span
               role="button"
               tabindex="-1"
-              class="ml-1 inline-flex items-center rounded p-0.5 hover:bg-muted"
+              class="ml-0.5 grid size-4.5 shrink-0 cursor-pointer place-items-center rounded-full hover:bg-primary/20"
               aria-label="Close terminal"
               onclick={(event) => { event.stopPropagation(); closeTerminal(tab.id); }}
               onkeydown={() => {}}
@@ -50,10 +50,10 @@
           </ZButton>
         {/each}
       </div>
-      <ZButton zWave={false} zType="ghost" zSize="sm" aria-label="New terminal (Ctrl+Shift+`)" onclick={newTerminal}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="New terminal (Ctrl+Shift+`)" onclick={newTerminal}>
         <ZIcon zType="lucidePlus" class="size-4" />
       </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" aria-label="Hide terminal (Ctrl+`)" onclick={toggleTerminal}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Hide terminal (Ctrl+`)" onclick={toggleTerminal}>
         <ZIcon zType="lucideChevronDown" class="size-4" />
       </ZButton>
     </div>

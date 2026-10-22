@@ -7,6 +7,7 @@ mod browser;
 mod overlay;
 
 use ag_adapters::agent::claude::Claude;
+use ag_adapters::agent::codex::Codex;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
 use ag_adapters::agent::{AgentEvent, Provider, TurnRequest};
 use ag_adapters::history::{self, HistoryMessage, HistorySession, Roots, Source};
@@ -56,6 +57,23 @@ async fn attachment_save(mime: String, data: String) -> Result<String, String> {
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// The models an agent CLI offers, from its own cache on this machine.
+#[tauri::command]
+fn models_list(agent: String) -> Vec<ag_adapters::models::ModelInfo> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    match agent.as_str() {
+        "claude" => ag_adapters::models::claude(&home),
+        "codex" => {
+            let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".codex"));
+            ag_adapters::models::codex(&codex_home)
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Sessions Claude Code and Codex already saved on this machine. Read-only.
@@ -174,6 +192,7 @@ static RUNNING: std::sync::LazyLock<
 fn provider_for(agent: &str) -> Result<Box<dyn Provider>, String> {
     match agent {
         "claude" => Ok(Box::new(Claude)),
+        "codex" => Ok(Box::new(Codex::default())),
         other => Err(format!("no agent provider for `{other}` yet")),
     }
 }
@@ -282,6 +301,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             history_list,
+            models_list,
             history_load,
             history_rename,
             history_delete,

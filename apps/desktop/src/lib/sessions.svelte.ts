@@ -16,13 +16,13 @@ import { listenAgentEvents, saveAttachment, sendAgentTurn, stopAgentTurn, type A
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
 import { estimateCost, recordUsage } from './usage';
-import { modelCatalog } from './models';
+import { modelCatalog } from './models.svelte';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
 export type Agent = 'claude' | 'codex' | 'gemini';
 export type Status = 'working' | 'idle' | 'waiting';
 /** Reasoning effort and the approval modes shared by the agent CLIs. */
-export type Effort = 'low' | 'medium' | 'high' | 'max';
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 export type Permission = 'ask' | 'edits' | 'plan' | 'auto' | 'yolo';
 
 export type Project = { id: string; name: string; path: string };
@@ -302,12 +302,16 @@ void getPref<Record<string, string[]>>('permissions.allowed').then((saved) => {
   if (saved) Object.assign(approved, saved);
 });
 
-/** One `claude -p` run in `session`, with a fresh live reply. Images go to disk first so the CLI can open them. */
+/** One CLI run (`claude -p`, `codex exec`) in `session`, with a fresh live reply. Images go to disk first so the CLI can open them. */
 function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = []) {
   if (images.length || !allow.length) lastPrompt[session.id] = text;
-  const cliId = session.agentSession ?? (session.id.startsWith('claude:') ? session.id.slice('claude:'.length) : crypto.randomUUID());
-  session.agentSession = cliId;
-  const resume = session.agentStarted ?? !!session.path;
+  // The CLI's own id for the conversation. Claude takes one we choose; Codex names its thread on the first turn
+  // and reports it, so a new Codex chat starts without one.
+  const prefix = `${session.agent}:`;
+  const known = session.agentSession ?? (session.id.startsWith(prefix) ? session.id.slice(prefix.length) : undefined);
+  const cliId = known ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
+  if (cliId) session.agentSession = cliId;
+  const resume = cliId !== null && (session.agentStarted ?? !!session.path);
   const turn = nextId();
   turns[session.id] = turn;
   const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now() };
@@ -489,13 +493,13 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
     ],
     at: new Date().toISOString(),
   });
-  if (inTauri() && session.agent === 'claude') startTurn(session, withElements(body, elements), images);
+  if (inTauri() && (session.agent === 'claude' || session.agent === 'codex')) startTurn(session, withElements(body, elements), images);
   else if (inTauri()) {
     messages.push({
       id: nextId(),
       role: 'assistant',
       time: clock(new Date().toISOString()),
-      blocks: [{ kind: 'response', text: `⚠ ${session.agent} chats are not connected yet. Only Claude runs from here for now.` }],
+      blocks: [{ kind: 'response', text: `⚠ ${session.agent} chats are not connected yet. Claude and Codex run from here for now.` }],
     });
   }
   // Imported sessions reload from disk; sessions that only exist here keep their messages in memory.
