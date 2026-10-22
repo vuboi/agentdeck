@@ -11,7 +11,7 @@ import {
 } from './history';
 import { messages as mockMessages, type Message } from './mock';
 import { isLocalUrl, openInPreview } from './browser.svelte';
-import { listenAgentEvents, saveAttachment, sendAgentTurn, type AgentEvent } from './agent';
+import { listenAgentEvents, saveAttachment, sendAgentTurn, stopAgentTurn, type AgentEvent } from './agent';
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
 import { modelCatalog } from './models';
@@ -243,7 +243,35 @@ function withElements(text: string, elements: PageElement[]): string {
 /** How the Composer's permission setting maps onto the CLI's `--permission-mode`; "ask" passes none. */
 const PERMISSION_MODE: Record<Permission, string | null> = { ask: null, edits: 'acceptEdits', plan: 'plan', auto: 'auto', yolo: 'bypassPermissions' };
 /** The permission setting of the Composer, read when a turn starts. */
-export const turnOptions = $state<{ permission: Permission; effort: Effort }>({ permission: 'ask', effort: 'medium' });
+export const turnOptions = $state<{ permission: Permission; effort: Effort; /** What Enter does while a reply is running. */ whileRunning: 'queue' | 'interrupt' }>({
+  permission: 'ask',
+  effort: 'medium',
+  whileRunning: 'queue',
+});
+void getPref<'queue' | 'interrupt'>('composer.whileRunning').then((saved) => {
+  if (saved === 'queue' || saved === 'interrupt') turnOptions.whileRunning = saved;
+});
+export function setWhileRunning(mode: 'queue' | 'interrupt') {
+  turnOptions.whileRunning = mode;
+  setPref('composer.whileRunning', mode);
+}
+
+/** The run of each chat that is current: events of an older (stopped) run are ignored. */
+const turns: Record<string, string> = {};
+
+/** Messages typed while the agent was still busy, waiting their turn. */
+export type Queued = { text: string; images: Attachment[]; elements: PageElement[] };
+export const queued = $state<Record<string, Queued[]>>({});
+/** Whether a chat has a reply in progress (for the send / stop button). */
+export const isRunning = (sessionId: string) => workspace.sessions.find((item) => item.id === sessionId)?.status === 'working';
+
+/** Stops the reply of a chat now. What was written so far stays. */
+export function stopTurn(sessionId: string) {
+  if (!replies[sessionId]) return;
+  const turn = turns[sessionId];
+  void stopAgentTurn(sessionId).catch(() => {});
+  handleAgentEvent(sessionId, { kind: 'error', message: 'stopped' }, turn);
+}
 
 /** Tools the user approved with "Always allow", per chat. */
 const approved: Record<string, string[]> = {};
@@ -257,6 +285,8 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   const cliId = session.agentSession ?? (session.id.startsWith('claude:') ? session.id.slice('claude:'.length) : crypto.randomUUID());
   session.agentSession = cliId;
   const resume = session.agentStarted ?? !!session.path;
+  const turn = nextId();
+  turns[session.id] = turn;
   const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now() };
   messagesOf(session.id).push(reply);
   replies[session.id] = reply.id;
@@ -269,6 +299,7 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       : text;
     await sendAgentTurn({
       session: session.id,
+      turn,
       agent: session.agent,
       prompt,
       agentSession: cliId,
@@ -280,7 +311,7 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       cwd,
     });
   })().catch((error: unknown) => {
-    handleAgentEvent(session.id, { kind: 'error', message: String(error) });
+    handleAgentEvent(session.id, { kind: 'error', message: String(error) }, turn);
   });
 }
 
@@ -321,7 +352,8 @@ function messagesOf(sessionId: string): Message[] {
 }
 
 /** Apply one agent event to the reply it belongs to. */
-export function handleAgentEvent(sessionId: string, event: AgentEvent) {
+export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: string) {
+  if (turn !== undefined && turns[sessionId] !== turn) return; // a run that was stopped or replaced
   const session = workspace.sessions.find((item) => item.id === sessionId);
   const reply = messagesOf(sessionId).find((item) => item.id === replies[sessionId]);
   if (!reply || !session) return;
@@ -339,28 +371,45 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent) {
     persistLocal();
     // The CLI wrote the conversation to disk: pick it up so the row gets its path, in place (same id).
     if (!session.path) void importHistory({ refresh: true });
+    // Messages typed while it worked go next, one at a time.
+    const next = queued[sessionId]?.shift();
+    if (next) setTimeout(() => send(sessionId, next.text, next.images, next.elements), 0);
   }
 }
 
 if (inTauri()) {
   // A fast stream sends dozens of deltas a second; each one re-rendered the chat. Apply them once per frame.
-  let queue: { session: string; event: AgentEvent }[] = [];
+  let queue: { session: string; turn: string; event: AgentEvent }[] = [];
   const flush = () => {
     const batch = queue;
     queue = [];
-    for (const { session, event } of batch) handleAgentEvent(session, event);
+    for (const { session, turn, event } of batch) handleAgentEvent(session, event, turn);
   };
   void listenAgentEvents((envelope) => {
     if (queue.push(envelope) === 1) requestAnimationFrame(flush);
   });
 }
 
+/** Send from the message box. While the agent is busy: wait in line, or stop it and go first, as chosen. */
 export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = []) {
   const session = activeSession();
+  if (!session || (!text.trim() && images.length === 0 && elements.length === 0)) return;
+  if (replies[session.id]) {
+    if (turnOptions.whileRunning === 'queue') {
+      (queued[session.id] ??= []).push({ text, images, elements });
+      return;
+    }
+    stopTurn(session.id);
+  }
+  send(session.id, text, images, elements);
+}
+
+function send(sessionId: string, text: string, images: Attachment[], elements: PageElement[]) {
+  const session = workspace.sessions.find((item) => item.id === sessionId);
   const body = text.trim();
-  if (!session || (!body && images.length === 0 && elements.length === 0) || replies[session.id]) return; // one turn at a time per chat
-  if (chat.messages === mockMessages) chat.messages = [...mockMessages];
-  chat.messages.push({
+  if (!session || replies[sessionId]) return;
+  const messages = messagesOf(sessionId);
+  messages.push({
     id: nextId(),
     role: 'user',
     time: clock(new Date().toISOString()),
@@ -373,7 +422,7 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
   });
   if (inTauri() && session.agent === 'claude') startTurn(session, withElements(body, elements), images);
   else if (inTauri()) {
-    messagesOf(session.id).push({
+    messages.push({
       id: nextId(),
       role: 'assistant',
       time: clock(new Date().toISOString()),
@@ -381,7 +430,7 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
     });
   }
   // Imported sessions reload from disk; sessions that only exist here keep their messages in memory.
-  if (!session.path) localMessages[session.id] = chat.messages;
+  if (!session.path) localMessages[session.id] = messages;
   persistLocal();
   if (session.draft) {
     session.draft = false;

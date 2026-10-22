@@ -157,8 +157,15 @@ async fn file_read_bytes(root: String, path: String) -> Result<String, String> {
 #[derive(Clone, Serialize)]
 struct AgentEnvelope {
     session: String,
+    /// Which run of the chat the event belongs to, so a stopped run's last events are never mistaken for the next one's.
+    turn: String,
     event: AgentEvent,
 }
+
+/// The runs in progress, per chat, so one can be stopped.
+static RUNNING: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
+> = std::sync::LazyLock::new(Default::default);
 
 fn provider_for(agent: &str) -> Result<Box<dyn Provider>, String> {
     match agent {
@@ -168,13 +175,20 @@ fn provider_for(agent: &str) -> Result<Box<dyn Provider>, String> {
 }
 
 /// Runs one turn for the app: resolves the binary, then forwards every event to the UI.
-async fn run_turn(app: AppHandle, session: String, provider: Box<dyn Provider>, req: TurnRequest) {
+async fn run_turn(
+    app: AppHandle,
+    session: String,
+    turn: String,
+    provider: Box<dyn Provider>,
+    req: TurnRequest,
+) {
     let binary = resolve_binary(provider.as_ref());
     drive_turn(binary, provider.as_ref(), &req, |event| {
         let _ = app.emit(
             "agent-event",
             AgentEnvelope {
                 session: session.clone(),
+                turn: turn.clone(),
                 event,
             },
         );
@@ -188,6 +202,7 @@ async fn run_turn(app: AppHandle, session: String, provider: Box<dyn Provider>, 
 async fn agent_send(
     app: AppHandle,
     session: String,
+    turn: String,
     agent: String,
     prompt: String,
     agent_session: Option<String>,
@@ -209,8 +224,23 @@ async fn agent_send(
         allowed_tools,
         cwd: cwd.map(Into::into),
     };
-    tauri::async_runtime::spawn(run_turn(app, session, provider, req));
+    let handle = tauri::async_runtime::spawn(run_turn(app, session.clone(), turn, provider, req));
+    if let Ok(mut running) = RUNNING.lock() {
+        if let Some(previous) = running.insert(session, handle) {
+            previous.abort(); // a chat runs one turn at a time
+        }
+    }
     Ok(())
+}
+
+/// Stops the run of a chat: its CLI process is killed with the task.
+#[tauri::command]
+fn agent_stop(session: String) {
+    if let Ok(mut running) = RUNNING.lock() {
+        if let Some(handle) = running.remove(&session) {
+            handle.abort();
+        }
+    }
 }
 
 /// Starts the AgentDeck desktop window.
@@ -250,6 +280,7 @@ pub fn run() {
             file_read,
             file_read_bytes,
             agent_send,
+            agent_stop,
             attachment_save,
             browser::browser_show,
             browser::browser_bounds,

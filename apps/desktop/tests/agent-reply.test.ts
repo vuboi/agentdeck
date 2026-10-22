@@ -79,3 +79,11 @@ test('a new block closes the previous streaming block', () => {
   assert.equal(u.blocks[0].streaming, false);
   assert.equal(u.blocks[1].status, 'running');
 });
+
+test('stopping a run yourself is not reported as a failure', () => {
+  let u = applyAgentEvent([], { kind: 'tool_call', id: 't', name: 'Bash', input: 'sleep 9', change: null });
+  u = applyAgentEvent(u.blocks, { kind: 'error', message: 'stopped' });
+  assert.equal(u.finished, true);
+  assert.equal(u.blocks.length, 1);
+  assert.equal(u.blocks[0].status, 'fail');
+});

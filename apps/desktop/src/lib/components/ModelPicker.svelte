@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { ZButton, ZIcon, ZPopover, ZSwitch, ZTabs, zHoverGlide } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { AGENT_TEXT, type Agent, type Effort, type Permission } from '../sessions.svelte';
+  import { AGENT_TEXT, setWhileRunning, turnOptions, type Agent, type Effort, type Permission } from '../sessions.svelte';
   import { modelSources, type ProviderId } from '../models';
 
   let {
@@ -204,6 +204,24 @@
             </span>
           </button>
         {/each}
+        </div>
+      </section>
+
+      <section aria-label="While it works">
+        <div class="mb-1 font-mono text-[10px] tracking-widest text-muted-foreground">WHILE IT WORKS</div>
+        <div class="grid grid-cols-2 gap-1 rounded-md bg-muted/50 p-0.5" role="radiogroup">
+          {#each [['queue', 'Queue', 'Wait your turn'], ['interrupt', 'Interrupt', 'Stop, then send']] as [value, label, hint] (value)}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={turnOptions.whileRunning === value}
+              title={hint}
+              class="h-6 cursor-pointer rounded text-xs outline-none {turnOptions.whileRunning === value ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+              onclick={() => setWhileRunning(value as 'queue' | 'interrupt')}
+            >
+              {label}
+            </button>
+          {/each}
         </div>
       </section>
     </div>

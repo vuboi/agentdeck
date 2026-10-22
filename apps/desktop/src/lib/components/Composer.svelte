@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { getPref, setPref } from '../prefs';
-  import { ZButton, ZCommand, ZIcon, ZPopover } from '@shival99/z-ui-svelte';
+  import { ZButton, ZCommand, ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
     activeSession,
@@ -10,9 +10,12 @@
     draftImages,
     draftMentions,
     drafts,
+    isRunning,
     MODELS,
     projectOf,
+    queued,
     sendMessage,
+    stopTurn,
     turnOptions,
     workspace,
     type Agent,
@@ -32,6 +35,9 @@
   const setMentions = (value: Mention[]) => (draftMentions[sessionId] = value);
   const images = $derived(draftImages[sessionId] ?? []);
   const elements = $derived(draftElements[sessionId] ?? []);
+  const running = $derived(isRunning(sessionId));
+  const waiting = $derived(queued[sessionId] ?? []);
+  const hasInput = $derived(draft.trim().length > 0 || images.length > 0 || elements.length > 0);
   let detail = $state<string | null>(null);
   let chipAnchors = $state<Record<string, HTMLElement | null>>({});
   const setImages = (value: Attachment[]) => (draftImages[sessionId] = value);
@@ -219,7 +225,7 @@
   }
 
   function submit() {
-    if (!draft.trim() && images.length === 0 && elements.length === 0) return;
+    if (!hasInput) return;
     sendMessage(draft, images, elements);
     draftElements[sessionId] = [];
     detail = null;
@@ -248,6 +254,20 @@
   ondragleave={() => (dragging = false)}
   ondrop={onDrop}
 >
+  {#if waiting.length > 0}
+    <!-- Messages typed while the agent works: they go out one by one when it is free. -->
+    <div class="mb-2 flex flex-col gap-1" aria-label="Queued messages">
+      {#each waiting as item, index (index)}
+        <div class="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
+          <ZIcon zType={'lucideClock' as ZIconName} class="size-3 shrink-0" />
+          <span class="min-w-0 flex-1 truncate">{item.text || (item.images.length ? 'Image' : 'Element')}</span>
+          <button type="button" class="grid size-4 shrink-0 cursor-pointer place-items-center rounded hover:bg-accent" aria-label="Remove from the queue" onclick={() => (queued[sessionId] = waiting.filter((entry) => entry !== item))}>
+            <ZIcon zType="lucideX" class="size-3" />
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
   {#if elements.length > 0}
     <!-- Elements picked in the browser travel with the message; click one to see what is included. -->
     <div class="mb-2 flex flex-wrap gap-1.5" aria-label="Picked elements">
@@ -346,9 +366,16 @@
       </ZButton>
       <ModelPicker bind:agent bind:model bind:effort bind:fast bind:permission />
     </div>
-    <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" disabled={!draft.trim() && images.length === 0 && elements.length === 0} aria-label="Send message">
-      <ZIcon zType="lucideArrowUp" class="size-4" />
-    </ZButton>
+    {#if running && !hasInput}
+      <!-- A reply is being written and nothing is typed: this stops it. -->
+      <button type="button" class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-full bg-foreground text-background outline-none hover:opacity-90" aria-label="Stop" {@attach zTooltip({ content: 'Stop', position: 'top' })} onclick={() => stopTurn(sessionId)}>
+        <ZIcon zType={'lucideSquare' as ZIconName} class="size-3.5 fill-current" />
+      </button>
+    {:else}
+      <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" disabled={!hasInput} aria-label={running ? (turnOptions.whileRunning === 'queue' ? 'Add to the queue' : 'Stop and send') : 'Send message'} {@attach zTooltip({ content: running ? (turnOptions.whileRunning === 'queue' ? 'Add to the queue' : 'Stop and send now') : 'Send', position: 'top' })}>
+        <ZIcon zType="lucideArrowUp" class="size-4" />
+      </ZButton>
+    {/if}
   </div>
 </form>
 

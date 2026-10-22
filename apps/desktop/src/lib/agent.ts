@@ -16,11 +16,12 @@ export type PermissionRequest = { id: string; tool: string; summary: string; all
 /** What a Write or Edit does to a file. */
 export type FileChange = { path: string; added: number; removed: number; before: string; after: string };
 
-export type AgentEnvelope = { session: string; event: AgentEvent };
+export type AgentEnvelope = { session: string; turn: string; event: AgentEvent };
 
 /** Start one turn. Resolves as soon as the CLI is started; the answer arrives as `agent-event`s. */
 export async function sendAgentTurn(args: {
   session: string;
+  turn: string;
   agent: string;
   prompt: string;
   agentSession: string | null;
@@ -45,4 +46,10 @@ export async function saveAttachment(mime: string, data: string): Promise<string
 export async function listenAgentEvents(onEvent: (envelope: AgentEnvelope) => void): Promise<() => void> {
   const { listen } = await import('@tauri-apps/api/event');
   return listen<AgentEnvelope>('agent-event', (event) => onEvent(event.payload));
+}
+
+/** Stops the run of a chat. */
+export async function stopAgentTurn(session: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('agent_stop', { session });
 }

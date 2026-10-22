@@ -80,7 +80,8 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
     }
     case 'error':
       close(blocks, true, 'fail');
-      blocks.push({ kind: 'response', text: `⚠ ${event.message}` });
+      // Stopping a run yourself is not a failure.
+      if (event.message !== 'stopped') blocks.push({ kind: 'response', text: `⚠ ${event.message}` });
       return { blocks, finished: true };
   }
 }
