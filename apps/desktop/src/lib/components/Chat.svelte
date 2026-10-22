@@ -425,13 +425,15 @@
                         <!-- The newest group of a running reply is the live line; it carries the only loader. -->
                         <!-- Step lines in a row sit close together, like one list. -->
                         <div class="{afterSteps(parts, position) ? '-mt-1.5' : ''} {parts[position + 1]?.kind === 'block' ? '-mb-0.5' : ''}">
-                          <CommandGroup items={segment.items} live={Boolean(message.live) && working && position === parts.length - 1} startedAt={message.startedAt} />
+                          <CommandGroup items={segment.items} live={false} startedAt={message.startedAt} />
                         </div>
                       {:else}
                         <ChatBlock block={segment.block} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} />
                       {/if}
                     {/each}
-                    {#if message.live && !working}
+                    <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
+                         editing…), as in Claude and Codex; the steps above stay plain, finished lines. -->
+                    {#if message.live}
                       <LiveStatus {message} />
                     {/if}
                   </div>

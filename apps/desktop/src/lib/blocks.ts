@@ -100,8 +100,10 @@ export function liveState(blocks: Block[]): { label: string; spinner: ZLoadingSp
   if (last?.kind === 'response' && last.streaming) return { label: 'Writing', spinner: LOADER.thinking };
   if (last?.kind === 'command' && last.status === 'running') {
     const tool = toolOf(last.command);
+    if (tool === 'Write') return { label: 'Creating', spinner: LOADER.action };
     if (EDIT.test(tool)) return { label: 'Editing', spinner: LOADER.action };
-    if (READ.test(tool) || SEARCH.test(tool)) return { label: 'Checking', spinner: LOADER.check };
+    if (READ.test(tool)) return { label: 'Reading', spinner: LOADER.check };
+    if (SEARCH.test(tool)) return { label: 'Searching', spinner: LOADER.check };
     if (FETCH.test(tool)) return { label: 'Fetching', spinner: LOADER.fetch };
     if (AGENT.test(tool)) return { label: 'Running agent', spinner: LOADER.background };
     return { label: 'Running command', spinner: LOADER.command };
