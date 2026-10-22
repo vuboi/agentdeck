@@ -1,3 +1,4 @@
+import { untrack } from 'svelte';
 import { workspace } from './sessions.svelte';
 import { getPref, setPref } from './prefs';
 
@@ -13,6 +14,7 @@ export const contentTabs = $state({
 });
 
 // Open tabs survive a reload. Restored once, then saved on every change.
+const ready = $state({ tabs: false });
 let tabsHydrated = false;
 getPref<{ active: string; tabs: ContentTab[] }>('content.tabs').then((saved) => {
   if (saved) {
@@ -20,6 +22,7 @@ getPref<{ active: string; tabs: ContentTab[] }>('content.tabs').then((saved) => 
     contentTabs.active = saved.active ?? '';
   }
   tabsHydrated = true;
+  ready.tabs = true;
 });
 $effect.root(() => {
   $effect(() => {
@@ -29,6 +32,25 @@ $effect.root(() => {
 });
 
 const chatId = (sessionId: string) => `chat:${sessionId}`;
+
+// The open session wins: after a reload the saved tab and the saved session can disagree, and the chat you were
+// reading must be the one on screen. A file tab in front is left alone.
+$effect.root(() => {
+  $effect(() => {
+    const id = workspace.activeId;
+    if (!ready.tabs || !id) return;
+    untrack(() => {
+      const current = contentTabs.tabs.find((tab) => tab.id === contentTabs.active);
+      if (current?.kind === 'file' || contentTabs.active === chatId(id)) return;
+      if (!contentTabs.tabs.some((tab) => tab.id === chatId(id))) {
+        const index = contentTabs.tabs.findIndex((tab) => tab.id === contentTabs.active);
+        if (index !== -1) contentTabs.tabs[index] = { id: chatId(id), kind: 'chat', sessionId: id };
+        else contentTabs.tabs.push({ id: chatId(id), kind: 'chat', sessionId: id });
+      }
+      contentTabs.active = chatId(id);
+    });
+  });
+});
 
 /** Open (or focus) the chat tab of a session and make it the session on screen. */
 export function openChatTab(sessionId: string) {
