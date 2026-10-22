@@ -457,9 +457,7 @@
 
     <!-- The page itself lives in a native webview placed over this area. -->
     <div class="relative min-h-0 flex-1 bg-muted/30">
-      <div bind:this={stage} class="absolute inset-0">
-        {#if frozen}<img src={frozen.src} alt="" class="pointer-events-none absolute select-none" style:left="{frozen.x}px" style:top="{frozen.y}px" style:width="{frozen.w}px" style:height="{frozen.h}px" />{/if}
-      </div>
+      <div bind:this={stage} class="absolute inset-0"></div>
       {#if deviceBox && !shot}
         <!-- The device: a bezel around the page (the page itself is the native layer above) and its caption. -->
         <div
@@ -477,6 +475,8 @@
           </button>
         </div>
       {/if}
+      <!-- Over the bezel: the picture of the page that stands in while a menu covers it. -->
+      {#if frozen}<img src={frozen.src} alt="" class="pointer-events-none absolute select-none" style:left="{frozen.x}px" style:top="{frozen.y}px" style:width="{frozen.w}px" style:height="{frozen.h}px" />{/if}
       {#if !started}
         <div class="absolute inset-0 grid place-items-center p-6 text-center text-xs text-muted-foreground">
           <div class="flex flex-col items-center gap-2">
