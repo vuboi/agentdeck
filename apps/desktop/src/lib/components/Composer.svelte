@@ -288,7 +288,7 @@
     rows="1"
     wrap="soft"
     aria-label="Message"
-    placeholder={innerW >= 720 ? "Message AgentDeck…  (@ to mention a session, project or AI)" : "Message…"}
+    placeholder="Do anything…"
     class="max-h-45 min-h-6 w-full resize-none overflow-x-hidden break-words border-0 bg-transparent px-1 pt-1 pb-2 text-sm leading-normal outline-none placeholder:text-muted-foreground"
   ></textarea>
 
