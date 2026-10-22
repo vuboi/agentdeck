@@ -346,7 +346,7 @@
         {#each $virtualizer.getVirtualItems() as row (row.key)}
           {@const message = chat.messages[row.index]}
           {@const mine = message?.role === 'user'}
-          {@const agent = activeSession()?.agent ?? 'claude'}
+          {@const agent = message?.agent ?? activeSession()?.source ?? activeSession()?.agent ?? 'claude'}
           {#if message}
             <div class="absolute top-0 left-0 w-full" data-index={row.index} style:transform="translateY({row.start}px)" {@attach measureRow}>
               <!-- No avatars: your messages are a bubble (right side, or left in one-sided mode); the agent is just its coloured name. -->

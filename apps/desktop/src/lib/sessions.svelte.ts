@@ -50,6 +50,9 @@ export type SessionItem = {
   agentSession?: string;
   /** The CLI already has this conversation (first turn sent): later turns resume it. */
   agentStarted?: boolean;
+  /** Per agent: its own conversation id and whether it has one yet. `agentSession` / `agentStarted` belong to
+   *  the chat's first agent; an agent the chat moved to later keeps its ids here. */
+  agentIds?: Partial<Record<Agent, { id: string; started: boolean }>>;
 };
 
 /**
@@ -307,14 +310,25 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   if (images.length || !allow.length) lastPrompt[session.id] = text;
   // The CLI's own id for the conversation. Claude takes one we choose; Codex names its thread on the first turn
   // and reports it, so a new Codex chat starts without one.
+  const first = session.source ?? session.agents?.[0] ?? session.agent;
   const prefix = `${session.agent}:`;
-  const known = session.agentSession ?? (session.id.startsWith(prefix) ? session.id.slice(prefix.length) : undefined);
-  const cliId = known ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
-  if (cliId) session.agentSession = cliId;
-  const resume = cliId !== null && (session.agentStarted ?? !!session.path);
+  let cliId: string | null;
+  let resume: boolean;
+  if (session.agent === first) {
+    const known = session.agentSession ?? (session.id.startsWith(prefix) ? session.id.slice(prefix.length) : undefined);
+    cliId = known ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
+    if (cliId) session.agentSession = cliId;
+    resume = cliId !== null && (session.agentStarted ?? !!session.path);
+  } else {
+    // Another agent in this chat: its own conversation, started the first time it is used here.
+    const own = session.agentIds?.[session.agent];
+    cliId = own?.id ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
+    if (cliId && !own) (session.agentIds ??= {})[session.agent] = { id: cliId, started: false };
+    resume = cliId !== null && Boolean(own?.started);
+  }
   const turn = nextId();
   turns[session.id] = turn;
-  const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now() };
+  const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent };
   const list = messagesOf(session.id);
   list.push(reply);
   liveReplies[session.id] = list[list.length - 1]; // the stored (reactive) object
@@ -415,10 +429,21 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
   const update = applyAgentEvent(reply.blocks, event);
   reply.blocks = update.blocks;
   // The CLI has the conversation once it answers; only then is `--resume` valid for the next turn.
-  if (event.kind !== 'error') session.agentStarted = true;
-  if (update.agentSession) session.agentSession = update.agentSession;
+  const first = session.source ?? session.agents?.[0] ?? session.agent;
+  const agent = reply.agent ?? session.agent;
+  if (agent === first) {
+    if (event.kind !== 'error') session.agentStarted = true;
+    if (update.agentSession) session.agentSession = update.agentSession;
+  } else if (event.kind !== 'error' && (update.agentSession || session.agentIds?.[agent])) {
+    const id = update.agentSession ?? session.agentIds?.[agent]?.id;
+    if (id) (session.agentIds ??= {})[agent] = { id, started: true };
+  }
   if (update.finished) {
     reply.live = false;
+    if (session.path && session.source && reply.agent && reply.agent !== session.source) {
+      keepOtherTurn(session, reply);
+      rememberMixed(session);
+    }
     if (reply.startedAt) reply.ms = Date.now() - reply.startedAt;
     if (reply.tokens) {
       const estimate = estimateCost(reply.tokens, reply.model);
@@ -640,10 +665,12 @@ function applyHistory(all: HistorySession[]) {
     }
   }
   const sessions: SessionItem[] = found.map((item) => ({
+    // A saved chat continued with another agent: which agents it has had, and their own conversation ids.
+    ...(mixed[item.id] ?? {}),
     id: item.id,
     projectId: projectIds.get(item.cwd)!,
     title: item.title,
-    agent: item.source,
+    agent: mixed[item.id]?.agents?.at(-1) ?? item.source,
     // Sonnet unless the chat was changed: the first model of the list is the biggest one.
     model: item.source === 'claude' ? 'claude-sonnet-5-5' : MODELS[item.source][0].value,
     status: 'idle',
@@ -681,9 +708,40 @@ const transcripts = new Map<string, Transcript>();
 const stampOf = (session: SessionItem) => `v2|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
 const MAX_SAVED = 12;
 
+/** Agents and per-agent ids of saved chats that switched agent (the chat files cannot hold them). */
+const mixed: Record<string, Pick<SessionItem, 'agents' | 'agentIds'>> = {};
+void getPref<typeof mixed>('chat.mixed').then((saved) => {
+  if (saved) Object.assign(mixed, saved);
+});
+export function rememberMixed(session: SessionItem) {
+  if (!session.path || !session.agents || session.agents.length < 2) return;
+  mixed[session.id] = $state.snapshot({ agents: session.agents, agentIds: session.agentIds });
+  setPref('chat.mixed', mixed);
+}
+
+/**
+ * Turns of another agent in a saved chat (a Claude chat continued with Codex, say). The chat's file only holds
+ * its own agent's turns, so these are kept here and merged back in by time when the chat is read again.
+ */
+const otherTurns: Record<string, Message[]> = {};
+void getPref<Record<string, Message[]>>('chat.otherTurns').then((saved) => {
+  if (saved) Object.assign(otherTurns, saved);
+});
+function keepOtherTurn(session: SessionItem, reply: Message) {
+  const list = messagesOf(session.id);
+  const index = list.indexOf(reply);
+  const asked = index > 0 && list[index - 1].role === 'user' ? [list[index - 1]] : [];
+  const kept = (otherTurns[session.id] ??= []);
+  for (const message of [...asked, reply]) {
+    if (!kept.some((item) => item.id === message.id)) kept.push($state.snapshot(message) as Message);
+  }
+  setPref('chat.otherTurns', $state.snapshot(otherTurns));
+}
+
 async function fetchTranscript(session: SessionItem): Promise<Message[]> {
   const loaded = await loadHistory(session.source!, session.path!);
-  return loaded.map((message) => ({
+  const own: Message[] = loaded.map((message) => ({
+    ...(message.role === 'assistant' ? { agent: session.source } : {}),
     id: message.id,
     role: message.role,
     time: clock(message.time),
@@ -694,6 +752,9 @@ async function fetchTranscript(session: SessionItem): Promise<Message[]> {
       ? { tokens: { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cache_read, cacheWrite: message.usage.cache_write }, model: message.model }
       : {}),
   }));
+  const others = otherTurns[session.id] ?? [];
+  if (!others.length) return own;
+  return [...own, ...others].sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
 }
 
 function remember(session: SessionItem, messages: Message[]) {

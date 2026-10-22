@@ -32,6 +32,8 @@ export type Message = {
   callOutput?: number;
   /** Exact cost reported by the CLI when the turn ended. */
   cost?: number;
+  /** The agent that wrote this reply. A chat can switch agents, so each reply keeps its own. */
+  agent?: Agent;
 };
 
 export const sessions: Session[] = [

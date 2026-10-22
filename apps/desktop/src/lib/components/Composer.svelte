@@ -11,6 +11,7 @@
     draftMentions,
     drafts,
     isRunning,
+    rememberMixed,
     MODELS,
     projectOf,
     queued,
@@ -103,6 +104,11 @@
       setPref('composer.pickers', pickers);
       const session = workspace.sessions.find((item) => item.id === id);
       if (session) {
+        // A chat continued with another agent lists every agent it has had (the sidebar shows them stacked).
+        if (session.agent !== current.agent && !session.draft) {
+          session.agents = [...new Set([...(session.agents ?? [session.source ?? session.agent]), current.agent])];
+          rememberMixed(session);
+        }
         session.agent = current.agent;
         session.model = current.model;
       }
