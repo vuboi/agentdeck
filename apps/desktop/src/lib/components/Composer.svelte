@@ -248,7 +248,7 @@
 
 <svelte:window bind:innerWidth={innerW} />
 <form
-  class="min-w-0 rounded-2xl border bg-card p-2.5 shadow-lg min-[720px]:p-3 transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
+  class="min-w-0 rounded-2xl border bg-card p-2.5 pb-2 shadow-lg min-[720px]:p-3 min-[720px]:pb-2 transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
   onsubmit={(event) => { event.preventDefault(); submit(); }}
   ondragover={(event) => { if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); dragging = true; } }}
   ondragleave={() => (dragging = false)}
