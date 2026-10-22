@@ -108,8 +108,14 @@
       if (tab.opened) await moveBrowser(place.rect);
       else await showBrowser(place.rect);
       if (tab.opened) await showBrowser(place.rect);
-      await zoomBrowser(place.zoom);
+      if (tab.opened) await zoomBrowser(place.zoom);
     } catch (error) {
+      // The page went away under us (closed, or being recreated for another device): open it again next time.
+      if (String(error).includes('the browser is not open')) {
+        tab.opened = false;
+        again = true;
+        return;
+      }
       browser.error = String(error);
     }
   }
@@ -317,20 +323,16 @@
 
   // ---- the "more" menu ----
   const menuItems = $derived<ZDropdownMenuItem[]>([
-    ...(['desktop', 'tablet', 'mobile'] as Device[]).map((value) => ({
-      label: DEVICES[value].w ? `${DEVICES[value].label} · ${DEVICES[value].w}×${DEVICES[value].h}` : DEVICES[value].label,
-      icon: (value === 'desktop' ? 'lucideMonitor' : value === 'tablet' ? 'lucideTablet' : 'lucideSmartphone') as ZIconName,
-      iconSize: '12' as const,
-      checked: browser.device === value,
-      class: 'text-xs! py-1',
-      onClick: () => (browser.device = value),
-    })),
-    { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: browser.device === 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
-    { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: 'before', disabled: !tab.url, onClick: () => void openExternal(tab.url) },
+    { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void openExternal(tab.url) },
     { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url) },
     { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
   ]);
 
+  const DEVICE_BUTTONS = (['desktop', 'tablet', 'mobile'] as Device[]).map((value) => ({
+    value,
+    label: DEVICES[value].w ? `${DEVICES[value].label} · ${DEVICES[value].w}×${DEVICES[value].h}` : DEVICES[value].label,
+    icon: (value === 'desktop' ? 'lucideMonitor' : value === 'tablet' ? 'lucideTablet' : 'lucideSmartphone') as ZIconName,
+  }));
   const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
 </script>
@@ -396,6 +398,34 @@
         />
       </form>
       <div class="flex shrink-0 items-center gap-0.5">
+        <!-- Desktop, tablet, phone: one group, the current one pressed. Rotate is part of it, off for desktop. -->
+        <div class="mr-1 flex items-center rounded-md border border-border p-px" role="radiogroup" aria-label="Device">
+          {#each DEVICE_BUTTONS as item (item.value)}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={browser.device === item.value}
+              aria-label={item.label}
+              class="grid h-6 w-7 cursor-pointer place-items-center rounded-[5px] outline-none {browser.device === item.value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+              {@attach zTooltip({ content: item.label, position: 'top' })}
+              onclick={() => (browser.device = item.value)}
+            >
+              <ZIcon zType={item.icon} class="size-3.5" />
+            </button>
+          {/each}
+          <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
+          <button
+              type="button"
+              aria-label="Rotate"
+              aria-pressed={browser.landscape}
+              disabled={browser.device === 'desktop'}
+              class="grid h-6 w-7 cursor-pointer place-items-center rounded-[5px] outline-none disabled:pointer-events-none disabled:opacity-40 {browser.landscape && browser.device !== 'desktop' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+              {@attach zTooltip({ content: 'Rotate', position: 'top' })}
+              onclick={() => (browser.landscape = !browser.landscape)}
+            >
+              <ZIcon zType={'lucideRotateCw' as ZIconName} class="size-3.5" />
+            </button>
+        </div>
         <button type="button" class={icon} aria-label="Mark up the page" disabled={!started || busy !== ''} {@attach zTooltip({ content: 'Mark up the page for the agent', position: 'top' })} onclick={annotate}>
           <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
         </button>
@@ -403,8 +433,8 @@
           <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
           {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
         </button>
-<div data-page-menu class="flex items-center [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
-                  <ZDropdownMenu zItems={menuItems} zIcon={'lucideEllipsisVertical' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
+<div data-page-menu class="flex items-center [&_svg]:size-3.5! [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
+                  <ZDropdownMenu zItems={menuItems} zIcon={'lucideSettings2' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
         </div>
       </div>
     </div>

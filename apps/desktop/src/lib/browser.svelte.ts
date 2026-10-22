@@ -193,8 +193,10 @@ export const stop = () => run('window.stop()');
 /** The pages are created again with the new device's user agent (it cannot change on a live page), at the same address. */
 export async function recreateBrowser() {
   for (const tab of browser.tabs) {
-    if (tab.opened && inTauri()) await call('browser_close', { tab: tab.id }).catch(() => {});
+    // Marked closed first: a placement running meanwhile must not reach a page that is going away.
+    const was = tab.opened;
     tab.opened = false;
+    if (was && inTauri()) await call('browser_close', { tab: tab.id }).catch(() => {});
   }
 }
 
