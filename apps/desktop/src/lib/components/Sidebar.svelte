@@ -298,7 +298,7 @@
             <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}">{ctx.node.label}</span>
             <!-- The agent tag and the three dots share one cell: hovering swaps them without moving anything. -->
             <span class="grid shrink-0 place-items-center">
-              <span class="col-start-1 row-start-1 transition-opacity group-hover/row:opacity-0 group-focus-within/row:opacity-0">
+              <span class="col-start-1 row-start-1 transition-opacity group-hover/tree-row:opacity-0 group-focus-within/tree-row:opacity-0">
                 {#if (data.session.agents?.length ?? 1) > 1}
                   <AgentStack agents={data.session.agents!} />
                 {:else}
@@ -307,7 +307,7 @@
               </span>
               <button
                 type="button"
-                class="col-start-1 row-start-1 inline-flex cursor-pointer rounded p-0.5 text-muted-foreground opacity-0 transition-opacity outline-none group-hover/row:opacity-100 group-focus-within/row:opacity-100 hover:bg-accent hover:text-foreground"
+                class="col-start-1 row-start-1 inline-flex cursor-pointer rounded p-0.5 text-muted-foreground opacity-0 transition-opacity outline-none group-hover/tree-row:opacity-100 group-focus-within/tree-row:opacity-100 hover:bg-accent hover:text-foreground"
                 aria-label="Session actions"
                 aria-haspopup="menu"
                 onclick={(event) => openMenu(event, data.session!.id, event.currentTarget)}
@@ -321,7 +321,7 @@
             {#if data?.kind === 'project'}
               <button
                 type="button"
-                class="inline-flex shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground opacity-0 transition-opacity outline-none group-hover/row:opacity-100 group-focus-within/row:opacity-100 hover:bg-accent hover:text-foreground"
+                class="inline-flex shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground opacity-0 transition-opacity outline-none group-hover/tree-row:opacity-100 group-focus-within/tree-row:opacity-100 hover:bg-accent hover:text-foreground"
                 aria-label="New session in {ctx.node.label}"
                 title="New session"
                 onclick={(event) => {
