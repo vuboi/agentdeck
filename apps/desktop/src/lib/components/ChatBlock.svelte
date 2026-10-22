@@ -15,7 +15,7 @@
 
 {#if block.kind === 'thinking' && block.text.trim()}
   <!-- Same flat style as the command blocks; the body slides open and shut. -->
-  <div class="rounded-lg border border-border bg-muted/30 text-xs text-muted-foreground">
+  <div class="block-in rounded-lg border border-border bg-muted/30 text-xs text-muted-foreground">
     <button
       type="button"
       class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -38,13 +38,13 @@
     </div>
   </div>
 {:else if block.kind === 'response'}
-  <div class="text-sm leading-relaxed text-foreground">
+  <div class="block-in text-sm leading-relaxed text-foreground">
     <ZShowMore zMaxHeight={240} zButtonSize="sm" zBlurColor={fade ?? 'var(--background)'}>
       <p class="m-0 whitespace-pre-wrap">{block.text}{#if block.streaming}<span class="ml-0.5 inline-block h-4 w-[2px] translate-y-[3px] animate-pulse bg-foreground" aria-hidden="true"></span>{/if}</p>
     </ZShowMore>
   </div>
 {:else if block.kind === 'command'}
-  <div class="overflow-hidden rounded-lg border border-border bg-background">
+  <div class="block-in overflow-hidden rounded-lg border border-border bg-background">
     <div class="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 font-mono text-xs">
       <ZIcon zType="lucideTerminal" class="size-3.5 text-muted-foreground" />
       <span class="truncate">{block.command}</span>
@@ -66,7 +66,7 @@
     {/if}
   </div>
 {:else if block.kind === 'loading'}
-  <div class="flex items-center gap-2 text-xs text-muted-foreground">
+  <div class="block-in flex items-center gap-2 text-xs text-muted-foreground">
     <ZLoading zLoading zSpinner={LOADER.thinking} zSize="xs" zColor="primary" />
     <span>{block.label}</span>
   </div>

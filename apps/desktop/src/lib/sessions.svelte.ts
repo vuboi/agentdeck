@@ -233,7 +233,16 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent) {
 }
 
 if (inTauri()) {
-  void listenAgentEvents(({ session, event }) => handleAgentEvent(session, event));
+  // A fast stream sends dozens of deltas a second; each one re-rendered the chat. Apply them once per frame.
+  let queue: { session: string; event: AgentEvent }[] = [];
+  const flush = () => {
+    const batch = queue;
+    queue = [];
+    for (const { session, event } of batch) handleAgentEvent(session, event);
+  };
+  void listenAgentEvents((envelope) => {
+    if (queue.push(envelope) === 1) requestAnimationFrame(flush);
+  });
 }
 
 export function sendMessage(text: string) {

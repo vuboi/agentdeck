@@ -92,11 +92,9 @@
 
   // Switching session loads its transcript (from disk for imported Claude/Codex history).
   // Re-runs when the open chat changes, and when it first appears in the list (after F5 the id is restored
-  // before the history index is in) or gains its file on disk (a new chat after its first answer).
-  const openKey = $derived.by(() => {
-    const found = workspace.sessions.find((item) => item.id === workspace.activeId);
-    return found ? `${found.id}|${found.path ? 'disk' : 'local'}` : `${workspace.activeId}|missing`;
-  });
+  // before the history index is in).
+  // Gaining its file after the first answer must not reload the chat: the live messages are already right.
+  const openKey = $derived(`${workspace.activeId}|${workspace.sessions.some((item) => item.id === workspace.activeId) ? 'found' : 'missing'}`);
   $effect(() => {
     void openKey;
     untrack(() => {
@@ -134,8 +132,29 @@
 
   // Jump-to-bottom button: shown while scrolled up or while the agent runs. Idle = arrow; running =
   // a loading ring that turns into the arrow on hover.
-  const atEnd = $derived($virtualizer.isAtEnd(1));
+  // The button only appears once the reader is clearly away from the bottom, not at the first pixel.
+  const JUMP_AFTER = 180;
+  const atEnd = $derived($virtualizer.isAtEnd(JUMP_AFTER));
   const running = $derived(activeSession()?.status === 'working');
+
+  // While a reply streams the view follows it, but only for a reader who is already at the bottom:
+  // scrolling up to read stops the following, sending a message (or the jump button) resumes it.
+  let following = true;
+  function onViewportScroll() {
+    if (viewportEl) following = viewportEl.scrollHeight - viewportEl.scrollTop - viewportEl.clientHeight < 120;
+  }
+  const tailSignature = $derived(
+    (chat.messages.at(-1)?.blocks ?? []).map((block) => block.kind + ('text' in block ? block.text.length : 'output' in block ? block.output.length : 0)).join(),
+  );
+  $effect(() => {
+    void tailSignature;
+    if (!following || !running) return;
+    untrack(() => requestAnimationFrame(() => $virtualizer.scrollToEnd()));
+  });
+  // Your own message always brings you back to the bottom.
+  $effect(() => {
+    if (chat.messages.at(-1)?.role === 'user') untrack(() => ((following = true), pinToNewest()));
+  });
 
   function jumpToTurn(turn: number) {
     const row = turnRows[turn];
@@ -258,7 +277,7 @@
         class="group/jump absolute bottom-3 left-1/2 z-20 size-8 -translate-x-1/2 rounded-full bg-card! p-0 shadow-md"
         aria-label="Scroll to latest"
         title="Scroll to latest"
-        onclick={() => $virtualizer.scrollToEnd()}
+        onclick={() => ((following = true), $virtualizer.scrollToEnd())}
       >
         <!-- Own grid so the spinner and the arrow sit dead centre; the button's inline content box drifted down-right. -->
         <span class="grid size-full place-items-center">
@@ -294,7 +313,7 @@
       </div>
     {/if}
 
-    <div bind:this={viewportEl} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+    <div bind:this={viewportEl} onscroll={onViewportScroll} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
       <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" role="log" aria-live="polite" aria-label="Conversation">
         {#each $virtualizer.getVirtualItems() as row (row.key)}
           {@const message = chat.messages[row.index]}
