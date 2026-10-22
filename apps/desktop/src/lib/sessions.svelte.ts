@@ -212,14 +212,16 @@ export function newChat() {
 
 /** The last thing asked in each chat: "open it", "run the app" decides whether a served page opens by itself. */
 const lastPrompt: Record<string, string> = {};
-const OPEN_WORDS = /(open|preview|browser|run|start|serve)|mở|chạy|xem thử/i;
+const OPEN_WORDS = /(open|opened|preview|browser|run|running|start|started|serve)|mở|chạy|xem thử/i;
 
 /** After a turn: if you asked to open or run something and a local address came out of it, show it in the AgentDeck browser. */
 function openServedPage(sessionId: string, reply: Message) {
-  if (!inTauri() || !OPEN_WORDS.test(lastPrompt[sessionId] ?? '')) return;
+  if (!inTauri()) return;
   const text = reply.blocks
     .map((block) => (block.kind === 'response' ? block.text : block.kind === 'command' ? `${block.command}\n${block.output}` : ''))
     .join('\n');
+  // You asked for it, or the answer says the page is open or running.
+  if (!OPEN_WORDS.test(lastPrompt[sessionId] ?? '') && !OPEN_WORDS.test(text)) return;
   const found = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?[^\s`'")\]>]*/gi)?.find(isLocalUrl);
   if (found) openInPreview(found);
 }

@@ -191,15 +191,7 @@ html[data-warming] [data-z-popover] {
 .md li > .md-code, .md li > .md-table { margin-bottom: 0.5rem; }
 .md li > ul, .md li > ol { margin-bottom: 0; }
 
-/* Tooltips (z-ui's and the native `title` ones, see TitleTooltip): one small card in the app's own colours.
-   z-ui's utilities are !important inside a layer and beat plain rules, so its colour tokens are remapped instead. */
-.z-tooltip-host {
-  --color-foreground: var(--popover);
-  --color-background: var(--popover-foreground);
-  --radius-sm: 0.5rem;
-  --radius-xs: 0.4rem;
-  box-shadow: 0 0 0 1px var(--border), 0 10px 24px -10px rgb(0 0 0 / 0.55);
-}
+/* Tooltips: z-ui draws them as a dark card now; only the arrow is dropped and the text kept to one line. */
 .z-tooltip-host.z-tooltip > div:not(:last-child) {
   display: none; /* the arrow */
 }

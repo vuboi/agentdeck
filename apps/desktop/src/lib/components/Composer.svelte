@@ -368,9 +368,9 @@
     </div>
     {#if running && !hasInput}
       <!-- A reply is being written and nothing is typed: this stops it. -->
-      <button type="button" class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-full bg-foreground text-background outline-none hover:opacity-90" aria-label="Stop" {@attach zTooltip({ content: 'Stop', position: 'top' })} onclick={() => stopTurn(sessionId)}>
-        <ZIcon zType={'lucideSquare' as ZIconName} class="size-3.5 fill-current" />
-      </button>
+      <ZButton zWave={false} zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" aria-label="Stop" {@attach zTooltip({ content: 'Stop', position: 'top' })} onclick={() => stopTurn(sessionId)}>
+        <svg class="size-3.5" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
+      </ZButton>
     {:else}
       <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" disabled={!hasInput} aria-label={running ? (turnOptions.whileRunning === 'queue' ? 'Add to the queue' : 'Stop and send') : 'Send message'} {@attach zTooltip({ content: running ? (turnOptions.whileRunning === 'queue' ? 'Add to the queue' : 'Stop and send now') : 'Send', position: 'top' })}>
         <ZIcon zType="lucideArrowUp" class="size-4" />

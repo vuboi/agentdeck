@@ -29,7 +29,7 @@
   <span class="ml-1.5 flex items-center gap-1.5 text-[11px]">
     {#if message.ms}<span class="tabular-nums">Worked for {elapsed(message.ms)}</span><span aria-hidden="true">·</span>{/if}
     {#if message.at}
-      <span {@attach zTooltip({ content: fullDate(message.at), position: 'top' })}>{ago(message.at, ticker.min)}</span>
+      <span {@attach zTooltip({ content: fullDate(message.at), position: 'top' })}>{ago(new Date(new Date(message.at).getTime() + (message.ms ?? 0)).toISOString(), ticker.min)}</span>
     {:else}
       <span>{message.time}</span>
     {/if}

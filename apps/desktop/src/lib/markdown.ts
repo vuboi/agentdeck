@@ -10,6 +10,11 @@ marked.use({
   gfm: true,
   breaks: true,
   renderer: {
+    // `http://localhost:4200` in backticks is an address too: make it a link.
+    codespan({ text }: Tokens.Codespan) {
+      const code = `<code>${text}</code>`;
+      return /^https?:\/\/[^\s<>"]+$/.test(text) ? `<a href="${escapeHtml(text.replace(/&amp;/g, '&'))}">${code}</a>` : code;
+    },
     code({ text, lang }: Tokens.Code) {
       const language = (lang ?? '').trim().split(/\s+/)[0];
       return (
