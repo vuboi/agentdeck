@@ -255,7 +255,7 @@
         <!-- Own grid so the spinner and the arrow sit dead centre; the button's inline content box drifted down-right. -->
         <span class="grid size-full place-items-center">
           {#if running}
-            <span class="group-hover/jump:hidden grid place-items-center"><ZLoading zLoading zSpinner="ring" zSize="sm" zColor="primary" /></span>
+            <span class="group-hover/jump:hidden grid place-items-center"><ZLoading zLoading zSpinner="ring" zSize="xs" zColor="primary" /></span>
             <ZIcon zType="lucideArrowDown" class="hidden size-4 group-hover/jump:block" />
           {:else}
             <ZIcon zType="lucideArrowDown" class="size-4" />

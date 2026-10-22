@@ -18,7 +18,11 @@ pub enum AgentEvent {
     /// A tool the agent ran; `input` is the JSON it passed.
     ToolCall { name: String, input: String },
     /// The turn finished. `session_id` is the CLI's id for the conversation, to resume next turn.
-    Done { session_id: Option<String>, text: String, cost_usd: Option<f64> },
+    Done {
+        session_id: Option<String>,
+        text: String,
+        cost_usd: Option<f64>,
+    },
     /// The turn failed.
     Error { message: String },
 }

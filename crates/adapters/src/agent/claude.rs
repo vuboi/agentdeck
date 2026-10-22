@@ -23,7 +23,13 @@ impl Provider for Claude {
     fn candidates(&self) -> Vec<PathBuf> {
         // The installer puts it in ~/.local/bin, which a desktop app started outside a shell may not see.
         let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-        home.map(|home| vec![PathBuf::from(home).join(".local").join("bin").join("claude")]).unwrap_or_default()
+        home.map(|home| {
+            vec![PathBuf::from(home)
+                .join(".local")
+                .join("bin")
+                .join("claude")]
+        })
+        .unwrap_or_default()
     }
 
     fn args(&self, req: &TurnRequest) -> Vec<String> {
@@ -37,7 +43,14 @@ impl Provider for Claude {
             "--include-partial-messages".to_string(),
         ];
         if let Some(id) = &req.session_id {
-            args.push(if req.resume { "--resume" } else { "--session-id" }.to_string());
+            args.push(
+                if req.resume {
+                    "--resume"
+                } else {
+                    "--session-id"
+                }
+                .to_string(),
+            );
             args.push(id.clone());
         }
         if let Some(model) = &req.model {
@@ -57,10 +70,14 @@ impl Provider for Claude {
                 let delta = &value["event"]["delta"];
                 match (value["event"]["type"].as_str(), delta["type"].as_str()) {
                     (Some("content_block_delta"), Some("text_delta")) => {
-                        vec![AgentEvent::Delta { text: delta["text"].as_str().unwrap_or_default().to_string() }]
+                        vec![AgentEvent::Delta {
+                            text: delta["text"].as_str().unwrap_or_default().to_string(),
+                        }]
                     }
                     (Some("content_block_delta"), Some("thinking_delta")) => {
-                        vec![AgentEvent::Thinking { text: delta["thinking"].as_str().unwrap_or_default().to_string() }]
+                        vec![AgentEvent::Thinking {
+                            text: delta["thinking"].as_str().unwrap_or_default().to_string(),
+                        }]
                     }
                     _ => Vec::new(),
                 }
@@ -78,7 +95,12 @@ impl Provider for Claude {
                 .collect(),
             Some("result") => {
                 if value["is_error"].as_bool().unwrap_or(false) {
-                    vec![AgentEvent::Error { message: value["result"].as_str().unwrap_or("agent failed").to_string() }]
+                    vec![AgentEvent::Error {
+                        message: value["result"]
+                            .as_str()
+                            .unwrap_or("agent failed")
+                            .to_string(),
+                    }]
                 } else {
                     vec![AgentEvent::Done {
                         session_id: value["session_id"].as_str().map(str::to_string),
@@ -97,19 +119,34 @@ mod tests {
     use super::*;
 
     fn req(resume: bool) -> TurnRequest {
-        TurnRequest { prompt: "hi".into(), session_id: Some("abc".into()), resume, model: None, cwd: None }
+        TurnRequest {
+            prompt: "hi".into(),
+            session_id: Some("abc".into()),
+            resume,
+            model: None,
+            cwd: None,
+        }
     }
 
     #[test]
     fn first_turn_creates_the_session_and_later_turns_resume_it() {
-        assert!(Claude.args(&req(false)).windows(2).any(|w| w == ["--session-id", "abc"]));
-        assert!(Claude.args(&req(true)).windows(2).any(|w| w == ["--resume", "abc"]));
+        assert!(Claude
+            .args(&req(false))
+            .windows(2)
+            .any(|w| w == ["--session-id", "abc"]));
+        assert!(Claude
+            .args(&req(true))
+            .windows(2)
+            .any(|w| w == ["--resume", "abc"]));
     }
 
     #[test]
     fn text_deltas_stream_as_delta_events() {
         let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"po"}}}"#;
-        assert_eq!(Claude.parse_line(line), vec![AgentEvent::Delta { text: "po".into() }]);
+        assert_eq!(
+            Claude.parse_line(line),
+            vec![AgentEvent::Delta { text: "po".into() }]
+        );
     }
 
     #[test]
@@ -117,19 +154,30 @@ mod tests {
         let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"pong","session_id":"s1","total_cost_usd":0.5}"#;
         assert_eq!(
             Claude.parse_line(line),
-            vec![AgentEvent::Done { session_id: Some("s1".into()), text: "pong".into(), cost_usd: Some(0.5) }]
+            vec![AgentEvent::Done {
+                session_id: Some("s1".into()),
+                text: "pong".into(),
+                cost_usd: Some(0.5)
+            }]
         );
     }
 
     #[test]
     fn error_result_becomes_an_error_event() {
         let line = r#"{"type":"result","is_error":true,"result":"rate limited"}"#;
-        assert_eq!(Claude.parse_line(line), vec![AgentEvent::Error { message: "rate limited".into() }]);
+        assert_eq!(
+            Claude.parse_line(line),
+            vec![AgentEvent::Error {
+                message: "rate limited".into()
+            }]
+        );
     }
 
     #[test]
     fn unknown_lines_are_ignored() {
-        assert!(Claude.parse_line(r#"{"type":"system","subtype":"init"}"#).is_empty());
+        assert!(Claude
+            .parse_line(r#"{"type":"system","subtype":"init"}"#)
+            .is_empty());
         assert!(Claude.parse_line("not json").is_empty());
     }
 }

@@ -66,12 +66,18 @@ async fn history_delete(source: Source, path: String) -> Result<(), String> {
 async fn file_read(root: String, path: String) -> Result<String, String> {
     const MAX_BYTES: u64 = 2 * 1024 * 1024;
     tauri::async_runtime::spawn_blocking(move || {
-        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
-        let path = PathBuf::from(&path).canonicalize().map_err(|error| error.to_string())?;
+        let root = PathBuf::from(&root)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let path = PathBuf::from(&path)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
         if !path.starts_with(&root) {
             return Err("file is outside the project folder".to_string());
         }
-        let size = std::fs::metadata(&path).map_err(|error| error.to_string())?.len();
+        let size = std::fs::metadata(&path)
+            .map_err(|error| error.to_string())?
+            .len();
         if size > MAX_BYTES {
             return Err(format!("file is {size} bytes, the viewer stops at 2 MB"));
         }
@@ -88,12 +94,18 @@ async fn file_read_bytes(root: String, path: String) -> Result<String, String> {
     use base64::Engine;
     const MAX_BYTES: u64 = 20 * 1024 * 1024;
     tauri::async_runtime::spawn_blocking(move || {
-        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
-        let path = PathBuf::from(&path).canonicalize().map_err(|error| error.to_string())?;
+        let root = PathBuf::from(&root)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let path = PathBuf::from(&path)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
         if !path.starts_with(&root) {
             return Err("file is outside the project folder".to_string());
         }
-        let size = std::fs::metadata(&path).map_err(|error| error.to_string())?.len();
+        let size = std::fs::metadata(&path)
+            .map_err(|error| error.to_string())?
+            .len();
         if size > MAX_BYTES {
             return Err(format!("file is {size} bytes, the preview stops at 20 MB"));
         }
@@ -147,7 +159,9 @@ async fn drive_turn(
     {
         Ok(child) => child,
         Err(error) => {
-            return emit(AgentEvent::Error { message: format!("could not start {}: {error}", provider.binary()) });
+            return emit(AgentEvent::Error {
+                message: format!("could not start {}: {error}", provider.binary()),
+            });
         }
     };
 
@@ -173,7 +187,13 @@ async fn drive_turn(
             Ok(status) if status.success() => "agent ended without a result".to_string(),
             _ => stderr.trim().to_string(),
         };
-        emit(AgentEvent::Error { message: if message.is_empty() { "agent failed".into() } else { message } });
+        emit(AgentEvent::Error {
+            message: if message.is_empty() {
+                "agent failed".into()
+            } else {
+                message
+            },
+        });
     }
 }
 
@@ -181,12 +201,18 @@ async fn drive_turn(
 async fn run_turn(app: AppHandle, session: String, provider: Box<dyn Provider>, req: TurnRequest) {
     let binary = resolve_binary(provider.as_ref());
     drive_turn(binary, provider.as_ref(), &req, |event| {
-        let _ = app.emit("agent-event", AgentEnvelope { session: session.clone(), event });
+        let _ = app.emit(
+            "agent-event",
+            AgentEnvelope {
+                session: session.clone(),
+                event,
+            },
+        );
     })
     .await;
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))] // the fake agents are sh scripts
 mod agent_turn_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
@@ -212,14 +238,21 @@ mod agent_turn_tests {
     }
 
     fn script(name: &str, body: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!("agentdeck-test-{name}-{}.sh", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("agentdeck-test-{name}-{}.sh", std::process::id()));
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
     }
 
     fn req() -> TurnRequest {
-        TurnRequest { prompt: "hi".into(), session_id: None, resume: false, model: None, cwd: None }
+        TurnRequest {
+            prompt: "hi".into(),
+            session_id: None,
+            resume: false,
+            model: None,
+            cwd: None,
+        }
     }
 
     #[tokio::test]
@@ -230,13 +263,20 @@ mod agent_turn_tests {
 echo '{"type":"result","is_error":false,"result":"pong","session_id":"s1"}'"#,
         );
         let mut events = Vec::new();
-        drive_turn(path.clone().into_os_string(), &Fake, &req(), |e| events.push(e)).await;
+        drive_turn(path.clone().into_os_string(), &Fake, &req(), |e| {
+            events.push(e)
+        })
+        .await;
         let _ = std::fs::remove_file(&path);
         assert_eq!(
             events,
             vec![
                 AgentEvent::Delta { text: "po".into() },
-                AgentEvent::Done { session_id: Some("s1".into()), text: "pong".into(), cost_usd: None },
+                AgentEvent::Done {
+                    session_id: Some("s1".into()),
+                    text: "pong".into(),
+                    cost_usd: None
+                },
             ]
         );
     }
@@ -245,21 +285,33 @@ echo '{"type":"result","is_error":false,"result":"pong","session_id":"s1"}'"#,
     async fn failure_without_result_reports_stderr() {
         let path = script("fail", "echo 'boom' >&2\nexit 3");
         let mut events = Vec::new();
-        drive_turn(path.clone().into_os_string(), &Fake, &req(), |e| events.push(e)).await;
+        drive_turn(path.clone().into_os_string(), &Fake, &req(), |e| {
+            events.push(e)
+        })
+        .await;
         let _ = std::fs::remove_file(&path);
-        assert_eq!(events, vec![AgentEvent::Error { message: "boom".into() }]);
+        assert_eq!(
+            events,
+            vec![AgentEvent::Error {
+                message: "boom".into()
+            }]
+        );
     }
 
     #[tokio::test]
     async fn missing_binary_reports_an_error() {
         let mut events = Vec::new();
-        drive_turn("/nonexistent/agent-binary".into(), &Fake, &req(), |e| events.push(e)).await;
+        drive_turn("/nonexistent/agent-binary".into(), &Fake, &req(), |e| {
+            events.push(e)
+        })
+        .await;
         assert!(matches!(events.as_slice(), [AgentEvent::Error { .. }]));
     }
 }
 
 /// Sends one user message to an agent CLI. Returns at once; the answer arrives as `agent-event`s.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // one parameter per field the frontend sends
 async fn agent_send(
     app: AppHandle,
     session: String,
@@ -271,7 +323,13 @@ async fn agent_send(
     cwd: Option<String>,
 ) -> Result<(), String> {
     let provider = provider_for(&agent)?;
-    let req = TurnRequest { prompt, session_id: agent_session, resume, model, cwd: cwd.map(Into::into) };
+    let req = TurnRequest {
+        prompt,
+        session_id: agent_session,
+        resume,
+        model,
+        cwd: cwd.map(Into::into),
+    };
     tauri::async_runtime::spawn(run_turn(app, session, provider, req));
     Ok(())
 }
