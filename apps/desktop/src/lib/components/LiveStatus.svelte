@@ -20,6 +20,7 @@
   <ZShimmerText zText={state.label} />
   <span class="tabular-nums">{seconds}</span>
   {#if message.tokens}
-    <span class="tabular-nums">· {shortCount(totalTokens(message.tokens))} tokens{cost != null ? ` · ~${usd(cost)}` : ''}</span>
+    <span class="rounded bg-muted px-1.5 py-px text-[10px] tabular-nums">{shortCount(totalTokens(message.tokens))} tokens</span>
+    {#if cost != null}<span class="rounded bg-success/10 px-1.5 py-px text-[10px] font-medium text-success tabular-nums">≈ {usd(cost)}</span>{/if}
   {/if}
 </div>

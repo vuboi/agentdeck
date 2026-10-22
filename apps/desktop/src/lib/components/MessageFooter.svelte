@@ -19,12 +19,12 @@
   }
 </script>
 
-<div class="mt-2.5 flex items-center {end ? 'flex-row-reverse' : '-ml-1'} gap-2 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 focus-within:opacity-100">
+<div class="mt-2.5 flex items-center {end ? 'flex-row-reverse' : '-ml-1'} gap-1 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 focus-within:opacity-100">
   <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Copy answer" onclick={copy} {@attach zTooltip({ content: copied ? 'Copied' : 'Copy', position: 'top' })}>
-    <ZIcon zType={copied ? 'lucideCheck' : 'lucideCopy'} class="size-[10px]" />
+    <ZIcon zType={copied ? 'lucideCheck' : 'lucideCopy'} zSize="14" class="size-[14px]!" />
   </ZButton>
   <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Fork chat from here" onclick={onfork} {@attach zTooltip({ content: 'Fork chat', position: 'top' })}>
-    <ZIcon zType="lucideGitBranchPlus" class="size-[10px]" />
+    <ZIcon zType="lucideGitBranchPlus" zSize="14" class="size-[14px]!" />
   </ZButton>
   <span class="mx-1 flex items-center gap-1.5 text-[11px]">
     {#if message.ms}<span class="tabular-nums">Worked for {elapsed(message.ms)}</span><span aria-hidden="true">·</span>{/if}

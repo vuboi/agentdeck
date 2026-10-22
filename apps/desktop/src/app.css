@@ -214,7 +214,7 @@ html[data-warming] [data-z-popover] {
   max-width: min(420px, calc(100vw - 16px)) !important;
 }
 .z-tooltip-host.z-tooltip > div:last-child {
-  white-space: normal;
+  white-space: pre-line;
 }
 
 /* The app is one screen, never a scrolling page: z-ui reserves a scrollbar gutter on <html>, which left a 10px strip

@@ -33,8 +33,16 @@ export const usd = (value: number) => (value < 0.01 ? `$${value.toFixed(3)}` : `
 /** All tokens the reply moved: what it read (fresh and cached) and what it wrote. */
 export const totalTokens = (tokens: Tokens) => tokens.input + tokens.cacheRead + tokens.cacheWrite + tokens.output;
 
-export function tokenDetail(tokens: Tokens): string {
-  return `Input ${shortCount(tokens.input)} · cache read ${shortCount(tokens.cacheRead)} · cache write ${shortCount(tokens.cacheWrite)} · output ${shortCount(tokens.output)}`;
+/** One line per kind, for a tooltip (shown with line breaks kept). */
+export function tokenDetail(tokens: Tokens, estimated = false): string {
+  const lines = [
+    `• Input  ${shortCount(tokens.input)}`,
+    `• Cache read  ${shortCount(tokens.cacheRead)}`,
+    `• Cache write  ${shortCount(tokens.cacheWrite)}`,
+    `• Output  ${shortCount(tokens.output)}`,
+  ];
+  if (estimated) lines.push('Cost estimated from list prices');
+  return lines.join('\n');
 }
 
 /** One finished reply, as kept for the usage dashboard. `cost` is the CLI's exact figure when it gave one. */

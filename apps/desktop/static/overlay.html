@@ -66,4 +66,8 @@ root.addEventListener('pointerleave', () => {
   for (const box of root.querySelectorAll('[data-z-hover-glide-highlight]')) box.style.opacity = '0';
 });
 addEventListener('keydown', (event) => post({ kind: 'overlay-key', key: event.key }));
+// The clear margin around the menu is not the menu: a press there goes to the app below.
+addEventListener('pointerdown', (event) => {
+  if (!root.contains(event.target)) post({ kind: 'overlay-pass', x: event.clientX, y: event.clientY });
+});
 </script></body></html>

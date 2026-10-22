@@ -373,7 +373,11 @@
                     <span class="text-muted-foreground">{message.time}</span>
                     {#if message.tokens}
                       {@const cost = message.cost ?? estimateCost(message.tokens, message.model)}
-                      <span class="text-[11px] text-muted-foreground tabular-nums" {@attach zTooltip({ content: `${tokenDetail(message.tokens)}${message.cost == null ? ' · cost estimated from list prices' : ''}`, position: 'top' })}>· {shortCount(totalTokens(message.tokens))} tokens{cost != null ? ` · ${message.cost == null ? '~' : ''}${usd(cost)}` : ''}</span>
+                      <!-- Tokens and cost as two small chips; hover for the breakdown. -->
+                      <span class="ml-0.5 flex items-center gap-1 text-[10px] tabular-nums" {@attach zTooltip({ content: tokenDetail(message.tokens, message.cost == null), position: 'top' })}>
+                        <span class="rounded bg-muted px-1.5 py-px text-muted-foreground">{shortCount(totalTokens(message.tokens))} tokens</span>
+                        {#if cost != null}<span class="rounded bg-success/10 px-1.5 py-px font-medium text-success">{message.cost == null ? '≈ ' : ''}{usd(cost)}</span>{/if}
+                      </span>
                     {/if}
                   </div>
                   <div class="flex w-full min-w-0 flex-col gap-2">

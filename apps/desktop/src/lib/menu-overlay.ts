@@ -47,6 +47,8 @@ export function mirrorMenus(area: () => DOMRect | null): () => void {
   let lastKey = '';
   let shown = false;
   let frame = 0;
+  /** Where the overlay sits in the window. */
+  let at = { x: 0, y: 0 };
 
   let fresh = false;
   const hide = () => {
@@ -109,6 +111,7 @@ export function mirrorMenus(area: () => DOMRect | null): () => void {
     const script = `window.__overlay && window.__overlay.render(${JSON.stringify(html)}, ${JSON.stringify(attrs)}, ${PAD}, ${PAD}, ${w}, ${opening ? JSON.stringify(origin) : 'null'})`;
     if (moved || !shown) {
       shown = true;
+      at = { x: x - PAD, y: y - PAD };
       void call('overlay_show', { script, x: x - PAD, y: y - PAD, w: w + PAD * 2, h: h + PAD * 2 }).catch(() => {});
     } else {
       void run(script).catch(() => {});
@@ -123,6 +126,17 @@ export function mirrorMenus(area: () => DOMRect | null): () => void {
       if (payload.kind === 'page-pointer') {
         // A press on the page is a press outside the menu: it closes as it would on any outside click.
         if (current) document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
+        return;
+      }
+      if (payload.kind === 'overlay-pass') {
+        // A press on the mirror's clear margin (room for its shadow) belongs to what is under it in the app:
+        // the menu's own button most often, which then toggles the menu shut.
+        const { x = 0, y = 0 } = payload as { x?: number; y?: number };
+        const under = document.elementFromPoint(at.x + x, at.y + y);
+        if (under instanceof HTMLElement) {
+          under.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
+          (under.closest<HTMLElement>('button,a,[role=button],input') ?? under).click();
+        }
         return;
       }
       if (!current) return;
