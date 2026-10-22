@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1024" height="1024">
+  <!-- The app icon: Logo.svelte with the primary tile as a fixed violet. Regenerate icons with `pnpm tauri icon app-icon.svg`. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#a78bfa" />
+      <stop offset="1" stop-color="#6d28d9" />
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.28" />
+      <stop offset="1" stop-color="#fff" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+  <rect width="24" height="24" rx="6.5" fill="url(#tile)" />
+  <rect width="24" height="24" rx="6.5" fill="url(#gloss)" />
+  <rect x="5" y="6.5" width="9" height="11.5" rx="2.2" fill="#fff" fill-opacity="0.45" transform="rotate(-14 9.5 12.25)" />
+  <rect x="9.5" y="6" width="9" height="12" rx="2.2" fill="#fff" />
+  <path d="M14 8.9Q14.45 11.55 17 12Q14.45 12.45 14 15.1Q13.55 12.45 11 12Q13.55 11.55 14 8.9Z" fill="#7c3aed" />
+</svg>
