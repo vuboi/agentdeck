@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
   import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree, zModalService } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZTreeNode } from '@shival99/z-ui-svelte';
+  import Logo from './Logo.svelte';
   import AgentStack from './AgentStack.svelte';
   import { showSession } from '../content-tabs.svelte';
   import SearchPalette from './SearchPalette.svelte';
@@ -235,7 +236,7 @@
 <aside class="flex h-full min-w-0 flex-col bg-sidebar" aria-label="Sessions">
   <!-- Header row shared with the other panes: same height, one continuous bottom line. -->
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3" data-tauri-drag-region>
-    <span class="grid size-5 shrink-0 place-items-center rounded-md bg-primary text-[11px] font-bold text-primary-foreground" data-tauri-drag-region>A</span>
+    <Logo class="size-5" />
     <span class="text-xs font-semibold" data-tauri-drag-region>AgentDeck</span>
   </div>
 

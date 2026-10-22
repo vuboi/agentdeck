@@ -261,10 +261,10 @@
   zTrigger="manual"
   zPosition="right-top"
   zOffset={6}
-  zWidth={240}
+  zWidth={200}
 >
   {#snippet children()}
-    <div class="flex w-[240px] flex-col gap-0.5 p-1" role="radiogroup" aria-label="{sourceOf(subProvider).label} models" {@attach glide()}>
+    <div class="flex w-[200px] flex-col gap-0.5 p-1" role="radiogroup" aria-label="{sourceOf(subProvider).label} models" {@attach glide()}>
       {#each modelsOf(subProvider) as item (item.value)}
         {@const selected = agent === subProvider && model === item.value}
         <button
@@ -278,10 +278,7 @@
             subOpen = false;
           }}
         >
-          <span class="min-w-0">
-            <span class="block truncate">{item.label}</span>
-            {#if item.description}<span class="block truncate text-[10.5px] text-muted-foreground">{item.description}</span>{/if}
-          </span>
+          <span class="min-w-0 truncate">{item.label}</span>
           {#if selected}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
         </button>
       {/each}

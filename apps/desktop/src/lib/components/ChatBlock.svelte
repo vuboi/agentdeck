@@ -10,6 +10,8 @@
 
   // Thinking starts folded. The body animates by growing its grid row from 0fr to 1fr.
   let thinkingOpen = $state(false);
+  // Reasoning often ends in blank lines; pre-wrap would show them as empty space under the text.
+  const thinkingText = $derived(block.kind === 'thinking' ? block.text.trim() : '');
 
   const statusIcon = { running: 'lucideLoaderCircle', ok: 'lucideCircleCheck', fail: 'lucideCircleX' } as const;
   const statusTone = { running: 'text-warning', ok: 'text-success', fail: 'text-destructive' } as const;
@@ -33,12 +35,12 @@
       <div class="min-h-0 overflow-hidden">
         <div class="px-3 pb-2">
           <!-- Short reasoning is shown as is: the show-more box keeps room for its button even when it has none. -->
-          {#if block.text.length > 600}
+          {#if thinkingText.length > 600}
             <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="var(--background)" moreLabel="Show more" lessLabel="Show less">
-              <p class="m-0 whitespace-pre-wrap leading-relaxed">{block.text}</p>
+              <p class="m-0 whitespace-pre-wrap leading-relaxed">{thinkingText}</p>
             </ZShowMore>
           {:else}
-            <p class="m-0 whitespace-pre-wrap leading-relaxed">{block.text}</p>
+            <p class="m-0 whitespace-pre-wrap leading-relaxed">{thinkingText}</p>
           {/if}
         </div>
       </div>
