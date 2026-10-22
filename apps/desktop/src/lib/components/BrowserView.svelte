@@ -31,6 +31,7 @@
     type Rect,
   } from '../browser.svelte';
   import { inTauri } from '../history';
+  import { layout } from '../layout.svelte';
   import { draftImages, drafts, workspace } from '../sessions.svelte';
   import AnnotationEditor from './AnnotationEditor.svelte';
   import DevTools from './DevTools.svelte';
@@ -72,9 +73,12 @@
   }
 
   async function sync() {
-    if (!inTauri() || !started || shot || covered) return;
+    if (!inTauri() || !started || shot || covered || layout.dragging) return;
     const place = frame();
-    if (!place) return;
+    if (!place) {
+      await hideBrowser();
+      return;
+    }
     const origin = stage!.getBoundingClientRect();
     deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
     try {
@@ -134,6 +138,20 @@
     observer.observe(document.body, { childList: true, subtree: true });
     void sync();
     window.addEventListener('resize', onResize);
+    // The stage can move without resizing (a floating window moved, a panel slid): follow it.
+    let last = '';
+    let frameId = 0;
+    const watch = () => {
+      const box = stage?.getBoundingClientRect();
+      const key = box ? `${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)},${Math.round(box.height)}` : '';
+      if (key !== last) {
+        last = key;
+        void sync();
+      }
+      frameId = requestAnimationFrame(watch);
+    };
+    frameId = requestAnimationFrame(watch);
+    return () => cancelAnimationFrame(frameId);
   });
   const onResize = () => void sync();
 
@@ -177,6 +195,9 @@
     void started;
     void browser.devtools;
     void browser.devtoolsHeight;
+    // A floating window being carried or resized: the page steps aside and comes back where it lands.
+    if (layout.dragging) untrack(() => void hideBrowser());
+    void layout.dragging;
     untrack(() => void sync());
   });
 

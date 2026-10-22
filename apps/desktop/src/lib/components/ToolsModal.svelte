@@ -59,9 +59,19 @@
 
   function beginDrag(win: FloatingTool, grabX: number, grabY: number) {
     layout.dragging = true;
+    // While it is carried the window is small, so the drop targets stay in view; it returns to its size when let go.
+    const original = { w: win.w ?? 560, h: win.h ?? 420 };
+    const small = { w: 280, h: 180 };
+    const wasMax = win.max;
+    win.min = false;
+    win.max = false;
+    win.w = small.w;
+    win.h = small.h;
+    const gx = Math.min(grabX, small.w - 24);
+    const gy = Math.min(grabY, small.h / 2);
     const move = (moved: PointerEvent) => {
-      win.x = Math.min(Math.max(0, moved.clientX - grabX), window.innerWidth - 120);
-      win.y = Math.min(Math.max(0, moved.clientY - grabY), window.innerHeight - 40);
+      win.x = Math.min(Math.max(0, moved.clientX - gx), window.innerWidth - 120);
+      win.y = Math.min(Math.max(0, moved.clientY - gy), window.innerHeight - 40);
       showTarget(moved.clientX, moved.clientY);
     };
     const up = (released: PointerEvent) => {
@@ -69,6 +79,11 @@
       window.removeEventListener('pointerup', up);
       const target = targetAt(released.clientX, released.clientY);
       if (target) dockTool(win.tool, target.zone);
+      else {
+        win.w = Math.min(original.w, window.innerWidth - win.x);
+        win.h = Math.min(original.h, window.innerHeight - win.y);
+        if (wasMax) toggleMax(win);
+      }
       layout.dragging = false;
       layout.dropZone = '';
       layout.dropLine = null;
@@ -77,25 +92,64 @@
     window.addEventListener('pointerup', up);
   }
 
-  // Bottom-right corner: drag to resize that window only.
-  function startResize(event: PointerEvent, win: FloatingTool) {
+  // Any edge or corner: drag to resize that window only.
+  type Edge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+  function startResize(event: PointerEvent, win: FloatingTool, edge: Edge) {
     event.preventDefault();
     event.stopPropagation();
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const startW = win.w ?? 560;
-    const startH = win.h ?? 420;
+    layout.dragging = true;
+    const start = { x: event.clientX, y: event.clientY, left: win.x, top: win.y, w: win.w ?? 560, h: win.h ?? 420 };
     const move = (moved: PointerEvent) => {
-      win.w = Math.max(MIN_W, Math.min(startW + moved.clientX - startX, window.innerWidth - win.x));
-      win.h = Math.max(MIN_H, Math.min(startH + moved.clientY - startY, window.innerHeight - win.y));
+      const dx = moved.clientX - start.x;
+      const dy = moved.clientY - start.y;
+      let { left, top, w, h } = start;
+      if (edge.includes('e')) w = Math.max(MIN_W, Math.min(start.w + dx, window.innerWidth - start.left));
+      if (edge.includes('s')) h = Math.max(MIN_H, Math.min(start.h + dy, window.innerHeight - start.top));
+      if (edge.includes('w')) {
+        w = Math.max(MIN_W, start.w - dx);
+        left = Math.max(0, start.left + start.w - w);
+        w = start.left + start.w - left;
+      }
+      if (edge.includes('n')) {
+        h = Math.max(MIN_H, start.h - dy);
+        top = Math.max(0, start.top + start.h - h);
+        h = start.top + start.h - top;
+      }
+      Object.assign(win, { x: left, y: top, w, h });
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      layout.dragging = false;
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
   }
+
+  function toggleMax(win: FloatingTool) {
+    if (win.max && win.prev) {
+      Object.assign(win, win.prev, { max: false });
+      win.prev = undefined;
+      return;
+    }
+    win.prev = { x: win.x, y: win.y, w: win.w ?? 560, h: win.h ?? 420 };
+    Object.assign(win, { x: 8, y: 8, w: window.innerWidth - 16, h: window.innerHeight - 16, max: true, min: false });
+  }
+
+  const toggleMin = (win: FloatingTool) => (win.min = !win.min);
+
+  const EDGES: { edge: Edge; cls: string }[] = [
+    { edge: 'n', cls: 'top-0 right-3 left-3 h-1 cursor-ns-resize' },
+    { edge: 's', cls: 'bottom-0 right-3 left-3 h-1 cursor-ns-resize' },
+    { edge: 'w', cls: 'top-3 bottom-3 left-0 w-1 cursor-ew-resize' },
+    { edge: 'e', cls: 'top-3 right-0 bottom-3 w-1 cursor-ew-resize' },
+    { edge: 'nw', cls: 'top-0 left-0 size-3 cursor-nwse-resize' },
+    { edge: 'ne', cls: 'top-0 right-0 size-3 cursor-nesw-resize' },
+    { edge: 'sw', cls: 'bottom-0 left-0 size-3 cursor-nesw-resize' },
+    { edge: 'se', cls: 'right-0 bottom-0 size-3 cursor-nwse-resize' },
+  ];
+  const headerButton =
+    'grid size-7! shrink-0 cursor-pointer place-items-center rounded-md p-0 text-muted-foreground outline-none !bg-transparent hover:!bg-primary/10 hover:!text-primary focus-visible:ring-0';
 </script>
 
 <!-- Floating tool windows: each one is draggable, not modal, and holds its own tool. Dropping one on the
@@ -103,45 +157,45 @@
 {#each layout.floating as win (win.tool)}
   {@const current = toolOf(win.tool)}
   <div
-    class="fixed z-50 flex flex-col overflow-hidden rounded-md border border-border bg-background text-foreground shadow-2xl"
+    class="fixed z-50 flex flex-col overflow-hidden rounded-md border border-border bg-background text-foreground shadow-2xl transition-[width,height] duration-150 {layout.dragging ? 'transition-none' : ''}"
     style:left="{win.x}px"
     style:top="{win.y}px"
     style:width="{win.w ?? 560}px"
-    style:height="{win.h ?? 420}px"
+    style:height={win.min ? '40px' : `${win.h ?? 420}px`}
     role="dialog"
     aria-label={current.label}
   >
-    <div class="flex h-10 shrink-0 cursor-grab items-center gap-1 border-b border-border pr-1 pl-2 select-none active:cursor-grabbing" role="presentation" onpointerdown={(event) => startDrag(event, win)}>
+    <div class="flex h-10 shrink-0 cursor-grab items-center gap-1 border-b border-border pr-1.5 pl-2 select-none active:cursor-grabbing" role="presentation" onpointerdown={(event) => startDrag(event, win)} ondblclick={() => toggleMax(win)}>
       <span class="grid size-6 place-items-center rounded-md bg-primary/15 text-primary" aria-hidden="true">
         <ZIcon zType={current.icon} class="size-3.5" />
       </span>
       <span class="truncate text-xs font-medium">{current.label}</span>
       <span class="ml-auto"></span>
       <!-- Drag handle: press and move to carry the window; release over a zone to dock it there. -->
-      <span
-        class="grid h-7 w-6 cursor-grab place-items-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary active:cursor-grabbing"
-        role="presentation"
-        title="Drag to move or dock"
-        onpointerdown={(event) => startDrag(event, win)}
-      >
-        <ZIcon zType="lucideGripVertical" class="size-3.5" />
+      <span class="{headerButton} cursor-grab active:cursor-grabbing" role="presentation" title="Drag to move or dock" onpointerdown={(event) => startDrag(event, win)}>
+        <ZIcon zType="lucideGripVertical" class="size-4" />
       </span>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-8 px-0" aria-label="Dock back" title="Dock back" onclick={() => dockTool(win.tool)}>
-        <ZIcon zType="lucidePanelRightOpen" class="size-3.5" />
+      <ZButton zWave={false} zType="ghost" zSize="sm" class={headerButton} aria-label={win.min ? 'Restore' : 'Minimize'} title={win.min ? 'Restore' : 'Minimize'} onclick={() => toggleMin(win)}>
+        <ZIcon zType="lucideMinus" class="size-4" />
       </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-8 px-0" aria-label="Close" title="Close" onclick={() => dockTool(win.tool)}>
-        <ZIcon zType="lucideX" class="size-3.5" />
+      <ZButton zWave={false} zType="ghost" zSize="sm" class={headerButton} aria-label={win.max ? 'Restore size' : 'Maximize'} title={win.max ? 'Restore size' : 'Maximize'} onclick={() => toggleMax(win)}>
+        <ZIcon zType={win.max ? 'lucideMinimize2' : 'lucideMaximize2'} class="size-3.5" />
+      </ZButton>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class={headerButton} aria-label="Dock back" title="Dock back" onclick={() => dockTool(win.tool)}>
+        <ZIcon zType="lucidePanelRightOpen" class="size-4" />
+      </ZButton>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class={headerButton} aria-label="Close" title="Close" onclick={() => dockTool(win.tool)}>
+        <ZIcon zType="lucideX" class="size-4" />
       </ZButton>
     </div>
-    <div class="flex min-h-0 flex-1 flex-col">
-      <ToolView tool={win.tool} />
-    </div>
-    <div
-      class="absolute right-0 bottom-0 size-4 cursor-nwse-resize"
-      role="presentation"
-      aria-hidden="true"
-      onpointerdown={(event) => startResize(event, win)}
-    ></div>
+    {#if !win.min}
+      <div class="flex min-h-0 flex-1 flex-col">
+        <ToolView tool={win.tool} />
+      </div>
+      {#each EDGES as item (item.edge)}
+        <div class="absolute z-10 {item.cls}" role="presentation" aria-hidden="true" onpointerdown={(event) => startResize(event, win, item.edge)}></div>
+      {/each}
+    {/if}
   </div>
 {/each}
 

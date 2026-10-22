@@ -25,7 +25,7 @@
         <span class="ml-auto"></span>
         <!-- Grip: press and drag to pull the tool out of this zone into a floating window, or dock it elsewhere. -->
         <span
-          class="grid h-6 w-6 cursor-grab place-items-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary active:cursor-grabbing"
+          class="grid size-7 cursor-grab place-items-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary active:cursor-grabbing"
           role="presentation"
           title="Drag to move"
           onpointerdown={(event) => {
@@ -33,10 +33,10 @@
             floatFromZone(tool, event.clientX, event.clientY);
           }}
         >
-          <ZIcon zType="lucideGripVertical" class="size-3.5" />
+          <ZIcon zType="lucideGripVertical" class="size-4" />
         </span>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 w-7 px-0" aria-label="Dock back to the tools panel" title="Dock back" onclick={() => undockTool(tool)}>
-          <ZIcon zType="lucidePanelRightOpen" class="size-3.5" />
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Dock back to the tools panel" title="Dock back" onclick={() => undockTool(tool)}>
+          <ZIcon zType="lucidePanelRightOpen" class="size-4" />
         </ZButton>
       </div>
       <div class="flex min-h-0 flex-1 flex-col">

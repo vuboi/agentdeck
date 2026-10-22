@@ -2,7 +2,18 @@ import { getPref, setPref } from './prefs';
 
 // Shared shell state. The page reacts to `toolsOpen` by resizing the columns.
 // `themeAnchor` is the palette button on screen, so the theme popover has a position the moment it opens.
-export type FloatingTool = { tool: string; x: number; y: number; w?: number; h?: number };
+export type FloatingTool = {
+  tool: string;
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
+  /** Fills the screen; `prev` is where to go back to. */
+  max?: boolean;
+  /** Folded to its title bar. */
+  min?: boolean;
+  prev?: { x: number; y: number; w: number; h: number };
+};
 
 export const layout = $state({
   toolsOpen: true,
