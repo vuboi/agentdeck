@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
   import { LOADER } from '../loaders';
   import { activeSession, AGENTS, answerPermission, chat, forkSession, newSession, openTranscript, workspace } from '../sessions.svelte';
@@ -392,7 +392,7 @@
                             </div>
                           {/each}
                           {#if cost != null}
-                            <div class="mt-0.5 flex items-center gap-2 border-t border-white/10 pt-1.5">
+                            <div class="-mx-[0.6rem] mt-0.5 flex items-center gap-2 border-t border-white/10 px-[0.6rem] pt-1.5">
                               <ZIcon zType={'lucideCoins' as ZIconName} zSize="12" class="size-3! shrink-0 text-green-400" />
                               <span class="flex-1 text-white/80">Total</span>
                               <span class="font-semibold text-green-400">{message.cost == null ? '≈ ' : ''}{usd(cost)}</span>
@@ -402,8 +402,8 @@
                       {/snippet}
                       <!-- Tokens and cost as two small chips; hover for the breakdown. -->
                       <span class="ml-0.5 flex items-center gap-1 text-[10px] tabular-nums" {@attach zTooltip({ content: usageTip, position: 'top' })}>
-                        <span class="rounded bg-muted px-1.5 py-px text-muted-foreground">{shortCount(totalTokens(message.tokens))} tokens</span>
-                        {#if cost != null}<span class="rounded bg-success/10 px-1.5 py-px font-medium text-success">{message.cost == null ? '≈ ' : ''}{usd(cost)}</span>{/if}
+                        <span class="rounded bg-muted px-1.5 py-px text-muted-foreground"><ZNumberTicker zValue={totalTokens(message.tokens)} zFormat="compact" zDuration={600} /> tokens</span>
+                        {#if cost != null}<span class="rounded bg-success/10 px-1.5 py-px font-medium text-success">{message.cost == null ? '≈ ' : ''}<ZNumberTicker zValue={cost} zFormat="currency" zCurrency="USD" zLocale="en-US" zMinimumFractionDigits={2} zMaximumFractionDigits={cost < 0.01 ? 3 : 2} zDuration={600} /></span>{/if}
                       </span>
                     {/if}
                   </div>

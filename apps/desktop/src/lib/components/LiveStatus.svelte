@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
+  import { ZLoading, ZNumberTicker, ZShimmerText } from '@shival99/z-ui-svelte';
   import { ticker } from '../clock.svelte';
   import { elapsed, liveState } from '../blocks';
   import type { Message } from '../mock';
@@ -20,7 +20,7 @@
   <ZShimmerText zText={state.label} />
   <span class="tabular-nums">{seconds}</span>
   {#if message.tokens}
-    <span class="rounded bg-muted px-1.5 py-px text-[10px] tabular-nums">{shortCount(totalTokens(message.tokens))} tokens</span>
-    {#if cost != null}<span class="rounded bg-success/10 px-1.5 py-px text-[10px] font-medium text-success tabular-nums">≈ {usd(cost)}</span>{/if}
+    <span class="rounded bg-muted px-1.5 py-px text-[10px] tabular-nums"><ZNumberTicker zValue={totalTokens(message.tokens)} zFormat="compact" zDuration={500} /> tokens</span>
+    {#if cost != null}<span class="rounded bg-success/10 px-1.5 py-px text-[10px] font-medium text-success tabular-nums">≈ <ZNumberTicker zValue={cost} zFormat="currency" zCurrency="USD" zLocale="en-US" zMinimumFractionDigits={2} zMaximumFractionDigits={cost < 0.01 ? 3 : 2} zDuration={500} /></span>{/if}
   {/if}
 </div>
