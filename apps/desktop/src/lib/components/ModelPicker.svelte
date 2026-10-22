@@ -43,6 +43,11 @@
           open = false;
           timers.push(
             window.setTimeout(() => {
+              // The popover hands focus back to its button when it closes; the warm-up must not leave it there.
+              if (document.activeElement === trigger) {
+                trigger?.blur();
+                document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus();
+              }
               delete root.dataset.warming;
               warming = false;
             }, 500),
@@ -112,7 +117,7 @@
   zWave={false}
   zType="ghost"
   zSize="sm"
-  class="h-7 min-w-0 gap-1.5 px-2 text-xs {open ? 'bg-primary/15 text-primary hover:bg-primary/20' : 'hover:bg-primary/10 hover:text-primary'}"
+  class="h-6 min-w-0 gap-1 px-1.5 text-[11px] {open ? 'bg-primary/15 text-primary hover:bg-primary/20' : 'hover:bg-primary/10 hover:text-primary'}"
   aria-haspopup="dialog"
   aria-expanded={open}
   aria-label="Model and permissions"
@@ -121,7 +126,7 @@
     open = !open;
   }}
 >
-  <ZIcon zType={sourceOf(agent).icon} class="size-3.5 shrink-0 {AGENT_TEXT[agent]}" />
+  <ZIcon zType={sourceOf(agent).icon} class="size-3 shrink-0 {AGENT_TEXT[agent]}" />
   <span class="truncate">{modelLabel}</span>
   <span class="hidden text-muted-foreground min-[720px]:inline">· {effortLabel}</span>
   {#if fast}<ZIcon zType="lucideZap" class="size-3 shrink-0 text-warning" />{/if}

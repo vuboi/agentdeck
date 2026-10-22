@@ -248,7 +248,7 @@
 
 <svelte:window bind:innerWidth={innerW} />
 <form
-  class="min-w-0 rounded-2xl border bg-card p-2.5 pb-2 shadow-lg min-[720px]:p-3 min-[720px]:pb-2 transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
+  class="min-w-0 rounded-2xl border bg-card px-2.5 pt-2 pb-1.5 shadow-lg min-[720px]:px-3 min-[720px]:pt-2.5 min-[720px]:pb-1.5 transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
   onsubmit={(event) => { event.preventDefault(); submit(); }}
   ondragover={(event) => { if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); dragging = true; } }}
   ondragleave={() => (dragging = false)}
@@ -352,28 +352,28 @@
     wrap="soft"
     aria-label="Message"
     placeholder="Do anything…"
-    class="max-h-45 min-h-6 w-full resize-none overflow-x-hidden break-words border-0 bg-transparent px-1 pt-1 pb-2 text-sm leading-normal outline-none placeholder:text-muted-foreground"
+    class="max-h-45 min-h-6 w-full resize-none overflow-x-hidden break-words border-0 bg-transparent px-1 pt-0.5 pb-1.5 text-sm leading-normal outline-none placeholder:text-muted-foreground"
   ></textarea>
 
   <div class="flex min-w-0 items-center justify-between gap-2">
     <div class="flex min-w-0 items-center gap-1">
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 w-7 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Attach image" title="Attach image (or paste / drop)" onclick={() => fileInput?.click()}>
-        <ZIcon zType="lucidePaperclip" class="size-4" />
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Attach image" title="Attach image (or paste / drop)" onclick={() => fileInput?.click()}>
+        <ZIcon zType="lucidePaperclip" class="size-3.5" />
       </ZButton>
       <input bind:this={fileInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onchange={(event) => { void addFiles([...(event.currentTarget.files ?? [])]); event.currentTarget.value = ''; }} />
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="hidden h-7 w-7 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary min-[720px]:inline-flex" aria-label="Mention a session, project or AI" title="Mention (@)" onclick={() => (paletteOpen = true)}>
-        <ZIcon zType="lucideAtSign" class="size-4" />
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="hidden size-6! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary min-[720px]:inline-flex" aria-label="Mention a session, project or AI" title="Mention (@)" onclick={() => (paletteOpen = true)}>
+        <ZIcon zType="lucideAtSign" class="size-3.5" />
       </ZButton>
       <ModelPicker bind:agent bind:model bind:effort bind:fast bind:permission />
     </div>
     {#if running && !hasInput}
       <!-- A reply is being written and nothing is typed: this stops it. -->
-      <ZButton zWave={false} zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" aria-label="Stop" {@attach zTooltip({ content: 'Stop', position: 'top' })} onclick={() => stopTurn(sessionId)}>
-        <svg class="size-3.5" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
+      <ZButton zWave={false} zType="default" zSize="default" class="size-7! shrink-0 rounded-full p-0" aria-label="Stop" {@attach zTooltip({ content: 'Stop', position: 'top' })} onclick={() => stopTurn(sessionId)}>
+        <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
       </ZButton>
     {:else}
-      <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-8 shrink-0 rounded-full p-0" disabled={!hasInput} aria-label={running ? (turnOptions.whileRunning === 'queue' ? 'Add to the queue' : 'Stop and send') : 'Send message'} {@attach zTooltip({ content: running ? (turnOptions.whileRunning === 'queue' ? 'Add to the queue' : 'Stop and send now') : 'Send', position: 'top' })}>
-        <ZIcon zType="lucideArrowUp" class="size-4" />
+      <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-7! shrink-0 rounded-full p-0" disabled={!hasInput} aria-label={running ? (turnOptions.whileRunning === 'queue' ? 'Add to the queue' : 'Stop and send') : 'Send message'} {@attach zTooltip({ content: running ? (turnOptions.whileRunning === 'queue' ? 'Add to the queue' : 'Stop and send now') : 'Send', position: 'top' })}>
+        <ZIcon zType="lucideArrowUp" class="size-3.5" />
       </ZButton>
     {/if}
   </div>
