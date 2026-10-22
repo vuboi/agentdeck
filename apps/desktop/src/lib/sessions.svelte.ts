@@ -220,11 +220,15 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent) {
   if (!reply || !session) return;
   const update = applyAgentEvent(reply.blocks, event);
   reply.blocks = update.blocks;
+  // The CLI has the conversation once it answers; only then is `--resume` valid for the next turn.
+  if (event.kind !== 'error') session.agentStarted = true;
   if (update.agentSession) session.agentSession = update.agentSession;
   if (update.finished) {
     delete replies[sessionId];
     session.status = 'idle';
     persistLocal();
+    // The CLI wrote the conversation to disk: pick it up so the row gets its path, in place (same id).
+    if (!session.path) void importHistory({ refresh: true });
   }
 }
 
@@ -235,7 +239,7 @@ if (inTauri()) {
 export function sendMessage(text: string) {
   const session = activeSession();
   const body = text.trim();
-  if (!session || !body) return;
+  if (!session || !body || replies[session.id]) return; // one turn at a time per chat
   if (chat.messages === mockMessages) chat.messages = [...mockMessages];
   chat.messages.push({
     id: nextId(),
@@ -248,13 +252,20 @@ export function sendMessage(text: string) {
     const cliId = session.agentSession ?? (session.id.startsWith('claude:') ? session.id.slice('claude:'.length) : crypto.randomUUID());
     session.agentSession = cliId;
     const resume = session.agentStarted ?? !!session.path;
-    session.agentStarted = true;
     const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), blocks: [{ kind: 'loading', label: 'Thinking' }] };
     messagesOf(session.id).push(reply);
     replies[session.id] = reply.id;
     session.status = 'working';
     void sendAgentTurn({ session: session.id, agent: session.agent, prompt: body, agentSession: session.agentSession, resume, model: session.model ?? null, cwd: workspace.projects.find((project) => project.id === session.projectId)?.path ?? null }).catch((error: unknown) => {
       handleAgentEvent(session.id, { kind: 'error', message: String(error) });
+    });
+  }
+  else if (inTauri()) {
+    messagesOf(session.id).push({
+      id: nextId(),
+      role: 'assistant',
+      time: clock(new Date().toISOString()),
+      blocks: [{ kind: 'response', text: `⚠ ${session.agent} chats are not connected yet. Only Claude runs from here for now.` }],
     });
   }
   // Imported sessions reload from disk; sessions that only exist here keep their messages in memory.
@@ -323,14 +334,14 @@ const CACHE_KEY = 'agentdeck.history.index';
 const folderName = (cwd: string) => cwd.split(/[\\/]+/).filter(Boolean).at(-1) ?? 'Unknown';
 
 /** Replaces the mock workspace with what Claude Code and Codex already saved on this machine. */
-export async function importHistory() {
+export async function importHistory({ refresh = false } = {}) {
   if (!inTauri()) {
     history.loading = false;
     return;
   }
   await restored;
   // Show the last known index at once, then refresh it: indexing every file takes a moment.
-  try {
+  if (!refresh) try {
     const cached = JSON.parse(localStorage.getItem(CACHE_KEY) ?? '[]') as HistorySession[];
     if (cached.length > 0) {
       applyHistory(cached);
@@ -347,6 +358,10 @@ export async function importHistory() {
     applyHistory(found);
     if (found.some((item) => item.id === keep)) workspace.activeId = keep;
     history.imported = true;
+    // Quietly warm the transcripts of the newest chats while the app is idle.
+    const warm = () => workspace.sessions.filter((item) => item.path).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')).slice(0, 4).forEach((item) => void prefetchTranscript(item));
+    if ('requestIdleCallback' in window) window.requestIdleCallback(warm, { timeout: 3000 });
+    else setTimeout(warm, 800);
     try {
       localStorage.setItem(CACHE_KEY, JSON.stringify(found));
     } catch {
@@ -395,7 +410,8 @@ function applyHistory(all: HistorySession[]) {
   // Sessions that only exist here (drafts, new chats) survive the import.
   const local = localSessions().filter((item) => !ids.has(item.id));
   const noProject = workspace.projects.find((item) => item.id === NO_PROJECT);
-  const keepActive = local.some((item) => item.id === workspace.activeId) ? workspace.activeId : undefined;
+  // The open chat stays open: after F5 it is an imported session, after a send it may still be a local one.
+  const keepActive = ids.has(workspace.activeId) || local.some((item) => item.id === workspace.activeId) ? workspace.activeId : undefined;
   if (noProject && local.some((item) => item.projectId === NO_PROJECT)) projects.unshift(noProject);
   sessions.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 
@@ -406,7 +422,45 @@ function applyHistory(all: HistorySession[]) {
 
 let transcriptToken = 0;
 
-/** Fills the chat with the transcript of a session: from disk for imported ones, mock otherwise. */
+// ---------- transcripts: memory + IndexedDB cache, so opening a chat is instant ----------
+// A transcript is valid while the session's index entry (last update + message count) is unchanged.
+type Transcript = { stamp: string; messages: Message[] };
+const transcripts = new Map<string, Transcript>();
+const stampOf = (session: SessionItem) => `${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
+const MAX_SAVED = 12;
+
+async function fetchTranscript(session: SessionItem): Promise<Message[]> {
+  const loaded = await loadHistory(session.source!, session.path!);
+  return loaded.map((message) => ({ id: message.id, role: message.role, time: clock(message.time), blocks: toBlocks(message.blocks) }));
+}
+
+function remember(session: SessionItem, messages: Message[]) {
+  const entry = { stamp: stampOf(session), messages };
+  transcripts.set(session.id, entry);
+  // The most recently opened few also survive a reload (F5 shows the chat at once).
+  void getPref<string[]>('transcripts.keys').then((keys = []) => {
+    const next = [session.id, ...keys.filter((key) => key !== session.id)];
+    for (const old of next.slice(MAX_SAVED)) setPref(`transcript.${old}`, null);
+    setPref('transcripts.keys', next.slice(0, MAX_SAVED));
+    setPref(`transcript.${session.id}`, JSON.parse(JSON.stringify(entry)));
+  });
+}
+
+/** Warms the cache for a chat the user is likely to open next (row hover, most recent ones). */
+const prefetching = new Set<string>();
+export async function prefetchTranscript(session: SessionItem | undefined) {
+  if (!session?.path || !session.source || transcripts.get(session.id)?.stamp === stampOf(session) || prefetching.has(session.id)) return;
+  prefetching.add(session.id);
+  try {
+    remember(session, await fetchTranscript(session));
+  } catch {
+    // Opening the chat will report the error.
+  } finally {
+    prefetching.delete(session.id);
+  }
+}
+
+/** Fills the chat with the transcript of a session: from cache when it is current, from disk otherwise. */
 export async function openTranscript(session: SessionItem | undefined) {
   const token = ++transcriptToken;
   chat.error = '';
@@ -418,19 +472,27 @@ export async function openTranscript(session: SessionItem | undefined) {
     chat.messages = localMessages[session.id] ?? (mockIds.has(session.id) ? mockMessages : []);
     return;
   }
-  chat.loading = true;
-  try {
-    const loaded = await loadHistory(session.source, session.path);
+  let cached = transcripts.get(session.id);
+  if (!cached) {
+    const saved = await getPref<Transcript>(`transcript.${session.id}`);
     if (token !== transcriptToken) return;
-    chat.messages = loaded.map((message) => ({
-      id: message.id,
-      role: message.role,
-      time: clock(message.time),
-      blocks: toBlocks(message.blocks),
-    }));
+    if (saved?.messages) transcripts.set(session.id, (cached = saved));
+  }
+  if (cached) {
+    // Show what we have right away; a stale copy is replaced as soon as the fresh one arrives.
+    chat.messages = cached.messages;
+    if (cached.stamp === stampOf(session)) return;
+  } else {
+    chat.loading = true;
+  }
+  try {
+    const fresh = await fetchTranscript(session);
+    if (token !== transcriptToken) return;
+    chat.messages = fresh;
+    remember(session, fresh);
   } catch (error) {
     if (token !== transcriptToken) return;
-    chat.messages = [];
+    if (!cached) chat.messages = [];
     chat.error = String(error);
   } finally {
     if (token === transcriptToken) chat.loading = false;

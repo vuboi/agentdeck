@@ -148,15 +148,20 @@ async fn drive_turn(
     req: &TurnRequest,
     mut emit: impl FnMut(AgentEvent),
 ) {
-    let mut child = match Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(provider.args(req))
-        .current_dir(req.cwd.as_deref().unwrap_or(std::path::Path::new(".")))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
+        .kill_on_drop(true);
+    // A folder that is gone (or an empty path, for chats without a project) would make the spawn itself fail.
+    if let Some(dir) = req.cwd.as_deref().filter(|dir| dir.is_dir()) {
+        command.current_dir(dir);
+    }
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console flashing up per turn
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             return emit(AgentEvent::Error {

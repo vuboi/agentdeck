@@ -23,13 +23,13 @@ impl Provider for Claude {
     fn candidates(&self) -> Vec<PathBuf> {
         // The installer puts it in ~/.local/bin, which a desktop app started outside a shell may not see.
         let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-        home.map(|home| {
-            vec![PathBuf::from(home)
-                .join(".local")
-                .join("bin")
-                .join("claude")]
-        })
-        .unwrap_or_default()
+        let name = if cfg!(windows) {
+            "claude.exe"
+        } else {
+            "claude"
+        };
+        home.map(|home| vec![PathBuf::from(home).join(".local").join("bin").join(name)])
+            .unwrap_or_default()
     }
 
     fn args(&self, req: &TurnRequest) -> Vec<String> {

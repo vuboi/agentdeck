@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ZIcon, ZLoading, ZShowMore } from '@shival99/z-ui-svelte';
+  import { LOADER, loaderFor } from '../loaders';
   import type { Block } from '../mock';
 
   // `fade` is the surface behind the block; ZShowMore fades its clipped edge into that colour.
@@ -7,15 +8,6 @@
 
   // Thinking starts folded. The body animates by growing its grid row from 0fr to 1fr.
   let thinkingOpen = $state(false);
-
-  // Each kind of work gets its own loader: searching, running a command and fetching look different.
-  const SEARCH_TOOLS = /^(Read|Grep|Glob|LS|WebSearch)\b/;
-  const FETCH_TOOLS = /^(WebFetch|Fetch)\b/;
-  function spinnerFor(command: string): 'scan' | 'comet' | 'conic' {
-    if (SEARCH_TOOLS.test(command)) return 'scan';
-    if (FETCH_TOOLS.test(command)) return 'comet';
-    return 'conic';
-  }
 
   const statusIcon = { running: 'lucideLoaderCircle', ok: 'lucideCircleCheck', fail: 'lucideCircleX' } as const;
   const statusTone = { running: 'text-warning', ok: 'text-success', fail: 'text-destructive' } as const;
@@ -31,7 +23,7 @@
       onclick={() => (thinkingOpen = !thinkingOpen)}
     >
       <ZIcon zType="lucideBrain" class="size-3.5" />
-      {#if block.streaming}<ZLoading zLoading zSpinner="pulse" zSize="2xs" zColor="primary" />{/if}
+      {#if block.streaming}<ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="primary" />{/if}
       Thinking
       <ZIcon zType="lucideChevronDown" class="ml-auto size-3.5 transition-transform duration-300 {thinkingOpen ? 'rotate-180' : ''}" />
     </button>
@@ -58,7 +50,7 @@
       <span class="truncate">{block.command}</span>
       <span class="ml-auto flex items-center gap-1 {statusTone[block.status]}">
         {#if block.status === 'running'}
-          <ZLoading zLoading zSpinner={spinnerFor(block.command)} zSize="2xs" zColor="current" />
+          <ZLoading zLoading zSpinner={loaderFor(block.command)} zSize="2xs" zColor="current" />
         {:else}
           <ZIcon zType={statusIcon[block.status]} class="size-3.5" />
         {/if}
@@ -75,7 +67,7 @@
   </div>
 {:else if block.kind === 'loading'}
   <div class="flex items-center gap-2 text-xs text-muted-foreground">
-    <ZLoading zLoading zSpinner="ring" zSize="xs" zColor="primary" />
+    <ZLoading zLoading zSpinner={LOADER.thinking} zSize="xs" zColor="primary" />
     <span>{block.label}</span>
   </div>
 {/if}

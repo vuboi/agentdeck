@@ -2,6 +2,7 @@
   import { tick, untrack } from 'svelte';
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZIcon, ZLoading, createVirtualizer } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
+  import { LOADER } from '../loaders';
   import { activeSession, AGENTS, chat, newSession, openTranscript, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
   import ChatBlock from './ChatBlock.svelte';
@@ -90,10 +91,16 @@
   });
 
   // Switching session loads its transcript (from disk for imported Claude/Codex history).
+  // Re-runs when the open chat changes, and when it first appears in the list (after F5 the id is restored
+  // before the history index is in) or gains its file on disk (a new chat after its first answer).
+  const openKey = $derived.by(() => {
+    const found = workspace.sessions.find((item) => item.id === workspace.activeId);
+    return found ? `${found.id}|${found.path ? 'disk' : 'local'}` : `${workspace.activeId}|missing`;
+  });
   $effect(() => {
-    const id = workspace.activeId;
+    void openKey;
     untrack(() => {
-      void openTranscript(workspace.sessions.find((item) => item.id === id)).then(pinToNewest);
+      void openTranscript(workspace.sessions.find((item) => item.id === workspace.activeId)).then(pinToNewest);
     });
   });
 
@@ -243,7 +250,8 @@
       </div>
     {/key}
 
-    {#if !atEnd || running}
+    <!-- Only while scrolled up: at the bottom there is nothing to jump to, running or not. -->
+    {#if !atEnd}
       <ZButton
         zWave={false}
         zType="outline"
@@ -255,7 +263,7 @@
         <!-- Own grid so the spinner and the arrow sit dead centre; the button's inline content box drifted down-right. -->
         <span class="grid size-full place-items-center">
           {#if running}
-            <span class="group-hover/jump:hidden grid place-items-center"><ZLoading zLoading zSpinner="ring" zSize="xs" zColor="primary" /></span>
+            <span class="group-hover/jump:hidden grid place-items-center"><ZLoading zLoading zSpinner={LOADER.scroll} zSize="xs" zColor="primary" /></span>
             <ZIcon zType="lucideArrowDown" class="hidden size-4 group-hover/jump:block" />
           {:else}
             <ZIcon zType="lucideArrowDown" class="size-4" />

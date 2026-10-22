@@ -16,6 +16,7 @@
     newChat,
     newSession,
     NO_PROJECT,
+    prefetchTranscript,
     renameSession,
     workspace,
     type TreeData,
@@ -264,6 +265,7 @@
         <span
           class="relative flex min-w-0 flex-1 items-center gap-2"
           data-session={data?.kind === 'session' ? data.session?.id : undefined}
+          onpointerenter={() => data?.kind === 'session' && prefetchTranscript(data.session)}
         >
           {#if data?.kind === 'session' && data.session}
             <!-- A fork hangs off its parent: an elbow drops from the parent's dot to this row. -->
