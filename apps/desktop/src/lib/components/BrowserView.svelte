@@ -388,7 +388,7 @@
         <button type="button" class={icon} aria-label={tab.loading ? 'Stop' : 'Reload'} {@attach zTooltip({ content: tab.loading ? 'Stop loading' : 'Reload', position: 'top' })} onclick={() => void (tab.loading ? stop() : reload())}>
           {#if tab.loading}<ZLoading zLoading zSpinner="spinner" zSize="xs" zColor="primary" />{:else}<ZIcon zType={'lucideRotateCw' as ZIconName} class="size-4" />{/if}
         </button>
-        <button type="button" class="{icon} {browser.picking ? 'bg-primary/15 text-primary' : ''}" aria-label="Inspect an element" aria-pressed={browser.picking} disabled={!started} {@attach zTooltip({ content: 'Inspect an element and comment on it', position: 'top' })} onclick={pick}>
+        <button type="button" class={icon} aria-label="Inspect an element" disabled={!started || busy !== ''} {@attach zTooltip({ content: 'Inspect an element and comment on it', position: 'top' })} onclick={annotate}>
           <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-4" />
         </button>
       </div>
@@ -419,27 +419,6 @@
     </div>
     {#if tab.loading}<div class="h-0.5 shrink-0 animate-pulse bg-primary/60" role="progressbar" aria-label="Loading"></div>{/if}
 
-    {#if browser.picked}
-      <!-- The element you clicked: write a note that belongs to it, like a comment on a line of code. -->
-      <form class="flex shrink-0 items-center gap-1.5 border-y border-border bg-primary/5 px-2 py-1.5 text-xs" onsubmit={(event) => { event.preventDefault(); comment(); }}>
-        <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 shrink-0 text-primary" />
-        <code class="max-w-40 shrink-0 truncate" title={browser.picked.selector}>{browser.picked.selector}</code>
-        <input bind:value={commentText} bind:this={commentInput} class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-2 outline-none focus:border-primary" placeholder="Comment on this element…" aria-label="Comment" />
-        <button type="submit" class="h-6 cursor-pointer rounded bg-primary px-2 text-primary-foreground outline-none hover:bg-primary/90 disabled:opacity-50" disabled={!commentText.trim()}>Comment</button>
-        <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-accent" aria-label="Clear selection" onclick={() => (browser.picked = null)}><ZIcon zType="lucideX" class="size-3" /></button>
-      </form>
-    {/if}
-    {#if browser.comments.length > 0}
-      <div class="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1 text-xs">
-        {#each browser.comments as item, index (item.id)}
-          <span class="inline-flex max-w-52 items-center gap-1 rounded-md bg-muted py-0.5 pr-0.5 pl-1.5" title="{item.selector}: {item.note}">
-            <span class="font-medium text-primary">{index + 1}</span><span class="truncate">{item.note}</span>
-            <button type="button" class="grid size-4 shrink-0 cursor-pointer place-items-center rounded hover:bg-accent" aria-label="Remove comment {index + 1}" onclick={() => (browser.comments = browser.comments.filter((entry) => entry !== item))}><ZIcon zType="lucideX" class="size-3" /></button>
-          </span>
-        {/each}
-        <button type="button" class="ml-auto h-6 cursor-pointer rounded border border-input px-2 outline-none hover:bg-accent" onclick={sendComments}>Add {browser.comments.length} to chat</button>
-      </div>
-    {/if}
     {#if browser.error || notice || busy}
       <div class="shrink-0 border-b border-border px-3 py-1 text-xs {browser.error ? 'text-destructive' : 'text-muted-foreground'}" role="status">{browser.error || busy || notice}</div>
     {/if}
