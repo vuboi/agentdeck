@@ -37,10 +37,18 @@ pub fn overlay_eval(app: AppHandle, script: String) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-/// Puts the overlay at a rectangle of the window, above every page.
+/// Bumped on every show: a hide that waited for the closing animation is dropped when a menu opened since.
+static SHOWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Runs `script` (the menu markup) and puts the overlay at a rectangle of the window, above every page, in one
+/// call: the menu appears without a round trip in between.
 #[tauri::command]
-pub fn overlay_show(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+pub fn overlay_show(app: AppHandle, script: Option<String>, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+    SHOWN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let view = overlay(&app).ok_or("no overlay")?;
+    if let Some(script) = script {
+        view.eval(script).map_err(|error| error.to_string())?;
+    }
     view.set_position(LogicalPosition::new(x, y))
         .map_err(|error| error.to_string())?;
     view.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
@@ -50,12 +58,20 @@ pub fn overlay_show(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<()
     Ok(())
 }
 
+/// Plays the closing animation, then hides the overlay (unless a menu opened meanwhile).
 #[tauri::command]
-pub fn overlay_hide(app: AppHandle) -> Result<(), String> {
-    match overlay(&app) {
-        Some(view) => view.hide().map_err(|error| error.to_string()),
-        None => Ok(()),
+pub async fn overlay_hide(app: AppHandle) -> Result<(), String> {
+    let Some(view) = overlay(&app) else {
+        return Ok(());
+    };
+    let shown = SHOWN.load(std::sync::atomic::Ordering::Relaxed);
+    let _ = view.eval("window.__overlay && window.__overlay.close()");
+    tokio::time::sleep(std::time::Duration::from_millis(130)).await;
+    if SHOWN.load(std::sync::atomic::Ordering::Relaxed) == shown {
+        let _ = view.eval("window.__overlay && window.__overlay.clear()");
+        view.hide().map_err(|error| error.to_string())?;
     }
+    Ok(())
 }
 
 /// Pages opened after the overlay are stacked above it; raise it again.

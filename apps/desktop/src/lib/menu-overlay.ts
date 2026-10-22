@@ -48,10 +48,13 @@ export function mirrorMenus(area: () => DOMRect | null): () => void {
   let shown = false;
   let frame = 0;
 
+  let fresh = false;
   const hide = () => {
-    current?.removeAttribute('data-mirrored');
+    // A closing menu stays unseen while it fades out; the mirror plays the closing instead.
+    if (!current?.inert) current?.removeAttribute('data-mirrored');
     current = null;
     lastKey = '';
+    // Emptied before it is hidden: shown again later, it must not flash the previous menu.
     if (shown) void call('overlay_hide').catch(() => {});
     shown = false;
   };
@@ -61,6 +64,8 @@ export function mirrorMenus(area: () => DOMRect | null): () => void {
     const page = area();
     const menu = page
       ? [...document.querySelectorAll<HTMLElement>(MENUS)].find((item) => {
+          // Svelte marks a menu that is playing its closing animation `inert`: it is closed already.
+          if (item.inert) return false;
           const r = item.getBoundingClientRect();
           return r.width > 0 && r.right > page.left && r.left < page.right && r.bottom > page.top && r.top < page.bottom;
         })
@@ -72,29 +77,34 @@ export function mirrorMenus(area: () => DOMRect | null): () => void {
     if (menu !== current) {
       current?.removeAttribute('data-mirrored');
       current = menu;
+      fresh = true;
       sendStyles();
     }
     menu.setAttribute('data-mirrored', '');
-    // The untransformed size: the menu's opening animation is not mirrored, the mirror appears at full size.
+    // Where the menu ends up, not where its opening animation has it now: the mirror plays its own animation.
     const r = menu.getBoundingClientRect();
     const w = menu.offsetWidth || r.width;
     const h = menu.offsetHeight || r.height;
-    const x = r.left + r.width / 2 - w / 2;
-    const y = r.top + r.height / 2 - h / 2;
+    const left = parseFloat(menu.style.left);
+    const top = parseFloat(menu.style.top);
+    const x = Number.isFinite(left) ? left : r.left + r.width / 2 - w / 2;
+    const y = Number.isFinite(top) ? top : r.top + r.height / 2 - h / 2;
     const html = menu.outerHTML;
     const key = `${Math.round(x)},${Math.round(y)},${w},${h}|${document.documentElement.className}|${html}`;
     if (key === lastKey) return;
     const moved = !lastKey.startsWith(`${Math.round(x)},${Math.round(y)},${w},${h}|`);
     lastKey = key;
     const attrs = { html: attributes(document.documentElement), body: document.body.className };
-    void run(`window.__overlay && window.__overlay.render(${JSON.stringify(html)}, ${JSON.stringify(attrs)}, ${PAD}, ${PAD}, ${w})`)
-      .then(() => {
-        if (moved || !shown) {
-          shown = true;
-          return call('overlay_show', { x: x - PAD, y: y - PAD, w: w + PAD * 2, h: h + PAD * 2 });
-        }
-      })
-      .catch(() => {});
+    const opening = fresh;
+    fresh = false;
+    const origin = menu.style.transformOrigin || 'center top';
+    const script = `window.__overlay && window.__overlay.render(${JSON.stringify(html)}, ${JSON.stringify(attrs)}, ${PAD}, ${PAD}, ${w}, ${opening ? JSON.stringify(origin) : 'null'})`;
+    if (moved || !shown) {
+      shown = true;
+      void call('overlay_show', { script, x: x - PAD, y: y - PAD, w: w + PAD * 2, h: h + PAD * 2 }).catch(() => {});
+    } else {
+      void run(script).catch(() => {});
+    }
   };
   frame = requestAnimationFrame(tick);
 

@@ -11,7 +11,15 @@ const root = document.getElementById('root');
 const PICK = 'button,a,[role=menuitem],[role=menuitemradio],[role=menuitemcheckbox],[role=option],[role=radio],[role=checkbox]';
 window.__overlay = {
   css(text) { document.getElementById('app').textContent = text; },
-  render(html, attrs, x, y, w) {
+  clear() {
+    root.getAnimations().forEach((animation) => animation.cancel());
+    root.innerHTML = '';
+  },
+  /** Closes like a z-ui popover: a quick fade and shrink. */
+  close() {
+    root.animate([{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(0.96)' }], { duration: 110, easing: 'ease-in', fill: 'forwards' });
+  },
+  render(html, attrs, x, y, w, origin) {
     const doc = document.documentElement;
     for (const name of [...doc.getAttributeNames()]) doc.removeAttribute(name);
     for (const [name, value] of Object.entries(attrs.html)) doc.setAttribute(name, value);
@@ -22,6 +30,13 @@ window.__overlay = {
     root.innerHTML = html;
     // A popover-API element is hidden unless opened in the top layer; the mirror is plain markup.
     for (const node of root.querySelectorAll('[popover]')) node.removeAttribute('popover');
+    if (origin) {
+      // A new menu opens like a z-ui popover. The overlay is hidden until shown, and frames only run once it is
+      // on screen, so the animation starts exactly when it can be seen.
+      root.getAnimations().forEach((animation) => animation.cancel());
+      root.style.transformOrigin = origin;
+      root.animate([{ opacity: 0, transform: 'scale(0.96)' }, { opacity: 1, transform: 'scale(1)' }], { duration: 150, easing: 'cubic-bezier(0.16, 1, 0.3, 1)', fill: 'backwards' });
+    }
   },
 };
 root.addEventListener('click', (event) => {
