@@ -369,7 +369,7 @@
 
     <!-- Address bar: navigation and inspector on the left, the address in the middle, markup / devtools / menu on the right -->
     <div class="flex shrink-0 items-center gap-1.5 px-2 py-1.5">
-      <div class="flex shrink-0 items-center rounded-lg bg-muted/60 p-0.5">
+      <div class="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5">
         <button type="button" class={icon} aria-label="Back" {@attach zTooltip({ content: 'Back', position: 'top' })} onclick={() => void back()}><ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-4" /></button>
         <button type="button" class={icon} aria-label="Forward" {@attach zTooltip({ content: 'Forward', position: 'top' })} onclick={() => void forward()}><ZIcon zType={'lucideArrowRight' as ZIconName} class="size-4" /></button>
         <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
@@ -392,7 +392,7 @@
           onblur={() => (editing = false)}
         />
       </form>
-      <div class="flex shrink-0 items-center rounded-lg bg-muted/60 p-0.5">
+      <div class="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5">
         <button type="button" class={icon} aria-label="Mark up the page" disabled={!started || busy !== ''} {@attach zTooltip({ content: 'Mark up the page for the agent', position: 'top' })} onclick={annotate}>
           <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
         </button>
@@ -401,7 +401,7 @@
           {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
         </button>
 <div class="flex items-center [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
-                  <ZDropdownMenu zItems={menuItems} zIcon={'lucideEllipsis' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
+                  <ZDropdownMenu zItems={menuItems} zIcon={'lucideEllipsisVertical' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
         </div>
       </div>
     </div>
