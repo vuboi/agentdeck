@@ -120,7 +120,7 @@ const localMessages: Record<string, Message[]> = {};
 
 /** Sessions that only exist in the app (drafts, new chats, live agent chats) and their messages. */
 function localSessions(): SessionItem[] {
-  return workspace.sessions.filter((item) => !item.path && (item.draft || localMessages[item.id]));
+  return workspace.sessions.filter((item) => !item.path && (item.draft || localMessages[item.id]) && !isEmptyDraft(item));
 }
 
 /** Save the local sessions, their messages and the open session to IndexedDB. Call after any change. */
@@ -135,11 +135,13 @@ export function persistLocal() {
 const localReady = getPref<{ sessions: SessionItem[]; messages: Record<string, Message[]>; activeId?: string }>('local.state').then(
   (saved) => {
     if (!saved) return;
-    for (const item of saved.sessions ?? []) {
-      if (!workspace.sessions.some((existing) => existing.id === item.id)) workspace.sessions.push(item);
-    }
     // A reply that was still running when the app closed is not running any more.
     for (const [id, list] of Object.entries(saved.messages ?? {})) localMessages[id] = list.map((message) => ({ ...message, live: false }));
+    for (const item of saved.sessions ?? []) {
+      // Empty new chats saved by an earlier version are not restored.
+      if (isEmptyDraft(item)) continue;
+      if (!workspace.sessions.some((existing) => existing.id === item.id)) workspace.sessions.push(item);
+    }
     if (saved.activeId && !workspace.activeId) workspace.activeId = saved.activeId;
   },
   () => {
@@ -179,7 +181,18 @@ function ensureNoProject() {
  * button from another session brings you back to the draft you left, input included. Only once a
  * message has been sent does the button start a new one.
  */
-export function newSession(projectId = activeSession()?.projectId ?? workspace.projects[0]?.id ?? NO_PROJECT, { reuseDraft = true } = {}) {
+/** A new chat nobody wrote in is not kept: Codex does the same, so empty tabs never pile up in the list. */
+function isEmptyDraft(item: SessionItem) {
+  return item.draft && !(localMessages[item.id]?.length);
+}
+function dropEmptyDrafts() {
+  for (let index = workspace.sessions.length - 1; index >= 0; index--) {
+    const item = workspace.sessions[index];
+    if (item.id !== workspace.activeId && isEmptyDraft(item)) workspace.sessions.splice(index, 1);
+  }
+}
+
+export function newSession(projectId =activeSession()?.projectId ?? workspace.projects[0]?.id ?? NO_PROJECT, { reuseDraft = true } = {}) {
   if (projectId === NO_PROJECT) ensureNoProject();
   const empty = reuseDraft ? workspace.sessions.find((item) => item.draft) : undefined;
   if (empty) {
@@ -188,6 +201,7 @@ export function newSession(projectId = activeSession()?.projectId ?? workspace.p
     return;
   }
   const base = workspace.sessions.find((item) => item.projectId === projectId);
+  dropEmptyDrafts();
   const uuid = crypto.randomUUID();
   const id = `claude:${uuid}`;
   workspace.sessions.push({
@@ -498,13 +512,15 @@ export function buildTree(): ZTreeNode<TreeData>[] {
     data: { kind: 'session', session },
   });
 
+  // An empty new chat shows only while it is the one open.
+  const shown = (item: SessionItem) => item.id === workspace.activeId || !isEmptyDraft(item);
   return workspace.projects.map((project) => ({
     id: `project:${project.id}`,
     label: project.name,
     icon: 'lucideFolder',
     data: { kind: 'project', path: project.path },
     children: workspace.sessions
-      .filter((item) => item.projectId === project.id && !item.parentId)
+      .filter((item) => item.projectId === project.id && !item.parentId && shown(item))
       .sort(newest)
       .map(sessionNode),
   }));
