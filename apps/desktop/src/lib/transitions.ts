@@ -8,6 +8,6 @@ export function slideWidth(node: HTMLElement, { duration = 240, easing = cubicOu
     duration,
     easing,
     css: (t: number) =>
-      `overflow: hidden; white-space: nowrap; width: ${t * width}px; opacity: ${t};`,
+      `overflow: hidden; white-space: nowrap; min-width: 0; width: ${t * width}px; opacity: ${t};`,
   };
 }

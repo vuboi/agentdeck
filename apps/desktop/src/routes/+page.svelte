@@ -10,6 +10,8 @@
   import RightPanel from '../lib/components/RightPanel.svelte';
   import DockZone from '../lib/components/DockZone.svelte';
   import Splitter from '../lib/components/Splitter.svelte';
+  import { slide } from 'svelte/transition';
+  import { slideWidth } from '../lib/transitions';
   import { layout, type DockZone as Zone } from '../lib/layout.svelte';
   import { terminal, handleTerminalShortcut } from '../lib/terminal.svelte';
   import { newSession, workspace } from '../lib/sessions.svelte';
@@ -106,7 +108,7 @@
   <!-- Workspace: left zone | conversation column | right zone -->
   <div class="flex h-full min-w-0 flex-1 min-[720px]:min-w-[480px]" data-workspace>
     {#if showZones && shows('left')}
-      <div class="flex h-full min-w-[200px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.left}px">
+      <div transition:slideWidth class="flex h-full min-w-[200px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.left}px">
         <DockZone zone="left" />
       </div>
       <Splitter axis="x" label="Resize left zone" onDelta={grow('left', 1, MIN.left, maxW)} />
@@ -114,7 +116,7 @@
 
     <div class="flex h-full min-w-0 flex-1 flex-col">
       {#if showZones && shows('top')}
-        <div class="flex flex-col {SIDE} w-full [&>*]:w-full [&>*]:min-h-0 [&>*]:flex-1" style:height="{layout.sizes.top}px">
+        <div transition:slide={{ duration: 240 }} class="flex flex-col {SIDE} w-full [&>*]:w-full [&>*]:min-h-0 [&>*]:flex-1" style:height="{layout.sizes.top}px">
           <DockZone zone="top" />
         </div>
         <Splitter axis="y" label="Resize top zone" onDelta={grow('top', 1, MIN.top, maxH)} />
@@ -126,14 +128,14 @@
 
       {#if showZones && shows('bottom')}
         <Splitter axis="y" label="Resize bottom zone" onDelta={grow('bottom', -1, MIN.bottom, maxH)} />
-        <div class="flex flex-col {SIDE} w-full [&>*]:w-full [&>*]:min-h-0 [&>*]:flex-1" style:height="{layout.sizes.bottom}px">
+        <div transition:slide={{ duration: 240 }} class="flex flex-col {SIDE} w-full [&>*]:w-full [&>*]:min-h-0 [&>*]:flex-1" style:height="{layout.sizes.bottom}px">
           <DockZone zone="bottom" />
         </div>
       {/if}
 
       {#if terminal.open && showZones}
         <Splitter axis="y" label="Resize terminal" onDelta={grow('terminal', -1, MIN.terminal, maxH)} />
-        <div class="flex flex-col {SIDE} w-full [&>*]:w-full [&>*]:min-h-0 [&>*]:flex-1" style:height="{layout.sizes.terminal}px" data-terminal>
+        <div transition:slide={{ duration: 240 }} class="flex flex-col {SIDE} w-full [&>*]:w-full [&>*]:min-h-0 [&>*]:flex-1" style:height="{layout.sizes.terminal}px" data-terminal>
           <Terminal />
         </div>
       {/if}
@@ -141,7 +143,7 @@
 
     {#if showZones && shows('right')}
       <Splitter axis="x" label="Resize right zone" onDelta={grow('right', -1, MIN.right, maxW)} />
-      <div class="flex h-full min-w-[200px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.right}px">
+      <div transition:slideWidth class="flex h-full min-w-[200px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.right}px">
         <DockZone zone="right" />
       </div>
     {/if}
@@ -149,7 +151,7 @@
 
   {#if showTools}
     <Splitter axis="x" label="Resize tools panel" onDelta={grow('tools', -1, MIN.tools, maxW)} />
-    <div class="flex h-full min-w-[240px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.tools}px">
+    <div transition:slideWidth class="flex h-full min-w-[240px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.tools}px">
       <RightPanel />
     </div>
   {/if}

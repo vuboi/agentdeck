@@ -174,3 +174,8 @@ html[data-warming] [data-z-popover] {
 .md-code-head button:hover { background: var(--accent); color: var(--foreground); }
 .md-code pre { margin: 0; padding: 0.7rem 0.85rem; overflow-x: auto; background: transparent; }
 .md-code code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.78rem; line-height: 1.6; white-space: pre; }
+
+/* The chat ruler's strip is 3rem wide by default and sat on top of the text; keep it to the gutter. */
+.z-chat-navigator-viewport {
+  width: 1.5rem !important;
+}

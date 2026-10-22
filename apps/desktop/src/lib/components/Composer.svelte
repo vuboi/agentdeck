@@ -19,6 +19,7 @@
     type Mention,
     type Permission,
   } from '../sessions.svelte';
+  import { openImages } from '../preview.svelte';
   import ModelPicker from './ModelPicker.svelte';
 
   // What is typed belongs to the open session: switch away and back and it is still there.
@@ -240,7 +241,9 @@
     <div class="mb-2 flex flex-wrap gap-2" aria-label="Attached images">
       {#each images as image (image.id)}
         <div class="group/img relative">
-          <img src={image.src} alt={image.name} class="size-14 rounded-lg border border-border object-cover" />
+          <button type="button" class="block size-12 cursor-zoom-in overflow-hidden rounded-lg border border-border outline-none transition hover:ring-2 hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-ring" aria-label="Preview {image.name}" onclick={() => openImages(images, images.indexOf(image))}>
+            <img src={image.src} alt={image.name} class="size-full object-cover" />
+          </button>
           <button
             type="button"
             class="absolute -top-1.5 -right-1.5 grid size-4 cursor-pointer place-items-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover/img:opacity-100 focus-visible:opacity-100"

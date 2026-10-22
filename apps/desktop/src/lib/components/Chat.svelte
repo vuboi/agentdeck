@@ -1,11 +1,12 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { ZButton, ZChatNavigator, ZDropdownMenu, ZIcon, ZLoading, createVirtualizer } from '@shival99/z-ui-svelte';
+  import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, createVirtualizer } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
   import { LOADER } from '../loaders';
   import { activeSession, AGENTS, chat, forkSession, newSession, openTranscript, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
+  import { openImages, preview } from '../preview.svelte';
   import ChatBlock from './ChatBlock.svelte';
   import CommandGroup from './CommandGroup.svelte';
   import LiveStatus from './LiveStatus.svelte';
@@ -328,11 +329,30 @@
               <!-- No avatars: your messages are a bubble (right side, or left in one-sided mode); the agent is just its coloured name. -->
               <article class="mx-auto flex w-full min-w-0 max-w-3xl flex-col break-words py-2.5 px-3 min-[720px]:px-6 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
                 {#if mine}
-                  <div class="flex max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 py-2.5 text-sm {theme.chatLayout === 'split' ? 'rounded-br-md' : 'rounded-bl-md'}">
-                    {#each message.blocks as block}
-                      <ChatBlock {block} fade="var(--muted)" />
-                    {/each}
-                  </div>
+                  {@const pictures = message.blocks.flatMap((block) => (block.kind === 'image' ? [block] : []))}
+                  {@const words = message.blocks.filter((block) => block.kind !== 'image')}
+                  <!-- Pictures sit apart from the bubble as small tiles; click one to see it large. -->
+                  {#if pictures.length > 0}
+                    <div class="mb-1.5 flex max-w-[85%] flex-wrap gap-1.5 {theme.chatLayout === 'split' ? 'justify-end' : ''}">
+                      {#each pictures as picture, index}
+                        <button
+                          type="button"
+                          class="size-[4.5rem] cursor-zoom-in overflow-hidden rounded-xl border border-border bg-muted outline-none transition hover:ring-2 hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-ring"
+                          aria-label="Preview {picture.name}"
+                          onclick={() => openImages(pictures, index)}
+                        >
+                          <img src={picture.src} alt={picture.name} class="size-full object-cover" />
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if words.length > 0}
+                    <div class="flex max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 py-2.5 text-sm {theme.chatLayout === 'split' ? 'rounded-br-md' : 'rounded-bl-md'}">
+                      {#each words as block}
+                        <ChatBlock {block} fade="var(--muted)" />
+                      {/each}
+                    </div>
+                  {/if}
                   <span class="mt-1 px-1 text-[10px] text-muted-foreground">{message.time}</span>
                 {:else}
                   {@const parts = segments(message.blocks)}
@@ -378,3 +398,5 @@
     </div>
   {/if}
 </main>
+
+<ZGalleryPreview bind:file={preview.file} files={preview.files} />

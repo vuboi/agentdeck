@@ -44,6 +44,22 @@
     });
   });
 
+  // Whatever chat is open is visible: its parents (forks hang under them) are expanded.
+  $effect(() => {
+    const active = workspace.sessions.find((item) => item.id === workspace.activeId);
+    if (!active?.parentId) return;
+    untrack(() => {
+      const ancestors: string[] = [];
+      for (let cursor = active.parentId; cursor; ) {
+        ancestors.push(`session:${cursor}`);
+        cursor = workspace.sessions.find((item) => item.id === cursor)?.parentId;
+        if (ancestors.length > 50) break;
+      }
+      const missing = ancestors.filter((id) => !expanded.includes(id));
+      if (missing.length) expanded = [...expanded, ...missing];
+    });
+  });
+
   let selected = $state<string[]>([]);
   $effect(() => {
     selected = [`session:${workspace.activeId}`];
