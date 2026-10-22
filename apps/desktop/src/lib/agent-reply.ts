@@ -68,6 +68,10 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
       }
       return { blocks, finished: false };
     }
+    case 'permission_denied':
+      close(blocks, false);
+      blocks.push({ kind: 'permission', requests: event.requests, state: 'pending' });
+      return { blocks, finished: false };
     case 'done': {
       close(blocks, true);
       // Streamed text already shows the answer; the final result only fills in when nothing streamed.

@@ -6,8 +6,12 @@ export type AgentEvent =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool_call'; id: string; name: string; input: string; change: FileChange | null }
   | { kind: 'tool_result'; id: string; output: string; is_error: boolean }
+  | { kind: 'permission_denied'; requests: PermissionRequest[] }
   | { kind: 'done'; session_id: string | null; text: string; cost_usd: number | null }
   | { kind: 'error'; message: string };
+
+/** A tool the CLI would not run without approval. `allow` is what approves exactly this call. */
+export type PermissionRequest = { id: string; tool: string; summary: string; allow: string };
 
 /** What a Write or Edit does to a file. */
 export type FileChange = { path: string; added: number; removed: number; before: string; after: string };
@@ -22,6 +26,8 @@ export async function sendAgentTurn(args: {
   agentSession: string | null;
   resume: boolean;
   model: string | null;
+  permissionMode: string | null;
+  allowedTools: string[];
   cwd: string | null;
 }): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');

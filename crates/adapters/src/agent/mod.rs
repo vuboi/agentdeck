@@ -31,6 +31,8 @@ pub enum AgentEvent {
         output: String,
         is_error: bool,
     },
+    /// The CLI refused tools that need the user's approval. Allow them and send a follow-up turn to continue.
+    PermissionDenied { requests: Vec<PermissionRequest> },
     /// The turn finished. `session_id` is the CLI's id for the conversation, to resume next turn.
     Done {
         session_id: Option<String>,
@@ -50,6 +52,10 @@ pub struct TurnRequest {
     /// `true` continues `session_id`; `false` creates a conversation with that id.
     pub resume: bool,
     pub model: Option<String>,
+    /// The CLI's permission mode (`acceptEdits`, `plan`, `auto`, `bypassPermissions`); `None` asks for every tool.
+    pub permission_mode: Option<String>,
+    /// Tools approved by the user, as the CLI writes them: `Bash(git status)`, `Write`.
+    pub allowed_tools: Vec<String>,
     /// Folder the CLI runs in. Claude files a conversation under the folder it ran from, so this is the project.
     pub cwd: Option<std::path::PathBuf>,
 }
@@ -175,5 +181,24 @@ pub fn file_change(name: &str, input: &serde_json::Value) -> Option<FileChange> 
             })
         }
         _ => None,
+    }
+}
+
+/// A tool call the CLI refused, with what to pass to `--allowedTools` to let it through.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PermissionRequest {
+    pub id: String,
+    pub tool: String,
+    /// One line: the command, the file.
+    pub summary: String,
+    /// The `--allowedTools` entry that approves exactly this.
+    pub allow: String,
+}
+
+/// `Bash(<command>)` for shell commands, the bare tool name for everything else.
+pub fn allow_entry(tool: &str, input: &serde_json::Value) -> String {
+    match (tool, input["command"].as_str()) {
+        ("Bash", Some(command)) => format!("Bash({command})"),
+        _ => tool.to_owned(),
     }
 }

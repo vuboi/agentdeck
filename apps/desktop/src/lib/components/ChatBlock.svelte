@@ -3,9 +3,10 @@
   import { LOADER, loaderFor } from '../loaders';
   import type { Block } from '../mock';
   import Markdown from './Markdown.svelte';
+  import PermissionCard from './PermissionCard.svelte';
 
   // `fade` is the surface behind the block; ZShowMore fades its clipped edge into that colour.
-  let { block, fade }: { block: Block; fade?: string } = $props();
+  let { block, fade, onanswer }: { block: Block; fade?: string; onanswer?: (answer: 'once' | 'always' | 'deny') => void } = $props();
 
   // Thinking starts folded. The body animates by growing its grid row from 0fr to 1fr.
   let thinkingOpen = $state(false);
@@ -70,6 +71,8 @@
       </div>
     {/if}
   </div>
+{:else if block.kind === 'permission'}
+  <PermissionCard {block} {onanswer} />
 {:else if block.kind === 'image'}
   <img src={block.src} alt={block.name} class="block-in max-h-56 max-w-full self-start rounded-lg border border-border object-contain" />
 {:else if block.kind === 'loading'}

@@ -191,6 +191,8 @@ async fn agent_send(
     agent_session: Option<String>,
     resume: bool,
     model: Option<String>,
+    permission_mode: Option<String>,
+    allowed_tools: Vec<String>,
     cwd: Option<String>,
 ) -> Result<(), String> {
     let provider = provider_for(&agent)?;
@@ -199,6 +201,8 @@ async fn agent_send(
         session_id: agent_session,
         resume,
         model,
+        permission_mode,
+        allowed_tools,
         cwd: cwd.map(Into::into),
     };
     tauri::async_runtime::spawn(run_turn(app, session, provider, req));

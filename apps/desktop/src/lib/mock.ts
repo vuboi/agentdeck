@@ -9,7 +9,8 @@ export type Block =
   | { kind: 'response'; text: string; streaming?: boolean }
   | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; change?: FileChange }
   | { kind: 'loading'; label: string }
-  | { kind: 'image'; src: string; name: string };
+  | { kind: 'image'; src: string; name: string }
+  | { kind: 'permission'; requests: { id: string; tool: string; summary: string; allow: string }[]; state: 'pending' | 'allowed' | 'denied' };
 
 export type Message = {
   id: string;
@@ -113,6 +114,7 @@ messages.push(
         status: 'ok',
         change: { path: 'src/lib/app.css', added: 3, removed: 1, before: 'color: red;', after: 'color: blue;\nmargin: 0;\npadding: 0;' },
       },
+      { kind: 'permission', state: 'pending', requests: [{ id: 'p1', tool: 'Bash', summary: 'git push origin main', allow: 'Bash(git push origin main)' }] },
       {
         kind: 'response',
         text: '## Done\n\nHere is what changed:\n\n- **Blocks**: new `blocks.ts` with the helpers\n- Styles: a *softer* colour\n  - nested item\n- [Docs](https://example.com)\n\n1. First step\n2. Second step\n\n> A note worth keeping.\n\n```ts\nexport function add(a: number, b: number) {\n  return a + b;\n}\n```\n\n| File | Lines |\n| --- | --- |\n| blocks.ts | 136 |\n| app.css | 4 |\n',

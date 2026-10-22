@@ -173,6 +173,8 @@ mod unix_tests {
             session_id: None,
             resume: false,
             model: None,
+            permission_mode: None,
+            allowed_tools: Vec::new(),
             cwd: None,
         }
     }

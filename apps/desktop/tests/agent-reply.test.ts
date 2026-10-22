@@ -40,6 +40,13 @@ test('a tool result fills in the output and status of its call', () => {
   assert.equal(u.blocks[0].status, 'fail');
 });
 
+test('a refused tool becomes a pending permission block', () => {
+  const requests = [{ id: 't', tool: 'Bash', summary: 'git push', allow: 'Bash(git push)' }];
+  const u = applyAgentEvent([], { kind: 'permission_denied', requests });
+  assert.deepEqual(u.blocks, [{ kind: 'permission', requests, state: 'pending' }]);
+  assert.equal(u.finished, false);
+});
+
 test('done keeps streamed text and returns the conversation id', () => {
   const streamed = [{ kind: 'response', text: 'pong', streaming: true }] as const;
   const u = applyAgentEvent([...streamed], { kind: 'done', session_id: 'abc', text: 'pong', cost_usd: 0.1 });

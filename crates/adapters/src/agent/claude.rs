@@ -7,7 +7,10 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::{file_change, summarize_tool_input, AgentEvent, Provider, TurnRequest};
+use super::{
+    allow_entry, file_change, summarize_tool_input, AgentEvent, PermissionRequest, Provider,
+    TurnRequest,
+};
 
 pub struct Claude;
 
@@ -100,6 +103,14 @@ impl Provider for Claude {
             args.push("--model".to_string());
             args.push(model.clone());
         }
+        if let Some(mode) = &req.permission_mode {
+            args.push("--permission-mode".to_string());
+            args.push(mode.clone());
+        }
+        for tool in &req.allowed_tools {
+            args.push("--allowedTools".to_string());
+            args.push(tool.clone());
+        }
         args
     }
 
@@ -157,20 +168,42 @@ impl Provider for Claude {
                 })
                 .collect(),
             Some("result") => {
+                let denied: Vec<PermissionRequest> = value["permission_denials"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|denial| {
+                        let tool = denial["tool_name"].as_str().unwrap_or_default();
+                        PermissionRequest {
+                            id: denial["tool_use_id"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string(),
+                            tool: tool.to_string(),
+                            summary: summarize_tool_input(tool, &denial["tool_input"]),
+                            allow: allow_entry(tool, &denial["tool_input"]),
+                        }
+                    })
+                    .collect();
+                let mut events = Vec::new();
+                if !denied.is_empty() {
+                    events.push(AgentEvent::PermissionDenied { requests: denied });
+                }
                 if value["is_error"].as_bool().unwrap_or(false) {
-                    vec![AgentEvent::Error {
+                    events.push(AgentEvent::Error {
                         message: value["result"]
                             .as_str()
                             .unwrap_or("agent failed")
                             .to_string(),
-                    }]
+                    });
                 } else {
-                    vec![AgentEvent::Done {
+                    events.push(AgentEvent::Done {
                         session_id: value["session_id"].as_str().map(str::to_string),
                         text: value["result"].as_str().unwrap_or_default().to_string(),
                         cost_usd: value["total_cost_usd"].as_f64(),
-                    }]
+                    });
                 }
+                events
             }
             _ => Vec::new(),
         }
@@ -187,6 +220,8 @@ mod tests {
             session_id: Some("abc".into()),
             resume,
             model: None,
+            permission_mode: None,
+            allowed_tools: Vec::new(),
             cwd: None,
         }
     }
@@ -285,6 +320,37 @@ mod tests {
                 is_error: true
             }]
         );
+    }
+
+    #[test]
+    fn refused_tools_become_a_permission_request_before_done() {
+        let line = r#"{"type":"result","is_error":false,"result":"blocked","session_id":"s1","permission_denials":[{"tool_name":"Bash","tool_use_id":"t9","tool_input":{"command":"git push"}}]}"#;
+        let events = Claude.parse_line(line);
+        assert_eq!(
+            events[0],
+            AgentEvent::PermissionDenied {
+                requests: vec![PermissionRequest {
+                    id: "t9".into(),
+                    tool: "Bash".into(),
+                    summary: "git push".into(),
+                    allow: "Bash(git push)".into()
+                }]
+            }
+        );
+        assert!(matches!(events[1], AgentEvent::Done { .. }));
+    }
+
+    #[test]
+    fn permission_mode_and_approved_tools_reach_the_cli() {
+        let mut request = req(true);
+        request.permission_mode = Some("acceptEdits".into());
+        request.allowed_tools = vec!["Bash(ls)".into(), "Write".into()];
+        let args = Claude.args(&request);
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--permission-mode", "acceptEdits"]));
+        assert!(args.windows(2).any(|w| w == ["--allowedTools", "Bash(ls)"]));
+        assert!(args.windows(2).any(|w| w == ["--allowedTools", "Write"]));
     }
 
     #[test]

@@ -205,6 +205,71 @@ export function newChat() {
   newSession(NO_PROJECT);
 }
 
+/** How the Composer's permission setting maps onto the CLI's `--permission-mode`; "ask" passes none. */
+const PERMISSION_MODE: Record<Permission, string | null> = { ask: null, edits: 'acceptEdits', plan: 'plan', auto: 'auto', yolo: 'bypassPermissions' };
+/** The permission setting of the Composer, read when a turn starts. */
+export const turnOptions = $state<{ permission: Permission }>({ permission: 'ask' });
+
+/** Tools the user approved with "Always allow", per chat. */
+const approved: Record<string, string[]> = {};
+void getPref<Record<string, string[]>>('permissions.allowed').then((saved) => {
+  if (saved) Object.assign(approved, saved);
+});
+
+/** One `claude -p` run in `session`, with a fresh live reply. Images go to disk first so the CLI can open them. */
+function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = []) {
+  const cliId = session.agentSession ?? (session.id.startsWith('claude:') ? session.id.slice('claude:'.length) : crypto.randomUUID());
+  session.agentSession = cliId;
+  const resume = session.agentStarted ?? !!session.path;
+  const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now() };
+  messagesOf(session.id).push(reply);
+  replies[session.id] = reply.id;
+  session.status = 'working';
+  const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
+  void (async () => {
+    const paths = await Promise.all(images.map((image) => saveAttachment(image.mime, image.src.slice(image.src.indexOf(',') + 1))));
+    const prompt = paths.length
+      ? `${text || 'Look at the attached image.'}\n\nAttached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
+      : text;
+    await sendAgentTurn({
+      session: session.id,
+      agent: session.agent,
+      prompt,
+      agentSession: cliId,
+      resume,
+      model: session.model ?? null,
+      permissionMode: PERMISSION_MODE[turnOptions.permission],
+      allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
+      cwd,
+    });
+  })().catch((error: unknown) => {
+    handleAgentEvent(session.id, { kind: 'error', message: String(error) });
+  });
+}
+
+/**
+ * The user's answer to an approval card. "Allow" and "Always allow" let the CLI run the refused tools and
+ * continue the work in a new turn; "Deny" just closes the card.
+ */
+export function answerPermission(messageId: string, blockIndex: number, answer: 'once' | 'always' | 'deny') {
+  const session = activeSession();
+  const block = chat.messages.find((message) => message.id === messageId)?.blocks[blockIndex];
+  if (!session || block?.kind !== 'permission' || block.state !== 'pending' || replies[session.id]) return;
+  if (answer === 'deny') {
+    block.state = 'denied';
+    persistLocal();
+    return;
+  }
+  block.state = 'allowed';
+  const entries = block.requests.map((request) => request.allow);
+  if (answer === 'always') {
+    approved[session.id] = [...new Set([...(approved[session.id] ?? []), ...entries])];
+    setPref('permissions.allowed', JSON.parse(JSON.stringify(approved)));
+  }
+  persistLocal();
+  startTurn(session, 'Permission granted. Please continue with what you were doing.', [], entries);
+}
+
 /** Adds the typed message to the open session. The first message turns a draft into a real session. */
 /** The assistant message each live turn is writing into, per session. */
 const replies: Record<string, string> = {};
@@ -264,27 +329,7 @@ export function sendMessage(text: string, images: Attachment[] = []) {
     blocks: [...images.map((image) => ({ kind: 'image' as const, src: image.src, name: image.name })), ...(body ? [{ kind: 'response' as const, text: body }] : [])],
     at: new Date().toISOString(),
   });
-  if (inTauri() && session.agent === 'claude') {
-    // A claude chat talks to the CLI: one `claude -p` per message, linked by the conversation id.
-    const cliId = session.agentSession ?? (session.id.startsWith('claude:') ? session.id.slice('claude:'.length) : crypto.randomUUID());
-    session.agentSession = cliId;
-    const resume = session.agentStarted ?? !!session.path;
-    const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now() };
-    messagesOf(session.id).push(reply);
-    replies[session.id] = reply.id;
-    session.status = 'working';
-    const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
-    void (async () => {
-      // Images go to disk first: the CLI is told where to find them and opens them itself.
-      const paths = await Promise.all(images.map((image) => saveAttachment(image.mime, image.src.slice(image.src.indexOf(',') + 1))));
-      const prompt = paths.length
-        ? `${body || 'Look at the attached image.'}\n\nAttached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
-        : body;
-      await sendAgentTurn({ session: session.id, agent: session.agent, prompt, agentSession: cliId, resume, model: session.model ?? null, cwd });
-    })().catch((error: unknown) => {
-      handleAgentEvent(session.id, { kind: 'error', message: String(error) });
-    });
-  }
+  if (inTauri() && session.agent === 'claude') startTurn(session, body, images);
   else if (inTauri()) {
     messagesOf(session.id).push({
       id: nextId(),

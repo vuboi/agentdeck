@@ -3,7 +3,7 @@
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, createVirtualizer } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
   import { LOADER } from '../loaders';
-  import { activeSession, AGENTS, chat, forkSession, newSession, openTranscript, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, answerPermission, chat, forkSession, newSession, openTranscript, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
   import { openImages, preview } from '../preview.svelte';
@@ -368,7 +368,7 @@
                         <!-- The newest group of a running reply is the live line; it carries the only loader. -->
                         <CommandGroup items={segment.items} live={Boolean(message.live) && working && position === parts.length - 1} startedAt={message.startedAt} />
                       {:else}
-                        <ChatBlock block={segment.block} />
+                        <ChatBlock block={segment.block} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} />
                       {/if}
                     {/each}
                     {#if message.live && !working}

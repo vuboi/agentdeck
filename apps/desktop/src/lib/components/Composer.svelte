@@ -12,6 +12,7 @@
     MODELS,
     projectOf,
     sendMessage,
+    turnOptions,
     workspace,
     type Agent,
     type Effort,
@@ -42,6 +43,9 @@
   let effort = $state<Effort>('medium');
   let fast = $state(false);
   let permission = $state<Permission>('ask');
+  $effect(() => {
+    turnOptions.permission = permission;
+  });
 
   // The picker belongs to each session: agent, model, effort, speed and approval mode are remembered per
   // session in IndexedDB, so a reload brings back what that chat was using.

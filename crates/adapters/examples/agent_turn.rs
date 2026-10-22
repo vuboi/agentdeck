@@ -11,6 +11,8 @@ async fn turn(prompt: &str, id: &str, resume: bool, cwd: &std::path::Path) -> Ve
         session_id: Some(id.into()),
         resume,
         model: Some("claude-haiku-5-5".into()),
+        permission_mode: None,
+        allowed_tools: Vec::new(),
         cwd: Some(cwd.to_path_buf()),
     };
     let mut events = Vec::new();
