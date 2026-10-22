@@ -22,7 +22,8 @@ export type HistoryBlock =
   | { kind: 'response'; text: string }
   | { kind: 'command'; command: string; output: string; status: string };
 
-export type HistoryMessage = { id: string; role: 'user' | 'assistant'; time: string; blocks: HistoryBlock[] };
+export type HistoryUsage = { input: number; output: number; cache_read: number; cache_write: number };
+export type HistoryMessage = { id: string; role: 'user' | 'assistant'; time: string; blocks: HistoryBlock[]; usage?: HistoryUsage; model?: string };
 
 export const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 

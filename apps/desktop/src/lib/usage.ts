@@ -1,6 +1,8 @@
 // Tokens a reply used and what they cost. The CLI reports tokens as it goes; its exact cost only at the end,
 // so a running reply shows an estimate from the list prices below (USD per million tokens).
 
+import { getPref, setPref } from './prefs';
+
 export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number };
 
 type Price = { input: number; output: number; cacheRead: number };
@@ -34,3 +36,31 @@ export const totalTokens = (tokens: Tokens) => tokens.input + tokens.cacheRead +
 export function tokenDetail(tokens: Tokens): string {
   return `Input ${shortCount(tokens.input)} · cache read ${shortCount(tokens.cacheRead)} · cache write ${shortCount(tokens.cacheWrite)} · output ${shortCount(tokens.output)}`;
 }
+
+/** One finished reply, as kept for the usage dashboard. `cost` is the CLI's exact figure when it gave one. */
+export type UsageRecord = {
+  at: string;
+  sessionId: string;
+  agent: string;
+  model?: string;
+  projectId?: string;
+  ms?: number;
+  tokens: Tokens;
+  cost: number | null;
+  estimated: boolean;
+};
+
+const LOG_KEY = 'usage.log';
+const LOG_LIMIT = 20000;
+let writing: Promise<void> = Promise.resolve();
+
+/** Appends a reply to the usage log (IndexedDB), one write at a time. */
+export function recordUsage(record: UsageRecord) {
+  writing = writing.then(async () => {
+    const log = (await getPref<UsageRecord[]>(LOG_KEY)) ?? [];
+    log.push(record);
+    setPref(LOG_KEY, log.length > LOG_LIMIT ? log.slice(-LOG_LIMIT) : log);
+  });
+}
+
+export const usageLog = async () => (await getPref<UsageRecord[]>(LOG_KEY)) ?? [];

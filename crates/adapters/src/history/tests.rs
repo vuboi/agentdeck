@@ -385,3 +385,23 @@ fn delete_moves_the_file_to_the_trash_and_refuses_busy_or_foreign_files() {
         Err(HistoryError::OutsideRoots)
     ));
 }
+
+#[test]
+fn claude_answers_carry_their_token_usage_counted_once_per_call() {
+    use super::claude;
+    let dir = std::env::temp_dir().join(format!("agentdeck-usage-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("s.jsonl");
+    let usage = r#""usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":20}"#;
+    let lines = [
+        r#"{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"t","message":{"role":"user","content":"hi"}}"#.to_string(),
+        format!(r#"{{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{{"id":"m1","model":"claude-opus-5-5","content":[{{"type":"thinking","thinking":"hm"}}],{usage}}}}}"#),
+        format!(r#"{{"type":"assistant","uuid":"a2","parentUuid":"a1","message":{{"id":"m1","model":"claude-opus-5-5","content":[{{"type":"text","text":"yo"}}],{usage}}}}}"#),
+    ];
+    std::fs::write(&file, lines.join("\n")).unwrap();
+    let messages = claude::load(&file).unwrap();
+    let answer = messages.iter().find(|m| m.role == "assistant").unwrap();
+    assert_eq!(answer.usage.map(|u| (u.input, u.output, u.cache_read, u.cache_write)), Some((10, 5, 100, 20)));
+    assert_eq!(answer.model.as_deref(), Some("claude-opus-5-5"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

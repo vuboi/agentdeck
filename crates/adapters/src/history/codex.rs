@@ -155,6 +155,8 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
             messages[last].blocks.push(block);
         } else {
             messages.push(HistoryMessage {
+                usage: None,
+                model: None,
                 id: format!("codex-{index}"),
                 role,
                 time,

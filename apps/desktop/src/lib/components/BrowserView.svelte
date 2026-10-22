@@ -357,18 +357,28 @@
     void sync();
   }
 
-  // ---- the "more" menu ----
-  const menuItems = $derived<ZDropdownMenuItem[]>([
-    { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void openExternal(tab.url) },
-    { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url) },
-    { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
-  ]);
-
   const DEVICE_BUTTONS = (['desktop', 'tablet', 'mobile'] as Device[]).map((value) => ({
     value,
     label: DEVICES[value].w ? `${DEVICES[value].label} · ${DEVICES[value].w}×${DEVICES[value].h}` : DEVICES[value].label,
     icon: (value === 'desktop' ? 'lucideMonitor' : value === 'tablet' ? 'lucideTablet' : 'lucideSmartphone') as ZIconName,
   }));
+  // ---- the "more" menu ----
+  // A narrow toolbar hides the device group; its choices move to the top of this menu.
+  let barWidth = $state(1000);
+  const compact = $derived(barWidth < 560);
+  const menuItems = $derived<ZDropdownMenuItem[]>([
+    ...(compact
+      ? [
+          ...DEVICE_BUTTONS.map((item) => ({ label: item.label, icon: item.icon, iconSize: '12', class: 'text-xs! py-1', checked: browser.device === item.value, onClick: () => (browser.device = item.value) })),
+          { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: browser.device === 'desktop', checked: browser.landscape && browser.device !== 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
+        ]
+      : []),
+    { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: compact ? 'before' : undefined, disabled: !tab.url, onClick: () => void openExternal(tab.url) },
+    { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url) },
+    { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
+  ]);
+
+
   const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
 </script>
@@ -410,7 +420,7 @@
     </div>
 
     <!-- Address bar: navigation and inspector on the left, the address in the middle, markup / devtools / menu on the right -->
-    <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 pb-1.5">
+    <div bind:clientWidth={barWidth} class="flex shrink-0 items-center gap-1 border-b border-border px-2 pb-1.5">
       <div class="flex shrink-0 items-center gap-0.5">
         <button type="button" class={icon} aria-label="Back" {@attach zTooltip({ content: 'Back', position: 'top' })} onclick={() => void back()}><ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-4" /></button>
         <button type="button" class={icon} aria-label="Forward" {@attach zTooltip({ content: 'Forward', position: 'top' })} onclick={() => void forward()}><ZIcon zType={'lucideArrowRight' as ZIconName} class="size-4" /></button>
@@ -435,7 +445,7 @@
       </form>
       <div class="flex shrink-0 items-center gap-0.5">
         <!-- Desktop, tablet, phone: one group, the current one pressed. Rotate is part of it, off for desktop. -->
-        <div class="mr-1 flex items-center rounded-md border border-border p-px" role="radiogroup" aria-label="Device">
+        <div class="mr-1 items-center rounded-md border border-border p-px {compact ? 'hidden' : 'flex'}" role="radiogroup" aria-label="Device">
           {#each DEVICE_BUTTONS as item (item.value)}
             <button
               type="button"

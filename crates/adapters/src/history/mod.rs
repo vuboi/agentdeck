@@ -66,6 +66,35 @@ pub struct HistoryMessage {
     /// ISO timestamp as written by the tool, empty when absent.
     pub time: String,
     pub blocks: Vec<HistoryBlock>,
+    /// Tokens the answer used, summed over its model calls (Claude transcripts record them).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<HistoryUsage>,
+    /// The model that wrote the answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct HistoryUsage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+impl HistoryUsage {
+    fn add(&mut self, other: HistoryUsage) {
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_read += other.cache_read;
+        self.cache_write += other.cache_write;
+    }
+
+    pub(crate) fn merge(slot: &mut Option<HistoryUsage>, other: Option<HistoryUsage>) {
+        if let Some(other) = other {
+            slot.get_or_insert_with(HistoryUsage::default).add(other);
+        }
+    }
 }
 
 #[derive(Debug, Error)]

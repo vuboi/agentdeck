@@ -15,6 +15,7 @@ import { trackActivity } from './activity.svelte';
 import { listenAgentEvents, saveAttachment, sendAgentTurn, stopAgentTurn, type AgentEvent } from './agent';
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
+import { estimateCost, recordUsage } from './usage';
 import { modelCatalog } from './models';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
@@ -415,6 +416,20 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
   if (update.finished) {
     reply.live = false;
     if (reply.startedAt) reply.ms = Date.now() - reply.startedAt;
+    if (reply.tokens) {
+      const estimate = estimateCost(reply.tokens, reply.model);
+      recordUsage({
+        at: new Date().toISOString(),
+        sessionId,
+        agent: session.agent,
+        model: reply.model,
+        projectId: session.projectId,
+        ms: reply.ms,
+        tokens: { ...reply.tokens },
+        cost: reply.cost ?? estimate,
+        estimated: reply.cost == null,
+      });
+    }
     openServedPage(sessionId, reply);
     delete replies[sessionId];
     delete liveReplies[sessionId];
@@ -548,7 +563,7 @@ export function buildTree(): ZTreeNode<TreeData>[] {
     children: workspace.sessions
       .filter((item) => item.projectId === project.id && !item.parentId && shown(item))
       .sort(newest)
-      .map(sessionNode),
+      .map((item) => sessionNode(item)),
   }));
 }
 
@@ -660,7 +675,17 @@ const MAX_SAVED = 12;
 
 async function fetchTranscript(session: SessionItem): Promise<Message[]> {
   const loaded = await loadHistory(session.source!, session.path!);
-  return loaded.map((message) => ({ id: message.id, role: message.role, time: clock(message.time), at: message.time || undefined, blocks: toBlocks(message.blocks) }));
+  return loaded.map((message) => ({
+    id: message.id,
+    role: message.role,
+    time: clock(message.time),
+    at: message.time || undefined,
+    blocks: toBlocks(message.blocks),
+    // Tokens come from the transcript itself, so every reply shows them again when the chat is reopened.
+    ...(message.usage
+      ? { tokens: { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cache_read, cacheWrite: message.usage.cache_write }, model: message.model }
+      : {}),
+  }));
 }
 
 function remember(session: SessionItem, messages: Message[]) {

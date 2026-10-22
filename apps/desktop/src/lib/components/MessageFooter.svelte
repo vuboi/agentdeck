@@ -19,14 +19,14 @@
   }
 </script>
 
-<div class="mt-2.5 flex items-center {end ? 'flex-row-reverse' : '-ml-1'} gap-0.5 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 focus-within:opacity-100">
-  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0" aria-label="Copy answer" onclick={copy} {@attach zTooltip({ content: copied ? 'Copied' : 'Copy', position: 'top' })}>
+<div class="mt-2.5 flex items-center {end ? 'flex-row-reverse' : '-ml-1'} gap-2 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 focus-within:opacity-100">
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Copy answer" onclick={copy} {@attach zTooltip({ content: copied ? 'Copied' : 'Copy', position: 'top' })}>
     <ZIcon zType={copied ? 'lucideCheck' : 'lucideCopy'} class="size-[10px]" />
   </ZButton>
-  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0" aria-label="Fork chat from here" onclick={onfork} {@attach zTooltip({ content: 'Fork chat', position: 'top' })}>
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Fork chat from here" onclick={onfork} {@attach zTooltip({ content: 'Fork chat', position: 'top' })}>
     <ZIcon zType="lucideGitBranchPlus" class="size-[10px]" />
   </ZButton>
-  <span class="ml-1.5 flex items-center gap-1.5 text-[11px]">
+  <span class="mx-1 flex items-center gap-1.5 text-[11px]">
     {#if message.ms}<span class="tabular-nums">Worked for {elapsed(message.ms)}</span><span aria-hidden="true">·</span>{/if}
     {#if message.at}
       <span {@attach zTooltip({ content: fullDate(message.at), position: 'top' })}>{ago(new Date(new Date(message.at).getTime() + (message.ms ?? 0)).toISOString(), ticker.min)}</span>

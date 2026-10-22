@@ -4,14 +4,17 @@
 //! tree; the transcript is the chain from the newest message back to the root. Subagent runs live
 //! in `agent-*.jsonl` files and are ignored.
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use serde_json::Value;
 
 use super::util::{
     describe_tool, jsonl_files, read_lines, result_text, strip_ansi, strip_reminders, truncate,
 };
-use super::{HistoryBlock, HistoryMessage, HistorySession, Source};
+use super::{HistoryBlock, HistoryMessage, HistorySession, HistoryUsage, Source};
 
 /// Message uuids kept per session to recognise forks and resumes.
 const SHARED_PREFIX: usize = 12;
@@ -210,6 +213,11 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
     let mut messages: Vec<HistoryMessage> = Vec::new();
     // tool_use id -> (message index, block index), to attach the result later.
     let mut pending: HashMap<String, (usize, usize)> = HashMap::new();
+    // One model call is written as several lines (text, thinking, each tool call), all with the call's usage:
+    // count each call once, by its message id. `carry` holds what is not yet on an answer.
+    let mut counted: HashSet<String> = HashSet::new();
+    let mut carry: Option<HistoryUsage> = None;
+    let mut model: Option<String> = None;
 
     for index in chain {
         let entry = &entries[index];
@@ -218,6 +226,29 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
         }
         let role = entry.kind.as_str();
         let time = str_of(&entry.value, "timestamp").to_owned();
+        if role == "assistant" {
+            let message = entry.value.get("message");
+            let call = message.and_then(|m| m.get("id")).and_then(Value::as_str).unwrap_or_default();
+            if let Some(usage) = message.and_then(|m| m.get("usage")) {
+                if call.is_empty() || counted.insert(call.to_owned()) {
+                    let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+                    HistoryUsage::merge(
+                        &mut carry,
+                        Some(HistoryUsage {
+                            input: count("input_tokens"),
+                            output: count("output_tokens"),
+                            cache_read: count("cache_read_input_tokens"),
+                            cache_write: count("cache_creation_input_tokens"),
+                        }),
+                    );
+                }
+            }
+            if let Some(name) = message.and_then(|m| m.get("model")).and_then(Value::as_str) {
+                if !name.starts_with('<') {
+                    model = Some(name.to_owned());
+                }
+            }
+        }
         let content = entry.value.get("message").and_then(|m| m.get("content"));
         let mut blocks = Vec::new();
 
@@ -288,7 +319,15 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
                 role: role.to_owned(),
                 time,
                 blocks,
+                usage: None,
+                model: None,
             });
+        }
+        if role == "assistant" {
+            HistoryUsage::merge(&mut messages[target].usage, carry.take());
+            if model.is_some() {
+                messages[target].model = model.take();
+            }
         }
     }
     messages.retain(|message| !message.blocks.is_empty());
