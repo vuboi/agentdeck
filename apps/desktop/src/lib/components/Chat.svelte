@@ -43,7 +43,24 @@
   import Composer from './Composer.svelte';
   import ToolbarActions from './ToolbarActions.svelte';
   import FileView from './FileView.svelte';
-  import { activateTab, closeTab, contentTabs, openChatTab, type ContentTab } from '../content-tabs.svelte';
+  import { activateTab, closeAllTabs, closeOtherTabs, closeTab, contentTabs, openChatTab, type ContentTab } from '../content-tabs.svelte';
+  import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
+
+  // Right click on a tab: close it, the others, or all of them.
+  let tabMenu = $state<{ x: number; y: number; id: string } | null>(null);
+  let tabMenuOpen = $state(false);
+  let tabMenuKey = $state(0);
+  function openTabMenu(event: MouseEvent, id: string) {
+    event.preventDefault();
+    tabMenuKey++;
+    tabMenu = { x: event.clientX, y: event.clientY, id };
+    tabMenuOpen = true;
+  }
+  const tabContextItems = $derived<ZDropdownMenuItem[]>([
+    { label: 'Close tab', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+W', class: 'text-xs! py-1', onClick: () => tabMenu && closeTab(tabMenu.id) },
+    { label: 'Close other tabs', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+K Ctrl+O', class: 'text-xs! py-1', onClick: () => tabMenu && closeOtherTabs(tabMenu.id) },
+    { label: 'Close all tabs', icon: 'lucideListX', iconSize: '12', shortcut: 'Ctrl+K Ctrl+W', divide: 'before', class: 'text-xs! py-1', onClick: () => closeAllTabs() },
+  ]);
 
   let viewportEl: HTMLDivElement | undefined = $state();
 
@@ -105,6 +122,27 @@
     void viewportEl;
     const options = virtualOptions();
     untrack(() => $virtualizer.setOptions(options));
+  });
+
+  // A file tab covers the conversation while it is open. Remember whether the reader was at the end, and where
+  // they were otherwise, and put them back when the conversation shows again.
+  let parked: { at: number; end: boolean } | null = null;
+  $effect(() => {
+    const covered = fileActive;
+    untrack(() => {
+      if (!viewportEl) return;
+      if (covered) {
+        parked = { at: viewportEl.scrollTop, end: following };
+        return;
+      }
+      if (!parked) return;
+      const { at, end } = parked;
+      parked = null;
+      requestAnimationFrame(() => {
+        if (end) $virtualizer.scrollToEnd();
+        else if (viewportEl) viewportEl.scrollTop = at;
+      });
+    });
   });
 
   /** One scroll is not enough on a cold list: sizes move as rows are measured, so re-assert per frame. */
@@ -233,8 +271,9 @@
               tabindex="0"
               aria-selected={active}
               title={tab.kind === 'file' ? tab.path : label}
-              class="flex h-7 min-w-[56px] max-w-56 shrink cursor-pointer min-[720px]:min-w-[96px] items-center gap-1 rounded-md py-0 pr-2.5 pl-2.5 text-xs outline-none focus-visible:ring-0 {active ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/60'}"
+              class="flex h-7 min-w-[56px] max-w-56 shrink cursor-pointer min-[720px]:min-w-[96px] items-center gap-1 rounded-md py-0 pr-2.5 pl-2.5 text-xs outline-none focus-visible:ring-0 {active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
               onclick={() => activateTab(tab.id)}
+              oncontextmenu={(event) => openTabMenu(event, tab.id)}
               onkeydown={(event) => event.key === 'Enter' && activateTab(tab.id)}
             >
               <span class="truncate">{label}</span>
@@ -284,6 +323,16 @@
       <ToolbarActions divider={false} />
     </div>
   </header>
+
+  {#if tabMenu}
+    {#key tabMenuKey}
+      <div class="pointer-events-none fixed z-50 size-px" style:left="{tabMenu.x}px" style:top="{tabMenu.y}px">
+        <ZDropdownMenu zItems={tabContextItems} bind:open={tabMenuOpen} zPosition="bottom-left" zOffset={4} zMinWidth={180} zContentClass="p-1 text-xs">
+          <span class="block size-px"></span>
+        </ZDropdownMenu>
+      </div>
+    {/key}
+  {/if}
 
   <!-- overflow-hidden: the turn ruler can never paint past the conversation area, down onto the composer. -->
   <div class="relative isolate flex min-h-0 flex-1 flex-col overflow-hidden">

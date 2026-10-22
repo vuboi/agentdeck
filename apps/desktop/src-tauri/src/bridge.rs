@@ -8,7 +8,7 @@ use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
@@ -254,6 +254,28 @@ fn tail(lines: Vec<Value>, limit: usize) -> Value {
     Value::Array(lines.into_iter().skip(skip).collect())
 }
 
+/// Opens `url` in the Preview panel (a tab of its own when another page is open there) and waits until the page
+/// answers the injected script: then it is ready to act on.
+async fn open_page(app: &AppHandle, url: &str) -> Result<Value, String> {
+    app.emit("agent-open", json!({ "url": url })).map_err(|error| error.to_string())?;
+    let wanted = url.trim_end_matches('/').to_string();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let tab = STATE.lock().map_err(|_| "busy".to_string())?.active.clone();
+        if tab.is_empty() {
+            continue;
+        }
+        if let Ok(report) = ask(app, &tab, "dom", Value::Null).await {
+            let shown = report["url"].as_str().unwrap_or_default();
+            if shown.trim_end_matches('/').starts_with(&wanted) {
+                return Ok(json!({ "opened": shown, "title": report["title"], "tab": tab }));
+            }
+        }
+    }
+    Err(format!("{url} did not open in Preview within 30 s"))
+}
+
 /// The MIME type of a file, from its extension, for the file the agent uploads.
 fn mime_of(name: &str) -> &'static str {
     match name.rsplit('.').next().unwrap_or_default().to_ascii_lowercase().as_str() {
@@ -298,7 +320,10 @@ pub(crate) async fn answer(
             "GET /type?text=": "types text into the focused field, as a keyboard",
             "GET /key?key=": "presses a key: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, Space",
             "GET /fill?selector=&value=": "sets a field's value and fires input and change",
-            "GET /drag?from=&to=": "drags one element onto another (HTML5 drag and drop), both as CSS selectors",
+            "GET /serve?command=&cwd=&url=": "starts a dev server owned by AgentDeck (it outlives your turn), waits until the address answers, then opens it",
+            "GET /device?mode=desktop|tablet|mobile&landscape=1": "switches the Preview to a device (the page is created again with its user agent and size) and answers with the viewport",
+            "GET /open?url=":"opens an address in the Preview panel and waits until the page is ready to act on",
+            "GET /drag?from=&to=":"drags one element onto another (HTML5 drag and drop), both as CSS selectors",
             "GET /upload?selector=&path=": "uploads a file from disk: set on an input type=file, or dropped on a drop zone",
             "GET /press?x=&y=": "a real mouse press at a point (moves the user's mouse, brings the app to the front); /click is usually enough",
         })),
@@ -331,7 +356,13 @@ pub(crate) async fn answer(
             Ok(tail(lines, limit))
         }
         "/network" => {
+            // failed=1: only 0 and >= 400. ok=1: only the successful ones. url=: only urls containing it.
+            // bodies=1: responses and what was sent too (to write a DTO); max_body= characters per response.
             let failed = params.get("failed").is_some_and(|v| v != "0");
+            let only_ok = params.get("ok").is_some_and(|v| v != "0");
+            let bodies = params.get("bodies").is_some_and(|v| v != "0");
+            let url_filter = params.get("url").cloned();
+            let max_body = params.get("max_body").and_then(|v| v.parse::<usize>().ok()).unwrap_or(2000).min(20000);
             let state = STATE.lock().map_err(|_| "busy".to_string())?;
             let lines = state
                 .tabs
@@ -340,12 +371,22 @@ pub(crate) async fn answer(
                     tab.network
                         .iter()
                         .filter(|l| {
-                            !failed || l["status"].as_i64().is_some_and(|s| s == 0 || s >= 400)
+                            let bad = l["status"].as_i64().is_some_and(|s| s == 0 || s >= 400);
+                            (!failed || bad)
+                                && (!only_ok || !bad)
+                                && url_filter.as_deref().is_none_or(|part| l["url"].as_str().is_some_and(|url| url.contains(part)))
                         })
                         .map(|l| {
+                            let bad = l["status"].as_i64().is_some_and(|s| s == 0 || s >= 400);
+                            let clip = |value: &Value, max: usize| match value.as_str() {
+                                Some(text) if text.chars().count() > max => json!(format!("{}…", text.chars().take(max).collect::<String>())),
+                                _ => value.clone(),
+                            };
                             json!({
                                 "method": l["method"], "url": l["url"], "status": l["status"],
-                                "ms": l["ms"], "body": l["body"], "at": l["at"],
+                                "ms": l["ms"], "at": l["at"],
+                                "request": if bodies { clip(&l["request"], max_body) } else { Value::Null },
+                                "body": if bodies || bad { clip(&l["body"], max_body) } else { Value::Null },
                             })
                         })
                         .collect()
@@ -448,7 +489,7 @@ pub(crate) async fn answer(
             let viewport = report["viewport"]["w"].as_f64().unwrap_or(1.0).max(1.0);
             let view = app
                 .get_webview(&format!("browser-{active}"))
-                .ok_or("no page is open in the AgentDeck browser")?;
+                .ok_or("no page is open in the AgentDeck browser: call browser_open (or browser_serve to start the server) with the page address first")?;
             let logical = view.size().map_err(|error| error.to_string())?;
             let scale = view.window().scale_factor().map_err(|error| error.to_string())?;
             let zoom = (logical.width as f64 / scale) / viewport;
@@ -490,6 +531,63 @@ pub(crate) async fn answer(
                 None => Ok(report["result"].clone()),
             }
         }
+        "/open" => {
+            let url = params.get("url").cloned().ok_or("send ?url= with the address to open")?;
+            let target = crate::browser::parse(&url)?;
+            if !crate::browser::answers(&target) {
+                return Err(format!("nothing answers at {target}: start the server with browser_serve first"));
+            }
+            open_page(app, target.as_str()).await
+        }
+        "/device" => {
+            let mode = params.get("mode").cloned().ok_or("send ?mode=desktop|tablet|mobile")?;
+            if !["desktop", "tablet", "mobile"].contains(&mode.as_str()) {
+                return Err(format!("unknown device {mode}: use desktop, tablet or mobile"));
+            }
+            let landscape = params.get("landscape").is_some_and(|value| value == "1" || value == "true");
+            app.emit("agent-device", json!({ "device": mode, "landscape": landscape })).map_err(|error| error.to_string())?;
+            // The pages are created again with the device's user agent: wait for the new one to answer.
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            let deadline = std::time::Instant::now() + Duration::from_secs(20);
+            while std::time::Instant::now() < deadline {
+                let tab = STATE.lock().map_err(|_| "busy".to_string())?.active.clone();
+                if !tab.is_empty() {
+                    if let Ok(report) = ask(app, &tab, "dom", Value::Null).await {
+                        return Ok(json!({ "device": mode, "landscape": landscape, "viewport": report["viewport"], "url": report["url"] }));
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err("the page did not come back after the device change".into())
+        }
+        "/serve" => {
+            let command = params.get("command").cloned().ok_or("send ?command=&cwd=&url=")?;
+            let cwd = params.get("cwd").cloned().ok_or("send ?cwd= with the project folder")?;
+            let url = params.get("url").cloned().ok_or("send ?url= with the address the server will answer at")?;
+            let target = crate::browser::parse(&url)?;
+            let port = target.port_or_known_default().ok_or("the address has no port")?;
+            let mut log = None;
+            // Already up (started earlier, by the user or by AgentDeck): just open it.
+            if !crate::browser::answers(&target) {
+                log = Some(crate::servers::start(&command, &cwd, port)?);
+                let deadline = std::time::Instant::now() + Duration::from_secs(120);
+                loop {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    if crate::browser::answers(&target) {
+                        break;
+                    }
+                    if crate::servers::exited(port) || std::time::Instant::now() > deadline {
+                        return Err(format!(
+                            "`{command}` did not start a server at {target}. Last lines of its log:\n{}",
+                            crate::servers::tail(port, 30)
+                        ));
+                    }
+                }
+            }
+            let mut opened = open_page(app, target.as_str()).await?;
+            opened["server"] = json!({ "command": command, "log": log.map(|path| path.to_string_lossy().into_owned()) });
+            Ok(opened)
+        }
         "/eval" => {
             let script = if body.is_empty() {
                 params.get("js").cloned().unwrap_or_default()
@@ -524,10 +622,10 @@ pub(crate) async fn answer(
 /// The webview of a tab's page.
 fn page(app: &AppHandle, tab: &str) -> Result<tauri::Webview, String> {
     if tab.is_empty() {
-        return Err("no page is open in the AgentDeck browser".into());
+        return Err("no page is open in the AgentDeck browser: call browser_open (or browser_serve to start the server) with the page address first".into());
     }
     app.get_webview(&format!("browser-{tab}"))
-        .ok_or_else(|| "no page is open in the AgentDeck browser".to_string())
+        .ok_or_else(|| "no page is open in the AgentDeck browser: call browser_open (or browser_serve to start the server) with the page address first".to_string())
 }
 
 /// `?x=&y=`, in CSS pixels of the page.
@@ -609,7 +707,7 @@ fn rgba(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
 /// Asks the page of a tab for something and waits for its answer.
 async fn ask(app: &AppHandle, tab: &str, kind: &str, arg: Value) -> Result<Value, String> {
     if tab.is_empty() {
-        return Err("no page is open in the AgentDeck browser".into());
+        return Err("no page is open in the AgentDeck browser: call browser_open (or browser_serve to start the server) with the page address first".into());
     }
     let id = format!("bridge-{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let (sender, receiver) = oneshot::channel();
@@ -620,7 +718,7 @@ async fn ask(app: &AppHandle, tab: &str, kind: &str, arg: Value) -> Result<Value
         .insert(id.clone(), sender);
     let view = app
         .get_webview(&format!("browser-{tab}"))
-        .ok_or("no page is open in the AgentDeck browser")?;
+        .ok_or("no page is open in the AgentDeck browser: call browser_open (or browser_serve to start the server) with the page address first")?;
     let script = format!(
         "window.__agentdeck && window.__agentdeck.run({}, {}, {})",
         json!(id),

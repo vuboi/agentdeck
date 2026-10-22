@@ -1,15 +1,23 @@
 <script lang="ts">
+  import { slide } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { ZDropdownMenu, ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
+  import { toast } from '../toast';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
     activeTab,
     back,
     browser,
+    annotate,
+    markHistory,
     cancelPick,
+    pickElement,
+    annotationNotes,
+    type AnnotateTool,
+    stopAnnotating,
     closeTab,
     DEVICES,
-    elementAt,
     forward,
     goTo,
     capturePage,
@@ -18,13 +26,10 @@
     moveBrowser,
     newTab,
     openExternal,
-    pickElement,
     recreateBrowser,
     reload,
-    screenshot,
     selectTab,
     showBrowser,
-    snapshot,
     stop,
     zoomBrowser,
     type Device,
@@ -34,13 +39,21 @@
   import { mirrorMenus } from '../menu-overlay';
   import { layout } from '../layout.svelte';
   import { draftElements, draftImages, drafts, workspace } from '../sessions.svelte';
-  import AnnotationEditor from './AnnotationEditor.svelte';
   import DevTools from './DevTools.svelte';
 
   // The AgentDeck browser: tabs, an address bar, device sizes, an element picker, devtools, and a markup view
   // whose result goes to the chat. The pages themselves are native webviews placed over the stage below.
   let stage: HTMLDivElement | undefined = $state();
   let address = $state('');
+  let addressInput: HTMLInputElement | undefined = $state();
+
+  // Ctrl+L: the address, selected, ready to type over, while this browser is the one on screen.
+  function onWindowKey(event: KeyboardEvent) {
+    if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'l' || !addressInput) return;
+    event.preventDefault();
+    addressInput.focus();
+    addressInput.select();
+  }
   let editing = $state(false);
   // A dialog over the page (search, a modal): the page cannot sit under it, so a picture of the page stands in,
   // dimmed by the dialog's backdrop like any page would be. It is taken the moment a key or button is pressed,
@@ -48,7 +61,7 @@
   let standIn = $state<{ src: string; x: number; y: number; w: number; h: number } | null>(null);
   let early: { picture: Promise<string>; at: number } | null = null;
   function takeEarly(event: Event) {
-    if (!inTauri() || !tab.opened || covered || shot) return;
+    if (!inTauri() || !tab.opened || covered) return;
     if (event instanceof KeyboardEvent && !(event.ctrlKey || event.metaKey || event.altKey)) return;
     const picture = capturePage();
     picture.catch(() => {});
@@ -73,9 +86,7 @@
     }
     if (covered) await hideBrowser();
   }
-  let shot = $state<{ data: string; w: number; h: number } | null>(null);
   let busy = $state('');
-  let notice = $state('');
   /** A dialog is open: the page hides. Menus are mirrored above the page instead (menu-overlay.ts). */
   let covered = $state(false);
   /** Where the phone / tablet sits in the stage (stage coordinates), for its frame. */
@@ -109,6 +120,9 @@
   // One placement at a time, the newest rectangle last: overlapping calls could land out of order and leave the page misplaced.
   let syncing = false;
   let again = false;
+  /** The tab whose page is on screen: switching to another one hides the rest first. */
+  let shownTab = '';
+
   async function sync() {
     if (syncing) {
       again = true;
@@ -126,7 +140,13 @@
   }
 
   async function placePage() {
-    if (!inTauri() || !started || shot || covered || layout.dragging) return;
+    // An empty tab (a new one, nothing typed yet) shows no page: the previous tab's page must go away.
+    if (inTauri() && !started && !covered && !layout.dragging) {
+      shownTab = '';
+      await hideBrowser();
+      return;
+    }
+    if (!inTauri() || !started || covered || layout.dragging) return;
     const place = frame();
     if (!place) {
       await hideBrowser();
@@ -135,11 +155,13 @@
     const origin = stage!.getBoundingClientRect();
     deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
     try {
-      // Only the tab in front is on screen.
-      if (!tab.opened) await hideBrowser();
-      if (tab.opened) await moveBrowser(place.rect);
-      else await showBrowser(place.rect);
-      if (tab.opened) await showBrowser(place.rect);
+      // Only the tab in front is on screen: switching tabs hides the others first. Showing an open tab again
+      // brings its own webview to the front (a hidden one stays hidden if only its bounds are moved).
+      if (shownTab !== tab.id) {
+        await hideBrowser();
+        shownTab = tab.id;
+      }
+      await showBrowser(place.rect);
       if (tab.opened) await zoomBrowser(place.zoom);
     } catch (error) {
       // The page went away under us (closed, or being recreated for another device): open it again next time.
@@ -187,7 +209,7 @@
     void listenToPage();
     document.addEventListener('pointerdown', takeEarly, true);
     document.addEventListener('keydown', takeEarly, true);
-    stopMirror = mirrorMenus(() => (tab.opened && !covered && !shot && stage ? stage.getBoundingClientRect() : null));
+    stopMirror = mirrorMenus(() => (tab.opened && !covered && stage ? stage.getBoundingClientRect() : null));
     if (stage) {
       resizer = new ResizeObserver(() => void sync());
       resizer.observe(stage);
@@ -209,7 +231,7 @@
       const box = stage?.getBoundingClientRect();
       const key = box ? `${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)},${Math.round(box.height)}` : '';
       // While a drag or a dialog holds the page back nothing is placed, so the change is kept for when it ends.
-      if (key !== last && !layout.dragging && !covered && !shot) {
+      if (key !== last && !layout.dragging && !covered) {
         last = key;
         void sync();
       }
@@ -272,44 +294,17 @@
   // ---- pick, comment, annotate, send ----
   const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
-  type Note = { n: number; text: string; x: number; y: number; selector?: string; html?: string; box?: { w: number; h: number } };
+  // An error shows for a few seconds, then goes by itself: it is never left on a page it has nothing to do with.
+  $effect(() => {
+    const message = browser.error;
+    if (!message) return;
+    const timer = setTimeout(() => {
+      if (browser.error === message) browser.error = '';
+    }, 6000);
+    return () => clearTimeout(timer);
+  });
 
-  /** What the agent needs to know about the page, written as text for the composer. */
-  async function pageContext(notes: Note[] = []): Promise<string> {
-    let title = tab.title;
-    let viewport = '';
-    let body = '';
-    try {
-      const snap = await snapshot();
-      title = snap.title || title;
-      viewport = `${snap.viewport.w}×${snap.viewport.h}`;
-      body = clip(snap.html.slice(Math.max(0, snap.html.indexOf('<body'))), 2500);
-    } catch {
-      // The page may not answer (a blank page); the rest of the context is still useful.
-    }
-    const lines = [`Browser: ${title || 'page'} — ${tab.url} (${browser.device}${viewport ? ` ${viewport}` : ''})`];
-    const onElements = notes.filter((note) => note.selector);
-    const loose = notes.filter((note) => !note.selector);
-    if (loose.length) lines.push('Notes (numbered on the screenshot):', ...loose.map((note) => `${note.n}. ${note.text} (at ${note.x},${note.y})`));
-    for (const note of onElements) {
-      lines.push(`${note.n}. \`${note.selector}\` (${note.box?.w}×${note.box?.h}) — ${note.text}`, '```html', clip(note.html ?? '', 1200), '```');
-    }
-    if (!onElements.length && browser.picked) lines.push(`Selected element: \`${browser.picked.selector}\``, '```html', clip(browser.picked.html, 2500), '```');
-    else if (!onElements.length && body) lines.push('Page HTML (start of body):', '```html', body, '```');
-    const recent = browser.console.filter((line) => line.level === 'error').slice(-5);
-    if (recent.length) lines.push('Console errors:', ...recent.map((line) => `- ${clip(line.text, 300)}`));
-    return lines.join('\n');
-  }
-
-  function addToDraft(text: string, image?: string) {
-    const id = workspace.activeId;
-    drafts[id] = [drafts[id], text].filter(Boolean).join('\n\n');
-    if (image) draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'browser-annotation.png', mime: 'image/png', src: image }];
-    notice = 'Added to the message box.';
-    setTimeout(() => (notice = ''), 2500);
-  }
-
-  /** The inspector: point at an element in the live page, click, write a comment there; it goes to the message box. */
+  /** The inspector: point at an element in the live page and click it. It goes to the message box as an element, with no picture. */
   async function pick() {
     if (browser.picking) {
       void cancelPick();
@@ -317,46 +312,81 @@
     }
     browser.error = '';
     try {
+      if (browser.annotating) await stopAnnotating();
       const picked = await pickElement();
       if (!picked) return;
       const { element, url, title } = picked;
       const id = workspace.activeId;
       draftElements[id] = [...(draftElements[id] ?? []), { id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), box: element.box, style: element.style, url, title }];
-      notice = 'Element added to the message box.';
-      setTimeout(() => (notice = ''), 2500);
+      toast.success('Element added to the message');
     } catch (error) {
       browser.error = String(error);
     }
   }
 
-  /** The markup button: freeze the page and mark it up (box, arrow, line, text, or an element with a comment). */
-  async function annotate() {
-    busy = 'Capturing the page…';
+  // ---- mark up the live page ----
+  // The arrow button starts it. The tools draw on the page itself (an element with a comment, an arrow, a box, a
+  // pinned note); once there are marks, Add to chat takes a picture of the page as it is, marks included.
+  const MARK_TOOLS: { tool: AnnotateTool; label: string; hint: string; icon: ZIconName }[] = [
+    { tool: 'pick', label: 'Comment on an element', hint: 'Click an element to comment on it', icon: 'lucideMousePointerClick' as ZIconName },
+    { tool: 'arrow', label: 'Draw an arrow', hint: 'Drag to draw an arrow', icon: 'lucideMoveUpRight' as ZIconName },
+    { tool: 'box', label: 'Draw a box', hint: 'Drag to draw a box', icon: 'lucideSquare' as ZIconName },
+    { tool: 'note', label: 'Add a note', hint: 'Click to pin a note', icon: 'lucideMessageSquarePlus' as ZIconName },
+  ];
+
+  async function toggleMarkup() {
     browser.error = '';
     try {
-      // The inspector's outline would be captured with the page, and stay there after the markup closes.
-      if (browser.picking) await cancelPick();
-      const taken = await screenshot();
-      await hideBrowser();
-      shot = taken;
+      if (browser.annotating) await stopAnnotating();
+      else {
+        // Inspecting and marking up are two ways to point at the page: starting one ends the other.
+        if (browser.picking) await cancelPick();
+        await annotate('pick');
+      }
+    } catch (error) {
+      browser.error = String(error);
+    }
+  }
+
+  async function useTool(tool: AnnotateTool) {
+    try {
+      await annotate(tool);
+    } catch (error) {
+      browser.error = String(error);
+    }
+  }
+
+  async function addMarksToChat() {
+    busy = 'sending';
+    browser.error = '';
+    try {
+      const notes = await annotationNotes();
+      // The page as it is now, marks included, straight from the engine: one quick capture.
+      const picture = await capturePage();
+      // What was written on an element goes with that element, as its note. The rest, drawn on the picture, are
+      // numbered lines in the message.
+      const words = notes
+        .filter((note) => note.text && !note.element)
+        .map((note) => `${note.n}. ${note.text}`)
+        .join('\n');
+      const id = workspace.activeId;
+      if (words) drafts[id] = [drafts[id], words].filter(Boolean).join('\n');
+      // An element that was marked travels as an element too (its markup and look), next to the picture.
+      const marked = notes.flatMap((note) => (note.element ? [{ element: note.element, note: note.text ? `${note.n}. ${note.text}` : `${note.n}.` }] : []));
+      if (marked.length) {
+        draftElements[id] = [
+          ...(draftElements[id] ?? []),
+          ...marked.map(({ element, note }) => ({ id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), box: element.box, style: element.style, url: tab.url, title: tab.title, note })),
+        ];
+      }
+      draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'page-notes.png', mime: 'image/png', src: picture }];
+      await stopAnnotating();
+      toast.success('Added to the message');
     } catch (error) {
       browser.error = String(error);
     } finally {
       busy = '';
     }
-  }
-
-  async function annotated(png: string, notes: Note[]) {
-    shot = null;
-    addToDraft(await pageContext(notes), png);
-    await tick();
-    void sync();
-  }
-
-  async function cancelAnnotation() {
-    shot = null;
-    await tick();
-    void sync();
   }
 
   const DEVICE_BUTTONS = (['desktop', 'tablet', 'mobile'] as Device[]).map((value) => ({
@@ -376,7 +406,7 @@
         ]
       : []),
     { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: compact ? 'before' : undefined, disabled: !tab.url, onClick: () => void openExternal(tab.url) },
-    { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url) },
+    { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url).then(() => toast.success('Address copied')) },
     { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
   ]);
 
@@ -384,6 +414,8 @@
   const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
 </script>
+
+<svelte:window onkeydown={onWindowKey} />
 
 <div class="flex h-full min-h-0 flex-1 flex-col" aria-label="Browser">
   {#if !inTauri()}
@@ -397,18 +429,20 @@
             role="tab"
             tabindex="0"
             aria-selected={item.id === browser.activeId}
-            class="group/tab flex h-7 min-w-24 max-w-44 shrink cursor-pointer items-center gap-1.5 rounded-lg pr-1 pl-2 text-xs outline-none {item.id === browser.activeId ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/60'}"
+            class="group/tab flex h-7 min-w-24 max-w-44 shrink cursor-pointer items-center gap-1.5 rounded-lg pr-1 pl-2 text-xs outline-none {item.id === browser.activeId ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
             onclick={() => selectTab(item.id)}
             onkeydown={(event) => event.key === 'Enter' && selectTab(item.id)}
             title={tabTitle(item)}
           >
-            {#if item.loading}
-              <ZLoading zLoading zSpinner="spinner" zSize="2xs" zColor="current" />
-            {:else if item.favicon}
-              <img src={item.favicon} alt="" class="size-3.5 shrink-0 rounded-sm" onerror={(event) => ((event.currentTarget as HTMLElement).style.display = 'none')} />
-            {:else}
-              <ZIcon zType="lucideGlobe" class="size-3.5 shrink-0" />
-            {/if}
+            <span class="grid size-3.5 shrink-0 place-items-center">
+              {#if item.loading}
+                <ZLoading zLoading zSpinner="spinner" zSize="2xs" zColor="current" />
+              {:else if item.favicon}
+                <img src={item.favicon} alt="" class="size-3.5 rounded-sm" onerror={(event) => ((event.currentTarget as HTMLElement).style.display = 'none')} />
+              {:else}
+                <ZIcon zType="lucideGlobe" class="size-3.5" />
+              {/if}
+            </span>
             <span class="min-w-0 flex-1 truncate">{tabTitle(item)}</span>
             <button type="button" class="grid size-4.5 shrink-0 cursor-pointer place-items-center rounded-full outline-none hover:bg-primary/20" aria-label="Close tab" onclick={(event) => { event.stopPropagation(); void closeTab(item.id); }}>
               <ZIcon zType="lucideX" class="size-3" />
@@ -429,12 +463,16 @@
         <button type="button" class={icon} aria-label={tab.loading ? 'Stop' : 'Reload'} {@attach zTooltip({ content: tab.loading ? 'Stop loading' : 'Reload', position: 'top' })} onclick={() => void (tab.loading ? stop() : reload())}>
           {#if tab.loading}<ZLoading zLoading zSpinner="spinner" zSize="xs" zColor="primary" />{:else}<ZIcon zType={'lucideRotateCw' as ZIconName} class="size-4" />{/if}
         </button>
-        <button type="button" class="{icon} {browser.picking ? 'bg-primary/15 text-primary' : ''}" aria-label="Inspect an element" disabled={!started} aria-pressed={browser.picking} {@attach zTooltip({ content: browser.picking ? 'Stop inspecting' : 'Inspect an element and comment on it', position: 'top' })} onclick={pick}>
+        <button type="button" class="{icon} {browser.picking ? 'bg-primary/15 text-primary' : ''}" aria-label="Inspect an element" disabled={!started} aria-pressed={browser.picking} {@attach zTooltip({ content: browser.picking ? 'Stop inspecting' : 'Inspect an element and add it to the message', position: 'top' })} onclick={() => void pick()}>
           <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-4" />
+        </button>
+        <button type="button" class="{icon} {browser.annotating ? 'bg-primary/15 text-primary' : ''}" aria-label="Mark up the page" disabled={!started} aria-pressed={browser.annotating} {@attach zTooltip({ content: browser.annotating ? 'Stop marking up' : 'Mark up the page: draw and write notes', position: 'top' })} onclick={() => void toggleMarkup()}>
+          <ZIcon zType={'lucideMousePointer2' as ZIconName} class="size-4" />
         </button>
       </div>
       <form class="min-w-0 flex-1" onsubmit={(event) => { event.preventDefault(); void go(); }}>
         <input
+          bind:this={addressInput}
           bind:value={address}
           class="h-7 w-full rounded-md border border-border bg-muted/40 px-3 text-xs outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:bg-background"
           placeholder="Search or enter an address"
@@ -474,9 +512,6 @@
               <ZIcon zType={'lucideRotateCw' as ZIconName} class="size-3.5" />
             </button>
         </div>
-        <button type="button" class="{icon} {shot ? 'bg-primary/15 text-primary' : ''}" aria-label="Mark up the page" aria-pressed={!!shot} disabled={!started || busy !== ''} {@attach zTooltip({ content: shot ? 'Close the markup' : 'Mark up the page for the agent', position: 'top' })} onclick={() => (shot ? cancelAnnotation() : annotate())}>
-          <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
-        </button>
         <button type="button" class="{icon} relative {browser.devtools ? 'bg-primary/15 text-primary' : ''}" aria-label="Developer tools" aria-pressed={browser.devtools} {@attach zTooltip({ content: 'Developer tools', position: 'top' })} onclick={() => (browser.devtools = !browser.devtools)}>
           <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
           {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
@@ -486,16 +521,53 @@
         </div>
       </div>
     </div>
-    {#if tab.loading}<div class="h-0.5 shrink-0 animate-pulse bg-primary/60" role="progressbar" aria-label="Loading"></div>{/if}
+    {#if browser.annotating}
+      <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1" role="toolbar" aria-label="Mark up tools" transition:slide={{ duration: 160, easing: cubicOut }}>
+        {#each MARK_TOOLS as item (item.tool)}
+          <button
+            type="button"
+            class="{icon} {browser.annotateTool === item.tool ? 'bg-primary/15 text-primary' : ''}"
+            aria-label={item.label}
+            aria-pressed={browser.annotateTool === item.tool}
+            {@attach zTooltip({ content: item.label, position: 'top' })}
+            onclick={() => void useTool(item.tool)}
+          >
+            <ZIcon zType={item.icon} class="size-4" />
+          </button>
+        {/each}
+        <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        <button type="button" class={icon} aria-label="Undo" disabled={!browser.annotateUndo} {@attach zTooltip({ content: 'Undo (Ctrl+Z)', position: 'top' })} onclick={() => void markHistory('undo')}>
+          <ZIcon zType={'lucideUndo2' as ZIconName} class="size-4" />
+        </button>
+        <button type="button" class={icon} aria-label="Redo" disabled={!browser.annotateRedo} {@attach zTooltip({ content: 'Redo (Ctrl+Shift+Z)', position: 'top' })} onclick={() => void markHistory('redo')}>
+          <ZIcon zType={'lucideRedo2' as ZIconName} class="size-4" />
+        </button>
+        <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-destructive outline-none hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-40" aria-label={browser.annotateSelected ? 'Delete the selected note' : 'Delete all notes'} disabled={browser.annotateCount === 0} {@attach zTooltip({ content: browser.annotateSelected ? 'Delete the selected note' : 'Delete all notes', position: 'top' })} onclick={() => void markHistory('remove')}>
+          <ZIcon zType={'lucideTrash2' as ZIconName} class="size-4" />
+        </button>
+        <span class="ml-1 min-w-0 truncate text-[11px] text-muted-foreground">{MARK_TOOLS.find((item) => item.tool === browser.annotateTool)?.hint}</span>
+        {#if browser.annotateCount > 0}
+          <button
+            type="button"
+            class="ml-auto inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground outline-none hover:bg-primary/90 disabled:opacity-60"
+            disabled={busy !== ''}
+            onclick={() => void addMarksToChat()}
+          >
+            <ZIcon zType={'lucidePlus' as ZIconName} class="size-3.5" />
+            Add to chat
+          </button>
+        {/if}
+      </div>
+    {/if}
 
-    {#if browser.error || notice || busy}
-      <div class="shrink-0 border-b border-border px-3 py-1 text-xs {browser.error ? 'text-destructive' : 'text-muted-foreground'}" role="status">{browser.error || busy || notice}</div>
+    {#if browser.error}
+      <div class="shrink-0 border-b border-border px-3 py-1 text-xs text-destructive" role="status">{browser.error}</div>
     {/if}
 
     <!-- The page itself lives in a native webview placed over this area. -->
     <div class="relative min-h-0 flex-1 bg-muted/30">
       <div bind:this={stage} class="absolute inset-0"></div>
-      {#if deviceBox && !shot}
+      {#if deviceBox}
         <!-- The device: a bezel around the page (the page itself is the native layer above) and its caption. -->
         <div
           class="pointer-events-none absolute border border-border bg-black shadow-lg {browser.device === 'mobile' ? 'rounded-2xl' : 'rounded-xl'}"
@@ -520,11 +592,6 @@
             <p class="m-0">Search or enter an address above.</p>
             <p class="m-0 max-w-60">Dev servers on localhost work best. Inspect elements, mark up the page, and send it all to the chat.</p>
           </div>
-        </div>
-      {/if}
-      {#if shot}
-        <div class="absolute inset-0 z-10 bg-background">
-          <AnnotationEditor {shot} inspect={elementAt} oncancel={cancelAnnotation} ondone={annotated} />
         </div>
       {/if}
     </div>

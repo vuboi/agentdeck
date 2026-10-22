@@ -1,9 +1,10 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
-  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { ZDropdownMenu, ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
+  import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import { browser } from '../browser.svelte';
+  import { toast } from '../toast';
   import Splitter from './Splitter.svelte';
 
   // Console and network of the page, laid out like a browser's devtools: tabs, a filter, a bar to resize it.
@@ -52,6 +53,44 @@
     if (tab === 'console') browser.console = [];
     else browser.network = [];
   }
+
+  // ---------- copy: the log or the requests as text, to paste into a chat (fix a bug, write a DTO) ----------
+  const bad = (status: number) => status === 0 || status >= 400;
+  async function copyText(text: string, what: string) {
+    if (!text) return void toast.info(`No ${what} to copy`);
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`Copied ${what}`);
+    } catch {
+      toast.error('Could not copy');
+    }
+  }
+  function copyConsole(errorsOnly: boolean) {
+    const picked = errorsOnly ? browser.console.filter((line) => line.level === 'error') : lines;
+    void copyText(picked.map((line) => `[${clock(line.at)}] ${line.level.toUpperCase()} ${line.text}`).join('\n'), errorsOnly ? 'errors' : 'console');
+  }
+  function copyRequests(which: 'failed' | 'ok' | 'all') {
+    const picked = browser.network.filter((line) => which === 'all' || (which === 'failed') === bad(line.status));
+    const text = picked
+      .map((line) => {
+        const head = `${line.method} ${line.url} -> ${line.status} (${line.ms} ms)`;
+        return [head, line.request ? `request:\n${line.request}` : '', line.body ? `response:\n${line.body}` : ''].filter(Boolean).join('\n');
+      })
+      .join('\n\n');
+    void copyText(text, which === 'failed' ? 'failed requests' : which === 'ok' ? 'successful requests' : 'requests');
+  }
+  const copyItems = $derived<ZDropdownMenuItem[]>(
+    tab === 'console'
+      ? [
+          { label: 'Copy console (as shown)', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => copyConsole(false) },
+          { label: 'Copy errors only', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => copyConsole(true) },
+        ]
+      : [
+          { label: 'Copy failed requests and responses', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => copyRequests('failed') },
+          { label: 'Copy successful requests and responses', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => copyRequests('ok') },
+          { label: 'Copy all requests', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', divide: 'before', onClick: () => copyRequests('all') },
+        ],
+  );
 
   // The same divider as every other pane: a hairline with the primary glow on hover and while dragging.
   const resize = (delta: number) => {
@@ -119,6 +158,9 @@
     {:else}
       <label class="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground"><input type="checkbox" bind:checked={onlyFailed} /> Failed</label>
     {/if}
+    <div class="flex items-center [&_svg]:size-3.5! [&_button]:size-6! [&_button]:rounded [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
+      <ZDropdownMenu zItems={copyItems} zIcon={'lucideCopy' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="top-right" zOffset={6} zMinWidth={240} zWave={false} />
+    </div>
     <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear" {@attach zTooltip({ content: 'Clear', position: 'top' })} onclick={clear}>
       <ZIcon zType={'lucideBan' as ZIconName} class="size-3.5" />
     </button>

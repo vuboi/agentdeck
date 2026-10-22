@@ -33,8 +33,12 @@
   const sessionId = $derived(workspace.activeId);
   const draft = $derived(drafts[sessionId] ?? '');
   const mentions = $derived(draftMentions[sessionId] ?? []);
-  const setDraft = (value: string) => (drafts[sessionId] = value);
-  const setMentions = (value: Mention[]) => (draftMentions[sessionId] = value);
+  const setDraft = (value: string) => {
+    drafts[sessionId] = value;
+  };
+  const setMentions = (value: Mention[]) => {
+    draftMentions[sessionId] = value;
+  };
   const images = $derived(draftImages[sessionId] ?? []);
   const elements = $derived(draftElements[sessionId] ?? []);
   const running = $derived(isRunning(sessionId));
@@ -51,7 +55,9 @@
   const hasInput = $derived(draft.trim().length > 0 || images.length > 0 || elements.length > 0);
   let detail = $state<string | null>(null);
   let chipAnchors = $state<Record<string, HTMLElement | null>>({});
-  const setImages = (value: Attachment[]) => (draftImages[sessionId] = value);
+  const setImages = (value: Attachment[]) => {
+    draftImages[sessionId] = value;
+  };
   let fileInput: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
   let area: HTMLTextAreaElement | undefined = $state();
@@ -302,8 +308,8 @@
             <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 shrink-0 text-primary" />
             <span class="truncate">&lt;{item.tag} /&gt; {item.text}</span>
           </button>
-          <button type="button" class="absolute -top-1.5 -right-1.5 grid size-4 cursor-pointer place-items-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100" aria-label="Remove element" onclick={() => (draftElements[sessionId] = elements.filter((entry) => entry !== item))}>
-            <ZIcon zType="lucideX" class="size-3" />
+          <button type="button" class="absolute -top-3 -right-2.5 flex size-5.5 cursor-pointer items-center justify-center rounded-full border border-border bg-popover text-popover-foreground shadow-md opacity-0 transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100" aria-label="Remove element" onclick={() => (draftElements[sessionId] = elements.filter((entry) => entry !== item))}>
+            <ZIcon zType="lucideX" zSize="12" class="block size-[12px]! shrink-0" />
           </button>
         </div>
       {/each}
@@ -315,6 +321,7 @@
             <div class="flex items-center gap-1.5 font-medium"><ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 text-primary" />Included with your message</div>
             <dl class="m-0 grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1.5">
               <dt class="text-muted-foreground">Element</dt><dd class="m-0 font-mono">&lt;{item.tag} /&gt;</dd>
+              {#if item.note}<dt class="text-muted-foreground">Note</dt><dd class="m-0">{item.note}</dd>{/if}
               <dt class="text-muted-foreground">Text</dt><dd class="m-0">{item.text || '—'}</dd>
               <dt class="text-muted-foreground">Page</dt><dd class="m-0 break-all">{item.url}</dd>
               <dt class="text-muted-foreground">Selector</dt><dd class="m-0 rounded bg-muted/60 px-1.5 py-1 font-mono text-[11px] break-all">{item.selector}</dd>
@@ -338,11 +345,11 @@
           </button>
           <button
             type="button"
-            class="absolute -top-1.5 -right-1.5 grid size-4 cursor-pointer place-items-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover/img:opacity-100 focus-visible:opacity-100"
+            class="absolute -top-3 -right-2.5 flex size-5.5 cursor-pointer items-center justify-center rounded-full border border-border bg-popover text-popover-foreground shadow-md opacity-0 transition-opacity group-hover/img:opacity-100 focus-visible:opacity-100"
             aria-label="Remove {image.name}"
             onclick={() => setImages(images.filter((entry) => entry !== image))}
           >
-            <ZIcon zType="lucideX" class="size-3" />
+            <ZIcon zType="lucideX" zSize="12" class="block size-[12px]! shrink-0" />
           </button>
         </div>
       {/each}

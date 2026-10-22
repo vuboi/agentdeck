@@ -63,6 +63,7 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
       if (call?.kind === 'command') {
         call.output = event.output.length > 6000 ? `${event.output.slice(0, 6000)}…` : event.output;
         call.status = event.is_error ? 'fail' : 'ok';
+        if (event.image) call.image = event.image;
         // A Write over an existing file is an edit, not a creation: the tool's own message says which.
         if (call.change?.create && /updated|overwr/i.test(event.output)) call.change.create = false;
       }

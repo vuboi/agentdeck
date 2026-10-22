@@ -15,7 +15,7 @@ use super::{
 pub struct Claude;
 
 /// Added to the CLI's system prompt on every turn.
-const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app that has its own built-in browser (the Preview panel). When the user asks you to open, preview, run or show a web page or a local dev server, do not open it with an external browser or any browser-automation tool. Start it yourself: find the start script that matches the framework the user asked for (package.json scripts, .claude/launch.json), run it, and read its output. If it fails, read the error, fix the cause (config, missing install, PATH) and run it again; do not stop at the first error. Keep the server running in the background (a detached process or a terminal tab): a server started inside a command that returns dies with it. Check that its port answers before you report the address, and report it only then. Once the server is up, write the full address you actually started (for example http://localhost:4200) in your reply and name the script you used: AgentDeck opens that address in its Preview panel by itself.";
+const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app that has its own built-in browser (the Preview panel). When the user asks you to open, preview, run or show a web page or a local dev server, do not open it with an external browser or any browser-automation tool. Find the start script that matches the framework the user asked for (package.json scripts, .claude/launch.json), then start it with the browser_serve tool (the command, the absolute project folder, the address it answers at): AgentDeck runs the server itself, so it keeps running after your turn, and opens the page in Preview. Never run a dev server in your own shell: it dies when your command or turn ends and Preview is left on a refused connection. If browser_serve reports a failed start, read the log it returns, fix the cause (config, missing install, port) and call it again; do not stop at the first error. If the page is already served, browser_open opens it. Then keep going in this same turn: screenshot, act on the page, screenshot again. Name the script you used in your reply.";
 
 /// Text of a tool result: a plain string, or an array of `{ "type": "text", "text": … }`.
 fn result_text(content: &Value) -> String {
@@ -217,6 +217,7 @@ impl Provider for Claude {
                         .to_string(),
                     output: result_text(&block["content"]),
                     is_error: block["is_error"].as_bool().unwrap_or(false),
+                    image: super::result_image(&block["content"]),
                 })
                 .collect(),
             Some("result") => {
@@ -390,9 +391,16 @@ mod tests {
             vec![AgentEvent::ToolResult {
                 id: "t1".into(),
                 output: "a\nb".into(),
-                is_error: true
+                is_error: true,
+                image: None,
             }]
         );
+        // A screenshot comes back as an image block: it rides along as a data URL.
+        let shot = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAA"}}]}]}}"#;
+        assert!(matches!(
+            &Claude.parse_line(shot)[0],
+            AgentEvent::ToolResult { image: Some(image), .. } if image == "data:image/png;base64,AAA"
+        ));
     }
 
     #[test]

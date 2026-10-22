@@ -275,10 +275,12 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
                                 str_of(item, "name"),
                                 item.get("input").unwrap_or(&Value::Null),
                             );
+                            let input = item.get("input").unwrap_or(&Value::Null);
                             blocks.push(HistoryBlock::Command {
                                 command,
                                 output: String::new(),
                                 status: "ok".into(),
+                                change: crate::agent::file_change(str_of(item, "name"), input),
                             });
                             // Remember where it will land once the block list is attached to a message.
                             pending.insert(id, (usize::MAX, blocks.len() - 1));

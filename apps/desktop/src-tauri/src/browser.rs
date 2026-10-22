@@ -31,31 +31,24 @@ fn remember(tab: &str, url: &str) {
     }
 }
 
-/// The error page as a `data:` address: same tab, same URL in the address bar, a Refresh that tries again.
-fn error_page(target: &str) -> Result<tauri::Url, String> {
+/// AgentDeck's page for an address that did not answer, like a browser's own: the tab keeps the address, Reload
+/// tries again, and the page opens the address by itself as soon as its server answers. It is served by the
+/// `agentdeck` scheme (WebView2 does not show `data:` pages here).
+pub(crate) fn error_html(target: &str) -> String {
     let shown = target.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
+    let host = tauri::Url::parse(target)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| shown.clone());
     let go = target.replace('\\', "\\\\").replace('\'', "\\'").replace('"', "%22");
-    let html = format!(
-        "{ERROR_MARK}<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>\
-<title>Can't reach this page</title><style>\
-body{{margin:0;min-height:100vh;display:grid;place-items:center;font:14px/1.5 system-ui,sans-serif;background:#1f1f1f;color:#e6e6e6}}\
-main{{max-width:440px;padding:24px;text-align:center}}h1{{font-size:20px;margin:0 0 12px;font-weight:600}}\
-code{{color:#9cc3ff;word-break:break-all}}\
-button{{margin-top:16px;padding:8px 18px;border:0;border-radius:6px;background:#2f6fe4;color:#fff;font:inherit;cursor:pointer}}\
-small{{display:block;margin-top:16px;color:#8a8a8a}}</style>\
-<main><h1>Can't reach this page</h1><p><code>{shown}</code> did not load.</p>\
-<button onclick=\"location.replace('{go}')\">Refresh</button>\
-<small>Check that the server is running, then Refresh.</small></main>"
-    );
-    let mut encoded = String::from("data:text/html;charset=utf-8,");
-    for byte in html.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
-            encoded.push(byte as char);
-        } else {
-            encoded.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    tauri::Url::parse(&encoded).map_err(|error| error.to_string())
+    format!(
+        "{ERROR_MARK}<!doctype html><html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>{host}</title><style>:root{{color-scheme:light dark;--bg:#ffffff;--fg:#202124;--muted:#5f6368;--accent:#1a73e8}}@media (prefers-color-scheme:dark){{:root{{--bg:#202124;--fg:#e8eaed;--muted:#9aa0a6;--accent:#8ab4f8}}}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--muted);font:15px/1.55 system-ui,'Segoe UI',sans-serif}}main{{max-width:560px;margin:0 auto;padding:18vh 32px 32px}}svg{{width:40px;height:40px;color:var(--accent)}}h1{{margin:24px 0 12px;font-size:22px;font-weight:500;color:var(--fg)}}ul{{margin:8px 0 0;padding-left:22px}}code{{font-size:12px;letter-spacing:.02em}}button{{margin-top:32px;padding:8px 18px;border:0;border-radius:6px;background:var(--accent);color:var(--bg);font:500 14px system-ui,sans-serif;cursor:pointer}}</style><main><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'><path d='M12 21a9 9 0 1 1 9-9'/><path d='M12 7v5l3 2'/></svg><h1>This site can't be reached</h1><p><b>{host}</b> refused to connect.</p><p>Try:</p><ul><li>Checking that the dev server is running</li><li>Checking the address: <code>{shown}</code></li></ul><p><code>ERR_CONNECTION_REFUSED</code></p><button onclick=\"location.replace('{go}')\">Reload</button></main><script>setInterval(()=>fetch('{go}',{{mode:'no-cors',cache:'no-store'}}).then(()=>location.replace('{go}'),()=>{{}}),1500)</script></html>"
+    )
+}
+
+/// The address of AgentDeck's error page for `target`.
+fn error_page(target: &str) -> Result<tauri::Url, String> {
+    tauri::Url::parse_with_params(&format!("{}error", base()), &[("url", target)]).map_err(|error| error.to_string())
 }
 
 /// Where the page posts its reports: the custom scheme, which WebView2 serves under a localhost name.
@@ -99,12 +92,45 @@ fn webview(app: &AppHandle, tab: &str) -> Result<Webview, String> {
         .ok_or_else(|| "the browser is not open".to_string())
 }
 
-fn parse(url: &str) -> Result<tauri::Url, String> {
+/// Whether a local address (localhost, 127.0.0.1, [::1]) has a server on its port. Other addresses count as up:
+/// only the page itself can tell. Vite may listen on IPv4 or IPv6 only, so both are tried.
+pub(crate) fn answers(url: &tauri::Url) -> bool {
+    if !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]" | "::1")) {
+        return true;
+    }
+    let Some(port) = url.port_or_known_default() else {
+        return true;
+    };
+    let wait = std::time::Duration::from_millis(300);
+    [
+        std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
+    ]
+    .iter()
+    .any(|addr| std::net::TcpStream::connect_timeout(addr, wait).is_ok())
+}
+
+/// Where a tab goes for `url`: the page itself, or AgentDeck's error page when nothing listens on its local port.
+fn destination(tab: &str, url: &str) -> Result<tauri::Url, String> {
+    let target = parse(url)?;
+    remember(tab, target.as_str());
+    if answers(&target) {
+        Ok(target)
+    } else {
+        error_page(target.as_str())
+    }
+}
+
+pub(crate) fn parse(url: &str) -> Result<tauri::Url, String> {
     // A bare host or "localhost:4200" is what people type; give it a scheme.
+    let url = url.trim();
     let text = if url.contains("://") || url.starts_with("about:") || url.starts_with("data:") {
         url.to_owned()
     } else if url.starts_with("localhost") || url.starts_with("127.") || url.starts_with("[::1]") {
         format!("http://{url}")
+    } else if url.contains(char::is_whitespace) || !url.contains('.') {
+        // Words, not an address ("zz", "svelte runes"): search for them, as a browser's address bar does.
+        return tauri::Url::parse_with_params("https://www.google.com/search", &[("q", url)]).map_err(|error| error.to_string());
     } else {
         format!("https://{url}")
     };
@@ -139,7 +165,7 @@ pub async fn browser_show(
         return view.show().map_err(|error| error.to_string());
     }
     let window = app.get_window("main").ok_or("no main window")?;
-    let mut builder = WebviewBuilder::new(label(&tab), WebviewUrl::External(parse(&url)?))
+    let mut builder = WebviewBuilder::new(label(&tab), WebviewUrl::External(destination(&tab, &url)?))
         .initialization_script(injected_script(&tab))
         .on_page_load(|view, payload| {
             let event = match payload.event() {
@@ -150,8 +176,8 @@ pub async fn browser_show(
             let url = payload.url().to_string();
             // The browser's own error page (Chromium's chrome-error:// address) is replaced by AgentDeck's, at the same tab.
             let failed = url.starts_with("chrome-error:");
-            // Our error page is a data: address; the tab keeps showing the address that was asked for.
-            let ours = url.starts_with("data:text/html;charset=utf-8,%3C%21--agentdeck-error");
+            // Our error page is served by the agentdeck scheme; the tab keeps showing the address that was asked for.
+            let ours = url.starts_with(&format!("{}error", base()));
             if failed {
                 if event == "finished" {
                     if let Some(target) = requested(&tab) {
@@ -277,10 +303,22 @@ pub fn browser_hide(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The app window was reloaded (F5): the pages opened before it belong to tabs that no longer exist, yet they stay
+/// on screen above the new window. Close them all.
+#[tauri::command]
+pub fn browser_reset(app: AppHandle) {
+    for (name, view) in app.webviews() {
+        if name.starts_with(PREFIX) {
+            let _ = view.close();
+        }
+    }
+    crate::bridge::set_active("");
+}
+
 #[tauri::command]
 pub fn browser_navigate(app: AppHandle, tab: String, url: String) -> Result<(), String> {
     webview(&app, &tab)?
-        .navigate(parse(&url)?)
+        .navigate(destination(&tab, &url)?)
         .map_err(|error| error.to_string())
 }
 

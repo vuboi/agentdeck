@@ -1,10 +1,12 @@
 <script lang="ts">
   import { ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { slide } from 'svelte/transition';
   import { activity, audit, clearAudit, type Activity } from '../activity.svelte';
   import { elapsed } from '../blocks';
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
+  import { toast } from '../toast';
 
   // Tasks: what the agents are running now, background shells and sub-agents included.
   // Audit (`log`): every finished tool call and chat error, kept on disk, grouped by month and day.
@@ -14,6 +16,8 @@
   let failedOnly = $state(false);
   let copied = $state(false);
   let month = $state('');
+  // null: all projects. '' is a real choice: the chats outside any project.
+  let project = $state<string | null>(null);
 
   const live = (item: Activity) => item.status === 'running' || item.status === 'background';
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -26,7 +30,14 @@
   // Audit: the months that have entries, newest first; the chosen one (or the newest) is shown.
   const months = $derived([...new Set(audit.map((item) => monthKey(item.startedAt)))].sort().reverse());
   const current = $derived(month && months.includes(month) ? month : (months[0] ?? ''));
-  const inMonth = $derived(audit.filter((item) => monthKey(item.startedAt) === current && (!failedOnly || item.status === 'fail')).reverse());
+  // Projects that have entries in the chosen month; a filter on a project that is gone shows them all.
+  const projectsInMonth = $derived([...new Set(audit.filter((item) => monthKey(item.startedAt) === current).map((item) => item.project ?? ''))].sort());
+  const chosenProject = $derived(project !== null && projectsInMonth.includes(project) ? project : null);
+  const inMonth = $derived(
+    audit
+      .filter((item) => monthKey(item.startedAt) === current && (chosenProject === null || (item.project ?? '') === chosenProject) && (!failedOnly || item.status === 'fail'))
+      .reverse(),
+  );
   const days = $derived.by(() => {
     const groups: { key: string; at: number; items: Activity[] }[] = [];
     for (const item of inMonth) {
@@ -46,6 +57,7 @@
   async function copyFailures() {
     const text = failures.map((item) => `[${dayKey(item.startedAt)} ${clock(item.startedAt)}] ${item.title} | ${item.name} ${item.input}\n${item.output ?? ''}`).join('\n\n');
     await navigator.clipboard.writeText(text);
+    toast.success(`Copied ${failures.length} failure${failures.length === 1 ? '' : 's'}`);
     copied = true;
     setTimeout(() => (copied = false), 1500);
   }
@@ -53,7 +65,7 @@
   const STATUS: Record<Activity['status'], { label: string; tone: string }> = {
     running: { label: 'Running', tone: 'text-primary' },
     background: { label: 'In background', tone: 'text-primary' },
-    ok: { label: 'Done', tone: 'text-success' },
+    ok: { label: 'Done', tone: 'text-emerald-500' },
     fail: { label: 'Failed', tone: 'text-destructive' },
     stopped: { label: 'Stopped', tone: 'text-muted-foreground' },
   };
@@ -80,6 +92,7 @@
       aria-expanded={open[item.key] ?? false}
       onclick={() => (open[item.key] = !open[item.key])}
     >
+      <ZIcon zType={'lucideChevronRight' as ZIconName} class="size-3 shrink-0 text-muted-foreground transition-transform duration-200 {open[item.key] ? 'rotate-90' : ''}" />
       <span class="grid size-3.5 shrink-0 place-items-center {STATUS[item.status].tone}" aria-label={STATUS[item.status].label} {@attach zTooltip({ content: STATUS[item.status].label, position: 'top' })}>
         {#if live(item)}
           <ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="current" />
@@ -93,7 +106,7 @@
       <span class="shrink-0 tabular-nums text-[11px] text-muted-foreground">{log ? clock(item.startedAt) : took(item)}</span>
     </button>
     {#if open[item.key]}
-      <div class="flex flex-col gap-1.5 px-3 pb-2.5 text-[11px]">
+      <div class="flex flex-col gap-1.5 overflow-hidden px-3 pb-2.5 text-[11px]" transition:slide={{ duration: 180 }}>
         <div class="flex items-center gap-2 text-muted-foreground">
           <button type="button" class="min-w-0 cursor-pointer truncate text-primary hover:underline" onclick={() => showSession(item.sessionId)}>{item.title}</button>
           <span aria-hidden="true">·</span>
@@ -134,6 +147,15 @@
       </button>
     {/if}
   </div>
+  {#if log && projectsInMonth.length > 1}
+    <!-- Projects with entries in this month. -->
+    <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-1.5" role="tablist" aria-label="Projects">
+      <button type="button" role="tab" aria-selected={chosenProject === null} class="shrink-0 cursor-pointer rounded-full px-2.5 py-0.5 text-[11px] {chosenProject === null ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = null)}>All projects</button>
+      {#each projectsInMonth as name (name)}
+        <button type="button" role="tab" aria-selected={chosenProject === name} class="shrink-0 cursor-pointer rounded-full px-2.5 py-0.5 text-[11px] {chosenProject === name ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = name)}>{name || 'No project'}</button>
+      {/each}
+    </div>
+  {/if}
   {#if log}
     <!-- Months with entries, newest first. -->
     <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-1.5" role="tablist" aria-label="Months">
@@ -155,7 +177,7 @@
           <span class="tabular-nums normal-case">{day.items.length}</span>
         </div>
         <ul class="m-0 list-none p-0">
-          {#each day.items as item (item.key)}{@render row(item)}{/each}
+          {#each day.items as item, index (index)}{@render row(item)}{/each}
         </ul>
       {/each}
     {:else}

@@ -23,7 +23,7 @@ export const DEVICES: Record<Device, { label: string; name: string; w: number; h
 };
 
 export type ConsoleLine = { level: string; text: string; at: number };
-export type NetworkLine = { method: string; url: string; status: number; ms: number; at: number };
+export type NetworkLine = { method: string; url: string; status: number; ms: number; at: number; /** The response text, when the request returned text or JSON. */ body?: string; /** What was sent. */ request?: string };
 export type PickedElement = {
   selector: string;
   tag: string;
@@ -43,6 +43,18 @@ let counter = 0;
 const newTabId = () => `t${++counter}${Date.now().toString(36)}`;
 const blankTab = (url = ''): BrowserTab => ({ id: newTabId(), url, title: '', favicon: '', loading: false, opened: false });
 
+export type AnnotateTool = 'pick' | 'arrow' | 'box' | 'note';
+/** One mark on the page: where it is (page pixels), what was written, and for an element which one. */
+export type AnnotationNote = {
+  n: number;
+  type: string;
+  text: string;
+  x: number;
+  y: number;
+  /** For a mark on an element: which one, with its markup and look. */
+  element?: { tag: string; text: string; selector: string; html: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string> };
+};
+
 export const browser = $state({
   tabs: [blankTab()] as BrowserTab[],
   activeId: '' as string,
@@ -59,6 +71,16 @@ export const browser = $state({
   comments: [] as PageComment[],
   devtools: false,
   devtoolsHeight: 220,
+  /** Marking up the live page: comment on an element, draw an arrow or a box, or pin a note. */
+  annotating: false,
+  annotateTool: 'arrow' as AnnotateTool,
+  /** How many notes are on the page: with some, the toolbar offers Add to chat. */
+  annotateCount: 0,
+  /** Whether the marks have something to undo or to redo. */
+  annotateUndo: false,
+  annotateRedo: false,
+  /** A note on the page is selected: the delete button then removes that one, not all. */
+  annotateSelected: false,
 });
 browser.activeId = browser.tabs[0].id;
 
@@ -78,6 +100,16 @@ export async function listenToPage() {
   if (listening || !inTauri()) return;
   listening = true;
   const { listen } = await import('@tauri-apps/api/event');
+  // The agent asked to open an address (browser_open): the same as a link opened in AgentDeck.
+  await listen<{ url: string }>('agent-open', ({ payload }) => openInPreview(payload.url));
+  // The agent switched the device (browser_device): pages are created again with that device's user agent.
+  await listen<{ device: Device; landscape: boolean }>('agent-device', ({ payload }) => {
+    if (!(payload.device in DEVICES)) return;
+    browser.device = payload.device;
+    browser.landscape = payload.landscape === true;
+    layout.activeTool = 'Preview';
+    layout.toolsOpen = true;
+  });
   await listen<Report>('browser-report', ({ payload }) => {
     if (payload.id && waiting.has(payload.id)) {
       waiting.get(payload.id)?.(payload);
@@ -88,8 +120,13 @@ export async function listenToPage() {
       browser.console.push({ level: String(payload.level), text: String(payload.text), at: Number(payload.at) });
       if (browser.console.length > LIMIT) browser.console.splice(0, browser.console.length - LIMIT);
     } else if (payload.kind === 'network' && payload.tab === browser.activeId) {
-      browser.network.push({ method: String(payload.method), url: String(payload.url), status: Number(payload.status), ms: Number(payload.ms), at: Number(payload.at) });
+      browser.network.push({ method: String(payload.method), url: String(payload.url), status: Number(payload.status), ms: Number(payload.ms), at: Number(payload.at), body: typeof payload.body === 'string' ? payload.body : undefined, request: typeof payload.request === 'string' ? payload.request : undefined });
       if (browser.network.length > LIMIT) browser.network.splice(0, browser.network.length - LIMIT);
+    } else if (payload.kind === 'ann-count' && payload.tab === browser.activeId) {
+      browser.annotateCount = Number(payload.count) || 0;
+      browser.annotateUndo = payload.undo === true;
+      browser.annotateRedo = payload.redo === true;
+      browser.annotateSelected = payload.selected === true;
     } else if (payload.kind === 'nav' && tab) {
       tab.url = String(payload.url);
       tab.title = String(payload.title ?? '');
@@ -106,6 +143,9 @@ export async function listenToPage() {
     if (payload.event === 'started') {
       tab.url = payload.url;
       if (tab.id === browser.activeId) {
+        // A new page takes the marks with it: leave the mode.
+        browser.annotating = false;
+        browser.annotateCount = 0;
         browser.console = [];
         browser.network = [];
       }
@@ -138,6 +178,8 @@ function ask<T extends Report>(kind: string, arg: unknown = null, timeout = 1500
 export type Rect = { x: number; y: number; w: number; h: number };
 
 export function newTab(url = '') {
+  if (browser.annotating) void stopAnnotating();
+  browser.error = '';
   const tab = blankTab(url);
   browser.tabs.push(tab);
   browser.activeId = tab.id;
@@ -147,6 +189,11 @@ export function newTab(url = '') {
 export async function closeTab(id: string) {
   const index = browser.tabs.findIndex((tab) => tab.id === id);
   if (index === -1) return;
+  if (browser.annotating && id === browser.activeId) {
+    browser.annotating = false;
+    browser.annotateCount = 0;
+  }
+  browser.error = '';
   const [tab] = browser.tabs.splice(index, 1);
   if (tab.opened && inTauri()) await call('browser_close', { tab: id }).catch(() => {});
   if (browser.tabs.length === 0) browser.tabs.push(blankTab());
@@ -154,7 +201,12 @@ export async function closeTab(id: string) {
 }
 
 export function selectTab(id: string) {
-  if (browser.tabs.some((tab) => tab.id === id)) browser.activeId = id;
+  if (!browser.tabs.some((tab) => tab.id === id)) return;
+  // An error belongs to the page it came from.
+  if (id !== browser.activeId) browser.error = '';
+  // The marks belong to the page they were drawn on: leaving it ends the mode there.
+  if (browser.annotating && id !== browser.activeId) void stopAnnotating();
+  browser.activeId = id;
 }
 
 let showing: Promise<void> | null = null;
@@ -172,6 +224,8 @@ async function openBrowser(rect: Rect) {
 }
 export const moveBrowser = (rect: Rect) => call('browser_bounds', { tab: activeTab().id, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
 export const hideBrowser = () => call('browser_hide');
+/** At start-up (also after F5): closes the pages a previous load of the window left running above it. */
+export const resetBrowser = () => (inTauri() ? call('browser_reset').catch(() => {}) : Promise.resolve());
 /** A picture of the front page taken by the engine (PNG data URL). */
 export const capturePage = () => call<string>('browser_capture', { tab: activeTab().id });
 export const zoomBrowser = (factor: number) => call('browser_zoom', { tab: activeTab().id, factor });
@@ -187,7 +241,12 @@ export async function goTo(url: string) {
 const run = (script: string) => call('browser_eval', { tab: activeTab().id, script });
 export const back = () => run('history.back()');
 export const forward = () => run('history.forward()');
-export const reload = () => run('location.reload()');
+// Reload asks for the address again, so an address that does not answer gets AgentDeck's own error page, never the
+// browser's chrome-error page (a reload of a page the browser cannot reach would show that).
+export const reload = () => {
+  const tab = activeTab();
+  return tab.url ? goTo(tab.url) : Promise.resolve();
+};
 export const stop = () => run('window.stop()');
 
 /** The pages are created again with the new device's user agent (it cannot change on a live page), at the same address. */
@@ -228,6 +287,32 @@ export async function pickElement(): Promise<{ element: PickedElement; url: stri
     browser.picking = false;
   }
 }
+/** Starts marking up the live page with a tool, or switches the tool. */
+export async function annotate(tool: AnnotateTool) {
+  browser.annotating = true;
+  browser.annotateTool = tool;
+  await ask('ann', { tool });
+}
+
+/** Undo or redo the last change to the marks, or take them all off (which can be undone). */
+export const markHistory = (action: 'undo' | 'redo' | 'remove') => ask('ann', { [action]: true });
+
+/** The marks on the page, to send with its picture. */
+export async function annotationNotes(): Promise<AnnotationNote[]> {
+  const report = await ask<Report & { result: { notes: AnnotationNote[] } }>('ann', { state: true });
+  return report.result.notes;
+}
+
+/** Ends the mode and takes every mark off the page. */
+export async function stopAnnotating() {
+  browser.annotating = false;
+  browser.annotateCount = 0;
+  browser.annotateUndo = false;
+  browser.annotateRedo = false;
+  browser.annotateSelected = false;
+  await ask('ann', { clear: true }).catch(() => {});
+}
+
 export const cancelPick = () => run("window.__agentdeck && window.__agentdeck.run('', 'unpick')");
 
 /** Pins a note to an element. */
@@ -254,4 +339,5 @@ export function openInPreview(url: string) {
 }
 
 /** The right-click menu of a link, shown by LinkMenu. */
-export const linkMenu = $state({ open: false, url: '', x: 0, y: 0 });
+/** The right-click menu of a link. `file` is set when the link is a file in the project: then `root` is its folder. */
+export const linkMenu = $state({ open: false, url: '', x: 0, y: 0, file: '', root: '' });

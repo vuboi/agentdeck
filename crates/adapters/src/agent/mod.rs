@@ -33,6 +33,9 @@ pub enum AgentEvent {
         id: String,
         output: String,
         is_error: bool,
+        /// A picture the tool returned (a browser screenshot), as a `data:` URL, shown as a thumbnail.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        image: Option<String>,
     },
     /// The CLI refused tools that need the user's approval. Allow them and send a follow-up turn to continue.
     PermissionDenied { requests: Vec<PermissionRequest> },
@@ -123,7 +126,7 @@ pub fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {
 }
 
 /// What one Write or Edit does to a file, for the "created 2 files +222 -0" summary and its diff.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FileChange {
     pub path: String,
     pub added: usize,
@@ -148,6 +151,17 @@ fn cut(text: &str) -> String {
     } else {
         text.to_owned()
     }
+}
+
+/// The first picture in a tool result's content, as a `data:` URL. Claude nests it under `source`; an MCP
+/// result (Codex) has `data` and `mimeType` on the part itself.
+pub fn result_image(content: &serde_json::Value) -> Option<String> {
+    let part = content.as_array()?.iter().find(|part| part["type"] == "image")?;
+    let (mime, data) = match part.get("source") {
+        Some(source) => (source["media_type"].as_str()?, source["data"].as_str()?),
+        None => (part["mimeType"].as_str()?, part["data"].as_str()?),
+    };
+    Some(format!("data:{mime};base64,{data}"))
 }
 
 /// The file change a tool call makes, if it is one of the file-writing tools.

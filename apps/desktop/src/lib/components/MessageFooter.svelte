@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
   import { ticker } from '../clock.svelte';
+  import { toast } from '../toast';
   import { ago, answerText, elapsed, fullDate } from '../blocks';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import type { Message } from '../mock';
@@ -14,8 +15,9 @@
       await navigator.clipboard.writeText(answerText(message.blocks));
       copied = true;
       setTimeout(() => (copied = false), 1500);
+      toast.success('Copied');
     } catch {
-      // No clipboard access: nothing to show.
+      toast.error('Could not copy');
     }
   }
 </script>

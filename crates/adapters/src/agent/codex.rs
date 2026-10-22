@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::{AgentEvent, FileChange, Provider, TurnRequest};
 
 /// Added to Codex's instructions on every turn (the same facts Claude is given).
-const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app with its own built-in browser (the Preview panel). To show a web page or a local dev server, start the server if needed and write the full address of the server you actually started in your reply and name the script you used: AgentDeck opens it in Preview. Before starting a dev server, inspect the workspace scripts (package.json, .claude/launch.json) and identify the requested framework. Run that script, read its output, and if it fails read the error, fix the cause (config, missing install, PATH) and run it again; do not stop at the first error. Keep the server running in the background (a detached process or a terminal tab): a server started inside a command that returns dies with it. Check that its port answers before you report the address, and report it only then. In the z-ui workspace, use `pnpm start:svelte` for the Svelte 5 app (default http://localhost:4301) and `pnpm start:angular` for the Angular app (default http://localhost:4200); never use the Angular 4200 server when the user asks for Svelte, Svelte 5, or z-ui-svelte. When the user asks you to inspect or interact with that page, you MUST use the AgentDeck MCP tools on the Preview page: call browser_screenshot first, then browser_click/browser_fill/browser_key/browser_scroll as needed (browser_fill for form fields; browser_type only when the page reacts to each keystroke), and call browser_screenshot or browser_dom again to verify the result. Do not use an external Chrome tab, do not merely navigate to or mention the URL, and do not claim an interaction happened without a matching MCP result. You can also use browser_eval, browser_console, and browser_network for inspection. Never tell the user you cannot test in Preview.";
+const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app with its own built-in browser (the Preview panel). To show a local dev server, inspect the workspace scripts (package.json, .claude/launch.json), identify the requested framework, then start it with the browser_serve tool (the command, the absolute project folder, the address it answers at): AgentDeck runs the server itself, so it keeps running after your turn, and opens the page in Preview. Never run a dev server in your own shell: it dies when your command or turn ends and Preview is left on a refused connection. If browser_serve reports a failed start, read the log it returns, fix the cause (config, missing install, port) and call it again; do not stop at the first error. If the page is already served, browser_open opens it. Then keep going in this same turn: screenshot, act on the page, screenshot again. Name the script you used in your reply. In the z-ui workspace, use `pnpm start:svelte` for the Svelte 5 app (default http://localhost:4301) and `pnpm start:angular` for the Angular app (default http://localhost:4200); never use the Angular 4200 server when the user asks for Svelte, Svelte 5, or z-ui-svelte. When the user asks you to inspect or interact with that page, you MUST use the AgentDeck MCP tools on the Preview page: call browser_screenshot first, then browser_click/browser_fill/browser_key/browser_scroll as needed (browser_fill for form fields; browser_type only when the page reacts to each keystroke), and call browser_screenshot or browser_dom again to verify the result. Do not use an external Chrome tab, do not merely navigate to or mention the URL, and do not claim an interaction happened without a matching MCP result. You can also use browser_eval, browser_console, and browser_network for inspection. Never tell the user you cannot test in Preview.";
 
 /// What one run of the parser remembers between lines: the thread id for the final event, which commands
 /// were already announced, and whether the last thing written was answer text.
@@ -193,6 +193,7 @@ impl Provider for Codex {
                     id,
                     output: item["aggregated_output"].as_str().unwrap_or_default().to_string(),
                     is_error: failed,
+                    image: None,
                 });
                 turn.last_was_text = false;
             }
@@ -217,7 +218,11 @@ impl Provider for Codex {
                 for (index, change) in changes.iter().enumerate() {
                     let path = change["path"].as_str().unwrap_or_default().to_string();
                     let call = format!("{id}:{index}");
-                    let name = if change["kind"] == "add" { "Write" } else { "Edit" };
+                    let name = match change["kind"].as_str() {
+                        Some("add") => "Write",
+                        Some("delete") => "Delete",
+                        _ => "Edit",
+                    };
                     events.push(AgentEvent::ToolCall {
                         id: call.clone(),
                         name: name.into(),
@@ -225,7 +230,7 @@ impl Provider for Codex {
                         change: Some(FileChange { path, added: 0, removed: 0, before: String::new(), after: String::new() }),
                         background: false,
                     });
-                    events.push(AgentEvent::ToolResult { id: call, output: String::new(), is_error: item["status"] == "failed" });
+                    events.push(AgentEvent::ToolResult { id: call, output: String::new(), is_error: item["status"] == "failed", image: None });
                 }
                 turn.last_was_text = false;
             }
@@ -249,6 +254,7 @@ impl Provider for Codex {
                         id,
                         output: if output.is_empty() { item["error"]["message"].as_str().unwrap_or_default().to_string() } else { output },
                         is_error: item["status"] == "failed",
+                        image: super::result_image(&item["result"]["content"]),
                     });
                 }
                 turn.last_was_text = false;
@@ -261,7 +267,7 @@ impl Provider for Codex {
                     change: None,
                     background: false,
                 });
-                events.push(AgentEvent::ToolResult { id, output: String::new(), is_error: false });
+                events.push(AgentEvent::ToolResult { id, output: String::new(), is_error: false, image: None });
             }
             ("item.completed", "error") => {
                 events.push(AgentEvent::Delta { text: format!("⚠ {}", item["message"].as_str().unwrap_or_default()) });

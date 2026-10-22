@@ -6,20 +6,33 @@ export type TerminalTab = { id: string; name: string; lines: string[] };
 let counter = 1;
 
 export const terminal = $state({
-  open: true,
+  // Hidden by default: it opens when asked (the shortcut, or a new terminal). A saved choice still wins.
+  open: false,
   active: 'term-1',
   tabs: [{ id: 'term-1', name: 'zsh', lines: ['AgentDeck terminal (preview, no PTY yet)'] }] as TerminalTab[],
 });
 
+// Open or closed, the tabs and the active one are kept in IndexedDB: a reload brings the terminal back as it was.
+type SavedTerminal = { open: boolean; active: string; tabs: TerminalTab[] };
 let terminalHydrated = false;
-getPref<boolean>('terminal.open').then((saved) => {
-  if (typeof saved === 'boolean') terminal.open = saved;
+Promise.all([getPref<SavedTerminal>('terminal.state'), getPref<boolean>('terminal.open')]).then(([saved, legacyOpen]) => {
+  if (saved && Array.isArray(saved.tabs) && saved.tabs.length > 0) {
+    terminal.tabs = saved.tabs;
+    terminal.active = saved.tabs.some((tab) => tab.id === saved.active) ? saved.active : saved.tabs[0].id;
+    terminal.open = saved.open === true;
+  } else if (typeof legacyOpen === 'boolean') {
+    terminal.open = legacyOpen;
+  }
   terminalHydrated = true;
 });
 $effect.root(() => {
   $effect(() => {
-    const open = terminal.open;
-    if (terminalHydrated) setPref('terminal.open', open);
+    const snapshot: SavedTerminal = {
+      open: terminal.open,
+      active: terminal.active,
+      tabs: terminal.tabs.map((tab) => ({ id: tab.id, name: tab.name, lines: tab.lines.slice(-500) })),
+    };
+    if (terminalHydrated) setPref('terminal.state', snapshot);
   });
 });
 

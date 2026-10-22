@@ -123,7 +123,7 @@ export type Attachment = { id: string; name: string; mime: string; src: string }
 export const draftImages = $state<Record<string, Attachment[]>>({});
 
 /** A part of a web page picked in the AgentDeck browser, waiting to go with the next message. */
-export type PageElement = { id: string; tag: string; text: string; selector: string; html: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string>; url: string; title: string };
+export type PageElement = { id: string; tag: string; text: string; selector: string; html: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string>; url: string; title: string; /** What was written about it while marking up the page. */ note?: string };
 export const draftElements = $state<Record<string, PageElement[]>>({});
 /** Messages of sessions that live only in this app (new chats), by session id. */
 const localMessages: Record<string, Message[]> = {};
@@ -178,6 +178,18 @@ const mockIds = new Set(mockWorkspace.sessions.map((item) => item.id));
 
 /** Sessions that belong to no project: a plain chat with the computer. */
 export const NO_PROJECT = 'none';
+
+/** Projects removed from the sidebar, by folder path. Their chats stay on disk; the list just leaves them out. */
+export const hiddenProjects = $state<string[]>([]);
+void getPref<string[]>('sidebar.hiddenProjects').then((saved) => {
+  if (Array.isArray(saved)) hiddenProjects.push(...saved.filter((path) => !hiddenProjects.includes(path)));
+});
+export function hideProject(id: string) {
+  const path = workspace.projects.find((project) => project.id === id)?.path;
+  if (!path || hiddenProjects.includes(path)) return;
+  hiddenProjects.push(path);
+  setPref('sidebar.hiddenProjects', [...hiddenProjects]);
+}
 const nextId = () => `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 function ensureNoProject() {
@@ -280,6 +292,7 @@ function withElements(text: string, elements: PageElement[]): string {
   const parts = elements.map((item, index) =>
     [
       `Element ${index + 1} on ${item.title || 'the page'} (${item.url}): \`${item.selector}\` ${item.box.w}×${item.box.h}`,
+      ...(item.note ? [`Note: ${item.note}`] : []),
       `Text: ${item.text || '(none)'}`,
       `Styles: ${Object.entries(item.style).map(([key, value]) => `${key}: ${value}`).join('; ')}`,
       '```html',
@@ -489,7 +502,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
   // reloaded) and the turn must still finish, or the chat would spin for ever.
   const reply = liveReplies[sessionId] ?? messagesOf(sessionId).find((item) => item.id === replies[sessionId]);
   if (!session) return;
-  trackActivity(sessionId, session.title, event);
+  trackActivity(sessionId, session.title, workspace.projects.find((project) => project.id === session.projectId)?.name ?? '', event);
   if (!reply) {
     if (event.kind === 'done' || event.kind === 'error') {
       delete replies[sessionId];
@@ -499,7 +512,8 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
   }
   if (event.kind === 'usage') {
     reply.model ??= session.model;
-    const tokens = (reply.tokens ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    reply.tokens ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const tokens = reply.tokens;
     if (event.new_call) {
       tokens.input += event.input_tokens;
       tokens.cacheRead += event.cache_read_tokens;
@@ -720,7 +734,7 @@ export function buildTree(): ZTreeNode<TreeData>[] {
 
   // A new chat joins the list only after its first message; an empty one stays out even while it is open.
   const shown = (item: SessionItem) => !isEmptyDraft(item);
-  return workspace.projects.map((project) => ({
+  return workspace.projects.filter((project) => !project.path || !hiddenProjects.includes(project.path)).map((project) => ({
     id: `project:${project.id}`,
     label: project.name,
     icon: 'lucideFolder',
@@ -838,8 +852,9 @@ let transcriptToken = 0;
 // A transcript is valid while the session's index entry (last update + message count) is unchanged.
 type Transcript = { stamp: string; messages: Message[] };
 const transcripts = new Map<string, Transcript>();
-// The format version leads the stamp: a cached transcript from an older app version is read again (v2: token usage).
-const stampOf = (session: SessionItem) => `v2|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
+// The format version leads the stamp: a cached transcript from an older app version is read again (v2: token usage,
+// v3: the file each tool call changed, so a file's +/- counts survive a reload).
+const stampOf = (session: SessionItem) => `v3|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
 const MAX_SAVED = 12;
 
 /** Agents and per-agent ids of saved chats that switched agent (the chat files cannot hold them). */

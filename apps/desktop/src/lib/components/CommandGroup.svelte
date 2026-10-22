@@ -1,7 +1,16 @@
 <script lang="ts">
+  import { slide } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import { ZIcon, ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
   import { ticker } from '../clock.svelte';
-  import { argOf, describeStep, elapsed, liveState, summarize, toolOf, totalChange, type CommandBlock } from '../blocks';
+  import { argOf, describeStep, elapsed, liveState, summarize, toolOf, totalChange, type CommandBlock, type Counts } from '../blocks';
+  import { openImages } from '../preview.svelte';
+
+  // A screenshot step: click its picture to see it large.
+  const showShot = (event: Event, src: string) => {
+    event.stopPropagation();
+    openImages([{ src, name: 'screenshot.png' }], 0);
+  };
 
   // The steps an agent took, as one quiet line: "Created 2 files, ran 8 commands  +222 −0". While the agent
   // is still working that line carries the only loader, with the current step and a running clock; open it
@@ -22,10 +31,13 @@
   };
 </script>
 
-{#snippet chips(change: { added: number; removed: number })}
+{#snippet chips(counts: Counts)}
+  <!-- Only the non-zero parts: files created or deleted, then lines added or removed. -->
   <span class="flex shrink-0 items-center gap-1 font-mono text-[10px] leading-none">
-    <span class="rounded bg-success/15 px-1 py-0.5 text-success">+{change.added}</span>
-    <span class="rounded bg-destructive/15 px-1 py-0.5 text-destructive">−{change.removed}</span>
+    {#if counts.created}<span class="rounded bg-emerald-500/15 px-1 py-0.5 text-emerald-500">+{counts.created} file{counts.created === 1 ? '' : 's'}</span>{/if}
+    {#if counts.deleted}<span class="rounded bg-destructive/15 px-1 py-0.5 text-destructive">−{counts.deleted} file{counts.deleted === 1 ? '' : 's'}</span>{/if}
+    {#if counts.added}<span class="rounded bg-emerald-500/15 px-1 py-0.5 text-emerald-500">+{counts.added}</span>{/if}
+    {#if counts.removed}<span class="rounded bg-destructive/15 px-1 py-0.5 text-destructive">−{counts.removed}</span>{/if}
   </span>
 {/snippet}
 
@@ -54,10 +66,10 @@
       <div class="mt-1.5 divide-y divide-border overflow-hidden rounded-xl border border-border">
         {#each items as item, index (item.id ?? index)}
           {@const step = describeStep(item)}
-          <div>
+          <div in:slide={{ duration: 220, easing: cubicOut }}>
             <button
               type="button"
-              class="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset"
+              class="flex h-9 w-full cursor-pointer items-center gap-2 px-3 text-left outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset"
               aria-expanded={rows[index] ?? false}
               onclick={() => (rows[index] = !rows[index])}
             >
@@ -67,7 +79,13 @@
               {:else}
                 <span class="min-w-0 truncate font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}">{step.subject}</span>
               {/if}
-              {#if step.change}{@render chips(step.change)}{/if}
+              {#if step.counts}{@render chips(step.counts)}{/if}
+              {#if item.image}
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+                <span class="ml-1 shrink-0 cursor-zoom-in" title="See the screenshot" onclick={(event) => showShot(event, item.image!)}>
+                  <img src={item.image} alt="Screenshot" class="h-5 w-8 rounded-sm border border-border object-cover object-top transition hover:ring-2 hover:ring-primary/50" />
+                </span>
+              {/if}
               <ZIcon zType="lucideChevronRight" class="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform duration-300 {rows[index] ? 'rotate-90' : ''}" />
             </button>
             <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {rows[index] ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
@@ -77,11 +95,16 @@
                     <div class="max-h-60 overflow-auto rounded-md border border-border bg-background py-1 font-mono text-[11px] leading-relaxed">
                       <div class="px-3 pb-1 text-muted-foreground">{item.change.path}</div>
                       {#each diffLines(item) as row}
-                        <div class="px-3 whitespace-pre-wrap break-all {row.sign === '+' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}">{row.sign} {row.line}</div>
+                        <div class="px-3 whitespace-pre-wrap break-all {row.sign === '+' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-destructive/10 text-destructive'}">{row.sign} {row.line}</div>
                       {/each}
                     </div>
                   {:else}
                     <pre class="m-0 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all">{shown(item)}</pre>
+                  {/if}
+                  {#if item.image}
+                    <button type="button" class="w-fit max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border outline-none hover:ring-2 hover:ring-primary/50" aria-label="See the screenshot" onclick={(event) => showShot(event, item.image!)}>
+                      <img src={item.image} alt="Screenshot" class="block max-h-48 max-w-full object-contain" />
+                    </button>
                   {/if}
                   {#if item.output && !item.change}
                     <pre class="m-0 max-h-60 overflow-auto px-1 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>

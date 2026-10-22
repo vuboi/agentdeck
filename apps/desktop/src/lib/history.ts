@@ -21,7 +21,7 @@ export type HistorySession = {
 export type HistoryBlock =
   | { kind: 'thinking'; text: string }
   | { kind: 'response'; text: string }
-  | { kind: 'command'; command: string; output: string; status: string };
+  | { kind: 'command'; command: string; output: string; status: string; change?: { path: string; added: number; removed: number; before: string; after: string } };
 
 export type HistoryUsage = { input: number; output: number; cache_read: number; cache_write: number };
 export type HistoryMessage = { id: string; role: 'user' | 'assistant'; time: string; blocks: HistoryBlock[]; usage?: HistoryUsage; model?: string };
@@ -50,7 +50,14 @@ export function clock(iso: string): string {
 export function toBlocks(blocks: HistoryBlock[]): Block[] {
   return blocks.map((block) =>
     block.kind === 'command'
-      ? { kind: 'command', command: block.command, output: block.output, status: block.status === 'fail' ? 'fail' : 'ok' }
+      ? {
+          kind: 'command',
+          command: block.command,
+          output: block.output,
+          status: block.status === 'fail' ? 'fail' : 'ok',
+          // A saved file change keeps its counts after a reload; a Write is a new file.
+          change: block.change ? { ...block.change, create: block.command.split(/\s+/, 1)[0] === 'Write' } : undefined,
+        }
       : block,
   );
 }

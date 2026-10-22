@@ -5,6 +5,7 @@ mod mcp;
 mod cdp;
 mod browser;
 mod overlay;
+mod servers;
 
 use ag_adapters::agent::claude::Claude;
 use ag_adapters::agent::codex::Codex;
@@ -103,7 +104,7 @@ async fn history_rename(source: Source, path: String, title: String) -> Result<(
     .map_err(|error| error.to_string())
 }
 
-fn home_folder() -> Result<PathBuf, String> {
+pub(crate) fn home_folder() -> Result<PathBuf, String> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
@@ -184,6 +185,160 @@ async fn file_read(root: String, path: String) -> Result<String, String> {
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[derive(serde::Serialize)]
+struct FolderEntry {
+    name: String,
+    dir: bool,
+}
+
+/// The entries of one folder for the Explore panel: folders first, then files, by name. Same rule as `file_read`:
+/// the folder must sit inside `root`. `.git` is left out.
+#[tauri::command]
+async fn folder_list(root: String, path: String) -> Result<Vec<FolderEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
+        let path = PathBuf::from(&path).canonicalize().map_err(|error| error.to_string())?;
+        if !path.starts_with(&root) {
+            return Err("folder is outside the project folder".to_string());
+        }
+        let mut entries: Vec<FolderEntry> = std::fs::read_dir(&path)
+            .map_err(|error| error.to_string())?
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let dir = entry.file_type().ok()?.is_dir();
+                (name != ".git").then_some(FolderEntry { name, dir })
+            })
+            .collect();
+        entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        Ok(entries)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// `path` inside `root` (not `root` itself), both made canonical.
+fn inside_root(root: &str, path: &str) -> Result<PathBuf, String> {
+    let root = PathBuf::from(root).canonicalize().map_err(|error| error.to_string())?;
+    let path = PathBuf::from(path).canonicalize().map_err(|error| error.to_string())?;
+    if !path.starts_with(&root) || path == root {
+        return Err("that is outside the project folder".to_string());
+    }
+    Ok(path)
+}
+
+/// Where deleted files go, so they can be put back (Ctrl+Z in Explore, or by hand).
+fn file_trash() -> Result<PathBuf, String> {
+    Ok(home_folder()?.join(".agentdeck").join("trash").join("files"))
+}
+
+fn copy_all(from: &Path, to: &Path) -> std::io::Result<()> {
+    if from.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_all(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        std::fs::copy(from, to).map(|_| ())
+    }
+}
+
+/// Moves a file or folder; across drives (the trash is on the home drive) it copies, then removes the original.
+fn move_path(from: &Path, to: &Path) -> Result<(), String> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    copy_all(from, to).map_err(|error| error.to_string())?;
+    if from.is_dir() {
+        std::fs::remove_dir_all(from)
+    } else {
+        std::fs::remove_file(from)
+    }
+    .map_err(|error| error.to_string())
+}
+
+/// Renames a file or folder of the project in place.
+#[tauri::command]
+async fn path_rename(root: String, path: String, name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let name = name.trim().to_string();
+        if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
+            return Err(format!("“{name}” is not a valid name"));
+        }
+        let from = inside_root(&root, &path)?;
+        let to = from.with_file_name(&name);
+        if to.exists() {
+            return Err(format!("{name} already exists here"));
+        }
+        std::fs::rename(&from, &to).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Moves a file or folder of the project to AgentDeck's trash; answers where it went, to put it back.
+#[tauri::command]
+async fn path_trash(root: String, path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let from = inside_root(&root, &path)?;
+        let folder = file_trash()?;
+        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let name = from.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let to = folder.join(format!("{stamp:x}-{name}"));
+        move_path(&from, &to)?;
+        Ok(to.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Puts a trashed file or folder back at `to`, inside the project, if nothing has taken its place.
+#[tauri::command]
+async fn path_restore(root: String, trashed: String, to: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let trash = file_trash()?.canonicalize().map_err(|error| error.to_string())?;
+        let trashed = PathBuf::from(&trashed).canonicalize().map_err(|error| error.to_string())?;
+        if !trashed.starts_with(&trash) {
+            return Err("that is not in AgentDeck's trash".to_string());
+        }
+        let target = PathBuf::from(&to);
+        let parent = target.parent().ok_or("no folder to restore into")?;
+        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
+        let parent = parent.canonicalize().map_err(|error| error.to_string())?;
+        if !parent.starts_with(&root) {
+            return Err("that is outside the project folder".to_string());
+        }
+        let target = parent.join(target.file_name().ok_or("no name to restore")?);
+        if target.exists() {
+            return Err(format!("{} already exists", target.display()));
+        }
+        move_path(&trashed, &target)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Opens a folder in the system file manager (Explorer, Finder, or the desktop's own).
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    if !Path::new(&path).is_dir() {
+        return Err(format!("{path} is not a folder"));
+    }
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program).arg(&path).spawn().map(|_| ()).map_err(|error| error.to_string())
 }
 
 /// Bytes of one file for previews (images, PDF, SVG), base64-encoded. Same rules as `file_read`:
@@ -310,6 +465,20 @@ fn agent_stop(session: String) {
 pub fn run() {
     tauri::Builder::default()
         .register_uri_scheme_protocol("agentdeck", |context, request| {
+            // The Preview's own page for an address that did not answer.
+            if request.uri().path() == "/error" {
+                let text = request.uri().to_string();
+                let target = tauri::Url::parse(&text)
+                    .or_else(|_| tauri::Url::parse(&format!("http://localhost{text}")))
+                    .ok()
+                    .and_then(|url| url.query_pairs().find(|(key, _)| key == "url").map(|(_, value)| value.into_owned()))
+                    .unwrap_or_default();
+                return tauri::http::Response::builder()
+                    .status(200)
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .body(browser::error_html(&target).into_bytes())
+                    .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()));
+            }
             browser::handle_report(context.app_handle(), request.body());
             tauri::http::Response::builder()
                 .status(200)
@@ -344,6 +513,11 @@ pub fn run() {
             audit_append,
             audit_read,
             audit_clear,
+            folder_list,
+            reveal_path,
+            path_rename,
+            path_trash,
+            path_restore,
             models_list,
             history_load,
             history_rename,
@@ -357,6 +531,7 @@ pub fn run() {
             browser::browser_bounds,
             browser::browser_hide,
             browser::browser_navigate,
+            browser::browser_reset,
             browser::browser_eval,
             browser::browser_zoom,
             browser::browser_close,

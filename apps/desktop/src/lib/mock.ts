@@ -7,7 +7,7 @@ export type Session = { id: string; title: string; agent: Agent; status: 'workin
 export type Block =
   | { kind: 'thinking'; text: string; streaming?: boolean }
   | { kind: 'response'; text: string; streaming?: boolean }
-  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; change?: FileChange }
+  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string }
   | { kind: 'loading'; label: string }
   | { kind: 'image'; src: string; name: string }
   | { kind: 'element'; tag: string; text: string; selector: string }
@@ -108,6 +108,16 @@ messages.push(
     ms: 24_000,
     blocks: [
       { kind: 'command', id: 'c1', command: 'Bash  pnpm --filter desktop check', output: '0 errors, 0 warnings', status: 'ok' },
+      {
+        kind: 'command',
+        id: 'c1b',
+        command: 'mcp__agentdeck__browser_screenshot  {}',
+        output: '',
+        status: 'ok',
+        image:
+          'data:image/svg+xml;utf8,' +
+          encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="#0b1220"/><rect x="24" y="24" width="592" height="40" rx="8" fill="#1e293b"/><text x="40" y="52" fill="#34d399" font-family="sans-serif" font-size="20">Z-UI · Command</text><rect x="24" y="96" width="280" height="160" rx="10" fill="#1e293b"/><rect x="336" y="96" width="280" height="160" rx="10" fill="#1e293b"/></svg>'),
+      },
       {
         kind: 'command',
         id: 'c2',

@@ -52,11 +52,13 @@ pub enum HistoryBlock {
     Response {
         text: String,
     },
-    /// A tool call and its result. `status` is `ok` or `fail`.
+    /// A tool call and its result. `status` is `ok` or `fail`. `change` is the file it wrote, if it wrote one.
     Command {
         command: String,
         output: String,
         status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        change: Option<crate::agent::FileChange>,
     },
 }
 

@@ -15,6 +15,14 @@ marked.use({
       const code = `<code>${text}</code>`;
       return /^https?:\/\/[^\s<>"]+$/.test(text) ? `<a href="${escapeHtml(text.replace(/&amp;/g, '&'))}">${code}</a>` : code;
     },
+    // A link to a file (`E:/repo/a.txt`, `/home/me/a.txt`, `src/a.ts:12`) keeps its path in data-file: DOMPurify drops
+    // a Windows drive from href, and the click opens the file in a tab.
+    link({ href, text }: Tokens.Link) {
+      if (/^(file:\/\/|[a-zA-Z]:[\\/]|\/(?!\/))/.test(href) || (!/^[a-z][a-z0-9+.-]*:/i.test(href) && /\.\w+(:\d+)?$/.test(href) && !href.startsWith('#'))) {
+        return `<a href="#" data-file="${escapeHtml(href)}">${text}</a>`;
+      }
+      return `<a href="${escapeHtml(href)}">${text}</a>`;
+    },
     code({ text, lang }: Tokens.Code) {
       const language = (lang ?? '').trim().split(/\s+/)[0];
       return (

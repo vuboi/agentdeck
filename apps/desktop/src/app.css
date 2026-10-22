@@ -230,3 +230,15 @@ body {
 [data-mirrored] {
   opacity: 0 !important;
 }
+
+/* "Show more" under a long block: a smaller button with smaller text. */
+.z-show-more > .justify-center button {
+  height: 1.5rem !important;
+  padding-inline: 0.625rem !important;
+  font-size: 11px !important;
+  line-height: 1 !important;
+}
+.z-show-more > .justify-center button svg {
+  width: 12px !important;
+  height: 12px !important;
+}

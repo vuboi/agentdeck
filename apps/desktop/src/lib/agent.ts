@@ -5,7 +5,7 @@ export type AgentEvent =
   | { kind: 'delta'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool_call'; id: string; name: string; input: string; change: FileChange | null; background: boolean }
-  | { kind: 'tool_result'; id: string; output: string; is_error: boolean }
+  | { kind: 'tool_result'; id: string; output: string; is_error: boolean; image?: string }
   | { kind: 'permission_denied'; requests: PermissionRequest[] }
   | { kind: 'done'; session_id: string | null; text: string; cost_usd: number | null }
   | { kind: 'usage'; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number; new_call: boolean }

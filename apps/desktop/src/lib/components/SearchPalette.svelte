@@ -82,7 +82,7 @@
   zGroups={groups}
   zSearch="fuzzy"
   zSize="default"
-  zHotkey="mod+k"
+  zHotkey="mod+p"
   zPlaceholder="Search chats…"
   onSelect={select}
 >

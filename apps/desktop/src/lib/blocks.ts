@@ -45,9 +45,12 @@ export type Step = {
   verb: string;
   /** What it was done to: the command, the file name, the pattern. */
   subject: string;
-  /** Lines added and removed, for file changes. */
-  change?: { added: number; removed: number };
+  /** What a file change did. Only the non-zero parts show. */
+  counts?: Counts;
 };
+
+/** Lines added and removed, and files created and deleted. */
+export type Counts = { added: number; removed: number; created: number; deleted: number };
 
 /** One row of the activity list. Wording follows the tool; a running step says "Running", a failed one "Failed". */
 export function describeStep(item: CommandBlock): Step {
@@ -55,11 +58,12 @@ export function describeStep(item: CommandBlock): Step {
   const running = item.status === 'running';
   const verbs = (done: string, doing: string) => (item.status === 'fail' ? 'Failed' : running ? doing : done);
   if (item.change) {
-    const created = item.change.create === true;
+    const removed = tool === 'Delete';
+    const created = !removed && item.change.create === true;
     return {
-      verb: verbs(created ? 'Created' : 'Edited', created ? 'Creating' : 'Editing'),
+      verb: verbs(removed ? 'Deleted' : created ? 'Created' : 'Edited', removed ? 'Deleting' : created ? 'Creating' : 'Editing'),
       subject: basename(item.change.path),
-      change: { added: item.change.added, removed: item.change.removed },
+      counts: { added: item.change.added, removed: item.change.removed, created: created ? 1 : 0, deleted: removed ? 1 : 0 },
     };
   }
   const subject = argOf(item.command);
@@ -71,6 +75,8 @@ export function describeStep(item: CommandBlock): Step {
   if (AGENT.test(tool)) return { verb: verbs('Ran agent', 'Running agent'), subject };
   if (PAGE_ACT.test(tool)) return { verb: verbs('Interacted with page', 'Interacting with page'), subject: '' };
   if (PAGE_SCRIPT.test(tool)) return { verb: verbs('Ran page script', 'Running page script'), subject: '' };
+  if (tool === 'browser_open') return { verb: verbs('Opened a page', 'Opening a page'), subject: '' };
+  if (tool === 'browser_serve') return { verb: verbs('Started a server', 'Starting a server'), subject: '' };
   if (PAGE_LOOK.test(tool)) return { verb: verbs('Looked at page', 'Looking at page'), subject: '' };
   if (PAGE_READ.test(tool)) return { verb: verbs('Found on page', 'Finding on page'), subject: '' };
   return { verb: verbs('Used', 'Using'), subject: `${tool} ${subject}`.trim() };
@@ -80,14 +86,17 @@ const plural = (count: number, one: string, many = `${one}s`) => `${count} ${cou
 
 /** "Created 2 files, ran 8 commands": what a group of steps did, files first. */
 export function summarize(items: CommandBlock[]): string {
-  const files = (create: boolean) => new Set(items.filter((item) => item.change && (item.change.create === true) === create).map((item) => item.change!.path)).size;
-  const created = files(true);
-  const edited = files(false);
+  const isDelete = (item: CommandBlock) => toolOf(item.command) === 'Delete';
+  const paths = (keep: (item: CommandBlock) => boolean) => new Set(items.filter((item) => item.change && keep(item)).map((item) => item.change!.path)).size;
+  const created = paths((item) => !isDelete(item) && item.change!.create === true);
+  const edited = paths((item) => !isDelete(item) && item.change!.create !== true);
+  const deleted = paths(isDelete);
   const ran = items.filter((item) => !item.change && RUN.test(toolOf(item.command))).length;
   const looked = items.filter((item) => !item.change && !RUN.test(toolOf(item.command))).length;
   const parts = [
     created && `created ${plural(created, 'file')}`,
     edited && `edited ${plural(edited, 'file')}`,
+    deleted && `deleted ${plural(deleted, 'file')}`,
     ran && `ran ${plural(ran, 'command')}`,
     looked && `looked at ${plural(looked, 'thing')}`,
   ].filter(Boolean) as string[];
@@ -95,11 +104,17 @@ export function summarize(items: CommandBlock[]): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-/** Total lines added and removed by a group, or null when it wrote no files. */
-export function totalChange(items: CommandBlock[]): { added: number; removed: number } | null {
-  const changes = items.flatMap((item) => (item.change ? [item.change] : []));
+/** Lines and files a group changed, or null when it changed no files. */
+export function totalChange(items: CommandBlock[]): Counts | null {
+  const changes = items.filter((item) => item.change);
   if (changes.length === 0) return null;
-  return { added: changes.reduce((sum, c) => sum + c.added, 0), removed: changes.reduce((sum, c) => sum + c.removed, 0) };
+  const isDelete = (item: CommandBlock) => toolOf(item.command) === 'Delete';
+  return {
+    added: changes.reduce((sum, item) => sum + item.change!.added, 0),
+    removed: changes.reduce((sum, item) => sum + item.change!.removed, 0),
+    created: changes.filter((item) => !isDelete(item) && item.change!.create === true).length,
+    deleted: changes.filter(isDelete).length,
+  };
 }
 
 /** What the agent is doing right now, and the loader that goes with it. */

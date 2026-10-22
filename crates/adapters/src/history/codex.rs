@@ -137,11 +137,16 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
                     Some(other) => other.clone(),
                     None => Value::Null,
                 };
-                let command = match &input {
-                    Value::String(raw) => {
-                        truncate(&format!("{}  {raw}", str_of(payload, "name")), 240)
-                    }
-                    _ => describe_tool(str_of(payload, "name"), &input),
+                // A patch (apply_patch) is raw text: its first file gives the command and the change.
+                let patch = match &input {
+                    // The patch rides in the input whatever tool carries it: apply_patch, or exec with the patch in a script.
+                    Value::String(raw) if raw.contains("*** Begin Patch") => patch_change(raw),
+                    _ => None,
+                };
+                let (command, change) = match (patch, &input) {
+                    (Some((name, change)), _) => (format!("{name}  {}", change.path), Some(change)),
+                    (None, Value::String(raw)) => (truncate(&format!("{}  {raw}", str_of(payload, "name")), 240), None),
+                    (None, _) => (describe_tool(str_of(payload, "name"), &input), None),
                 };
                 (
                     "assistant".to_owned(),
@@ -149,6 +154,7 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
                         command,
                         output: String::new(),
                         status: "ok".into(),
+                        change,
                     },
                 )
             }
@@ -269,4 +275,48 @@ fn summary_text(payload: &Value) -> String {
 
 fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+/// The first file of an `apply_patch` body: the tool name the live view uses (Write, Edit or Delete) and what it did.
+/// Lines are counted up to the next `***` header; a delete or an add has no old or new text to show.
+fn patch_change(raw: &str) -> Option<(&'static str, crate::agent::FileChange)> {
+    // A patch inside a script keeps its line breaks as the two characters `\n`: read them as breaks.
+    let text = raw.replace("\\n", "\n");
+    let lines: Vec<&str> = text.lines().collect();
+    let (start, name, path) = lines.iter().enumerate().find_map(|(index, line)| {
+        if let Some(path) = line.strip_prefix("*** Add File: ") {
+            Some((index, "Write", path.trim()))
+        } else if let Some(path) = line.strip_prefix("*** Update File: ") {
+            Some((index, "Edit", path.trim()))
+        } else {
+            line.strip_prefix("*** Delete File: ").map(|path| (index, "Delete", path.trim()))
+        }
+    })?;
+    let body: Vec<&str> = lines[start + 1..].iter().take_while(|line| !line.starts_with("***")).copied().collect();
+    let added = body.iter().filter(|line| line.starts_with('+')).count();
+    let removed = body.iter().filter(|line| line.starts_with('-')).count();
+    Some((
+        name,
+        crate::agent::FileChange { path: path.to_owned(), added, removed, before: String::new(), after: String::new() },
+    ))
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::patch_change;
+
+    #[test]
+    fn a_patch_inside_a_script_gives_its_first_file() {
+        // exec carries the patch in a script, where its line breaks are the two characters `\n`.
+        let script = r#"const patch = "*** Begin Patch\n*** Delete File: E:/z-ui/xin-chao.txt\n*** End Patch"; run(patch)"#;
+        let (name, change) = patch_change(script).expect("a delete is found");
+        assert_eq!((name, change.path.as_str()), ("Delete", "E:/z-ui/xin-chao.txt"));
+    }
+
+    #[test]
+    fn an_added_file_counts_its_lines() {
+        let patch = "*** Begin Patch\n*** Add File: a.txt\n+one\n+two\n*** End Patch";
+        let (name, change) = patch_change(patch).expect("an add is found");
+        assert_eq!((name, change.added, change.removed), ("Write", 2, 0));
+    }
 }

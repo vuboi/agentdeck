@@ -102,3 +102,45 @@ export function closeTab(id: string) {
     if (next?.kind === 'chat') workspace.activeId = next.sessionId;
   }
 }
+
+/** The folder a file is read from: the project when the file is inside it, else the file's own folder. */
+export function fileRootOf(path: string, projectRoot: string): string {
+  const norm = (text: string) => text.replace(/\\/g, '/').toLowerCase();
+  return projectRoot && norm(path).startsWith(`${norm(projectRoot)}/`) ? projectRoot : path.replace(/[\\/][^\\/]*$/, '');
+}
+
+/** Closes every open tab. The chats themselves stay in the sidebar. */
+export function closeAllTabs() {
+  contentTabs.tabs.splice(0, contentTabs.tabs.length);
+  contentTabs.active = '';
+}
+
+/** Closes every tab except `id`, which becomes the active one. */
+export function closeOtherTabs(id: string) {
+  const keep = contentTabs.tabs.find((tab) => tab.id === id);
+  if (!keep) return;
+  contentTabs.tabs.splice(0, contentTabs.tabs.length, keep);
+  activateTab(id);
+}
+
+/** Ctrl+K then Ctrl+W closes all tabs, Ctrl+K then Ctrl+O closes the other tabs (within a moment), as in VS Code. */
+export function installTabShortcuts() {
+  let waiting = 0;
+  const onKey = (event: KeyboardEvent) => {
+    const mod = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+    if (mod && !event.shiftKey && !event.altKey && key === 'k') {
+      waiting = Date.now();
+      return;
+    }
+    if (waiting && Date.now() - waiting < 1500 && mod && !event.shiftKey && !event.altKey && (key === 'w' || key === 'o')) {
+      event.preventDefault();
+      const active = contentTabs.active;
+      waiting = 0;
+      if (key === 'w') closeAllTabs();
+      else if (active) closeOtherTabs(active);
+    }
+  };
+  window.addEventListener('keydown', onKey);
+  return () => window.removeEventListener('keydown', onKey);
+}

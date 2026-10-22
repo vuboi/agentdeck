@@ -8,8 +8,12 @@ import { inTauri } from './history';
 export type ActivityStatus = 'running' | 'background' | 'ok' | 'fail' | 'stopped';
 export type Activity = {
   key: string;
+  /** The tool id the CLI gave this call. Ids restart every turn, so the key adds a counter. */
+  callId?: string;
   sessionId: string;
   title: string;
+  /** The project the chat belongs to, by name ('' when none). Old entries have none. */
+  project?: string;
   name: string;
   input: string;
   background: boolean;
@@ -21,6 +25,10 @@ export type Activity = {
 
 const LIMIT = 1000;
 export const activity = $state<Activity[]>([]);
+let calls = 0;
+
+/** Bumped whenever an agent writes, edits or deletes a file, so Explore reads its folders again. */
+export const fileWrites = $state({ tick: 0 });
 
 /** Finished calls and chat errors, oldest first: loaded from disk at start, then kept in step with each finish. */
 export const audit = $state<Activity[]>([]);
@@ -37,7 +45,9 @@ if (inTauri()) {
       for (const line of String(text).split('\n')) {
         if (!line.trim()) continue;
         try {
-          loaded.push(JSON.parse(line) as Activity);
+          // Entries saved before keys were unique can share one: each loaded entry gets its own position in the key.
+          const entry = JSON.parse(line) as Activity;
+          loaded.push({ ...entry, key: `${entry.key}#${loaded.length}` });
         } catch {
           // A line cut short by a crash is skipped, the rest still loads.
         }
@@ -49,18 +59,21 @@ if (inTauri()) {
 
 /** A finished call goes to the Audit log and to disk. */
 function record(item: Activity) {
-  const entry = { ...item, output: item.output?.slice(0, 4000) };
+  // Tool ids restart in every turn (Codex counts from item_0 each time), so a saved entry gets its own key.
+  const entry = { ...item, key: `${item.key}@${item.startedAt}`, output: item.output?.slice(0, 4000) };
   audit.push(entry);
   if (inTauri()) void tauriCall('audit_append', { line: JSON.stringify(entry) }).catch(() => {});
 }
 
 /** Keeps the log in step with one event of a chat's run. */
-export function trackActivity(sessionId: string, title: string, event: AgentEvent) {
+export function trackActivity(sessionId: string, title: string, project: string, event: AgentEvent) {
   if (event.kind === 'tool_call') {
     activity.push({
-      key: `${sessionId}:${event.id}`,
+      key: `${sessionId}:${event.id}:${++calls}`,
+      callId: event.id,
       sessionId,
       title,
+      project,
       name: event.name,
       input: event.input,
       background: event.background,
@@ -69,7 +82,9 @@ export function trackActivity(sessionId: string, title: string, event: AgentEven
     });
     if (activity.length > LIMIT) activity.splice(0, activity.length - LIMIT);
   } else if (event.kind === 'tool_result') {
-    const item = activity.findLast((entry) => entry.key === `${sessionId}:${event.id}`);
+    // The call still open with this id, else the latest one with it.
+    const same = (entry: Activity) => entry.sessionId === sessionId && entry.callId === event.id;
+    const item = activity.findLast((entry) => same(entry) && (entry.status === 'running' || entry.status === 'background')) ?? activity.findLast(same);
     if (!item) return;
     item.output = event.output.length > 4000 ? `${event.output.slice(0, 4000)}…` : event.output;
     if (event.is_error) item.status = 'fail';
@@ -79,6 +94,7 @@ export function trackActivity(sessionId: string, title: string, event: AgentEven
       item.endedAt = Date.now();
       record(item);
     }
+    if (item.status === 'ok' && (item.name === 'Write' || item.name === 'Edit' || item.name === 'Delete' || item.name === 'MultiEdit')) fileWrites.tick++;
   } else if (event.kind === 'done' || event.kind === 'error') {
     if (event.kind === 'error' && event.message !== 'stopped') {
       const now = Date.now();
@@ -86,6 +102,7 @@ export function trackActivity(sessionId: string, title: string, event: AgentEven
         key: `${sessionId}:error:${now}`,
         sessionId,
         title,
+        project,
         name: 'Chat error',
         input: event.message,
         background: false,

@@ -1,8 +1,9 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree, zModalService } from '@shival99/z-ui-svelte';
-  import type { ZDropdownMenuItem, ZTreeNode } from '@shival99/z-ui-svelte';
+  import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import Logo from './Logo.svelte';
+  import { toast } from '../toast';
   import AgentStack from './AgentStack.svelte';
   import { showSession } from '../content-tabs.svelte';
   import SearchPalette from './SearchPalette.svelte';
@@ -16,6 +17,7 @@
     history,
     newChat,
     newSession,
+    hideProject,
     NO_PROJECT,
     prefetchTranscript,
     renameSession,
@@ -79,7 +81,7 @@
   }
 
   // ---------- row menu: right click, or the three dots that replace the agent tag on hover ----------
-  let menu = $state<{ x: number; y: number; id: string; align: 'bottom-left' | 'bottom-right' } | null>(null);
+  let menu = $state<{ x: number; y: number; id: string; align: 'bottom-left' | 'bottom-right'; kind: 'session' | 'project' } | null>(null);
   let menuOpen = $state(false);
   let menuKey = $state(0);
   let treeBox: HTMLDivElement | undefined = $state();
@@ -90,7 +92,9 @@
     event.preventDefault();
     const row = (event.target as HTMLElement).closest('[role="treeitem"]');
     const id = row?.querySelector<HTMLElement>('[data-session]')?.dataset.session;
+    const project = row?.querySelector<HTMLElement>('[data-project]')?.dataset.project;
     if (id) void openMenu(event, id);
+    else if (project) void openMenu(event, project, undefined, 'project');
   }
 
   // The row the menu belongs to stays highlighted while the menu is open.
@@ -104,28 +108,85 @@
   let searchOpen = $state(false);
   const menuSession = $derived(menu ? workspace.sessions.find((item) => item.id === menu!.id) : undefined);
 
-  async function openMenu(event: MouseEvent, id: string, anchor?: HTMLElement) {
+  async function openMenu(event: MouseEvent, id: string, anchor?: HTMLElement, kind: 'session' | 'project' = 'session') {
     event.preventDefault();
     event.stopPropagation();
     menuKey++; // a fresh menu at the new spot: no close-then-open flicker
     if (anchor) {
       const rect = anchor.getBoundingClientRect();
-      menu = { x: rect.right, y: rect.bottom, id, align: 'bottom-right' };
+      menu = { x: rect.right, y: rect.bottom, id, align: 'bottom-right', kind };
     } else {
-      menu = { x: event.clientX, y: event.clientY, id, align: 'bottom-left' };
+      menu = { x: event.clientX, y: event.clientY, id, align: 'bottom-left', kind };
     }
     menuOpen = true;
   }
 
-  const menuItems = $derived<ZDropdownMenuItem[]>([
+  // ---------- project menu: right click on a project row ----------
+  const menuProject = $derived(menu?.kind === 'project' ? workspace.projects.find((item) => item.id === menu!.id) : undefined);
+
+  async function revealProject() {
+    const path = menuProject?.path;
+    if (!path) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('reveal_path', { path });
+    } catch (error) {
+      zModalService.warning({ zTitle: 'Could not open the folder', zContent: String(error), zConfirmStyle: 'dialog', zCancelText: null, zOkText: 'OK' });
+    }
+  }
+
+  function askHideProject() {
+    const project = menuProject;
+    if (!project) return;
+    zModalService.danger({
+      zTitle: 'Remove project from the list?',
+      zContent: `“${project.name}” leaves the sidebar. Its folder and its chats stay on disk, in Claude and Codex.`,
+      zConfirmStyle: 'dialog',
+      zOkText: 'Remove',
+      zOkIcon: 'lucideTrash2',
+      zCancelText: 'Cancel',
+      zWidth: '400px',
+      onOk: () => hideProject(project.id),
+    });
+  }
+
+  const ITEM = 'text-xs! py-1';
+  const projectItems = $derived<ZDropdownMenuItem[]>([
+    { label: 'New session', icon: 'lucidePlus', iconSize: '12', class: ITEM, onClick: () => menu && addSession(menu.id) },
+    { label: 'Reveal in File Explorer', icon: 'lucideFolder', iconSize: '12', class: ITEM, disabled: !menuProject?.path, onClick: () => void revealProject() },
+    {
+      label: 'Copy path',
+      icon: 'lucideCopy',
+      iconSize: '12',
+      class: ITEM,
+      disabled: !menuProject?.path,
+      onClick: () => {
+        if (!menuProject?.path) return;
+        void navigator.clipboard.writeText(menuProject.path);
+        toast.success('Path copied');
+      },
+    },
+    {
+      label: 'Remove from list',
+      icon: 'lucideTrash2',
+      iconSize: '12',
+      divide: 'before',
+      disabled: !menuProject?.path,
+      class: `${ITEM} text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive!`,
+      onClick: () => askHideProject(),
+    },
+  ]);
+
+  const sessionItems = $derived<ZDropdownMenuItem[]>([
     { label: 'Rename', icon: 'lucidePencil', iconSize: '12', shortcut: 'R', class: 'text-xs! py-1', onClick: () => askRename() },
     { label: 'Fork', icon: 'lucideGitFork', iconSize: '12', shortcut: 'F', class: 'text-xs! py-1', onClick: () => menu && fork(menu.id) },
     { label: 'Delete', icon: 'lucideTrash2', iconSize: '12', shortcut: 'D', divide: 'before', class: 'text-xs! py-1 text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive! [&_.ml-auto]:text-destructive!', onClick: () => askDelete() },
   ]);
+  const menuItems = $derived(menu?.kind === 'project' ? projectItems : sessionItems);
 
-  // The letters on the right are real shortcuts while the menu is open.
+  // The letters on the right are real shortcuts while a chat's menu is open.
   $effect(() => {
-    if (!menuOpen) return;
+    if (!menuOpen || menu?.kind !== 'session') return;
     const keys: Record<string, () => void> = {
       r: () => askRename(),
       f: () => menu && fork(menu.id),
@@ -194,6 +255,7 @@
       onOk: async () => {
         try {
           await deleteSession(session.id);
+          toast.success(`Deleted “${session.title}”`);
         } catch (error) {
           zModalService.warning({ zTitle: 'Could not delete', zContent: String(error), zConfirmStyle: 'dialog', zCancelText: null, zOkText: 'OK' });
         }
@@ -215,7 +277,15 @@
     }
   }
 
-  const doRename = () => !titleError && run(() => renameSession(target, title), () => (renaming = false));
+  const doRename = () =>
+    !titleError &&
+    run(
+      () => renameSession(target, title),
+      () => {
+        renaming = false;
+        toast.success('Renamed');
+      },
+    );
 
   const projectId = (nodeId: string) => nodeId.replace(/^project:/, '');
   function addSession(id: string) {
@@ -246,7 +316,7 @@
         <ZIcon zType="lucidePlus" class="size-3.5" />
         New session
       </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Search chats (Ctrl+K)" title="Search chats (Ctrl+K)" onclick={() => (searchOpen = true)}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Search chats (Ctrl+P)" title="Search chats (Ctrl+P)" onclick={() => (searchOpen = true)}>
         <ZIcon zType="lucideSearch" class="size-3.5" />
       </ZButton>
       <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="New chat without a project" title="New chat without a project" onclick={() => newChat()}>
@@ -255,15 +325,16 @@
     </div>
   </div>
 
-  {#if history.loading && workspace.sessions.length === 0}
-    <div class="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground" role="status">
-      <ZLoading zLoading zSpinner="orbit" zSize="xs" zColor="primary" />
-      Loading your Claude and Codex history…
-    </div>
-  {/if}
   <!-- Full width, so the tree's own scrollbar sits flush against the sidebar border. -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div bind:clientHeight={treeHeight} bind:this={treeBox} class="min-h-0 flex-1" oncontextmenu={onTreeContextMenu}>
+  <div bind:clientHeight={treeHeight} bind:this={treeBox} class="relative min-h-0 flex-1" oncontextmenu={onTreeContextMenu}>
+    {#if history.loading && workspace.sessions.length === 0}
+      <!-- First load: centred in the list, where the chats will appear. -->
+      <div class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground" role="status">
+        <ZIcon zType={'lucideLoaderCircle' as ZIconName} class="size-5 animate-spin text-primary" />
+        <span>Loading your Claude and Codex history…</span>
+      </div>
+    {/if}
     <ZTree
       {nodes}
       zSize="sm"
@@ -281,6 +352,7 @@
         <span
           class="relative flex min-w-0 flex-1 items-center gap-2"
           data-session={data?.kind === 'session' ? data.session?.id : undefined}
+          data-project={data?.kind === 'project' ? projectId(ctx.node.id) : undefined}
           onpointerenter={() => data?.kind === 'session' && prefetchTranscript(data.session)}
         >
           {#if data?.kind === 'session' && data.session}
