@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
-use base64::Engine;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -216,12 +215,17 @@ async fn answer(
             "GET /page": "address and title of the tab the user is looking at",
             "GET /console?level=error|warn|info&limit=100": "console lines and uncaught JavaScript errors",
             "GET /network?failed=1&limit=100": "requests; failed ones (status 0 or >= 400) carry the start of the response body",
-            "GET /dom?selector=css": "outerHTML of the page, or of the elements matching a selector",
-            "POST /eval (body: JavaScript)": "runs the script in the page and returns its result",
-            "GET /shot": "a PNG of the page as shown now; answers with the file path",
-            "GET /click?x=&y=": "presses at a point of the page (CSS pixels, as in /shot), with the events of a real press",
-            "GET /fill?selector=&value=": "types a value into a field and fires input and change",
-            "GET /press?x=&y=": "a real mouse press at a point (moves the user's mouse, brings the app to the front)",
+            "GET /dom?selector=css&frame=": "outerHTML of the page, or of the elements matching a selector (frame: see /frames)",
+            "POST /eval?frame= (body: JavaScript)": "runs the script in the page, or in a frame of any origin, and returns its value",
+            "GET /frames": "the frames of other origins in the page (iframes), each usable as ?frame=<index or part of its url>",
+            "GET /shot": "a PNG of the page as shown now, with any menu open over it; answers with the file path",
+            "GET /click?x=&y=": "a click at a point of the page (CSS pixels, as in /shot), as the browser's own mouse events; reaches iframes",
+            "GET /hover?x=&y=": "moves the mouse over a point (hover menus, tooltips)",
+            "GET /scroll?x=&y=&dy=&dx=": "scrolls at a point, as a mouse wheel (dy > 0 scrolls down)",
+            "GET /type?text=": "types text into the focused field, as a keyboard",
+            "GET /key?key=": "presses a key: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, Space",
+            "GET /fill?selector=&value=": "sets a field's value and fires input and change",
+            "GET /press?x=&y=": "a real mouse press at a point (moves the user's mouse, brings the app to the front); /click is usually enough",
         })),
         "/page" => {
             let state = STATE.lock().map_err(|_| "busy".to_string())?;
@@ -274,30 +278,85 @@ async fn answer(
                 .unwrap_or_default();
             Ok(tail(lines, limit))
         }
+        "/frames" => {
+            let view = page(app, &active)?;
+            let frames = crate::cdp::frames(view.label());
+            Ok(Value::Array(
+                frames
+                    .iter()
+                    .enumerate()
+                    .map(|(index, frame)| json!({ "frame": index, "url": frame.url, "type": frame.kind }))
+                    .collect(),
+            ))
+        }
         "/dom" => {
+            if let Some(frame) = params.get("frame") {
+                let view = page(app, &active)?;
+                let session = frame_session(&view, frame)?;
+                let selector = params.get("selector").cloned().unwrap_or_default();
+                let script = format!(
+                    "(() => {{ const s = {}; const html = s ? [...document.querySelectorAll(s)].slice(0, 10).map((n) => n.outerHTML).join('\\n') : document.documentElement.outerHTML; return {{ url: location.href, title: document.title, html: html.length > 60000 ? html.slice(0, 60000) + '…' : html }}; }})()",
+                    json!(selector)
+                );
+                return crate::cdp::evaluate(&view, &script, Some(session)).await;
+            }
             let arg = params.get("selector").map(|s| json!(s)).unwrap_or(Value::Null);
             let report = ask(app, &active, "dom", arg).await?;
             Ok(json!({ "url": report["url"], "title": report["title"], "html": report["html"] }))
         }
         "/shot" => {
-            // The picture the page shows now, written to a file; the path is the answer.
-            let data = crate::browser::browser_capture(app.clone(), active.clone()).await?;
-            let encoded = data.split_once(',').map(|(_, rest)| rest).unwrap_or_default();
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(encoded)
-                .map_err(|error| error.to_string())?;
+            // The picture the page shows now, with a menu open over it laid on top; the file path is the answer.
+            let view = page(app, &active)?;
+            let mut bytes = crate::cdp::screenshot(&view).await?;
+            if let Some(menu) = crate::overlay::visible_view(app) {
+                if let Ok(layer) = crate::cdp::transparent_screenshot(&menu).await {
+                    let page_at = view.position().map_err(|error| error.to_string())?;
+                    let page_size = view.size().map_err(|error| error.to_string())?;
+                    let menu_at = menu.position().map_err(|error| error.to_string())?;
+                    let (dx, dy) = (menu_at.x - page_at.x, menu_at.y - page_at.y);
+                    if let Ok(joined) = compose(&bytes, &layer, dx, dy, page_size.width) {
+                        bytes = joined;
+                    }
+                }
+            }
             let path = std::env::temp_dir().join(format!("agentdeck-shot-{}.png", NEXT.fetch_add(1, Ordering::Relaxed)));
             std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
             Ok(json!({ "png": path.display().to_string() }))
         }
         "/click" => {
-            let x = params.get("x").and_then(|v| v.parse::<f64>().ok()).ok_or("send ?x=&y= in CSS pixels, as in /shot")?;
-            let y = params.get("y").and_then(|v| v.parse::<f64>().ok()).ok_or("send ?x=&y= in CSS pixels, as in /shot")?;
+            let (x, y) = point(params)?;
+            let view = page(app, &active)?;
+            if crate::cdp::click(&view, x, y).await.is_ok() {
+                return Ok(json!({ "clicked": true, "x": x, "y": y }));
+            }
+            // No DevTools access: the page's own events, dispatched from inside it.
             let report = ask(app, &active, "click", json!({ "x": x, "y": y })).await?;
             match report["error"].as_str() {
                 Some(error) => Err(error.to_string()),
                 None => Ok(report["result"].clone()),
             }
+        }
+        "/hover" => {
+            let (x, y) = point(params)?;
+            crate::cdp::hover(&page(app, &active)?, x, y).await?;
+            Ok(json!({ "hovered": true, "x": x, "y": y }))
+        }
+        "/scroll" => {
+            let (x, y) = point(params)?;
+            let dy = params.get("dy").and_then(|v| v.parse::<f64>().ok()).unwrap_or(400.0);
+            let dx = params.get("dx").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+            crate::cdp::scroll(&page(app, &active)?, x, y, dx, dy).await?;
+            Ok(json!({ "scrolled": true, "dx": dx, "dy": dy }))
+        }
+        "/type" => {
+            let text = params.get("text").cloned().ok_or("send ?text=")?;
+            crate::cdp::type_text(&page(app, &active)?, &text).await?;
+            Ok(json!({ "typed": text }))
+        }
+        "/key" => {
+            let key = params.get("key").cloned().ok_or("send ?key=")?;
+            crate::cdp::key(&page(app, &active)?, &key).await?;
+            Ok(json!({ "pressed": key }))
         }
         "/press" => {
             // A real mouse press at a point of the page (CSS pixels, as in /shot): this moves the user's mouse.
@@ -339,14 +398,111 @@ async fn answer(
             if script.trim().is_empty() {
                 return Err("send the JavaScript as the request body (POST) or as ?js=".into());
             }
-            let report = ask(app, &active, "eval", json!(script)).await?;
-            match report["error"].as_str() {
-                Some(error) => Err(error.to_string()),
-                None => Ok(json!({ "result": report["result"] })),
+            let view = page(app, &active)?;
+            let session = match params.get("frame") {
+                Some(frame) => Some(frame_session(&view, frame)?),
+                None => None,
+            };
+            // Through DevTools first: it works in frames of any origin and on pages whose policy forbids eval.
+            match crate::cdp::evaluate(&view, &script, session.clone()).await {
+                Ok(value) => Ok(json!({ "result": value })),
+                Err(error) if session.is_some() => Err(error),
+                Err(_) => {
+                    let report = ask(app, &active, "eval", json!(script)).await?;
+                    match report["error"].as_str() {
+                        Some(error) => Err(error.to_string()),
+                        None => Ok(json!({ "result": report["result"] })),
+                    }
+                }
             }
         }
         _ => Err("unknown path; GET /help lists them".into()),
     }
+}
+
+/// The webview of a tab's page.
+fn page(app: &AppHandle, tab: &str) -> Result<tauri::Webview, String> {
+    if tab.is_empty() {
+        return Err("no page is open in the AgentDeck browser".into());
+    }
+    app.get_webview(&format!("browser-{tab}"))
+        .ok_or_else(|| "no page is open in the AgentDeck browser".to_string())
+}
+
+/// `?x=&y=`, in CSS pixels of the page.
+fn point(params: &HashMap<String, String>) -> Result<(f64, f64), String> {
+    let read = |key: &str| params.get(key).and_then(|v| v.parse::<f64>().ok());
+    match (read("x"), read("y")) {
+        (Some(x), Some(y)) => Ok((x, y)),
+        _ => Err("send ?x=&y= in CSS pixels of the page, as in /shot".into()),
+    }
+}
+
+/// A frame chosen by its index in /frames or by a part of its address.
+fn frame_session(view: &tauri::Webview, frame: &str) -> Result<String, String> {
+    let frames = crate::cdp::frames(view.label());
+    // An index in the list, else a part of the address (a port such as 8766 is an address, not an index).
+    let found = frame
+        .parse::<usize>()
+        .ok()
+        .and_then(|index| frames.get(index))
+        .or_else(|| frames.iter().find(|item| item.url.contains(frame)));
+    found
+        .map(|item| item.session.clone())
+        .ok_or_else(|| format!("no frame matches {frame}; GET /frames lists them"))
+}
+
+/// Lays the menu overlay's picture over the page's, at its offset (physical pixels of the window). The page's
+/// picture may be at another scale than the window (a zoomed phone page); the offset follows that scale.
+fn compose(page: &[u8], layer: &[u8], dx: i32, dy: i32, page_width: u32) -> Result<Vec<u8>, String> {
+    let (mut base, width, height) = rgba(page)?;
+    let (top, top_width, top_height) = rgba(layer)?;
+    let ratio = width as f64 / page_width.max(1) as f64;
+    for row in 0..(top_height as f64 * ratio) as u32 {
+        for col in 0..(top_width as f64 * ratio) as u32 {
+            let x = (dx as f64 * ratio) as i64 + col as i64;
+            let y = (dy as f64 * ratio) as i64 + row as i64;
+            if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
+                continue;
+            }
+            let sx = ((col as f64 / ratio) as u32).min(top_width - 1);
+            let sy = ((row as f64 / ratio) as u32).min(top_height - 1);
+            let from = ((sy * top_width + sx) * 4) as usize;
+            let to = ((y as u32 * width + x as u32) * 4) as usize;
+            let alpha = top[from + 3] as u32;
+            for channel in 0..3 {
+                let over = top[from + channel] as u32;
+                let under = base[to + channel] as u32;
+                base[to + channel] = ((over * alpha + under * (255 - alpha)) / 255) as u8;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+    writer.write_image_data(&base).map_err(|error| error.to_string())?;
+    writer.finish().map_err(|error| error.to_string())?;
+    Ok(out)
+}
+
+/// A PNG as 8-bit RGBA pixels.
+fn rgba(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
+    let mut decoder = png::Decoder::new(bytes);
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer).map_err(|error| error.to_string())?;
+    let pixels = &buffer[..info.buffer_size()];
+    let out = match info.color_type {
+        png::ColorType::Rgba => pixels.to_vec(),
+        png::ColorType::Rgb => pixels.chunks(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        png::ColorType::GrayscaleAlpha => pixels.chunks(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
+        png::ColorType::Grayscale => pixels.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return Err("indexed PNG".into()),
+    };
+    Ok((out, info.width, info.height))
 }
 
 /// Asks the page of a tab for something and waits for its answer.

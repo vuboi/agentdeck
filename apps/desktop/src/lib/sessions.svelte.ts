@@ -391,6 +391,20 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     }
     return;
   }
+  if (event.kind === 'usage') {
+    reply.model ??= session.model;
+    const tokens = (reply.tokens ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    if (event.new_call) {
+      tokens.input += event.input_tokens;
+      tokens.cacheRead += event.cache_read_tokens;
+      tokens.cacheWrite += event.cache_write_tokens;
+      reply.callOutput = 0;
+    }
+    tokens.output += Math.max(0, event.output_tokens - (reply.callOutput ?? 0));
+    reply.callOutput = event.output_tokens;
+    return;
+  }
+  if (event.kind === 'done' && event.cost_usd != null) reply.cost = event.cost_usd;
   const update = applyAgentEvent(reply.blocks, event);
   reply.blocks = update.blocks;
   // The CLI has the conversation once it answers; only then is `--resume` valid for the next turn.

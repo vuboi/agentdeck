@@ -147,6 +147,28 @@ impl Provider for Claude {
                             text: delta["thinking"].as_str().unwrap_or_default().to_string(),
                         }]
                     }
+                    // A model call starts: its input (and cache use) is known now.
+                    (Some("message_start"), _) => {
+                        let usage = &value["event"]["message"]["usage"];
+                        vec![AgentEvent::Usage {
+                            input_tokens: usage["input_tokens"].as_u64().unwrap_or(0),
+                            output_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
+                            cache_read_tokens: usage["cache_read_input_tokens"].as_u64().unwrap_or(0),
+                            cache_write_tokens: usage["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+                            new_call: true,
+                        }]
+                    }
+                    // The call's output so far.
+                    (Some("message_delta"), _) => match value["event"]["usage"]["output_tokens"].as_u64() {
+                        Some(output) => vec![AgentEvent::Usage {
+                            input_tokens: 0,
+                            output_tokens: output,
+                            cache_read_tokens: 0,
+                            cache_write_tokens: 0,
+                            new_call: false,
+                        }],
+                        None => Vec::new(),
+                    },
                     _ => Vec::new(),
                 }
             }
@@ -264,6 +286,16 @@ mod tests {
 
     #[test]
     fn result_line_finishes_the_turn_with_the_session_id() {
+        let start = r#"{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":12,"cache_read_input_tokens":900,"cache_creation_input_tokens":40,"output_tokens":1}}}}"#;
+        assert_eq!(
+            Claude.parse_line(start),
+            vec![AgentEvent::Usage { input_tokens: 12, output_tokens: 1, cache_read_tokens: 900, cache_write_tokens: 40, new_call: true }]
+        );
+        let delta = r#"{"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":321}}}"#;
+        assert_eq!(
+            Claude.parse_line(delta),
+            vec![AgentEvent::Usage { input_tokens: 0, output_tokens: 321, cache_read_tokens: 0, cache_write_tokens: 0, new_call: false }]
+        );
         let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"pong","session_id":"s1","total_cost_usd":0.5}"#;
         assert_eq!(
             Claude.parse_line(line),

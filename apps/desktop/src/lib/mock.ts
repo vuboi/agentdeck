@@ -25,6 +25,13 @@ export type Message = {
   startedAt?: number;
   /** How long the reply took, once finished. */
   ms?: number;
+  /** Tokens the reply used so far (all its model calls), and the model it ran on, for the cost estimate. */
+  tokens?: import('./usage').Tokens;
+  model?: string;
+  /** The output count of the model call in progress (reports are totals per call). */
+  callOutput?: number;
+  /** Exact cost reported by the CLI when the turn ended. */
+  cost?: number;
 };
 
 export const sessions: Session[] = [

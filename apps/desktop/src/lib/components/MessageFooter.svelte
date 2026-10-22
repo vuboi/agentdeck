@@ -3,10 +3,12 @@
   import { ticker } from '../clock.svelte';
   import { ago, answerText, elapsed, fullDate } from '../blocks';
   import type { Message } from '../mock';
+  import { estimateCost, shortCount, tokenDetail, totalTokens, usd } from '../usage';
 
   // Under each answer: copy, fork, how long it took, and how long ago it was (hover for the date).
   let { message, onfork, end = false }: { message: Message; onfork: () => void; end?: boolean } = $props();
 
+  const cost = $derived(message.cost ?? (message.tokens ? estimateCost(message.tokens, message.model) : null));
   let copied = $state(false);
   async function copy() {
     try {
@@ -28,6 +30,9 @@
   </ZButton>
   <span class="ml-1.5 flex items-center gap-1.5 text-[11px]">
     {#if message.ms}<span class="tabular-nums">Worked for {elapsed(message.ms)}</span><span aria-hidden="true">·</span>{/if}
+    {#if message.tokens}
+      <span class="tabular-nums" {@attach zTooltip({ content: `${tokenDetail(message.tokens)}${message.cost == null ? ' · estimated cost' : ''}`, position: 'top' })}>{shortCount(totalTokens(message.tokens))} tokens{cost != null ? ` · ${message.cost == null ? '~' : ''}${usd(cost)}` : ''}</span><span aria-hidden="true">·</span>
+    {/if}
     {#if message.at}
       <span {@attach zTooltip({ content: fullDate(message.at), position: 'top' })}>{ago(new Date(new Date(message.at).getTime() + (message.ms ?? 0)).toISOString(), ticker.min)}</span>
     {:else}

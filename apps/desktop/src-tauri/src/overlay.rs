@@ -39,6 +39,17 @@ pub fn overlay_eval(app: AppHandle, script: String) -> Result<(), String> {
 
 /// Bumped on every show: a hide that waited for the closing animation is dropped when a menu opened since.
 static SHOWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Whether a menu is on screen in the overlay (for screenshots of the page).
+static VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The overlay, when a menu is on screen in it.
+pub fn visible_view(app: &AppHandle) -> Option<Webview> {
+    if VISIBLE.load(std::sync::atomic::Ordering::Relaxed) {
+        overlay(app)
+    } else {
+        None
+    }
+}
 
 /// Runs `script` (the menu markup) and puts the overlay at a rectangle of the window, above every page, in one
 /// call: the menu appears without a round trip in between.
@@ -55,6 +66,7 @@ pub fn overlay_show(app: AppHandle, script: Option<String>, x: f64, y: f64, w: f
         .map_err(|error| error.to_string())?;
     view.show().map_err(|error| error.to_string())?;
     to_front(&view);
+    VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
@@ -65,6 +77,7 @@ pub async fn overlay_hide(app: AppHandle) -> Result<(), String> {
         return Ok(());
     };
     let shown = SHOWN.load(std::sync::atomic::Ordering::Relaxed);
+    VISIBLE.store(false, std::sync::atomic::Ordering::Relaxed);
     let _ = view.eval("window.__overlay && window.__overlay.close()");
     tokio::time::sleep(std::time::Duration::from_millis(130)).await;
     if SHOWN.load(std::sync::atomic::Ordering::Relaxed) == shown {

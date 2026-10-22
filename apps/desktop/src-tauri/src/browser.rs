@@ -127,6 +127,7 @@ pub async fn browser_show(
         )
         .map_err(|error| error.to_string())?;
     allow_password_saving(&view);
+    crate::cdp::watch_frames(&view);
     Ok(())
 }
 

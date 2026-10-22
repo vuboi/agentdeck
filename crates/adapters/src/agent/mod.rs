@@ -39,6 +39,15 @@ pub enum AgentEvent {
         text: String,
         cost_usd: Option<f64>,
     },
+    /// Tokens of the model call in progress. A new call (`new_call`) starts at its input; then its output
+    /// count grows (each report is the call's total so far, not an increment).
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_write_tokens: u64,
+        new_call: bool,
+    },
     /// The turn failed.
     Error { message: String },
 }

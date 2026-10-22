@@ -80,6 +80,7 @@ version = "0.0.0"
 dependencies = [
  "ag-adapters",
  "base64 0.22.1",
+ "png 0.17.16",
  "serde",
  "serde_json",
  "tauri",

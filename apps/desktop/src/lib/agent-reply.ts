@@ -78,6 +78,9 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
       if (!blocks.some((block) => block.kind === 'response') && event.text) blocks.push({ kind: 'response', text: event.text });
       return { blocks, finished: true, agentSession: event.session_id ?? undefined };
     }
+    case 'usage':
+      // Counted on the message, not drawn as a block (see sessions.svelte.ts).
+      return { blocks: current, finished: false };
     case 'error':
       close(blocks, true, 'fail');
       // Stopping a run yourself is not a failure.
