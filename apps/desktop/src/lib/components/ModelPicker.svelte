@@ -130,7 +130,7 @@
   onClosed={() => !warming && document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()}
 >
   {#snippet children()}
-    <div class="flex w-[320px] flex-col gap-2 overflow-y-auto px-2.5 py-2" style:max-height="{panelMax}px">
+    <div class="flex w-[320px] flex-col gap-2 overflow-y-auto px-2.5 py-2 [&>section+section]:border-t [&>section+section]:border-border [&>section+section]:pt-2" style:max-height="{panelMax}px">
       <section aria-label="Model">
         <div class="mb-1 font-mono text-[10px] tracking-widest text-muted-foreground">MODEL</div>
         <div class="flex flex-col gap-0.5" {@attach glide()}>
@@ -209,20 +209,20 @@
 
       <section aria-label="While it works">
         <div class="mb-1 font-mono text-[10px] tracking-widest text-muted-foreground">WHILE IT WORKS</div>
-        <div class="grid grid-cols-2 gap-1 rounded-md bg-muted/50 p-0.5" role="radiogroup">
-          {#each [['queue', 'Queue', 'Wait your turn'], ['interrupt', 'Interrupt', 'Stop, then send']] as [value, label, hint] (value)}
-            <button
-              type="button"
-              role="radio"
-              aria-checked={turnOptions.whileRunning === value}
-              title={hint}
-              class="h-6 cursor-pointer rounded text-xs outline-none {turnOptions.whileRunning === value ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-              onclick={() => setWhileRunning(value as 'queue' | 'interrupt')}
-            >
-              {label}
-            </button>
-          {/each}
-        </div>
+        <ZTabs
+          zTabs={[
+            { value: 'queue', label: 'Queue' },
+            { value: 'interrupt', label: 'Interrupt' },
+          ]}
+          zType="segmented"
+          zSize="xs"
+          zTabsOnly
+          zNavFullWidth
+          zCache={false}
+          class="w-full [&_.z-tab-item]:flex-1 [&_.z-tab-item-label]:text-center"
+          activeTab={turnOptions.whileRunning}
+          onTabChange={(value) => setWhileRunning(value as 'queue' | 'interrupt')}
+        />
       </section>
     </div>
   {/snippet}
