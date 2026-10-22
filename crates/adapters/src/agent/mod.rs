@@ -16,8 +16,19 @@ pub enum AgentEvent {
     Delta { text: String },
     /// Reasoning text, as it streams.
     Thinking { text: String },
-    /// A tool the agent ran; `input` is the JSON it passed.
-    ToolCall { name: String, input: String },
+    /// A tool the agent started. `id` links it to its [`AgentEvent::ToolResult`]; `input` is a one-line
+    /// summary of what it was asked to do (the command, the file, the pattern).
+    ToolCall {
+        id: String,
+        name: String,
+        input: String,
+    },
+    /// What a tool printed. `is_error` marks a failed call.
+    ToolResult {
+        id: String,
+        output: String,
+        is_error: bool,
+    },
     /// The turn finished. `session_id` is the CLI's id for the conversation, to resume next turn.
     Done {
         session_id: Option<String>,
@@ -53,4 +64,38 @@ pub trait Provider: Send + Sync {
     fn args(&self, req: &TurnRequest) -> Vec<String>;
     /// One line of stdout to zero or more events. Lines this provider does not understand give none.
     fn parse_line(&self, line: &str) -> Vec<AgentEvent>;
+}
+
+/// One line describing a tool call's input: the part a person would look at.
+pub fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {
+    let field = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| input.get(*key)?.as_str().map(str::to_owned))
+    };
+    let picked = match name {
+        "Bash" => field(&["command"]),
+        "Read" | "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => {
+            field(&["file_path", "notebook_path"])
+        }
+        "Grep" | "Glob" => field(&["pattern"]),
+        "WebFetch" => field(&["url"]),
+        "WebSearch" => field(&["query"]),
+        "Task" | "Agent" => field(&["description", "prompt"]),
+        _ => None,
+    };
+    let text = picked.unwrap_or_else(|| {
+        let compact = input.to_string();
+        if compact == "null" || compact == "{}" {
+            String::new()
+        } else {
+            compact
+        }
+    });
+    if text.chars().count() > 400 {
+        let mut cut: String = text.chars().take(400).collect();
+        cut.push('…');
+        cut
+    } else {
+        text
+    }
 }

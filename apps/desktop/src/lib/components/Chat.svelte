@@ -3,9 +3,13 @@
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZIcon, ZLoading, createVirtualizer } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
   import { LOADER } from '../loaders';
-  import { activeSession, AGENTS, chat, newSession, openTranscript, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, chat, forkSession, newSession, openTranscript, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
+  import { segments } from '../blocks';
   import ChatBlock from './ChatBlock.svelte';
+  import CommandGroup from './CommandGroup.svelte';
+  import LiveStatus from './LiveStatus.svelte';
+  import MessageFooter from './MessageFooter.svelte';
   import Composer from './Composer.svelte';
   import ToolbarActions from './ToolbarActions.svelte';
   import FileView from './FileView.svelte';
@@ -336,10 +340,20 @@
                     <span class="text-muted-foreground">{message.time}</span>
                   </div>
                   <div class="flex w-full min-w-0 flex-col gap-3">
-                    {#each message.blocks as block}
-                      <ChatBlock {block} />
+                    {#each segments(message.blocks) as segment}
+                      {#if segment.kind === 'commands'}
+                        <CommandGroup items={segment.items} />
+                      {:else}
+                        <ChatBlock block={segment.block} />
+                      {/if}
                     {/each}
+                    {#if message.live}
+                      <LiveStatus {message} />
+                    {/if}
                   </div>
+                  {#if !message.live && message.blocks.length > 0}
+                    <MessageFooter {message} onfork={() => forkSession(workspace.activeId)} />
+                  {/if}
                 {/if}
               </article>
             </div>

@@ -4,10 +4,22 @@ export type Session = { id: string; title: string; agent: Agent; status: 'workin
 export type Block =
   | { kind: 'thinking'; text: string; streaming?: boolean }
   | { kind: 'response'; text: string; streaming?: boolean }
-  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail' }
+  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string }
   | { kind: 'loading'; label: string };
 
-export type Message = { id: string; role: 'user' | 'assistant'; time: string; blocks: Block[] };
+export type Message = {
+  id: string;
+  role: 'user' | 'assistant';
+  time: string;
+  blocks: Block[];
+  /** ISO time of the message, for the relative time and its tooltip. */
+  at?: string;
+  /** Reply still being written by an agent. */
+  live?: boolean;
+  startedAt?: number;
+  /** How long the reply took, once finished. */
+  ms?: number;
+};
 
 export const sessions: Session[] = [
   { id: 's1', title: 'Build the settings panel', agent: 'claude', status: 'working' },

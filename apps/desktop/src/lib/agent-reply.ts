@@ -49,8 +49,16 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
     }
     case 'tool_call':
       close(blocks, false);
-      blocks.push({ kind: 'command', command: `${event.name} ${event.input}`, output: '', status: 'running' });
+      blocks.push({ kind: 'command', id: event.id, command: `${event.name}  ${event.input}`.trim(), output: '', status: 'running' });
       return { blocks, finished: false };
+    case 'tool_result': {
+      const call = blocks.find((block) => block.kind === 'command' && block.id === event.id);
+      if (call?.kind === 'command') {
+        call.output = event.output.length > 6000 ? `${event.output.slice(0, 6000)}…` : event.output;
+        call.status = event.is_error ? 'fail' : 'ok';
+      }
+      return { blocks, finished: false };
+    }
     case 'done': {
       close(blocks, true);
       // Streamed text already shows the answer; the final result only fills in when nothing streamed.

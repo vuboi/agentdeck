@@ -129,7 +129,8 @@ const localReady = getPref<{ sessions: SessionItem[]; messages: Record<string, M
     for (const item of saved.sessions ?? []) {
       if (!workspace.sessions.some((existing) => existing.id === item.id)) workspace.sessions.push(item);
     }
-    for (const [id, list] of Object.entries(saved.messages ?? {})) localMessages[id] = list;
+    // A reply that was still running when the app closed is not running any more.
+    for (const [id, list] of Object.entries(saved.messages ?? {})) localMessages[id] = list.map((message) => ({ ...message, live: false }));
     if (saved.activeId && !workspace.activeId) workspace.activeId = saved.activeId;
   },
   () => {
@@ -224,6 +225,8 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent) {
   if (event.kind !== 'error') session.agentStarted = true;
   if (update.agentSession) session.agentSession = update.agentSession;
   if (update.finished) {
+    reply.live = false;
+    if (reply.startedAt) reply.ms = Date.now() - reply.startedAt;
     delete replies[sessionId];
     session.status = 'idle';
     persistLocal();
@@ -255,13 +258,14 @@ export function sendMessage(text: string) {
     role: 'user',
     time: clock(new Date().toISOString()),
     blocks: [{ kind: 'response', text: body }],
+    at: new Date().toISOString(),
   });
   if (inTauri() && session.agent === 'claude') {
     // A claude chat talks to the CLI: one `claude -p` per message, linked by the conversation id.
     const cliId = session.agentSession ?? (session.id.startsWith('claude:') ? session.id.slice('claude:'.length) : crypto.randomUUID());
     session.agentSession = cliId;
     const resume = session.agentStarted ?? !!session.path;
-    const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), blocks: [{ kind: 'loading', label: 'Thinking' }] };
+    const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now() };
     messagesOf(session.id).push(reply);
     replies[session.id] = reply.id;
     session.status = 'working';
@@ -440,7 +444,7 @@ const MAX_SAVED = 12;
 
 async function fetchTranscript(session: SessionItem): Promise<Message[]> {
   const loaded = await loadHistory(session.source!, session.path!);
-  return loaded.map((message) => ({ id: message.id, role: message.role, time: clock(message.time), blocks: toBlocks(message.blocks) }));
+  return loaded.map((message) => ({ id: message.id, role: message.role, time: clock(message.time), at: message.time || undefined, blocks: toBlocks(message.blocks) }));
 }
 
 function remember(session: SessionItem, messages: Message[]) {

@@ -4,7 +4,8 @@
 export type AgentEvent =
   | { kind: 'delta'; text: string }
   | { kind: 'thinking'; text: string }
-  | { kind: 'tool_call'; name: string; input: string }
+  | { kind: 'tool_call'; id: string; name: string; input: string }
+  | { kind: 'tool_result'; id: string; output: string; is_error: boolean }
   | { kind: 'done'; session_id: string | null; text: string; cost_usd: number | null }
   | { kind: 'error'; message: string };
 

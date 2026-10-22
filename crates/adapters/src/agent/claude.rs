@@ -7,9 +7,22 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::{AgentEvent, Provider, TurnRequest};
+use super::{summarize_tool_input, AgentEvent, Provider, TurnRequest};
 
 pub struct Claude;
+
+/// Text of a tool result: a plain string, or an array of `{ "type": "text", "text": … }`.
+fn result_text(content: &Value) -> String {
+    match content {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
 
 /// Where the Claude Code CLI usually lives, per platform. A desktop app started from the Dock, the Start
 /// menu or a launcher does not get the shell's PATH, so the usual install locations are tried first.
@@ -118,9 +131,28 @@ impl Provider for Claude {
                 .into_iter()
                 .flatten()
                 .filter(|block| block["type"] == "tool_use")
-                .map(|block| AgentEvent::ToolCall {
-                    name: block["name"].as_str().unwrap_or_default().to_string(),
-                    input: block["input"].to_string(),
+                .map(|block| {
+                    let name = block["name"].as_str().unwrap_or_default();
+                    AgentEvent::ToolCall {
+                        id: block["id"].as_str().unwrap_or_default().to_string(),
+                        name: name.to_string(),
+                        input: summarize_tool_input(name, &block["input"]),
+                    }
+                })
+                .collect(),
+            // Tool output comes back as a "user" message made of tool_result blocks.
+            Some("user") => value["message"]["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|block| block["type"] == "tool_result")
+                .map(|block| AgentEvent::ToolResult {
+                    id: block["tool_use_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    output: result_text(&block["content"]),
+                    is_error: block["is_error"].as_bool().unwrap_or(false),
                 })
                 .collect(),
             Some("result") => {
@@ -199,6 +231,28 @@ mod tests {
             Claude.parse_line(line),
             vec![AgentEvent::Error {
                 message: "rate limited".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn tool_calls_and_their_output_are_linked_by_id() {
+        let call = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]}}"#;
+        assert_eq!(
+            Claude.parse_line(call),
+            vec![AgentEvent::ToolCall {
+                id: "t1".into(),
+                name: "Bash".into(),
+                input: "ls -la".into()
+            }]
+        );
+        let result = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"a\nb"}],"is_error":true}]}}"#;
+        assert_eq!(
+            Claude.parse_line(result),
+            vec![AgentEvent::ToolResult {
+                id: "t1".into(),
+                output: "a\nb".into(),
+                is_error: true
             }]
         );
     }
