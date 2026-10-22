@@ -32,5 +32,7 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 
 export function renderMarkdown(source: string): string {
   const html = marked.parse(source, { async: false });
-  return DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
+  // Tables sit in a rounded, scrollable card like the code blocks.
+  const framed = html.replaceAll('<table>', '<div class="md-table"><table>').replaceAll('</table>', '</table></div>');
+  return DOMPurify.sanitize(framed, { ADD_ATTR: ['target'] });
 }

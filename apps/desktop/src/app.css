@@ -164,9 +164,11 @@ html[data-warming] [data-z-popover] {
   background: var(--muted);
   font-size: 0.8em;
 }
-.md table { display: block; max-width: 100%; margin: 0 0 0.75rem; overflow-x: auto; border-collapse: collapse; font-size: 0.8125rem; }
-.md th, .md td { padding: 0.35rem 0.7rem; border: 1px solid var(--border); text-align: left; }
-.md th { background: var(--muted); font-weight: 600; }
+.md-table { margin: 0 0 0.75rem; overflow-x: auto; border: 1px solid var(--border); border-radius: 0.6rem; background: var(--muted); }
+.md-table table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.md-table th, .md-table td { padding: 0.4rem 0.8rem; text-align: left; border: 0; }
+.md-table th { font-weight: 600; color: var(--muted-foreground); font-size: 0.75rem; border-bottom: 1px solid var(--border); }
+.md-table tr + tr td { border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent); }
 .md img { max-width: 100%; border-radius: 0.5rem; }
 .md-code { margin: 0 0 0.75rem; overflow: hidden; border: 1px solid var(--border); border-radius: 0.6rem; background: var(--muted); }
 .md-code-head { display: flex; align-items: center; justify-content: space-between; padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 0.6875rem; }
