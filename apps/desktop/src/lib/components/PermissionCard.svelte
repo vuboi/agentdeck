@@ -24,7 +24,7 @@
     <div class="flex flex-wrap items-center gap-1.5 border-t border-border px-3 py-2">
       <ZButton zWave={false} zType="default" zSize="sm" class="h-7 px-3 text-xs" onclick={() => onanswer?.('once')}>Allow</ZButton>
       <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-3 text-xs" onclick={() => onanswer?.('always')} title="Allow this in the rest of the chat">Always allow</ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto h-7 px-3 text-xs" onclick={() => onanswer?.('deny')}>Deny</ZButton>
+      <ZButton zWave={false} zType="secondary" zSize="sm" class="ml-auto h-7 px-3 text-xs" onclick={() => onanswer?.('deny')}>Deny</ZButton>
     </div>
   {/if}
 </div>
