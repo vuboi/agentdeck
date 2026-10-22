@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+mod bridge;
 mod browser;
 
 use ag_adapters::agent::claude::Claude;
@@ -255,6 +256,7 @@ pub fn run() {
                 .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
         })
         .setup(|app| {
+            bridge::start(app.handle().clone());
             if let Ok(url) = std::env::var("AGENTDECK_BROWSER_SELFTEST") {
                 browser::selftest(app.handle().clone(), url);
             }

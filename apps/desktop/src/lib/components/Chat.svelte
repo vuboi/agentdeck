@@ -362,9 +362,7 @@
                       {/each}
                     </div>
                   {/if}
-                  <div class="mt-1.5 flex items-center gap-1 px-1 text-[11px] text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100">
-                    <span>{message.time}</span>
-                  </div>
+                  <MessageFooter {message} end={theme.chatLayout === 'split'} onfork={() => forkSession(workspace.activeId)} />
                 {:else}
                   {@const parts = segments(message.blocks)}
                   {@const tail = parts.at(-1)}

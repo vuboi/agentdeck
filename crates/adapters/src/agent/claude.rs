@@ -108,7 +108,11 @@ impl Provider for Claude {
         }
         // AgentDeck has its own browser; the agent is told to hand pages over to it instead of opening one itself.
         args.push("--append-system-prompt".to_string());
-        args.push(APP_CONTEXT.to_string());
+        let mut context = APP_CONTEXT.to_string();
+        if let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") {
+            context.push_str(&format!(" To debug a page open there, read it from the app instead of guessing: curl {bridge}/console?level=error (console and uncaught JavaScript errors), curl \"{bridge}/network?failed=1\" (failed requests with the start of the response body), curl \"{bridge}/dom?selector=.css\" (elements), curl -d \"document.title\" {bridge}/eval (run JavaScript in the page), curl {bridge}/page (address), curl {bridge}/help."));
+        }
+        args.push(context);
         if let Some(effort) = &req.effort {
             args.push("--effort".to_string());
             args.push(effort.clone());

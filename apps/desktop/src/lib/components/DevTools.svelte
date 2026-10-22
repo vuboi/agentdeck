@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ZIcon, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { browser } from '../browser.svelte';
   import Splitter from './Splitter.svelte';
@@ -12,6 +12,8 @@
   let filter = $state('');
   let level = $state<'all' | 'error' | 'warn' | 'info'>('all');
   let onlyFailed = $state(false);
+  let levelOpen = $state(false);
+  let levelButton: HTMLElement | null = $state(null);
 
   const LEVELS: { value: typeof level; label: string }[] = [
     { value: 'all', label: 'All' },
@@ -78,9 +80,39 @@
       aria-label="Filter"
     />
     {#if tab === 'console'}
-      <select bind:value={level} class="h-6 cursor-pointer rounded border border-input bg-background px-1 text-xs outline-none" aria-label="Level">
-        {#each LEVELS as item (item.value)}<option value={item.value}>{item.label}</option>{/each}
-      </select>
+      <button
+        bind:this={levelButton}
+        type="button"
+        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-input bg-background px-1.5 text-xs outline-none hover:border-primary/60 {levelOpen ? 'border-primary' : ''}"
+        aria-haspopup="listbox"
+        aria-expanded={levelOpen}
+        aria-label="Level"
+        onclick={() => (levelOpen = !levelOpen)}
+      >
+        {LEVELS.find((item) => item.value === level)?.label}
+        <ZIcon zType="lucideChevronDown" class="size-3 text-muted-foreground" />
+      </button>
+      <ZPopover anchor={levelButton} bind:open={levelOpen} zTrigger="manual" zPosition="top-right" zOffset={4} zWidth={110}>
+        {#snippet children()}
+          <div class="flex w-[110px] flex-col gap-0.5 p-1" role="listbox" aria-label="Level">
+            {#each LEVELS as item (item.value)}
+              <button
+                type="button"
+                role="option"
+                aria-selected={level === item.value}
+                class="flex w-full cursor-pointer items-center justify-between rounded px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {level === item.value ? 'bg-primary/10 text-primary' : ''}"
+                onclick={() => {
+                  level = item.value;
+                  levelOpen = false;
+                }}
+              >
+                {item.label}
+                {#if level === item.value}<ZIcon zType="lucideCheck" class="size-3" />{/if}
+              </button>
+            {/each}
+          </div>
+        {/snippet}
+      </ZPopover>
     {:else}
       <label class="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground"><input type="checkbox" bind:checked={onlyFailed} /> Failed</label>
     {/if}

@@ -37,6 +37,7 @@ fn injected_script(tab: &str) -> String {
 /// The handler of the `agentdeck` scheme: forwards a page's JSON report to the app window.
 pub fn handle_report(app: &AppHandle, body: &[u8]) {
     if let Ok(report) = serde_json::from_slice::<serde_json::Value>(body) {
+        crate::bridge::ingest(&report);
         let _ = app.emit("browser-report", report);
     }
 }
@@ -88,6 +89,7 @@ pub async fn browser_show(
     w: f64,
     h: f64,
 ) -> Result<(), String> {
+    crate::bridge::set_active(&tab);
     let _creating = CREATING.lock().await;
     if let Ok(view) = webview(&app, &tab) {
         place(&view, x, y, w, h)?;
@@ -101,6 +103,9 @@ pub async fn browser_show(
                 PageLoadEvent::Started => "started",
                 PageLoadEvent::Finished => "finished",
             };
+            if event == "started" {
+                crate::bridge::page_started(view.label().trim_start_matches(PREFIX), payload.url().as_str());
+            }
             let _ = view.app_handle().emit(
                 "browser-load",
                 serde_json::json!({
@@ -134,6 +139,7 @@ pub fn browser_bounds(
     w: f64,
     h: f64,
 ) -> Result<(), String> {
+    crate::bridge::set_active(&tab);
     place(&webview(&app, &tab)?, x, y, w, h)
 }
 

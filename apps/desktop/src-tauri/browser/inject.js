@@ -41,8 +41,8 @@
   );
 
   // ---- network ----
-  const record = (method, url, status, started) =>
-    post({ kind: 'network', method, url: cut(String(url), 400), status, ms: Math.round(performance.now() - started), at: Date.now() });
+  const record = (method, url, status, started, body) =>
+    post({ kind: 'network', method, url: cut(String(url), 400), status, ms: Math.round(performance.now() - started), at: Date.now(), body: body ? cut(String(body), 1500) : undefined });
   const originalFetch = window.fetch.bind(window);
   window.fetch = (input, init) => {
     const url = typeof input === 'string' ? input : input.url;
@@ -50,14 +50,29 @@
     const started = performance.now();
     const method = (init && init.method) || (typeof input !== 'string' && input.method) || 'GET';
     return originalFetch(input, init).then(
-      (response) => (record(method, url, response.status, started), response),
+      (response) => {
+        if (response.status >= 400) {
+          response.clone().text().then((text) => record(method, url, response.status, started, text), () => record(method, url, response.status, started));
+        } else {
+          record(method, url, response.status, started);
+        }
+        return response;
+      },
       (error) => (record(method, url, 0, started), Promise.reject(error)),
     );
   };
   const open = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
     const started = performance.now();
-    this.addEventListener('loadend', () => record(method, url, this.status, started));
+    this.addEventListener('loadend', () => {
+      let text;
+      try {
+        if (this.status >= 400 && (this.responseType === '' || this.responseType === 'text')) text = this.responseText;
+      } catch {
+        // The body is not readable.
+      }
+      record(method, url, this.status, started, text);
+    });
     return open.call(this, method, url, ...rest);
   };
 
@@ -175,14 +190,27 @@
   window.__agentdeck = {
     run(id, kind, arg) {
       if (kind === 'dom') {
+        let html;
+        try {
+          html = typeof arg === 'string' && arg ? [...document.querySelectorAll(arg)].slice(0, 10).map((node) => node.outerHTML).join('\n') : document.documentElement.outerHTML;
+        } catch (error) {
+          html = 'Invalid selector: ' + error.message;
+        }
         post({
           kind: 'dom',
           id,
           url: location.href,
           title: document.title,
           viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
-          html: cut(document.documentElement.outerHTML, 60000),
+          html: cut(html, 60000),
         });
+      } else if (kind === 'eval') {
+        Promise.resolve()
+          .then(() => (0, eval)(String(arg)))
+          .then(
+            (value) => post({ kind: 'eval', id, result: cut(show(value), 20000) }),
+            (error) => post({ kind: 'eval', id, error: String((error && error.stack) || error) }),
+          );
       } else if (kind === 'shot') {
         const lib = window.htmlToImage;
         if (!lib) return post({ kind: 'shot', id, error: 'screenshot library missing' });

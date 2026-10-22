@@ -88,7 +88,26 @@
     return { rect: { x: box.x + (box.width - w) / 2, y: box.y + (box.height - h) / 2 + 6, w, h }, zoom };
   }
 
+  // One placement at a time, the newest rectangle last: overlapping calls could land out of order and leave the page misplaced.
+  let syncing = false;
+  let again = false;
   async function sync() {
+    if (syncing) {
+      again = true;
+      return;
+    }
+    syncing = true;
+    try {
+      do {
+        again = false;
+        await placePage();
+      } while (again);
+    } finally {
+      syncing = false;
+    }
+  }
+
+  async function placePage() {
     if (!inTauri() || !started || shot || covered || layout.dragging) return;
     const place = frame();
     if (!place) {
@@ -156,6 +175,7 @@
       if (now === covered) return;
       covered = now;
       if (now) void hideBrowser();
+      else void sync();
     });
     observer.observe(document.body, { childList: true, subtree: true });
     void sync();
@@ -171,7 +191,8 @@
         return `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`;
       });
       const key = (box ? `${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)},${Math.round(box.height)}` : '') + '|' + menus.join(';');
-      if (key !== last) {
+      // While a drag or a dialog holds the page back nothing is placed, so the change is kept for when it ends.
+      if (key !== last && !layout.dragging && !covered && !shot) {
         last = key;
         void sync();
       }
