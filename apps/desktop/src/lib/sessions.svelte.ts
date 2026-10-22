@@ -214,10 +214,8 @@ const OPEN_WORDS = /(open|preview|browser|run|start|serve)|mở|chạy|xem th�
 function openServedPage(sessionId: string, reply: Message) {
   if (!inTauri() || !OPEN_WORDS.test(lastPrompt[sessionId] ?? '')) return;
   const text = reply.blocks
-    .map((block) => (block.kind === 'response' ? block.text : block.kind === 'command' ? `${block.command}
-${block.output}` : ''))
-    .join('
-');
+    .map((block) => (block.kind === 'response' ? block.text : block.kind === 'command' ? `${block.command}\n${block.output}` : ''))
+    .join('\n');
   const found = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?[^\s`'")\]>]*/gi)?.find(isLocalUrl);
   if (found) openInPreview(found);
 }
