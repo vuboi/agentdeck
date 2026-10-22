@@ -29,7 +29,7 @@
   </span>
 {/snippet}
 
-<div class="block-in flex flex-col gap-1.5 text-xs">
+<div class="block-in flex flex-col text-xs">
   <button
     type="button"
     class="flex w-fit max-w-full cursor-pointer items-center gap-2 rounded-md py-0.5 text-left text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -51,7 +51,7 @@
 
   <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
     <div class="min-h-0 overflow-hidden">
-      <div class="mt-1 divide-y divide-border overflow-hidden rounded-xl border border-border">
+      <div class="mt-1.5 divide-y divide-border overflow-hidden rounded-xl border border-border">
         {#each items as item, index (item.id ?? index)}
           {@const step = describeStep(item)}
           <div>

@@ -424,7 +424,7 @@
                       {#if segment.kind === 'commands'}
                         <!-- The newest group of a running reply is the live line; it carries the only loader. -->
                         <!-- Step lines in a row sit close together, like one list. -->
-                        <div class={afterSteps(parts, position) ? '-mt-1.5' : ''}>
+                        <div class="{afterSteps(parts, position) ? '-mt-1.5' : ''} {parts[position + 1]?.kind === 'block' ? '-mb-0.5' : ''}">
                           <CommandGroup items={segment.items} live={Boolean(message.live) && working && position === parts.length - 1} startedAt={message.startedAt} />
                         </div>
                       {:else}
