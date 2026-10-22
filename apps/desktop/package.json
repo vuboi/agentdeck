@@ -27,6 +27,7 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.0.0",
+    "html-to-image": "^1.11.13",
     "svelte": "^5.40.0",
     "svelte-check": "^4.1.4",
     "tailwindcss": "^4.3.3",

@@ -14,6 +14,8 @@
   import { slideWidth } from '../lib/transitions';
   import { layout, type DockZone as Zone } from '../lib/layout.svelte';
   import { terminal, handleTerminalShortcut } from '../lib/terminal.svelte';
+  import { browser } from '../lib/browser.svelte';
+  import { inTauri } from '../lib/history';
   import { newSession, workspace } from '../lib/sessions.svelte';
   import { openChatTab } from '../lib/content-tabs.svelte';
 
@@ -80,6 +82,21 @@
   $effect(() => {
     void workspace.activeId;
     untrack(() => (layout.sidebarDrawer = false));
+  });
+
+  // Developer hook (AGENTDECK_OPEN_PREVIEW): the app opens the Preview tool on a page by itself.
+  onMount(() => {
+    if (!import.meta.env.DEV || !inTauri()) return;
+    let stop: (() => void) | undefined;
+    void import('@tauri-apps/api/event').then(({ listen }) =>
+      listen<string>('dev-preview', ({ payload }) => {
+        browser.url = payload;
+        browser.autostart = true;
+        layout.activeTool = 'Preview';
+        layout.toolsOpen = true;
+      }).then((unlisten) => (stop = unlisten)),
+    );
+    return () => stop?.();
   });
 
   function onKey(event: KeyboardEvent) {

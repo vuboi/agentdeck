@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ZIcon } from '@shival99/z-ui-svelte';
   import { toolOf } from '../tools';
+  import BrowserView from './BrowserView.svelte';
   import FileExplorer from './FileExplorer.svelte';
 
   // The body of a workspace tool. Same view in the right panel and in the detached modal.
@@ -10,6 +11,8 @@
 
 {#if tool === 'Explore'}
   <FileExplorer />
+{:else if tool === 'Preview'}
+  <BrowserView />
 {:else}
 
 <div class="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground" role="tabpanel" aria-label={current.label}>

@@ -185,6 +185,11 @@ Mỗi module có Definition of Done (DoD). Làm tuần tự, mỗi module = 1 co
 - **DoD**: số liệu Codex rate_limits + Claude usage hiển thị đúng; test đơn vị cho estimator.
 
 ### M7 — Preview nhúng
+> **Trạng thái (2026-10-22): bản đầu đã chạy, dùng cách nhẹ hơn CDP.** Child webview (Tauri multiwebview, `unstable`) đặt đè lên panel Preview;
+> script chèn vào mọi trang (`apps/desktop/src-tauri/browser/inject.js`) báo console / network / điều hướng và trả lời yêu cầu DOM, screenshot
+> (html-to-image), element picker, gửi về app qua URL scheme `agentdeck` -> event `browser-report`. UI: thanh địa chỉ, thiết bị Mobile/Tablet/Desktop
+> (zoom để đúng bề rộng), pick element, Console/Network, Annotate (freeze-frame: mũi tên, ô vuông, nét vẽ, note đánh số) rồi "Add to chat"
+> (ảnh + DOM + lỗi console vào composer). Chưa có: CDP/chromiumoxide, debugger, network body, tool browser cho agent qua MCP, macOS/Linux chưa thử.
 - Trait `PreviewBackend`; impl `Webview2Native` (Tauri `add_child`, `--remote-debugging-port=0`, đọc `DevToolsActivePort`, `chromiumoxide`) và `CdpScreencast` (headless Chromium + canvas).
 - Console, network (kèm body), element picker (isolated world), annotate kiểu freeze-frame, context chip gửi vào chat (selector, outerHTML, computed style, box, ảnh crop, source file nếu có).
 - Tool browser expose cho agent qua hub MCP: click/type/screenshot/read_dom/console/network.

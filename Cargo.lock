@@ -81,6 +81,7 @@ dependencies = [
  "ag-adapters",
  "base64 0.22.1",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tokio",

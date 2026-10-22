@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+mod browser;
+
 use ag_adapters::agent::claude::Claude;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
 use ag_adapters::agent::{AgentEvent, Provider, TurnRequest};
@@ -212,6 +214,32 @@ async fn agent_send(
 /// Starts the AgentDeck desktop window.
 pub fn run() {
     tauri::Builder::default()
+        .register_uri_scheme_protocol("agentdeck", |context, request| {
+            browser::handle_report(context.app_handle(), request.body());
+            tauri::http::Response::builder()
+                .status(200)
+                .header("Access-Control-Allow-Origin", "*")
+                .body(Vec::new())
+                .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
+        })
+        .setup(|app| {
+            if let Ok(url) = std::env::var("AGENTDECK_BROWSER_SELFTEST") {
+                browser::selftest(app.handle().clone(), url);
+            }
+            // Developer hook: open the Preview tool on a page a few seconds after start-up.
+            if let Ok(url) = std::env::var("AGENTDECK_OPEN_PREVIEW") {
+                let handle = app.handle().clone();
+                tauri::Listener::listen(app.handle(), "browser-report", |event| {
+                    let shown: String = event.payload().chars().take(140).collect();
+                    eprintln!("report: {shown}");
+                });
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    let _ = tauri::Emitter::emit(&handle, "dev-preview", url);
+                });
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             history_list,
             history_load,
@@ -220,7 +248,14 @@ pub fn run() {
             file_read,
             file_read_bytes,
             agent_send,
-            attachment_save
+            attachment_save,
+            browser::browser_show,
+            browser::browser_bounds,
+            browser::browser_hide,
+            browser::browser_navigate,
+            browser::browser_eval,
+            browser::browser_zoom,
+            browser::browser_close
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AgentDeck desktop application");
