@@ -191,20 +191,19 @@ html[data-warming] [data-z-popover] {
 .md li > .md-code, .md li > .md-table { margin-bottom: 0.5rem; }
 .md li > ul, .md li > ol { margin-bottom: 0; }
 
-/* Tooltips: a small card in the app's own colours instead of the inverted default. */
-.z-tooltip-host.z-tooltip {
-  background: var(--popover) !important;
-  color: var(--popover-foreground) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: 0.5rem !important;
-  box-shadow: 0 10px 24px -10px rgb(0 0 0 / 0.55) !important;
+/* Tooltips (z-ui's and the native `title` ones, see TitleTooltip): one small card in the app's own colours.
+   z-ui's utilities are !important inside a layer and beat plain rules, so its colour tokens are remapped instead. */
+.z-tooltip-host {
+  --color-foreground: var(--popover);
+  --color-background: var(--popover-foreground);
+  --radius-sm: 0.5rem;
+  --radius-xs: 0.4rem;
+  box-shadow: 0 0 0 1px var(--border), 0 10px 24px -10px rgb(0 0 0 / 0.55);
 }
 .z-tooltip-host.z-tooltip > div:not(:last-child) {
   display: none; /* the arrow */
 }
 .z-tooltip-host.z-tooltip > div:last-child {
-  background: transparent !important;
-  border-radius: 0 !important;
   padding: 0.3rem 0.6rem !important;
   font-size: 0.75rem;
   font-weight: 500;

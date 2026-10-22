@@ -4,6 +4,7 @@
   import '../lib/theme.svelte';
 
   import { onMount } from 'svelte';
+  import TitleTooltip from '../lib/components/TitleTooltip.svelte';
   import { importHistory } from '../lib/sessions.svelte';
   import { warmIcons } from '../lib/icons';
 
@@ -17,3 +18,4 @@
 </script>
 
 {@render children()}
+<TitleTooltip />
