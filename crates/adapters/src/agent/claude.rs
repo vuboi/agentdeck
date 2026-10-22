@@ -14,6 +14,9 @@ use super::{
 
 pub struct Claude;
 
+/// Added to the CLI's system prompt on every turn.
+const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app that has its own built-in browser (the Preview panel). When the user asks you to open, preview or show a web page or a local dev server, do not open it with an external browser or any browser-automation tool. Start the server if it is needed, then write the full address (for example http://localhost:4200) in your reply: AgentDeck opens that address in its Preview panel by itself.";
+
 /// Text of a tool result: a plain string, or an array of `{ "type": "text", "text": … }`.
 fn result_text(content: &Value) -> String {
     match content {
@@ -103,6 +106,9 @@ impl Provider for Claude {
             args.push("--model".to_string());
             args.push(model.clone());
         }
+        // AgentDeck has its own browser; the agent is told to hand pages over to it instead of opening one itself.
+        args.push("--append-system-prompt".to_string());
+        args.push(APP_CONTEXT.to_string());
         if let Some(effort) = &req.effort {
             args.push("--effort".to_string());
             args.push(effort.clone());
@@ -343,6 +349,16 @@ mod tests {
             }
         );
         assert!(matches!(events[1], AgentEvent::Done { .. }));
+    }
+
+    #[test]
+    fn the_agent_is_told_about_the_built_in_browser() {
+        let args = Claude.args(&req(false));
+        let at = args
+            .iter()
+            .position(|arg| arg == "--append-system-prompt")
+            .unwrap();
+        assert!(args[at + 1].contains("Preview panel"));
     }
 
     #[test]
