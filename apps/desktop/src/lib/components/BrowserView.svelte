@@ -77,7 +77,9 @@
     if (!stage) return null;
     const full = stage.getBoundingClientRect();
     if (full.width < 20 || full.height < 20) return null;
-    const box = menuOpen ? avoidMenus(full) : full;
+    // A menu over the page: the page steps aside entirely (a shifted or cut page looked broken).
+    if (menuOpen && avoidMenus(full) !== full) return null;
+    const box = full;
     const device = DEVICES[browser.device];
     if (!device.w) return { rect: { x: box.x, y: box.y, w: box.width, h: box.height }, zoom: 1 };
     const [dw, dh] = browser.landscape ? [device.h, device.w] : [device.w, device.h];
