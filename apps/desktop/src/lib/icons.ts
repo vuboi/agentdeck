@@ -10,7 +10,7 @@ const USED = [
   'lucideGlobe', 'lucideHand', 'lucideLoaderCircle', 'lucideMaximize2', 'lucideMenu', 'lucideMessageSquare',
   'lucideMinimize2', 'lucideMinus', 'lucideMonitor', 'lucideMoon', 'lucidePalette', 'lucidePanelRightClose',
   'lucidePanelRightOpen', 'lucidePaperclip', 'lucidePlus', 'lucideShieldCheck', 'lucideSparkles', 'lucideSquare',
-  'lucideSquareTerminal', 'lucideSun', 'lucideTerminal', 'lucideWorkflow', 'lucideX', 'lucideZap', 'lucideArrowLeft', 'lucideHighlighter', 'lucideSquareTerminal', 'lucideNetwork', 'lucideArrowRight', 'lucideRotateCw', 'lucideSmartphone', 'lucideTablet', 'lucideMousePointerClick', 'lucidePenLine', 'lucideMoveUpRight', 'lucideUndo2', 'lucideTrash2', 'lucideMessageSquarePlus', 'lucideShieldAlert', 'lucideShieldX',
+  'lucideSquareTerminal', 'lucideSun', 'lucideTerminal', 'lucideWorkflow', 'lucideX', 'lucideZap', 'lucideArrowLeft', 'lucideMousePointer2', 'lucidePencil', 'lucideType', 'lucideExternalLink', 'lucideEllipsis', 'lucideBan', 'lucideHighlighter', 'lucideSquareTerminal', 'lucideNetwork', 'lucideArrowRight', 'lucideRotateCw', 'lucideSmartphone', 'lucideTablet', 'lucideMousePointerClick', 'lucidePenLine', 'lucideMoveUpRight', 'lucideUndo2', 'lucideTrash2', 'lucideMessageSquarePlus', 'lucideShieldAlert', 'lucideShieldX',
 ];
 
 /** Loads every icon the app uses, a few at a time, without blocking first paint. */

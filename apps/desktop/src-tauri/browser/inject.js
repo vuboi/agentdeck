@@ -4,9 +4,10 @@
 (() => {
   if (window.__agentdeck || window.top !== window) return;
   const BASE = '__BASE__';
+  const TAB = '__TAB__';
   const post = (message) => {
     try {
-      fetch(BASE + 'r', { method: 'POST', body: JSON.stringify(message), mode: 'no-cors', keepalive: true }).catch(() => {});
+      fetch(BASE + 'r', { method: 'POST', body: JSON.stringify({ tab: TAB, ...message }), mode: 'no-cors', keepalive: true }).catch(() => {});
     } catch {
       // A page policy may block it; the app then simply sees nothing from this page.
     }
@@ -65,7 +66,8 @@
   const announce = () => {
     if (location.href === last) return;
     last = location.href;
-    post({ kind: 'nav', url: location.href, title: document.title });
+    const icon = document.querySelector('link[rel~="icon"]');
+    post({ kind: 'nav', url: location.href, title: document.title, favicon: icon ? icon.href : '' });
   };
   for (const name of ['pushState', 'replaceState']) {
     const original = history[name];
@@ -77,7 +79,12 @@
   }
   window.addEventListener('popstate', announce);
   window.addEventListener('hashchange', announce);
-  window.addEventListener('load', announce);
+  window.addEventListener('load', () => { last = ''; announce(); });
+  // The title can change after load (single page apps); the document does not exist yet when this script starts.
+  document.addEventListener('DOMContentLoaded', () => {
+    const target = document.querySelector('title') || document.head || document.documentElement;
+    if (target) new MutationObserver(() => post({ kind: 'title', title: document.title })).observe(target, { subtree: true, childList: true, characterData: true });
+  });
   document.addEventListener('DOMContentLoaded', announce);
 
   // ---- DOM, selectors, picking ----
@@ -152,7 +159,7 @@
 
   // ---- requests from the app ----
   window.__agentdeck = {
-    run(id, kind) {
+    run(id, kind, arg) {
       if (kind === 'dom') {
         post({
           kind: 'dom',
@@ -171,6 +178,9 @@
           .then((data) => post({ kind: 'shot', id, data, w: innerWidth, h: innerHeight }))
           .catch((error) => post({ kind: 'shot', id, error: error && error.message ? error.message : error && error.type ? 'an image or style on the page could not be read (' + error.type + ')' : String(error) }))
           .finally(() => (quiet = false));
+      } else if (kind === 'at') {
+        const element = document.elementFromPoint(arg.x, arg.y);
+        post({ kind: 'at', id, element: element ? describe(element) : null });
       } else if (kind === 'pick') {
         startPicking(id);
       } else if (kind === 'unpick') {

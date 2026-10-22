@@ -1,17 +1,18 @@
-//! The AgentDeck browser: a child webview laid over the preview panel.
+//! The AgentDeck browser: one child webview per tab, laid over the preview panel.
 //!
-//! The page runs in its own webview, so it behaves like a normal browser tab. A script injected into every
+//! Each page runs in its own webview, so a tab behaves like a normal browser tab. A script injected into every
 //! page (browser/inject.js) reports console, network and navigation, and answers requests for the DOM, a
 //! screenshot and the element picker. Reports come back through the `agentdeck` URL scheme and are forwarded
-//! to the app window as `browser-report` events.
+//! to the app window as `browser-report` events; page loads are forwarded as `browser-load` events.
 
+use tauri::webview::PageLoadEvent;
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Webview, WebviewBuilder, WebviewUrl,
 };
 
-const LABEL: &str = "browser";
+const PREFIX: &str = "browser-";
 
-/// Opening can be asked for twice at once (resize and navigation); only one may create the webview.
+/// Opening can be asked for twice at once (resize and navigation); only one may create a webview.
 static CREATING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Where the page posts its reports: the custom scheme, which WebView2 serves under a localhost name.
@@ -23,11 +24,13 @@ fn base() -> &'static str {
     }
 }
 
-fn injected_script() -> String {
+fn injected_script(tab: &str) -> String {
     format!(
         "{}\n{}",
         include_str!("../browser/html-to-image.js"),
-        include_str!("../browser/inject.js").replace("__BASE__", base())
+        include_str!("../browser/inject.js")
+            .replace("__BASE__", base())
+            .replace("__TAB__", tab)
     )
 }
 
@@ -38,8 +41,17 @@ pub fn handle_report(app: &AppHandle, body: &[u8]) {
     }
 }
 
-fn webview(app: &AppHandle) -> Result<Webview, String> {
-    app.get_webview(LABEL)
+/// Tab ids come from the app; keep them to a safe label.
+fn label(tab: &str) -> String {
+    let safe: String = tab
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    format!("{PREFIX}{safe}")
+}
+
+fn webview(app: &AppHandle, tab: &str) -> Result<Webview, String> {
+    app.get_webview(&label(tab))
         .ok_or_else(|| "the browser is not open".to_string())
 }
 
@@ -56,20 +68,19 @@ fn parse(url: &str) -> Result<tauri::Url, String> {
 }
 
 fn place(view: &Webview, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
-    if cfg!(debug_assertions) && std::env::var_os("AGENTDECK_OPEN_PREVIEW").is_some() {
-        eprintln!("place: x={x:.0} y={y:.0} w={w:.0} h={h:.0}");
-    }
     view.set_position(LogicalPosition::new(x, y))
         .map_err(|error| error.to_string())?;
     view.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
         .map_err(|error| error.to_string())
 }
 
-/// Opens the browser at `url` inside the given rectangle (window coordinates), or moves it there if it is open.
+/// Opens tab `tab` at `url` inside the given rectangle (window coordinates), or shows and moves it if it exists.
 /// (async on purpose: creating a webview from a synchronous command deadlocks on Windows.)
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // one parameter per field the frontend sends
 pub async fn browser_show(
     app: AppHandle,
+    tab: String,
     url: String,
     user_agent: Option<String>,
     x: f64,
@@ -78,13 +89,27 @@ pub async fn browser_show(
     h: f64,
 ) -> Result<(), String> {
     let _creating = CREATING.lock().await;
-    if let Ok(view) = webview(&app) {
+    if let Ok(view) = webview(&app, &tab) {
         place(&view, x, y, w, h)?;
         return view.show().map_err(|error| error.to_string());
     }
     let window = app.get_window("main").ok_or("no main window")?;
-    let mut builder = WebviewBuilder::new(LABEL, WebviewUrl::External(parse(&url)?))
-        .initialization_script(injected_script());
+    let mut builder = WebviewBuilder::new(label(&tab), WebviewUrl::External(parse(&url)?))
+        .initialization_script(injected_script(&tab))
+        .on_page_load(|view, payload| {
+            let event = match payload.event() {
+                PageLoadEvent::Started => "started",
+                PageLoadEvent::Finished => "finished",
+            };
+            let _ = view.app_handle().emit(
+                "browser-load",
+                serde_json::json!({
+                    "label": view.label(),
+                    "event": event,
+                    "url": payload.url().to_string(),
+                }),
+            );
+        });
     // A phone or tablet identifies itself as one, so sites send their mobile layout.
     if let Some(agent) = user_agent.as_deref() {
         builder = builder.user_agent(agent);
@@ -101,87 +126,57 @@ pub async fn browser_show(
 
 /// Follows the panel when it moves or resizes.
 #[tauri::command]
-pub fn browser_bounds(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
-    place(&webview(&app)?, x, y, w, h)
+pub fn browser_bounds(
+    app: AppHandle,
+    tab: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    place(&webview(&app, &tab)?, x, y, w, h)
 }
 
-/// Hides the page (a menu or the annotation view needs the space) without closing it.
+/// Hides every tab's page (a menu or the annotation view needs the space, or another tab comes forward).
 #[tauri::command]
 pub fn browser_hide(app: AppHandle) -> Result<(), String> {
-    match webview(&app) {
-        Ok(view) => view.hide().map_err(|error| error.to_string()),
-        Err(_) => Ok(()),
+    for (name, view) in app.webviews() {
+        if name.starts_with(PREFIX) {
+            view.hide().map_err(|error| error.to_string())?;
+        }
     }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn browser_navigate(app: AppHandle, url: String) -> Result<(), String> {
-    webview(&app)?
+pub fn browser_navigate(app: AppHandle, tab: String, url: String) -> Result<(), String> {
+    webview(&app, &tab)?
         .navigate(parse(&url)?)
         .map_err(|error| error.to_string())
 }
 
-/// Runs a snippet in the page: back, forward, reload, or a request to the injected script.
+/// Runs a snippet in a tab's page: back, forward, reload, or a request to the injected script.
 #[tauri::command]
-pub fn browser_eval(app: AppHandle, script: String) -> Result<(), String> {
-    webview(&app)?
+pub fn browser_eval(app: AppHandle, tab: String, script: String) -> Result<(), String> {
+    webview(&app, &tab)?
         .eval(script)
         .map_err(|error| error.to_string())
 }
 
 /// Page zoom, used to fit a phone or tablet width into the panel.
 #[tauri::command]
-pub fn browser_zoom(app: AppHandle, factor: f64) -> Result<(), String> {
-    webview(&app)?
+pub fn browser_zoom(app: AppHandle, tab: String, factor: f64) -> Result<(), String> {
+    webview(&app, &tab)?
         .set_zoom(factor.clamp(0.25, 3.0))
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn browser_close(app: AppHandle) -> Result<(), String> {
-    match webview(&app) {
+pub fn browser_close(app: AppHandle, tab: String) -> Result<(), String> {
+    match webview(&app, &tab) {
         Ok(view) => view.close().map_err(|error| error.to_string()),
         Err(_) => Ok(()),
     }
-}
-
-/// Developer check (set `AGENTDECK_BROWSER_SELFTEST=<url>`): opens the browser on a page, asks it for its DOM and
-/// a screenshot and prints what the injected script reports, then quits. It proves the whole round trip.
-pub fn selftest(app: AppHandle, url: String) {
-    use std::time::Duration;
-    use tauri::Listener;
-    app.listen("browser-report", |event| {
-        let payload = event.payload();
-        let shown: String = payload.chars().take(220).collect();
-        eprintln!("report ({} bytes): {shown}", payload.len());
-    });
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        eprintln!(
-            "show: {:?}",
-            browser_show(app.clone(), url, None, 280.0, 60.0, 600.0, 500.0).await
-        );
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        eprintln!(
-            "eval dom: {:?}",
-            browser_eval(app.clone(), "window.__agentdeck.run('t1','dom')".into())
-        );
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        eprintln!(
-            "eval shot: {:?}",
-            browser_eval(app.clone(), "window.__agentdeck.run('t2','shot')".into())
-        );
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        eprintln!(
-            "eval console: {:?}",
-            browser_eval(
-                app.clone(),
-                "console.error('selftest error'); fetch('/favicon.ico')".into()
-            )
-        );
-        tokio::time::sleep(Duration::from_secs(8)).await;
-        app.exit(0);
-    });
 }
 
 /// Opens a web address in the system browser. Only http(s) addresses.
@@ -207,4 +202,49 @@ pub fn open_external(url: String) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// Developer check (set `AGENTDECK_BROWSER_SELFTEST=<url>`): opens a tab on a page, asks it for its DOM and
+/// a screenshot and prints what the injected script reports, then quits. It proves the whole round trip.
+pub fn selftest(app: AppHandle, url: String) {
+    use std::time::Duration;
+    use tauri::Listener;
+    app.listen("browser-report", |event| {
+        let payload = event.payload();
+        let shown: String = payload.chars().take(220).collect();
+        eprintln!("report ({} bytes): {shown}", payload.len());
+    });
+    app.listen("browser-load", |event| {
+        eprintln!("load: {}", event.payload())
+    });
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        eprintln!(
+            "show: {:?}",
+            browser_show(
+                app.clone(),
+                "t1".into(),
+                url,
+                None,
+                280.0,
+                60.0,
+                600.0,
+                500.0
+            )
+            .await
+        );
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        for (id, kind) in [("a", "dom"), ("b", "shot")] {
+            eprintln!(
+                "eval {kind}: {:?}",
+                browser_eval(
+                    app.clone(),
+                    "t1".into(),
+                    format!("window.__agentdeck.run('{id}','{kind}')")
+                )
+            );
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+        app.exit(0);
+    });
 }

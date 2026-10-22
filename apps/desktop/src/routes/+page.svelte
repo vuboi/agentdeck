@@ -92,9 +92,8 @@
     void import('@tauri-apps/api/event').then(({ listen }) =>
       listen<string>('dev-preview', ({ payload }) => {
         const [address, device] = payload.split('|');
-        browser.url = address;
         if (device === 'mobile' || device === 'tablet') browser.device = device;
-        browser.autostart = true;
+        browser.autostart = address;
         layout.activeTool = 'Preview';
         layout.toolsOpen = true;
       }).then((unlisten) => (stop = unlisten)),

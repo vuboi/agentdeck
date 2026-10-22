@@ -1,24 +1,31 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, untrack } from 'svelte';
-  import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
-  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { ZDropdownMenu, ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
+  import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
+    activeTab,
+    addComment,
     back,
     browser,
-    addComment,
     cancelPick,
+    closeTab,
     DEVICES,
+    elementAt,
     forward,
     goTo,
     hideBrowser,
     listenToPage,
     moveBrowser,
+    newTab,
+    openExternal,
     pickElement,
     recreateBrowser,
     reload,
     screenshot,
+    selectTab,
     showBrowser,
     snapshot,
+    stop,
     zoomBrowser,
     type Device,
     type Rect,
@@ -28,26 +35,26 @@
   import AnnotationEditor from './AnnotationEditor.svelte';
   import DevTools from './DevTools.svelte';
 
-  // The AgentDeck browser: any page (a local dev server, a site) in a real webview, with device sizes, an
-  // element picker, a console and network log, and a freeze-frame annotation view whose result goes to the chat.
+  // The AgentDeck browser: tabs, an address bar, device sizes, an element picker, devtools, and a markup view
+  // whose result goes to the chat. The pages themselves are native webviews placed over the stage below.
   let stage: HTMLDivElement | undefined = $state();
-  let address = $state(browser.url);
-  let started = $state(browser.opened);
+  let address = $state('');
+  let editing = $state(false);
   let shot = $state<{ data: string; w: number; h: number } | null>(null);
-  let commentText = $state('');
-  let commentInput: HTMLInputElement | undefined = $state();
   let busy = $state('');
   let notice = $state('');
   let covered = $state(false);
   /** Where the phone / tablet sits in the stage (stage coordinates), for its frame. */
   let deviceBox = $state<{ x: number; y: number; w: number; h: number; zoom: number } | null>(null);
 
-  const DEVICE_ICON: Record<Device, ZIconName> = {
-    desktop: 'lucideMonitor' as ZIconName,
-    tablet: 'lucideTablet' as ZIconName,
-    mobile: 'lucideSmartphone' as ZIconName,
-  };
+  const tab = $derived(activeTab());
   const errors = $derived(browser.console.filter((line) => line.level === 'error').length);
+  const started = $derived(Boolean(tab.url));
+
+  // The address bar shows the front tab's address unless it is being typed in.
+  $effect(() => {
+    if (!editing) address = tab.url;
+  });
 
   /** The webview's rectangle in window coordinates: the stage itself, or a phone / tablet frame centred in it. */
   function frame(): { rect: Rect; zoom: number } | null {
@@ -58,7 +65,6 @@
     if (!device.w) return { rect: { x: box.x, y: box.y, w: box.width, h: box.height }, zoom: 1 };
     const [dw, dh] = browser.landscape ? [device.h, device.w] : [device.w, device.h];
     // A narrower page is a zoomed-out one: the page lays out at the device width, the panel just shows it smaller.
-    // Room is left around it for the frame and its caption.
     const zoom = Math.min(1, (box.width - 44) / dw, (box.height - 68) / dh);
     const w = dw * zoom;
     const h = dh * zoom;
@@ -72,8 +78,11 @@
     const origin = stage!.getBoundingClientRect();
     deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
     try {
-      if (browser.opened) await moveBrowser(place.rect);
+      // Only the tab in front is on screen.
+      if (!tab.opened) await hideBrowser();
+      if (tab.opened) await moveBrowser(place.rect);
       else await showBrowser(place.rect);
+      if (tab.opened) await showBrowser(place.rect);
       await zoomBrowser(place.zoom);
     } catch (error) {
       browser.error = String(error);
@@ -84,19 +93,25 @@
     const text = input.trim();
     if (!text) return '';
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return text;
-    return /^(localhost|127\.|\[::1\])/.test(text) ? `http://${text}` : `https://${text}`;
+    if (/^(localhost|127\.|\[::1\])/.test(text)) return `http://${text}`;
+    // Words with spaces are a search, not an address.
+    if (/\s/.test(text) || !/\./.test(text)) return `https://www.google.com/search?q=${encodeURIComponent(text)}`;
+    return `https://${text}`;
   }
 
   async function go() {
     const url = normalize(address);
     if (!url) return;
     browser.error = '';
+    editing = false;
     address = url;
     // The address is set before the page opens, so the first open never uses a stale one.
-    browser.url = url;
-    started = true;
-    if (browser.opened) await goTo(url);
-    else await sync();
+    if (tab.opened) await goTo(url);
+    else {
+      tab.url = url;
+      await tick();
+      await sync();
+    }
   }
 
   // The page is a native layer above the app: a menu or dialog opened over it would hide behind it.
@@ -129,17 +144,22 @@
     if (inTauri()) void hideBrowser();
   });
 
-  // Opened by the developer hook while the view is already on screen.
+  // Opened by a link or the developer hook.
   $effect(() => {
-    if (!browser.autostart) return;
-    browser.autostart = false;
-    address = browser.url;
-    started = true;
-    // Already showing a page: go to the new one.
-    if (browser.opened) void goTo(browser.url);
+    const url = browser.autostart;
+    if (!url) return;
+    browser.autostart = '';
+    untrack(() => {
+      const front = activeTab();
+      if (front.opened && front.url !== url) void goTo(url);
+      else {
+        front.url = url;
+        void tick().then(sync);
+      }
+    });
   });
 
-  // A new device means a new user agent, which only a new page can have: the page is created again at the same address.
+  // A new device means a new user agent, which only a new page can have: the pages are created again at the same address.
   let lastDevice = browser.device;
   $effect(() => {
     const device = browser.device;
@@ -148,20 +168,26 @@
     untrack(() => void recreateBrowser().then(sync));
   });
 
+  // Switching tabs, opening one, rotating, a covering menu: show the right page in the right place.
   $effect(() => {
+    void browser.activeId;
     void browser.landscape;
     void browser.device;
     void covered;
     void started;
+    void browser.devtools;
+    void browser.devtoolsHeight;
     untrack(() => void sync());
   });
 
-  // ---- pick, annotate, send ----
+  // ---- pick, comment, annotate, send ----
   const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
+  type Note = { n: number; text: string; x: number; y: number; selector?: string; html?: string; box?: { w: number; h: number } };
+
   /** What the agent needs to know about the page, written as text for the composer. */
-  async function pageContext(notes: { n: number; text: string; x: number; y: number }[] = []): Promise<string> {
-    let title = browser.title;
+  async function pageContext(notes: Note[] = []): Promise<string> {
+    let title = tab.title;
     let viewport = '';
     let body = '';
     try {
@@ -172,11 +198,15 @@
     } catch {
       // The page may not answer (a blank page); the rest of the context is still useful.
     }
-    const lines = [`Browser: ${title || 'page'} — ${browser.url} (${browser.device}${viewport ? ` ${viewport}` : ''})`];
-    if (notes.length) lines.push('Notes (numbered on the screenshot):', ...notes.map((note) => `${note.n}. ${note.text} (at ${note.x},${note.y})`));
-    const picked = browser.picked;
-    if (picked) lines.push(`Selected element: \`${picked.selector}\` (${picked.box.w}×${picked.box.h})`, '```html', clip(picked.html, 2500), '```');
-    else if (body) lines.push('Page HTML (start of body):', '```html', body, '```');
+    const lines = [`Browser: ${title || 'page'} — ${tab.url} (${browser.device}${viewport ? ` ${viewport}` : ''})`];
+    const onElements = notes.filter((note) => note.selector);
+    const loose = notes.filter((note) => !note.selector);
+    if (loose.length) lines.push('Notes (numbered on the screenshot):', ...loose.map((note) => `${note.n}. ${note.text} (at ${note.x},${note.y})`));
+    for (const note of onElements) {
+      lines.push(`${note.n}. \`${note.selector}\` (${note.box?.w}×${note.box?.h}) — ${note.text}`, '```html', clip(note.html ?? '', 1200), '```');
+    }
+    if (!onElements.length && browser.picked) lines.push(`Selected element: \`${browser.picked.selector}\``, '```html', clip(browser.picked.html, 2500), '```');
+    else if (!onElements.length && body) lines.push('Page HTML (start of body):', '```html', body, '```');
     const recent = browser.console.filter((line) => line.level === 'error').slice(-5);
     if (recent.length) lines.push('Console errors:', ...recent.map((line) => `- ${clip(line.text, 300)}`));
     return lines.join('\n');
@@ -190,20 +220,9 @@
     setTimeout(() => (notice = ''), 2500);
   }
 
-  function commentOn() {
-    addComment(commentText);
-    commentText = '';
-  }
-
-  /** The pinned comments as text for the composer: which element, what to change, and its markup. */
-  async function sendComments() {
-    const lines = [`Browser: ${browser.title || 'page'} — ${browser.url} (${browser.device})`, 'Comments on elements of the page:'];
-    browser.comments.forEach((comment, index) => {
-      lines.push(`${index + 1}. \`${comment.selector}\` (${comment.box.w}×${comment.box.h}) — ${comment.note}`, '```html', clip(comment.html, 1200), '```');
-    });
-    addToDraft(lines.join('\n'));
-    browser.comments = [];
-  }
+  /** The inspector button: click an element in the live page; it is pinned as a comment right under the bar. */
+  let commentText = $state('');
+  let commentInput: HTMLInputElement | undefined = $state();
 
   async function pick() {
     if (browser.picking) {
@@ -219,6 +238,20 @@
     }
   }
 
+  function comment() {
+    if (!browser.picked) return;
+    addComment(browser.picked, commentText);
+    browser.picked = null;
+    commentText = '';
+  }
+
+  async function sendComments() {
+    const notes: Note[] = browser.comments.map((item, index) => ({ n: index + 1, text: item.note, x: item.box.x, y: item.box.y, selector: item.selector, html: item.html, box: item.box }));
+    addToDraft(await pageContext(notes));
+    browser.comments = [];
+  }
+
+  /** The markup button: freeze the page and mark it up (box, arrow, line, text, or an element with a comment). */
   async function annotate() {
     busy = 'Capturing the page…';
     browser.error = '';
@@ -233,7 +266,7 @@
     }
   }
 
-  async function annotated(png: string, notes: { n: number; text: string; x: number; y: number }[]) {
+  async function annotated(png: string, notes: Note[]) {
     shot = null;
     addToDraft(await pageContext(notes), png);
     await tick();
@@ -246,85 +279,119 @@
     void sync();
   }
 
+  // ---- the "more" menu ----
+  const menuItems = $derived<ZDropdownMenuItem[]>([
+    ...(['desktop', 'tablet', 'mobile'] as Device[]).map((value) => ({
+      label: DEVICES[value].w ? `${DEVICES[value].label} · ${DEVICES[value].w}×${DEVICES[value].h}` : DEVICES[value].label,
+      icon: (value === 'desktop' ? 'lucideMonitor' : value === 'tablet' ? 'lucideTablet' : 'lucideSmartphone') as ZIconName,
+      iconSize: '12' as const,
+      checked: browser.device === value,
+      class: 'text-xs! py-1',
+      onClick: () => (browser.device = value),
+    })),
+    { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: browser.device === 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
+    { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: 'before', disabled: !tab.url, onClick: () => void openExternal(tab.url) },
+    { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url) },
+    { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
+  ]);
+
+  const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-full text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
+  const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
 </script>
 
 <div class="flex h-full min-h-0 flex-1 flex-col" aria-label="Browser">
   {#if !inTauri()}
     <div class="grid flex-1 place-items-center p-6 text-center text-xs text-muted-foreground">The browser runs in the AgentDeck desktop app.</div>
   {:else}
-    <!-- Address bar -->
-    <form class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5" onsubmit={(event) => { event.preventDefault(); void go(); }}>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Back" title="Back" onclick={() => void back()}>
-        <ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-4" />
-      </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Forward" title="Forward" onclick={() => void forward()}>
-        <ZIcon zType={'lucideArrowRight' as ZIconName} class="size-4" />
-      </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Reload" title="Reload" onclick={() => void reload()}>
-        <ZIcon zType={'lucideRotateCw' as ZIconName} class="size-4" />
-      </ZButton>
-      <input
-        bind:value={address}
-        class="h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 text-xs outline-none focus:border-primary"
-        placeholder="Enter a URL, e.g. localhost:4200"
-        aria-label="Address"
-        spellcheck="false"
-        autocomplete="off"
-      />
-    </form>
+    <!-- Tabs -->
+    <div class="flex shrink-0 items-center gap-1 px-2 pt-1.5" role="tablist" aria-label="Browser tabs">
+      <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        {#each browser.tabs as item (item.id)}
+          <div
+            role="tab"
+            tabindex="0"
+            aria-selected={item.id === browser.activeId}
+            class="group/tab flex h-7 min-w-24 max-w-44 shrink cursor-pointer items-center gap-1.5 rounded-lg pr-1 pl-2 text-xs outline-none {item.id === browser.activeId ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/60'}"
+            onclick={() => selectTab(item.id)}
+            onkeydown={(event) => event.key === 'Enter' && selectTab(item.id)}
+            title={tabTitle(item)}
+          >
+            {#if item.loading}
+              <ZLoading zLoading zSpinner="spinner" zSize="2xs" zColor="current" />
+            {:else if item.favicon}
+              <img src={item.favicon} alt="" class="size-3.5 shrink-0 rounded-sm" onerror={(event) => ((event.currentTarget as HTMLElement).style.display = 'none')} />
+            {:else}
+              <ZIcon zType="lucideGlobe" class="size-3.5 shrink-0" />
+            {/if}
+            <span class="min-w-0 flex-1 truncate">{tabTitle(item)}</span>
+            <button type="button" class="grid size-4.5 shrink-0 cursor-pointer place-items-center rounded-full outline-none hover:bg-primary/20" aria-label="Close tab" onclick={(event) => { event.stopPropagation(); void closeTab(item.id); }}>
+              <ZIcon zType="lucideX" class="size-3" />
+            </button>
+          </div>
+        {/each}
+      </div>
+      <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-lg text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="New tab" {@attach zTooltip({ content: 'New tab', position: 'top' })} onclick={() => newTab()}>
+        <ZIcon zType="lucidePlus" class="size-4" />
+      </button>
+    </div>
 
-    <!-- Tools -->
-    <div class="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1">
-      {#each Object.entries(DEVICES) as [value, device] (value)}
-        <ZButton
-          zWave={false}
-          zType="ghost"
-          zSize="sm"
-          class="size-7! p-0 {browser.device === value ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}"
-          aria-label={device.label}
-          aria-pressed={browser.device === value}
-          {@attach zTooltip({ content: device.w ? `${device.label} ${device.w}×${device.h}` : device.label, position: 'top' })}
-          onclick={() => (browser.device = value as Device)}
-        >
-          <ZIcon zType={DEVICE_ICON[value as Device]} class="size-4" />
-        </ZButton>
-      {/each}
-      <span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 {browser.picking ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Pick an element" aria-pressed={browser.picking} disabled={!started} onclick={pick} {@attach zTooltip({ content: 'Pick an element', position: 'top' })}>
-        <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-4" />
-      </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Annotate" disabled={!started || busy !== ''} onclick={annotate} {@attach zTooltip({ content: 'Annotate: mark up a screenshot for the agent', position: 'top' })}>
-        <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
-      </ZButton>
-      <div class="ml-auto flex items-center gap-1">
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="relative size-7! p-0 {browser.devtools ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Developer tools" aria-pressed={browser.devtools} onclick={() => (browser.devtools = !browser.devtools)} {@attach zTooltip({ content: 'Developer tools', position: 'top' })}>
+    <!-- Address bar: navigation and inspector on the left, the address in the middle, markup / devtools / menu on the right -->
+    <div class="flex shrink-0 items-center gap-1.5 px-2 py-1.5">
+      <div class="flex shrink-0 items-center rounded-full bg-muted/60 p-0.5">
+        <button type="button" class={icon} aria-label="Back" {@attach zTooltip({ content: 'Back', position: 'top' })} onclick={() => void back()}><ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-4" /></button>
+        <button type="button" class={icon} aria-label="Forward" {@attach zTooltip({ content: 'Forward', position: 'top' })} onclick={() => void forward()}><ZIcon zType={'lucideArrowRight' as ZIconName} class="size-4" /></button>
+        <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
+        <button type="button" class={icon} aria-label={tab.loading ? 'Stop' : 'Reload'} {@attach zTooltip({ content: tab.loading ? 'Stop loading' : 'Reload', position: 'top' })} onclick={() => void (tab.loading ? stop() : reload())}>
+          {#if tab.loading}<ZLoading zLoading zSpinner="spinner" zSize="xs" zColor="primary" />{:else}<ZIcon zType={'lucideRotateCw' as ZIconName} class="size-4" />{/if}
+        </button>
+        <button type="button" class="{icon} {browser.picking ? 'bg-primary/15 text-primary' : ''}" aria-label="Inspect an element" aria-pressed={browser.picking} disabled={!started} {@attach zTooltip({ content: 'Inspect an element and comment on it', position: 'top' })} onclick={pick}>
+          <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-4" />
+        </button>
+      </div>
+      <form class="min-w-0 flex-1" onsubmit={(event) => { event.preventDefault(); void go(); }}>
+        <input
+          bind:value={address}
+          class="h-8 w-full rounded-full border border-transparent bg-muted/60 px-4 text-center text-xs outline-none transition-colors focus:border-primary focus:bg-background focus:text-left"
+          placeholder="Search or enter an address"
+          aria-label="Address"
+          spellcheck="false"
+          autocomplete="off"
+          onfocus={(event) => { editing = true; (event.currentTarget as HTMLInputElement).select(); }}
+          onblur={() => (editing = false)}
+        />
+      </form>
+      <div class="flex shrink-0 items-center rounded-full bg-muted/60 p-0.5">
+        <button type="button" class={icon} aria-label="Mark up the page" disabled={!started || busy !== ''} {@attach zTooltip({ content: 'Mark up the page for the agent', position: 'top' })} onclick={annotate}>
+          <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
+        </button>
+        <button type="button" class="{icon} relative {browser.devtools ? 'bg-primary/15 text-primary' : ''}" aria-label="Developer tools" aria-pressed={browser.devtools} {@attach zTooltip({ content: 'Developer tools', position: 'top' })} onclick={() => (browser.devtools = !browser.devtools)}>
           <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
           {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
-        </ZButton>
+        </button>
+        <ZDropdownMenu zItems={menuItems} zIcon={'lucideEllipsis' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
       </div>
     </div>
+    {#if tab.loading}<div class="h-0.5 shrink-0 animate-pulse bg-primary/60" role="progressbar" aria-label="Loading"></div>{/if}
 
     {#if browser.picked}
       <!-- The element you clicked: write a note that belongs to it, like a comment on a line of code. -->
-      <form class="flex shrink-0 items-center gap-1.5 border-b border-border bg-primary/5 px-2 py-1.5 text-xs" onsubmit={(event) => { event.preventDefault(); commentOn(); }}>
+      <form class="flex shrink-0 items-center gap-1.5 border-y border-border bg-primary/5 px-2 py-1.5 text-xs" onsubmit={(event) => { event.preventDefault(); comment(); }}>
         <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 shrink-0 text-primary" />
         <code class="max-w-40 shrink-0 truncate" title={browser.picked.selector}>{browser.picked.selector}</code>
         <input bind:value={commentText} bind:this={commentInput} class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-2 outline-none focus:border-primary" placeholder="Comment on this element…" aria-label="Comment" />
-        <ZButton zWave={false} type="submit" zType="default" zSize="sm" class="h-6 px-2 text-xs" disabled={!commentText.trim()}>Comment</ZButton>
-        <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-accent" aria-label="Clear selection" onclick={() => (browser.picked = null)}>
-          <ZIcon zType="lucideX" class="size-3" />
-        </button>
+        <button type="submit" class="h-6 cursor-pointer rounded bg-primary px-2 text-primary-foreground outline-none hover:bg-primary/90 disabled:opacity-50" disabled={!commentText.trim()}>Comment</button>
+        <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-accent" aria-label="Clear selection" onclick={() => (browser.picked = null)}><ZIcon zType="lucideX" class="size-3" /></button>
       </form>
     {/if}
     {#if browser.comments.length > 0}
       <div class="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1 text-xs">
-        {#each browser.comments as comment, index (comment.id)}
-          <span class="inline-flex max-w-52 items-center gap-1 rounded-md bg-muted py-0.5 pr-0.5 pl-1.5" title="{comment.selector}: {comment.note}">
-            <span class="font-medium text-primary">{index + 1}</span><span class="truncate">{comment.note}</span>
-            <button type="button" class="grid size-4 shrink-0 cursor-pointer place-items-center rounded hover:bg-accent" aria-label="Remove comment {index + 1}" onclick={() => (browser.comments = browser.comments.filter((item) => item !== comment))}><ZIcon zType="lucideX" class="size-3" /></button>
+        {#each browser.comments as item, index (item.id)}
+          <span class="inline-flex max-w-52 items-center gap-1 rounded-md bg-muted py-0.5 pr-0.5 pl-1.5" title="{item.selector}: {item.note}">
+            <span class="font-medium text-primary">{index + 1}</span><span class="truncate">{item.note}</span>
+            <button type="button" class="grid size-4 shrink-0 cursor-pointer place-items-center rounded hover:bg-accent" aria-label="Remove comment {index + 1}" onclick={() => (browser.comments = browser.comments.filter((entry) => entry !== item))}><ZIcon zType="lucideX" class="size-3" /></button>
           </span>
         {/each}
-        <ZButton zWave={false} zType="outline" zSize="sm" class="ml-auto h-6 px-2 text-xs" onclick={sendComments}>Add {browser.comments.length} to chat</ZButton>
+        <button type="button" class="ml-auto h-6 cursor-pointer rounded border border-input px-2 outline-none hover:bg-accent" onclick={sendComments}>Add {browser.comments.length} to chat</button>
       </div>
     {/if}
     {#if browser.error || notice || busy}
@@ -346,7 +413,7 @@
         ></div>
         <div class="absolute flex items-center justify-center gap-2 text-[11px] text-muted-foreground" style:left="{deviceBox.x - 10}px" style:width="{deviceBox.w + 20}px" style:top="{deviceBox.y - 34}px">
           <span>{DEVICES[browser.device].name} · {browser.landscape ? `${DEVICES[browser.device].h}×${DEVICES[browser.device].w}` : `${DEVICES[browser.device].w}×${DEVICES[browser.device].h}`}{deviceBox.zoom < 1 ? ` · ${Math.round(deviceBox.zoom * 100)}%` : ''}</span>
-          <button type="button" class="grid size-5 cursor-pointer place-items-center rounded hover:bg-accent hover:text-foreground" aria-label="Rotate" title="Rotate" onclick={() => (browser.landscape = !browser.landscape)}>
+          <button type="button" class="grid size-5 cursor-pointer place-items-center rounded hover:bg-accent hover:text-foreground" aria-label="Rotate" onclick={() => (browser.landscape = !browser.landscape)} {@attach zTooltip({ content: 'Rotate', position: 'top' })}>
             <ZIcon zType={'lucideRotateCw' as ZIconName} class="size-3" />
           </button>
         </div>
@@ -355,14 +422,14 @@
         <div class="absolute inset-0 grid place-items-center p-6 text-center text-xs text-muted-foreground">
           <div class="flex flex-col items-center gap-2">
             <ZIcon zType="lucideGlobe" class="size-8 opacity-60" />
-            <p class="m-0">Enter a URL above to open a page here.</p>
-            <p class="m-0 max-w-60">Dev servers on localhost work best. You can pick elements, annotate, and send it all to the chat.</p>
+            <p class="m-0">Search or enter an address above.</p>
+            <p class="m-0 max-w-60">Dev servers on localhost work best. Inspect elements, mark up the page, and send it all to the chat.</p>
           </div>
         </div>
       {/if}
       {#if shot}
         <div class="absolute inset-0 z-10 bg-background">
-          <AnnotationEditor {shot} oncancel={cancelAnnotation} ondone={annotated} />
+          <AnnotationEditor {shot} inspect={elementAt} oncancel={cancelAnnotation} ondone={annotated} />
         </div>
       {/if}
     </div>

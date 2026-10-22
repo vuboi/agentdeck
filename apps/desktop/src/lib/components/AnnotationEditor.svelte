@@ -1,44 +1,46 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
+  import { ZIcon, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
+  import type { PickedElement } from '../browser.svelte';
 
-  // A frozen screenshot of the page to mark up: arrows, boxes, freehand lines and numbered notes.
-  // "Add to chat" gives back the marked-up PNG and the notes, so the agent sees what you point at.
+  // A frozen screenshot of the page to mark up. Click an element to comment on it, or draw: line, box, arrow, text.
+  // The toolbar floats at the bottom; the check mark hands the marked-up PNG and the notes to the chat.
+  type Note = { n: number; text: string; x: number; y: number; selector?: string; html?: string; box?: PickedElement['box'] };
   let {
     shot,
+    inspect,
     oncancel,
     ondone,
   }: {
     shot: { data: string; w: number; h: number };
+    inspect: (x: number, y: number) => Promise<PickedElement | null>;
     oncancel: () => void;
-    ondone: (png: string, notes: { n: number; text: string; x: number; y: number }[]) => void;
+    ondone: (png: string, notes: Note[]) => void;
   } = $props();
 
-  type Tool = 'arrow' | 'rect' | 'pen' | 'note';
+  type Tool = 'select' | 'pen' | 'shape' | 'text';
   type Shape =
     | { t: 'arrow' | 'rect'; color: string; x1: number; y1: number; x2: number; y2: number }
     | { t: 'pen'; color: string; pts: [number, number][] }
-    | { t: 'note'; color: string; x: number; y: number; n: number; text: string };
+    | { t: 'hl'; color: string; x: number; y: number; w: number; h: number }
+    | { t: 'note'; color: string; x: number; y: number; n: number; text: string; element?: PickedElement };
 
-  const TOOLS: { value: Tool; icon: ZIconName; label: string }[] = [
-    { value: 'arrow', icon: 'lucideMoveUpRight' as ZIconName, label: 'Arrow' },
-    { value: 'rect', icon: 'lucideSquare' as ZIconName, label: 'Box' },
-    { value: 'pen', icon: 'lucidePenLine' as ZIconName, label: 'Line' },
-    { value: 'note', icon: 'lucideMessageSquarePlus' as ZIconName, label: 'Note' },
-  ];
   const COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6'];
 
-  let tool = $state<Tool>('arrow');
+  let tool = $state<Tool>('select');
+  let shapeKind = $state<'rect' | 'arrow'>('rect');
+  let shapeMenu = $state(false);
   let color = $state(COLORS[0]);
   let shapes = $state<Shape[]>([]);
   let draft = $state<Shape | null>(null);
   let canvas: HTMLCanvasElement | undefined = $state();
-  let noteAt = $state<{ x: number; y: number; px: number; py: number } | null>(null);
+  let noteAt = $state<{ x: number; y: number; px: number; py: number; element?: PickedElement } | null>(null);
   let noteText = $state('');
   let noteInput: HTMLInputElement | undefined = $state();
   let image: HTMLImageElement | undefined;
   let ready = $state(false);
+  let status = $state('');
 
   const LINE = $derived(Math.max(3, Math.round(shot.w / 280)));
 
@@ -62,6 +64,13 @@
       context.lineJoin = 'round';
       if (shape.t === 'rect') {
         context.strokeRect(shape.x1, shape.y1, shape.x2 - shape.x1, shape.y2 - shape.y1);
+      } else if (shape.t === 'hl') {
+        context.globalAlpha = 0.14;
+        context.fillRect(shape.x, shape.y, shape.w, shape.h);
+        context.globalAlpha = 1;
+        context.setLineDash([LINE * 2, LINE]);
+        context.strokeRect(shape.x, shape.y, shape.w, shape.h);
+        context.setLineDash([]);
       } else if (shape.t === 'arrow') {
         const angle = Math.atan2(shape.y2 - shape.y1, shape.x2 - shape.x1);
         const head = LINE * 5;
@@ -105,45 +114,73 @@
     return [((event.clientX - rect.left) / rect.width) * shot.w, ((event.clientY - rect.top) / rect.height) * shot.h];
   }
 
-  function down(event: PointerEvent) {
+  function openNote(x: number, y: number, event: PointerEvent, element?: PickedElement) {
+    const rect = canvas!.getBoundingClientRect();
+    noteAt = { x, y, px: event.clientX - rect.left, py: event.clientY - rect.top, element };
+    noteText = '';
+    queueMicrotask(() => noteInput?.focus());
+  }
+
+  async function down(event: PointerEvent) {
     if (!ready || noteAt) return;
+    shapeMenu = false;
     const [x, y] = at(event);
-    if (tool === 'note') {
-      const rect = canvas!.getBoundingClientRect();
-      noteAt = { x, y, px: event.clientX - rect.left, py: event.clientY - rect.top };
-      noteText = '';
-      queueMicrotask(() => noteInput?.focus());
+    if (tool === 'text') return openNote(x, y, event);
+    if (tool === 'select') {
+      status = 'Finding the element…';
+      try {
+        const element = await inspect(x, y);
+        if (!element) return;
+        draft = null;
+        shapes = [...shapes, { t: 'hl', color, x: element.box.x, y: element.box.y, w: element.box.w, h: element.box.h }];
+        openNote(element.box.x + element.box.w / 2, element.box.y + element.box.h / 2, event, element);
+      } catch {
+        // The page did not answer: the click is ignored.
+      } finally {
+        status = '';
+      }
       return;
     }
     canvas!.setPointerCapture(event.pointerId);
-    draft = tool === 'pen' ? { t: 'pen', color, pts: [[x, y]] } : { t: tool, color, x1: x, y1: y, x2: x, y2: y };
+    draft = tool === 'pen' ? { t: 'pen', color, pts: [[x, y]] } : { t: shapeKind, color, x1: x, y1: y, x2: x, y2: y };
   }
 
   function move(event: PointerEvent) {
     if (!draft) return;
     const [x, y] = at(event);
     if (draft.t === 'pen') draft.pts.push([x, y]);
-    else if (draft.t !== 'note') ((draft.x2 = x), (draft.y2 = y));
+    else if (draft.t === 'rect' || draft.t === 'arrow') ((draft.x2 = x), (draft.y2 = y));
     draft = { ...draft } as Shape;
   }
 
   function up() {
     if (!draft) return;
-    const tiny = draft.t !== 'pen' && draft.t !== 'note' && Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1) < 6;
+    const tiny = (draft.t === 'rect' || draft.t === 'arrow') && Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1) < 6;
     if (!tiny) shapes = [...shapes, draft];
     draft = null;
   }
 
   function commitNote() {
     const text = noteText.trim();
-    if (noteAt && text) {
-      const n = shapes.filter((shape) => shape.t === 'note').length + 1;
-      shapes = [...shapes, { t: 'note', color, x: noteAt.x, y: noteAt.y, n, text }];
+    if (noteAt) {
+      if (text) {
+        const n = shapes.filter((shape) => shape.t === 'note').length + 1;
+        shapes = [...shapes, { t: 'note', color, x: noteAt.x, y: noteAt.y, n, text, element: noteAt.element }];
+      } else if (noteAt.element) {
+        // An element with no comment leaves no mark behind.
+        shapes = shapes.slice(0, -1);
+      }
     }
     noteAt = null;
   }
 
-  const notes = $derived(shapes.flatMap((shape) => (shape.t === 'note' ? [{ n: shape.n, text: shape.text, x: Math.round(shape.x), y: Math.round(shape.y) }] : [])));
+  const notes = $derived<Note[]>(
+    shapes.flatMap((shape) =>
+      shape.t === 'note'
+        ? [{ n: shape.n, text: shape.text, x: Math.round(shape.x), y: Math.round(shape.y), selector: shape.element?.selector, html: shape.element?.html, box: shape.element?.box }]
+        : [],
+    ),
+  );
 
   function done() {
     if (!canvas) return;
@@ -156,81 +193,87 @@
     if (event.key === 'Escape') (noteAt ? (noteAt = null) : oncancel());
     else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') shapes = shapes.slice(0, -1);
   }
+
+  const button = (active: boolean) =>
+    `grid size-8 cursor-pointer place-items-center rounded-lg outline-none ${active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}`;
 </script>
 
 <svelte:window onkeydown={onKey} />
 
-<div class="flex h-full min-h-0 flex-col bg-muted/30" role="dialog" aria-label="Annotate screenshot">
-  <div class="flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-background px-2 py-1.5">
-    {#each TOOLS as item (item.value)}
-      <ZButton
-        zWave={false}
-        zType="ghost"
-        zSize="sm"
-        class="size-7! p-0 {tool === item.value ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}"
-        aria-label={item.label}
-        aria-pressed={tool === item.value}
-        title={item.label}
-        onclick={() => (tool = item.value)}
-      >
-        <ZIcon zType={item.icon} class="size-4" />
-      </ZButton>
-    {/each}
-    <span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
-    {#each COLORS as swatch (swatch)}
-      <button
-        type="button"
-        class="size-5 cursor-pointer rounded-full border-2 {color === swatch ? 'border-foreground' : 'border-transparent'}"
-        style:background={swatch}
-        aria-label="Colour {swatch}"
-        onclick={() => (color = swatch)}
-      ></button>
-    {/each}
-    <span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Undo" title="Undo (Ctrl+Z)" disabled={shapes.length === 0} onclick={() => (shapes = shapes.slice(0, -1))}>
-      <ZIcon zType={'lucideUndo2' as ZIconName} class="size-4" />
-    </ZButton>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Clear" title="Clear" disabled={shapes.length === 0} onclick={() => (shapes = [])}>
-      <ZIcon zType="lucideTrash2" class="size-4" />
-    </ZButton>
-    <div class="ml-auto flex items-center gap-1">
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 px-2 text-xs" onclick={oncancel}>Cancel</ZButton>
-      <ZButton zWave={false} zType="default" zSize="sm" class="h-7 px-3 text-xs" onclick={done}>Add to chat</ZButton>
-    </div>
-  </div>
-
-  <div class="relative grid min-h-0 flex-1 place-items-center overflow-auto p-3">
+<div class="relative flex h-full min-h-0 flex-col bg-muted/30" role="dialog" aria-label="Annotate screenshot">
+  <div class="relative grid min-h-0 flex-1 place-items-center overflow-auto p-3 pb-20">
     <div class="relative max-h-full max-w-full" style:aspect-ratio="{shot.w} / {shot.h}" style:width="min(100%, {shot.w}px)">
       <canvas
         bind:this={canvas}
         width={shot.w}
         height={shot.h}
-        class="block h-full w-full touch-none rounded-md border border-border bg-background shadow-sm {tool === 'note' ? 'cursor-text' : 'cursor-crosshair'}"
+        class="block h-full w-full touch-none rounded-md border border-border bg-background shadow-sm {tool === 'text' ? 'cursor-text' : tool === 'select' ? 'cursor-pointer' : 'cursor-crosshair'}"
         onpointerdown={down}
         onpointermove={move}
         onpointerup={up}
       ></canvas>
       {#if noteAt}
-        <input
-          bind:this={noteInput}
-          bind:value={noteText}
-          class="absolute z-10 w-52 rounded-md border border-border bg-background px-2 py-1 text-xs shadow-md outline-none focus:border-primary"
-          style:left="{noteAt.px}px"
-          style:top="{noteAt.py}px"
-          placeholder="Note for the agent…"
-          onkeydown={(event) => {
-            if (event.key === 'Enter') commitNote();
-            event.stopPropagation();
-            if (event.key === 'Escape') noteAt = null;
-          }}
-          onblur={commitNote}
-        />
+        <div class="absolute z-10 flex w-64 flex-col gap-1 rounded-lg border border-border bg-popover p-1.5 text-xs shadow-md" style:left="{noteAt.px}px" style:top="{noteAt.py + 8}px">
+          {#if noteAt.element}<code class="truncate px-1 text-[10px] text-muted-foreground" title={noteAt.element.selector}>{noteAt.element.selector}</code>{/if}
+          <input
+            bind:this={noteInput}
+            bind:value={noteText}
+            class="h-7 rounded-md border border-input bg-background px-2 outline-none focus:border-primary"
+            placeholder={noteAt.element ? 'Comment on this element…' : 'Note for the agent…'}
+            onkeydown={(event) => {
+              if (event.key === 'Enter') commitNote();
+              event.stopPropagation();
+              if (event.key === 'Escape') noteAt = null;
+            }}
+          />
+        </div>
       {/if}
     </div>
   </div>
-  {#if notes.length > 0}
-    <ol class="m-0 shrink-0 list-none border-t border-border bg-background px-3 py-1.5 text-xs text-muted-foreground">
-      {#each notes as note (note.n)}<li><span class="font-medium text-foreground">{note.n}.</span> {note.text}</li>{/each}
-    </ol>
-  {/if}
+
+  {#if status}<div class="absolute top-2 left-1/2 -translate-x-1/2 rounded-md bg-popover px-2 py-1 text-xs text-muted-foreground shadow" role="status">{status}</div>{/if}
+
+  <!-- The floating toolbar: select, pen, shape, text | colour, undo | done, close. -->
+  <div class="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-xl border border-border bg-popover p-1 shadow-lg">
+    <button type="button" class={button(tool === 'select')} aria-label="Select an element" aria-pressed={tool === 'select'} {@attach zTooltip({ content: 'Select an element and comment on it', position: 'top' })} onclick={() => (tool = 'select')}>
+      <ZIcon zType={'lucideMousePointer2' as ZIconName} class="size-4" />
+    </button>
+    <button type="button" class={button(tool === 'pen')} aria-label="Draw a line" aria-pressed={tool === 'pen'} {@attach zTooltip({ content: 'Draw a line', position: 'top' })} onclick={() => (tool = 'pen')}>
+      <ZIcon zType={'lucidePencil' as ZIconName} class="size-4" />
+    </button>
+    <div class="relative flex items-center">
+      <button type="button" class={button(tool === 'shape')} aria-label="Shape" aria-pressed={tool === 'shape'} {@attach zTooltip({ content: shapeKind === 'rect' ? 'Draw a box' : 'Draw an arrow', position: 'top' })} onclick={() => (tool = 'shape')}>
+        <ZIcon zType={(shapeKind === 'rect' ? 'lucideSquare' : 'lucideMoveUpRight') as ZIconName} class="size-4" />
+      </button>
+      <button type="button" class="grid h-8 w-4 cursor-pointer place-items-center rounded-lg text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Shape type" aria-haspopup="menu" aria-expanded={shapeMenu} onclick={() => (shapeMenu = !shapeMenu)}>
+        <ZIcon zType="lucideChevronDown" class="size-3" />
+      </button>
+      {#if shapeMenu}
+        <div class="absolute bottom-10 left-0 flex flex-col rounded-lg border border-border bg-popover p-1 text-xs shadow-md" role="menu">
+          {#each [['rect', 'Box', 'lucideSquare'], ['arrow', 'Arrow', 'lucideMoveUpRight']] as [value, label, icon] (value)}
+            <button type="button" role="menuitem" class="flex h-7 cursor-pointer items-center gap-2 rounded-md px-2 hover:bg-primary/10 {shapeKind === value ? 'text-primary' : ''}" onclick={() => ((shapeKind = value as 'rect' | 'arrow'), (tool = 'shape'), (shapeMenu = false))}>
+              <ZIcon zType={icon as ZIconName} class="size-3.5" />{label}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+    <button type="button" class={button(tool === 'text')} aria-label="Add a note" aria-pressed={tool === 'text'} {@attach zTooltip({ content: 'Add a note', position: 'top' })} onclick={() => (tool = 'text')}>
+      <ZIcon zType={'lucideType' as ZIconName} class="size-4" />
+    </button>
+    <span class="mx-1 h-5 w-px bg-border" aria-hidden="true"></span>
+    <button type="button" class={button(false)} aria-label="Colour" {@attach zTooltip({ content: 'Colour', position: 'top' })} onclick={() => (color = COLORS[(COLORS.indexOf(color) + 1) % COLORS.length])}>
+      <span class="size-4 rounded-full border-2 border-background ring-1 ring-border" style:background={color}></span>
+    </button>
+    <button type="button" class={button(false)} aria-label="Undo" disabled={shapes.length === 0} {@attach zTooltip({ content: 'Undo (Ctrl+Z)', position: 'top' })} onclick={() => (shapes = shapes.slice(0, -1))}>
+      <ZIcon zType={'lucideUndo2' as ZIconName} class="size-4" />
+    </button>
+    <span class="mx-1 h-5 w-px bg-border" aria-hidden="true"></span>
+    <button type="button" class="grid size-8 cursor-pointer place-items-center rounded-lg bg-primary text-primary-foreground outline-none hover:bg-primary/90" aria-label="Add to chat" {@attach zTooltip({ content: 'Add to chat', position: 'top' })} onclick={done}>
+      <ZIcon zType="lucideCheck" class="size-4" />
+    </button>
+    <button type="button" class={button(false)} aria-label="Close" {@attach zTooltip({ content: 'Close', position: 'top' })} onclick={oncancel}>
+      <ZIcon zType="lucideX" class="size-4" />
+    </button>
+  </div>
 </div>
