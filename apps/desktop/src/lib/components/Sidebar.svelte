@@ -284,10 +284,6 @@
           onpointerenter={() => data?.kind === 'session' && prefetchTranscript(data.session)}
         >
           {#if data?.kind === 'session' && data.session}
-            <!-- A fork hangs off its parent: an elbow drops from the parent's dot to this row. -->
-            {#if data.session.parentId}
-              <span class="pointer-events-none absolute bottom-1/2 -left-[11.5px] h-[23px] w-[9.5px] border-b border-l border-muted-foreground/40" aria-hidden="true"></span>
-            {/if}
             {#if data.session.status === 'working'}
               <span class="grid size-3 shrink-0 place-items-center text-success" role="status" aria-label="Running">
                 <ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="current" />
