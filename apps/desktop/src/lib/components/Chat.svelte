@@ -327,7 +327,7 @@
           {#if message}
             <div class="absolute top-0 left-0 w-full" data-index={row.index} style:transform="translateY({row.start}px)" {@attach measureRow}>
               <!-- No avatars: your messages are a bubble (right side, or left in one-sided mode); the agent is just its coloured name. -->
-              <article class="mx-auto flex w-full min-w-0 max-w-3xl flex-col break-words py-2.5 px-3 min-[720px]:px-6 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
+              <article class="mx-auto flex w-full min-w-0 max-w-3xl flex-col break-words py-2.5 px-3 min-[720px]:pr-6 min-[720px]:pl-12 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
                 {#if mine}
                   {@const pictures = message.blocks.flatMap((block) => (block.kind === 'image' ? [block] : []))}
                   {@const words = message.blocks.filter((block) => block.kind !== 'image')}
@@ -391,7 +391,7 @@
   <!-- Hidden while a file tab is on screen: the file gets the full height. -->
   {#if !fileActive}
     <div class="relative z-30 shrink-0 bg-background px-2 pt-4 pb-4 min-[720px]:px-6">
-      <div class="mx-auto w-full min-w-0 max-w-3xl px-0 min-[720px]:min-w-[440px] min-[720px]:px-6">
+      <div class="mx-auto w-full min-w-0 max-w-3xl px-0 min-[720px]:min-w-[440px] min-[720px]:pr-6 min-[720px]:pl-12">
         <Composer />
         <p class="mt-2 hidden text-center text-[10px] text-muted-foreground min-[720px]:block">AgentDeck can make mistakes. Review important changes.</p>
       </div>
