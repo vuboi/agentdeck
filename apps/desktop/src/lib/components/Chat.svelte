@@ -222,7 +222,7 @@
       </div>
       {#if tabsOverflow}
         <!-- Trigger styled like the other ghost icon buttons: same size, same hover colour. -->
-        <div class="flex shrink-0 items-center bg-background pr-1 [&_button]:h-7 [&_button]:w-7 [&_button]:bg-transparent [&_button]:text-muted-foreground [&_button:hover]:bg-primary/10 [&_button:hover]:text-primary">
+        <div class="flex shrink-0 items-center bg-background pr-1 [&_button]:size-7! [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:outline-none [&_button]:focus-visible:ring-0">
           <ZDropdownMenu
           zItems={tabMenuItems}
           zIcon="lucideChevronDown"
