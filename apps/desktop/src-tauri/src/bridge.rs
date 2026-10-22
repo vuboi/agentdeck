@@ -153,6 +153,36 @@ async fn serve(mut stream: TcpStream, app: AppHandle) -> std::io::Result<()> {
             (decode(key), decode(value))
         })
         .collect();
+    // The same browser as an MCP server, for agents that take tools rather than curl.
+    if path == "/mcp" {
+        let reply = if head.starts_with("POST") {
+            match crate::mcp::handle(&app, &body).await {
+                Some(text) => format!(
+                    "HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: {}
+Connection: close
+
+{text}",
+                    text.len()
+                ),
+                None => "HTTP/1.1 202 Accepted
+Content-Length: 0
+Connection: close
+
+".to_string(),
+            }
+        } else {
+            "HTTP/1.1 405 Method Not Allowed
+Allow: POST
+Content-Length: 0
+Connection: close
+
+".to_string()
+        };
+        stream.write_all(reply.as_bytes()).await?;
+        return stream.shutdown().await;
+    }
     let (status, text) = match answer(&app, path, &params, &body).await {
         Ok(value) => (
             200,
@@ -199,7 +229,7 @@ fn tail(lines: Vec<Value>, limit: usize) -> Value {
     Value::Array(lines.into_iter().skip(skip).collect())
 }
 
-async fn answer(
+pub(crate) async fn answer(
     app: &AppHandle,
     path: &str,
     params: &HashMap<String, String>,

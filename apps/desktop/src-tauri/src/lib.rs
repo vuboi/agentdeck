@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 mod bridge;
+mod mcp;
 mod cdp;
 mod browser;
 mod overlay;

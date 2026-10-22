@@ -109,10 +109,22 @@ impl Provider for Claude {
         // AgentDeck has its own browser; the agent is told to hand pages over to it instead of opening one itself.
         args.push("--append-system-prompt".to_string());
         let mut context = APP_CONTEXT.to_string();
-        if let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") {
-            context.push_str(&format!(" You CAN see and operate the page open in the Preview panel yourself: click, type, scroll, read its console and network. Do it through the AgentDeck bridge below with curl (Bash); never tell the user you cannot click or test in Preview, and do not ask them to do it for you. The bridge address is also in the environment variable AGENTDECK_BRIDGE. Read first: curl {bridge}/page (address), curl {bridge}/dom?selector=CSS (elements, the page's HTML), curl {bridge}/console?level=error (console and uncaught errors), curl \"{bridge}/network?failed=1\" (failed requests with the start of the response body). Look: curl {bridge}/shot gives the path of a PNG of the page as shown, menus included; open it to see the page. Act, as a user would: curl \"{bridge}/click?x=X&y=Y\" clicks at a point in CSS pixels of the page (take it from the screenshot or from getBoundingClientRect); curl \"{bridge}/hover?x=X&y=Y\"; curl \"{bridge}/scroll?x=X&y=Y&dy=400\"; curl \"{bridge}/type?text=TEXT\" types into the focused field (click the field first); curl \"{bridge}/key?key=Enter\" (Tab, Escape, Backspace, arrows); curl -d \"JS\" {bridge}/eval runs JavaScript in the page and returns its value. Frames of other origins (iframes: sign-in, payment, embeds): curl {bridge}/frames lists them, then add ?frame=INDEX or a part of the frame's address to /eval and /dom; clicks and typing reach them directly. Test a flow step by step: act, then look (/shot) and check /console and /network for errors before the next step. Full list: curl {bridge}/help."));
+        let bridge = std::env::var("AGENTDECK_BRIDGE").ok();
+        if let Some(bridge) = &bridge {
+            context.push_str(" You CAN see and operate the page open in the Preview panel yourself, with the agentdeck tools: browser_screenshot to look, browser_click / browser_type / browser_key / browser_scroll / browser_hover to act as a user would (coordinates are CSS pixels of the screenshot; browser_eval with getBoundingClientRect() finds an element's point), browser_eval and browser_dom to read the page, browser_console and browser_network for errors. Never tell the user you cannot click or test in Preview, and do not ask them to do it for you. Test step by step: look, act, look again, check the console and network.");
+            context.push_str(&format!(" The same actions are plain HTTP too if a tool is missing: curl {bridge}/help."));
         }
         args.push(context);
+        // The AgentDeck browser as real tools (an MCP server served by the app), allowed without asking.
+        if let Some(bridge) = &bridge {
+            args.push("--mcp-config".to_string());
+            args.push(
+                serde_json::json!({ "mcpServers": { "agentdeck": { "type": "http", "url": format!("{bridge}/mcp") } } })
+                    .to_string(),
+            );
+            args.push("--allowedTools".to_string());
+            args.push("mcp__agentdeck".to_string());
+        }
         if let Some(effort) = &req.effort {
             args.push("--effort".to_string());
             args.push(effort.clone());

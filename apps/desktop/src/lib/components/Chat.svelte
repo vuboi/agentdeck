@@ -11,6 +11,18 @@
   import CommandGroup from './CommandGroup.svelte';
   import LiveStatus from './LiveStatus.svelte';
   import MessageFooter from './MessageFooter.svelte';
+  import type { Segment } from '../blocks';
+
+  // Whether the part before this one, skipping blocks that draw nothing (empty reasoning), is also a step line.
+  function afterSteps(parts: Segment[], position: number) {
+    for (let index = position - 1; index >= 0; index--) {
+      const part = parts[index];
+      if (part.kind === 'commands') return true;
+      if (part.block.kind === 'thinking' && !part.block.text.trim()) continue;
+      return false;
+    }
+    return false;
+  }
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { costParts, estimateCost, shortCount, totalTokens, usd } from '../usage';
   import PermissionCard from './PermissionCard.svelte';
@@ -411,7 +423,10 @@
                     {#each parts as segment, position (position)}
                       {#if segment.kind === 'commands'}
                         <!-- The newest group of a running reply is the live line; it carries the only loader. -->
-                        <CommandGroup items={segment.items} live={Boolean(message.live) && working && position === parts.length - 1} startedAt={message.startedAt} />
+                        <!-- Step lines in a row sit close together, like one list. -->
+                        <div class={afterSteps(parts, position) ? '-mt-1.5' : ''}>
+                          <CommandGroup items={segment.items} live={Boolean(message.live) && working && position === parts.length - 1} startedAt={message.startedAt} />
+                        </div>
                       {:else}
                         <ChatBlock block={segment.block} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} />
                       {/if}
