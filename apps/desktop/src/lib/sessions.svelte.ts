@@ -480,7 +480,10 @@ export type TreeData = { kind: 'project' | 'session'; session?: SessionItem; pat
 
 export function buildTree(): ZTreeNode<TreeData>[] {
   // A session with no time yet is new: it goes first.
-  const newest = (a: SessionItem, b: SessionItem) => (b.updatedAt ?? '￿').localeCompare(a.updatedAt ?? '￿');
+  const newest = (a: SessionItem, b: SessionItem) => {
+    if (!a.updatedAt || !b.updatedAt) return Number(!b.updatedAt) - Number(!a.updatedAt);
+    return b.updatedAt.localeCompare(a.updatedAt);
+  };
   const forksOf = (parent: SessionItem): ZTreeNode<TreeData>[] =>
     workspace.sessions
       .filter((item) => item.parentId === parent.id)
