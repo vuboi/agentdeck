@@ -72,7 +72,8 @@
     {/if}
   </div>
 {:else if block.kind === 'permission'}
-  <PermissionCard {block} {onanswer} />
+  <!-- Pending requests are shown above the input; the conversation keeps only the answered ones. -->
+  {#if block.state !== 'pending'}<PermissionCard {block} {onanswer} />{/if}
 {:else if block.kind === 'image'}
   <img src={block.src} alt={block.name} class="block-in max-h-56 max-w-full self-start rounded-lg border border-border object-contain" />
 {:else if block.kind === 'loading'}

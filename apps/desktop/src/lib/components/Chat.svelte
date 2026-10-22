@@ -11,6 +11,7 @@
   import CommandGroup from './CommandGroup.svelte';
   import LiveStatus from './LiveStatus.svelte';
   import MessageFooter from './MessageFooter.svelte';
+  import PermissionCard from './PermissionCard.svelte';
   import Composer from './Composer.svelte';
   import ToolbarActions from './ToolbarActions.svelte';
   import FileView from './FileView.svelte';
@@ -139,6 +140,14 @@
   // a loading ring that turns into the arrow on hover.
   // The button only appears once the reader is clearly away from the bottom, not at the first pixel.
   const JUMP_AFTER = 180;
+  const pendingApproval = $derived.by(() => {
+    for (const message of chat.messages.slice(-3).reverse()) {
+      const index = message.blocks.findIndex((block) => block.kind === 'permission' && block.state === 'pending');
+      const block = message.blocks[index];
+      if (block?.kind === 'permission') return { block, messageId: message.id, index };
+    }
+    return null;
+  });
   const atEnd = $derived($virtualizer.isAtEnd(JUMP_AFTER));
   const running = $derived(activeSession()?.status === 'working');
 
@@ -392,6 +401,12 @@
   {#if !fileActive}
     <div class="relative z-30 shrink-0 bg-background px-2 pt-4 pb-4 min-[720px]:px-6">
       <div class="mx-auto w-full min-w-0 max-w-3xl px-0 min-[720px]:min-w-[440px] min-[720px]:pr-6 min-[720px]:pl-12">
+        <!-- A pending approval sits right above the input, where the eye already is. -->
+        {#if pendingApproval}
+          <div class="mb-2">
+            <PermissionCard block={pendingApproval.block} onanswer={(answer) => answerPermission(pendingApproval.messageId, pendingApproval.index, answer)} />
+          </div>
+        {/if}
         <Composer />
         <p class="mt-2 hidden text-center text-[10px] text-muted-foreground min-[720px]:block">AgentDeck can make mistakes. Review important changes.</p>
       </div>
