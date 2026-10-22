@@ -1,5 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
+  import { isLocalUrl, openInPreview } from '../browser.svelte';
+  import { inTauri } from '../history';
   import { renderMarkdown } from '../markdown';
   import { theme } from '../theme.svelte';
 
@@ -40,6 +42,13 @@
   });
 
   function onclick(event: MouseEvent) {
+    // A link to a local dev server opens in the AgentDeck browser.
+    const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
+    if (link && inTauri() && isLocalUrl(link.href)) {
+      event.preventDefault();
+      openInPreview(link.href);
+      return;
+    }
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-copy]');
     const code = button?.closest('.md-code')?.querySelector('code');
     if (!button || !code) return;

@@ -1,6 +1,7 @@
 // State and requests of the AgentDeck browser (see src-tauri/src/browser.rs). The page runs in a child webview;
 // a script injected into it reports console, network and navigation, and answers DOM / screenshot / pick requests.
 import { inTauri } from './history';
+import { layout } from './layout.svelte';
 
 export type Device = 'desktop' | 'tablet' | 'mobile';
 export const DEVICES: Record<Device, { label: string; w: number; h: number }> = {
@@ -130,3 +131,13 @@ export async function pickElement(): Promise<PickedElement | null> {
   }
 }
 export const cancelPick = () => call('browser_eval', { script: "window.__agentdeck && window.__agentdeck.run('', 'unpick')" });
+
+/** A local address (a dev server) is opened in the AgentDeck browser instead of leaving the app. */
+export const isLocalUrl = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(url);
+
+export function openInPreview(url: string) {
+  browser.url = url;
+  browser.autostart = true;
+  layout.activeTool = 'Preview';
+  layout.toolsOpen = true;
+}

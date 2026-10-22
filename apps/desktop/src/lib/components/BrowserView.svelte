@@ -82,13 +82,11 @@
     if (!url) return;
     browser.error = '';
     address = url;
+    // The address is set before the page opens, so the first open never uses a stale one.
+    browser.url = url;
     started = true;
-    await tick();
     if (browser.opened) await goTo(url);
-    else {
-      browser.url = url;
-      await sync();
-    }
+    else await sync();
   }
 
   // The page is a native layer above the app: a menu or dialog opened over it would hide behind it.
@@ -127,6 +125,8 @@
     browser.autostart = false;
     address = browser.url;
     started = true;
+    // Already showing a page: go to the new one.
+    if (browser.opened) void goTo(browser.url);
   });
 
   $effect(() => {
@@ -253,25 +253,25 @@
           class="size-7! p-0 {browser.device === value ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}"
           aria-label={device.label}
           aria-pressed={browser.device === value}
-          {@attach zTooltip({ content: device.w ? `${device.label} ${device.w}×${device.h}` : device.label, position: 'bottom' })}
+          {@attach zTooltip({ content: device.w ? `${device.label} ${device.w}×${device.h}` : device.label, position: 'top' })}
           onclick={() => (browser.device = value as Device)}
         >
           <ZIcon zType={DEVICE_ICON[value as Device]} class="size-4" />
         </ZButton>
       {/each}
       <span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 {browser.picking ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Pick an element" aria-pressed={browser.picking} disabled={!started} onclick={pick} {@attach zTooltip({ content: 'Pick an element', position: 'bottom' })}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 {browser.picking ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Pick an element" aria-pressed={browser.picking} disabled={!started} onclick={pick} {@attach zTooltip({ content: 'Pick an element', position: 'top' })}>
         <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-4" />
       </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Annotate" disabled={!started || busy !== ''} onclick={annotate} {@attach zTooltip({ content: 'Annotate: mark up a screenshot for the agent', position: 'bottom' })}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Annotate" disabled={!started || busy !== ''} onclick={annotate} {@attach zTooltip({ content: 'Annotate: mark up a screenshot for the agent', position: 'top' })}>
         <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
       </ZButton>
       <div class="ml-auto flex items-center gap-1">
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="relative size-7! p-0 {drawer === 'console' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Console" aria-pressed={drawer === 'console'} onclick={() => toggleDrawer('console')} {@attach zTooltip({ content: 'Console', position: 'bottom' })}>
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="relative size-7! p-0 {drawer === 'console' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Console" aria-pressed={drawer === 'console'} onclick={() => toggleDrawer('console')} {@attach zTooltip({ content: 'Console', position: 'top' })}>
           <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
           {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
         </ZButton>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 {drawer === 'network' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Network" aria-pressed={drawer === 'network'} onclick={() => toggleDrawer('network')} {@attach zTooltip({ content: 'Network', position: 'bottom' })}>
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 {drawer === 'network' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Network" aria-pressed={drawer === 'network'} onclick={() => toggleDrawer('network')} {@attach zTooltip({ content: 'Network', position: 'top' })}>
           <ZIcon zType={'lucideNetwork' as ZIconName} class="size-4" />
         </ZButton>
       </div>
