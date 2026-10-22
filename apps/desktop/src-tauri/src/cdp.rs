@@ -205,28 +205,43 @@ pub async fn evaluate(view: &Webview, script: &str, session: Option<String>) -> 
 /// ring pulses for a click. It never takes events and fades after a moment of rest.
 const CURSOR: &str = r##"((x, y, kind) => {
   const id = '__agentdeck_cursor';
+  const root = document.body || document.documentElement;
   let box = document.getElementById(id);
   if (!box) {
     box = document.createElement('div');
     box.id = id;
-    box.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;transition:transform 420ms cubic-bezier(.22,1,.36,1),opacity 200ms;opacity:0;will-change:transform';
-    box.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" style="filter:drop-shadow(0 2px 4px rgba(0,0,0,.45))"><path d="M4 2l15 9.2-6.6 1.5 3.8 7.4-2.9 1.4-3.8-7.4L4 19z" fill="#8b5cf6" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg><span style="position:absolute;left:18px;top:18px;padding:1px 6px;border-radius:6px;background:#8b5cf6;color:#fff;font:600 10px/16px system-ui,sans-serif;white-space:nowrap">AI</span>';
-    (document.body || document.documentElement).appendChild(box);
-    box.style.transform = `translate(${x - 40}px, ${y - 40}px)`;
+    box.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;opacity:0;will-change:transform;transition:transform 520ms cubic-bezier(.2,.9,.25,1),opacity 220ms ease';
+    box.innerHTML = `
+      <div data-halo style="position:absolute;left:-14px;top:-14px;width:40px;height:40px;border-radius:50%;background:radial-gradient(circle,rgba(124,92,255,.35),rgba(124,92,255,0) 70%);filter:blur(2px)"></div>
+      <svg data-arrow width="20" height="20" viewBox="0 0 20 20" style="position:relative;display:block;transform-origin:2px 2px;transition:transform 140ms ease;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.35)) drop-shadow(0 4px 10px rgba(0,0,0,.18))">
+        <path d="M2.2 1.6c-.3-.2-.7.1-.6.5l3.9 15.1c.1.4.7.5.9.1l2.5-4.9c.1-.2.3-.3.5-.3l5.4-.4c.4 0 .6-.5.3-.8L2.2 1.6z" fill="#111827" stroke="#ffffff" stroke-width="1.4" stroke-linejoin="round"/>
+      </svg>
+      <div style="position:absolute;left:16px;top:17px;display:flex;align-items:center;gap:4px;padding:2px 8px 2px 6px;border-radius:999px;background:linear-gradient(135deg,#7c5cff,#5b8cff);box-shadow:0 2px 8px rgba(91,92,255,.35),inset 0 0 0 1px rgba(255,255,255,.25);color:#fff;font:600 10.5px/16px ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;letter-spacing:.01em;white-space:nowrap">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="#fff"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg>AI
+      </div>`;
+    root.appendChild(box);
+    box.style.transform = `translate(${x + 24}px, ${y + 24}px)`;
   }
   box.getBoundingClientRect();
   box.style.opacity = '1';
-  box.style.transform = `translate(${x - 3}px, ${y - 2}px)`;
+  box.style.transform = `translate(${x - 2}px, ${y - 2}px)`;
   if (kind === 'click') {
     setTimeout(() => {
-      const ring = document.createElement('div');
-      ring.style.cssText = `position:fixed;left:${x - 14}px;top:${y - 14}px;width:28px;height:28px;border-radius:50%;border:2px solid #8b5cf6;background:rgba(139,92,246,.18);z-index:2147483646;pointer-events:none`;
-      (document.body || document.documentElement).appendChild(ring);
-      ring.animate([{ transform: 'scale(.4)', opacity: 1 }, { transform: 'scale(1.6)', opacity: 0 }], { duration: 500, easing: 'ease-out' }).onfinish = () => ring.remove();
-    }, 380);
+      const arrow = box.querySelector('[data-arrow]');
+      if (arrow) {
+        arrow.style.transform = 'scale(.82)';
+        setTimeout(() => (arrow.style.transform = ''), 140);
+      }
+      for (const [delay, size] of [[0, 34], [90, 52]]) {
+        const ring = document.createElement('div');
+        ring.style.cssText = `position:fixed;left:${x - size / 2}px;top:${y - size / 2}px;width:${size}px;height:${size}px;border-radius:50%;border:1.5px solid rgba(124,92,255,.85);background:rgba(124,92,255,.10);z-index:2147483646;pointer-events:none`;
+        root.appendChild(ring);
+        ring.animate([{ transform: 'scale(.3)', opacity: 0.9 }, { transform: 'scale(1)', opacity: 0 }], { duration: 520, delay, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'both' }).onfinish = () => ring.remove();
+      }
+    }, 470);
   }
   clearTimeout(window.__agentdeckCursorTimer);
-  window.__agentdeckCursorTimer = setTimeout(() => (box.style.opacity = '0'), 2500);
+  window.__agentdeckCursorTimer = setTimeout(() => (box.style.opacity = '0'), 3000);
   return true;
 })"##;
 
@@ -234,7 +249,7 @@ const CURSOR: &str = r##"((x, y, kind) => {
 async fn show_pointer(view: &Webview, x: f64, y: f64, kind: &str) {
     let script = format!("{CURSOR}({x}, {y}, {kind:?})");
     if evaluate(view, &script, None).await.is_ok() {
-        tokio::time::sleep(std::time::Duration::from_millis(420)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(520)).await;
     }
 }
 
