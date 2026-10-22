@@ -165,7 +165,12 @@
     let frameId = 0;
     const watch = () => {
       const box = stage?.getBoundingClientRect();
-      const key = box ? `${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)},${Math.round(box.height)}` : '';
+      // A menu that has just opened is positioned a moment after it appears: follow it too.
+      const menus = [...document.querySelectorAll(MENUS)].map((menu) => {
+        const r = menu.getBoundingClientRect();
+        return `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`;
+      });
+      const key = (box ? `${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)},${Math.round(box.height)}` : '') + '|' + menus.join(';');
       if (key !== last) {
         last = key;
         void sync();
