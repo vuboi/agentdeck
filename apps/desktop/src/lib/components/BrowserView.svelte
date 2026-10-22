@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, untrack } from 'svelte';
-  import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import {
     back,
@@ -253,27 +253,26 @@
           class="size-7! p-0 {browser.device === value ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}"
           aria-label={device.label}
           aria-pressed={browser.device === value}
-          title={device.w ? `${device.label} ${device.w}×${device.h}` : device.label}
+          {@attach zTooltip({ content: device.w ? `${device.label} ${device.w}×${device.h}` : device.label, position: 'bottom' })}
           onclick={() => (browser.device = value as Device)}
         >
           <ZIcon zType={DEVICE_ICON[value as Device]} class="size-4" />
         </ZButton>
       {/each}
       <span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 {browser.picking ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Pick an element" aria-pressed={browser.picking} title="Pick an element" disabled={!started} onclick={pick}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 {browser.picking ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Pick an element" aria-pressed={browser.picking} disabled={!started} onclick={pick} {@attach zTooltip({ content: 'Pick an element', position: 'bottom' })}>
         <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-4" />
       </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1.5 px-2 text-xs text-muted-foreground" aria-label="Annotate" title="Mark up a screenshot for the agent" disabled={!started || busy !== ''} onclick={annotate}>
-        <ZIcon zType={'lucidePenLine' as ZIconName} class="size-4" />
-        Annotate
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Annotate" disabled={!started || busy !== ''} onclick={annotate} {@attach zTooltip({ content: 'Annotate: mark up a screenshot for the agent', position: 'bottom' })}>
+        <ZIcon zType={'lucideHighlighter' as ZIconName} class="size-4" />
       </ZButton>
       <div class="ml-auto flex items-center gap-1">
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1 px-2 text-xs {drawer === 'console' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-pressed={drawer === 'console'} onclick={() => toggleDrawer('console')}>
-          Console
-          {#if errors > 0}<span class="rounded-full bg-destructive/20 px-1.5 text-[10px] leading-4 text-destructive">{errors}</span>{/if}
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="relative size-7! p-0 {drawer === 'console' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Console" aria-pressed={drawer === 'console'} onclick={() => toggleDrawer('console')} {@attach zTooltip({ content: 'Console', position: 'bottom' })}>
+          <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
+          {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
         </ZButton>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1 px-2 text-xs {drawer === 'network' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-pressed={drawer === 'network'} onclick={() => toggleDrawer('network')}>
-          Network
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 {drawer === 'network' ? 'bg-primary/15 text-primary' : 'text-muted-foreground'}" aria-label="Network" aria-pressed={drawer === 'network'} onclick={() => toggleDrawer('network')} {@attach zTooltip({ content: 'Network', position: 'bottom' })}>
+          <ZIcon zType={'lucideNetwork' as ZIconName} class="size-4" />
         </ZButton>
       </div>
     </div>
