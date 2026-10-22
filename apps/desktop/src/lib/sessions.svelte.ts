@@ -269,7 +269,12 @@ export const isRunning = (sessionId: string) => workspace.sessions.find((item) =
 
 /** Stops the reply of a chat now. What was written so far stays. */
 export function stopTurn(sessionId: string) {
-  if (!replies[sessionId]) return;
+  if (!replies[sessionId]) {
+    // Nothing is running any more but the chat still says so (a lost event): clear it.
+    const stuck = workspace.sessions.find((item) => item.id === sessionId);
+    if (stuck?.status === 'working') stuck.status = 'idle';
+    return;
+  }
   const turn = turns[sessionId];
   void stopAgentTurn(sessionId).catch(() => {});
   handleAgentEvent(sessionId, { kind: 'error', message: 'stopped' }, turn);
@@ -290,7 +295,9 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   const turn = nextId();
   turns[session.id] = turn;
   const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now() };
-  messagesOf(session.id).push(reply);
+  const list = messagesOf(session.id);
+  list.push(reply);
+  liveReplies[session.id] = list[list.length - 1]; // the stored (reactive) object
   replies[session.id] = reply.id;
   session.status = 'working';
   const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
@@ -343,6 +350,8 @@ export function answerPermission(messageId: string, blockIndex: number, answer: 
 /** Adds the typed message to the open session. The first message turns a draft into a real session. */
 /** The assistant message each live turn is writing into, per session. */
 const replies: Record<string, string> = {};
+/** The reply object of each running turn. */
+const liveReplies: Record<string, Message> = {};
 
 /** Messages of a session: the live list for the active one, the remembered list for the others. */
 function messagesOf(sessionId: string): Message[] {
@@ -357,8 +366,17 @@ function messagesOf(sessionId: string): Message[] {
 export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: string) {
   if (turn !== undefined && turns[sessionId] !== turn) return; // a run that was stopped or replaced
   const session = workspace.sessions.find((item) => item.id === sessionId);
-  const reply = messagesOf(sessionId).find((item) => item.id === replies[sessionId]);
-  if (!reply || !session) return;
+  // The live reply is kept by reference: the chat list can be swapped under it (another chat opened, a transcript
+  // reloaded) and the turn must still finish, or the chat would spin for ever.
+  const reply = liveReplies[sessionId] ?? messagesOf(sessionId).find((item) => item.id === replies[sessionId]);
+  if (!session) return;
+  if (!reply) {
+    if (event.kind === 'done' || event.kind === 'error') {
+      delete replies[sessionId];
+      session.status = 'idle';
+    }
+    return;
+  }
   const update = applyAgentEvent(reply.blocks, event);
   reply.blocks = update.blocks;
   // The CLI has the conversation once it answers; only then is `--resume` valid for the next turn.
@@ -369,6 +387,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     if (reply.startedAt) reply.ms = Date.now() - reply.startedAt;
     openServedPage(sessionId, reply);
     delete replies[sessionId];
+    delete liveReplies[sessionId];
     session.status = 'idle';
     persistLocal();
     // The CLI wrote the conversation to disk: pick it up so the row gets its path, in place (same id).

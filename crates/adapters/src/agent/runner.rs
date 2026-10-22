@@ -88,10 +88,20 @@ pub async fn drive_turn(
                 finished |= matches!(event, AgentEvent::Done { .. } | AgentEvent::Error { .. });
                 emit(event);
             }
+            // The turn is over once its result is out. The CLI may still hold the pipe open (a dev server it
+            // started in the background does), so do not wait for the stream to end.
+            if finished {
+                break;
+            }
         }
     }
 
-    let status = child.wait().await;
+    let status = if finished {
+        let _ = child.start_kill();
+        child.wait().await
+    } else {
+        child.wait().await
+    };
     if !finished {
         let mut stderr = String::new();
         if let Some(mut err) = child.stderr.take() {
