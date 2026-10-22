@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
+use base64::Engine;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -217,6 +218,9 @@ async fn answer(
             "GET /network?failed=1&limit=100": "requests; failed ones (status 0 or >= 400) carry the start of the response body",
             "GET /dom?selector=css": "outerHTML of the page, or of the elements matching a selector",
             "POST /eval (body: JavaScript)": "runs the script in the page and returns its result",
+            "GET /shot": "a PNG of the page as shown now; answers with the file path",
+            "GET /click?x=&y=": "presses at a point of the page (CSS pixels, as in /shot), with the events of a real press",
+            "GET /fill?selector=&value=": "types a value into a field and fires input and change",
         })),
         "/page" => {
             let state = STATE.lock().map_err(|_| "busy".to_string())?;
@@ -273,6 +277,35 @@ async fn answer(
             let arg = params.get("selector").map(|s| json!(s)).unwrap_or(Value::Null);
             let report = ask(app, &active, "dom", arg).await?;
             Ok(json!({ "url": report["url"], "title": report["title"], "html": report["html"] }))
+        }
+        "/shot" => {
+            // The picture the page shows now, written to a file; the path is the answer.
+            let data = crate::browser::browser_capture(app.clone(), active.clone()).await?;
+            let encoded = data.split_once(',').map(|(_, rest)| rest).unwrap_or_default();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|error| error.to_string())?;
+            let path = std::env::temp_dir().join(format!("agentdeck-shot-{}.png", NEXT.fetch_add(1, Ordering::Relaxed)));
+            std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+            Ok(json!({ "png": path.display().to_string() }))
+        }
+        "/click" => {
+            let x = params.get("x").and_then(|v| v.parse::<f64>().ok()).ok_or("send ?x=&y= in CSS pixels, as in /shot")?;
+            let y = params.get("y").and_then(|v| v.parse::<f64>().ok()).ok_or("send ?x=&y= in CSS pixels, as in /shot")?;
+            let report = ask(app, &active, "click", json!({ "x": x, "y": y })).await?;
+            match report["error"].as_str() {
+                Some(error) => Err(error.to_string()),
+                None => Ok(report["result"].clone()),
+            }
+        }
+        "/fill" => {
+            let selector = params.get("selector").cloned().ok_or("send ?selector=&value=")?;
+            let value = params.get("value").cloned().unwrap_or_default();
+            let report = ask(app, &active, "fill", json!({ "selector": selector, "value": value })).await?;
+            match report["error"].as_str() {
+                Some(error) => Err(error.to_string()),
+                None => Ok(report["result"].clone()),
+            }
         }
         "/eval" => {
             let script = if body.is_empty() {

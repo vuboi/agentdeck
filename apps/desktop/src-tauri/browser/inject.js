@@ -208,6 +208,39 @@
           viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
           html: cut(html, 60000),
         });
+      } else if (kind === 'click') {
+        // The events a real press makes, at a point of the page, on whatever is there.
+        let result;
+        try {
+          const el = document.elementFromPoint(arg.x, arg.y);
+          if (!el) throw new Error('nothing at ' + arg.x + ',' + arg.y);
+          const opts = { bubbles: true, cancelable: true, composed: true, clientX: arg.x, clientY: arg.y, button: 0, buttons: 1 };
+          el.dispatchEvent(new PointerEvent('pointerdown', opts));
+          el.dispatchEvent(new MouseEvent('mousedown', opts));
+          if (el.focus) el.focus();
+          el.dispatchEvent(new PointerEvent('pointerup', { ...opts, buttons: 0 }));
+          el.dispatchEvent(new MouseEvent('mouseup', { ...opts, buttons: 0 }));
+          el.dispatchEvent(new MouseEvent('click', { ...opts, buttons: 0 }));
+          result = { tag: el.tagName.toLowerCase(), text: cut((el.textContent || '').trim(), 120), id: el.id || undefined, class: cut(el.getAttribute('class') || '', 120) };
+          post({ kind: 'click', id, result });
+        } catch (error) {
+          post({ kind: 'click', id, error: String(error.message || error) });
+        }
+      } else if (kind === 'fill') {
+        // Types into a field the way a user does: focus, value, then the events frameworks listen for.
+        try {
+          const el = document.querySelector(arg.selector);
+          if (!el) throw new Error('no element matches ' + arg.selector);
+          el.focus();
+          const proto = Object.getPrototypeOf(el);
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(el, arg.value); else el.value = arg.value;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          post({ kind: 'fill', id, result: { tag: el.tagName.toLowerCase(), value: cut(String(el.value), 200) } });
+        } catch (error) {
+          post({ kind: 'fill', id, error: String(error.message || error) });
+        }
       } else if (kind === 'eval') {
         Promise.resolve()
           .then(() => (0, eval)(String(arg)))
