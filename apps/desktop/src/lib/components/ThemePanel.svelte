@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { ZIcon, ZPopover, ZTabs } from '@shival99/z-ui-svelte';
+  import { ZDivider, ZIcon, ZPopover, ZTabs } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
   import { theme } from '../theme.svelte';
@@ -53,7 +53,7 @@
       </div>
 
       <div class="py-4">
-        <div class="mb-2 font-mono text-[10px] tracking-widest text-muted-foreground">PRIMARY</div>
+        <ZDivider zLabel="PRIMARY" zAlign="start" zSize="sm" class="mb-1.5 text-[10px] tracking-widest text-muted-foreground" />
         <div class="grid grid-cols-9 justify-items-center gap-y-3" role="radiogroup" aria-label="Primary color">
           {#each PRIMARIES as color}
             <button
@@ -74,7 +74,7 @@
       </div>
 
       <div class="py-4">
-        <div class="mb-2 font-mono text-[10px] tracking-widest text-muted-foreground">NEUTRAL</div>
+        <ZDivider zLabel="NEUTRAL" zAlign="start" zSize="sm" class="mb-1.5 text-[10px] tracking-widest text-muted-foreground" />
         <div class="grid grid-cols-9 justify-items-center gap-y-3" role="radiogroup" aria-label="Neutral color">
           {#each NEUTRALS as color}
             <button
@@ -95,7 +95,7 @@
       </div>
 
       <div class="pt-4">
-        <div class="mb-2 font-mono text-[10px] tracking-widest text-muted-foreground">CHAT LAYOUT</div>
+        <ZDivider zLabel="CHAT LAYOUT" zAlign="start" zSize="sm" class="mb-1.5 text-[10px] tracking-widest text-muted-foreground" />
         <!-- Own segmented control with a sliding thumb. Its position is plain CSS from the two equal halves
              (no measuring), so the popover's scale-in can't throw it off-centre the way ZTabs did. -->
         <div class="relative grid grid-cols-2 gap-1 rounded-lg bg-accent p-0.5 dark:bg-muted/50" role="radiogroup" aria-label="Chat layout">
