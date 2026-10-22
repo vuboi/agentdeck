@@ -195,6 +195,12 @@ html[data-warming] [data-z-popover] {
 .z-tooltip-host.z-tooltip > div:not(:last-child) {
   display: none; /* the arrow */
 }
+.z-tooltip-host.z-tooltip,
+.z-tooltip-host.z-tooltip > div:last-child {
+  background-color: #0f1115 !important;
+  color: #f4f4f5 !important;
+  border-color: #2a2d34 !important;
+}
 .z-tooltip-host.z-tooltip > div:last-child {
   padding: 0.3rem 0.6rem !important;
   font-size: 0.75rem;
