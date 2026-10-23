@@ -131,10 +131,42 @@ export type Attachment = { id: string; name: string; mime: string; src: string }
 export const draftImages = $state<Record<string, Attachment[]>>({});
 
 /** A part of a web page picked in the AgentDeck browser, waiting to go with the next message. */
-export type PageElement = { id: string; tag: string; text: string; selector: string; html: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string>; url: string; title: string; /** What was written about it while marking up the page. */ note?: string };
+export type PageElement = { id: string; tag: string; text: string; selector: string; html: string; /** Its place among its neighbours. */ around?: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string>; url: string; title: string; /** What was written about it while marking up the page. */ note?: string };
 export const draftElements = $state<Record<string, PageElement[]>>({});
 /** Messages of sessions that live only in this app (new chats), by session id. */
 const localMessages: Record<string, Message[]> = {};
+
+/**
+ * Which chat each sub chat belongs to (a flow step, a delegated task, a fork), by the sub chat's id. The chat files
+ * do not hold it, so when the history is read again (a chat finishing, a reload) a sub chat would come back as a
+ * chat of its own; this map puts it back under its parent.
+ */
+const parents: Record<string, string> = {};
+void getPref<Record<string, string>>('chat.parents').then((saved) => {
+  if (saved) Object.assign(parents, saved, { ...parents });
+});
+function rememberParents() {
+  let changed = false;
+  for (const item of workspace.sessions) {
+    if (item.parentId && item.parentId !== item.id && parents[item.id] !== item.parentId) {
+      parents[item.id] = item.parentId;
+      changed = true;
+    }
+  }
+  // A chat that delegated work or ran a flow holds a card for each sub chat it started: that names the parent of
+  // sub chats made before this map existed (their own files, once read back, do not say).
+  for (const [parentId, list] of Object.entries(localMessages)) {
+    for (const message of list) {
+      for (const block of message.blocks ?? []) {
+        if (block.kind === 'delegate' && block.childId && block.childId !== parentId && parents[block.childId] === undefined) {
+          parents[block.childId] = parentId;
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed) setPref('chat.parents', { ...parents });
+}
 
 /** Sessions that only exist in the app (drafts, new chats, live agent chats) and their messages. */
 function localSessions(): SessionItem[] {
@@ -143,6 +175,7 @@ function localSessions(): SessionItem[] {
 
 /** Save the local sessions, their messages and the open session to IndexedDB. Call after any change. */
 export function persistLocal() {
+  rememberParents();
   const sessions = localSessions();
   const messages = Object.fromEntries(sessions.map((item) => [item.id, localMessages[item.id] ?? []]));
   // Plain copies: the store holds proxies that IndexedDB cannot store.
@@ -330,11 +363,32 @@ function openServedPage(sessionId: string, reply: Message) {
   if (found && !opened) openInPreview(found);
 }
 
+/**
+ * Words in a picked element's markup that are worth searching the project's files for: its text, ids, class names
+ * and the values of its attributes. The source of a rendered element is found by what it says and is called, not by
+ * its tag, so these are what a model should Grep for first.
+ */
+function searchHints(item: PageElement): string[] {
+  const hints = new Set<string>();
+  const add = (value: string | undefined | null, min = 3) => {
+    const word = (value ?? '').trim();
+    if (word.length >= min && word.length <= 60) hints.add(word);
+  };
+  add(item.text.length <= 60 ? item.text : item.text.slice(0, 40), 2);
+  for (const match of item.html.matchAll(/\b(?:id|aria-label|title|placeholder|formcontrolname|name|data-[\w-]+|routerlink|ng-reflect-[\w-]+)="([^"]{2,60})"/gi)) add(match[1]);
+  const generic = /^(flex|grid|block|inline|hidden|relative|absolute|items-|justify-|gap-|p[xytblr]?-|m[xytblr]?-|w-|h-|min-|max-|text-|bg-|border|rounded|shadow|font-|size-|z-|overflow|cursor|transition|hover:|focus:|disabled:|ring|outline|opacity|sr-only|truncate|shrink|grow|self-|col-|row-|space-|divide-)/;
+  for (const match of item.html.matchAll(/\bclass="([^"]*)"/gi)) for (const name of match[1].split(/\s+/)) if (name && !generic.test(name) && !/^\d/.test(name)) add(name, 4);
+  const custom = item.html.match(/^<([a-z]+-[a-z0-9-]+)/i)?.[1];
+  add(custom, 4);
+  return [...hints].slice(0, 12);
+}
+
 /** The picked page elements as text the agent can use: where they are, what they look like, their markup. */
 function withElements(text: string, elements: PageElement[]): string {
   if (elements.length === 0) return text;
-  const parts = elements.map((item, index) =>
-    [
+  const parts = elements.map((item, index) => {
+    const hints = searchHints(item);
+    return [
       `Element ${index + 1} on ${item.title || 'the page'} (${item.url}): \`${item.selector}\` ${item.box.w}×${item.box.h}`,
       ...(item.note ? [`Note: ${item.note}`] : []),
       `Text: ${item.text || '(none)'}`,
@@ -342,9 +396,12 @@ function withElements(text: string, elements: PageElement[]): string {
       '```html',
       item.html,
       '```',
-    ].join('\n'),
-  );
-  return `${text || 'Look at the element(s) below.'}\n\n${parts.join('\n\n')}`;
+      ...(item.around ? ['Its place on the page:', '```', item.around, '```'] : []),
+      ...(hints.length ? [`To find its source in the project, search the files for these (they come from this element's text, ids and classes): ${hints.map((hint) => `"${hint}"`).join(', ')}`] : []),
+    ].join('\n');
+  });
+  const guide = 'These elements are what the request is about. Change the code that renders them, in the place they are rendered: find it by searching the project for the words listed, read the file around the match, and put the change exactly where the element sits (see "Its place on the page"), written like the markup around it. Do not add it anywhere else.';
+  return `${text || 'Look at the element(s) below.'}\n\n${guide}\n\n${parts.join('\n\n')}`;
 }
 
 /** How the Composer's permission setting maps onto the CLI's `--permission-mode`; "ask" passes none. */
@@ -1085,7 +1142,11 @@ function handBack(batch: DelegateBatch) {
   const answers = batch.results.map((result) => `### ${result.label}\n${result.text}`).join('\n\n');
   const memo = batch.memo ? `\n\n${batch.memo}` : '';
   const finish = batch.orchestrator ? `${batch.orchestrator}\n\nThe user's request: ${batch.task}` : `Using their answers, finish the user's request: ${batch.task}`;
-  const prompt = `The agents you handed work to have answered.\n\n${answers}${memo}\n\n${finish}`;
+  // A step that reviews can find the work wrong. The agent that gets the answers then owns the result: it fixes what is
+  // wrong and cleans up after the steps, instead of only reporting it.
+  const owner =
+    "You own the result. If a review or check step says the work is wrong or unfinished, or it does not match the user's request, do not just report it: fix it. See everything the steps changed (their handoffs list the files; run git status and git diff), undo the changes that are in the wrong place or wrong, delete the files, code, debug output and notes they left that no longer belong, then redo the change correctly where the request says. Run the project's checks, and end with what you fixed and removed. If everything is right, say so briefly.";
+  const prompt = `The agents you handed work to have answered.\n\n${answers}${memo}\n\n${finish}\n\n${owner}`;
   const shown = `↩ ${batch.results.map((result) => result.label.split(' · ')[0]).join(', ')} answered`;
   const go = (tries: number) => {
     if (!replies[batch.main]) {
@@ -1318,7 +1379,16 @@ export async function importHistory({ refresh = false } = {}) {
   }
 }
 
+/** The parent remembered for a sub chat, when that parent still exists (in the history, or as a chat of this app). */
+function knownParent(id: string, ids: Set<string>): string | undefined {
+  const parent = parents[id];
+  if (!parent || parent === id) return undefined;
+  return ids.has(parent) || workspace.sessions.some((item) => item.id === parent) ? parent : undefined;
+}
+
 function applyHistory(all: HistorySession[]) {
+  // The sub chats that exist now keep their parent through this import.
+  rememberParents();
   // One entry per id (first = newest): an older cache can still hold a duplicated Codex thread,
   // and a repeated id breaks the sidebar's keyed tree.
   const seen = new Set<string>();
@@ -1344,7 +1414,7 @@ function applyHistory(all: HistorySession[]) {
     model: item.model ?? (item.source === 'claude' ? 'claude-sonnet-5-5' : MODELS[item.source][0].value),
     conversationModel: item.model ?? undefined,
     status: 'idle',
-    parentId: item.parent_id && ids.has(item.parent_id) ? item.parent_id : undefined,
+    parentId: item.parent_id && ids.has(item.parent_id) ? item.parent_id : knownParent(item.id, ids),
     source: item.source,
     path: item.path,
     updatedAt: item.updated_at ?? undefined,

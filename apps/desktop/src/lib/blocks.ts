@@ -4,20 +4,43 @@ import { LOADER } from './loaders';
 import type { Block } from './mock';
 
 export type CommandBlock = Extract<Block, { kind: 'command' }>;
-export type Segment = { kind: 'block'; block: Block } | { kind: 'commands'; items: CommandBlock[] };
+export type ThinkingBlock = Extract<Block, { kind: 'thinking' }>;
+export type Segment = { kind: 'block'; block: Block } | { kind: 'commands'; items: CommandBlock[]; /** Reasoning between the steps, folded into the group. */ thoughts: ThinkingBlock[] };
 
 /** Consecutive commands become one group; everything else stays as it is. Reasoning with no text draws nothing,
- *  so it does not split a group either: the steps then count up on one line, as in Claude and Codex. */
+ *  so it does not split a group either: the steps then count up on one line, as in Claude and Codex. Reasoning that
+ *  has text and sits between steps (a local model thinks before nearly every one) joins the group too, as one
+ *  "Thinking" entry inside it, instead of a box of its own between every two steps. */
 export function segments(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
+  // Reasoning seen before its first step: it goes into the group that step starts.
+  let pending: ThinkingBlock[] = [];
+  const flush = () => {
+    for (const thought of pending) out.push({ kind: 'block', block: thought });
+    pending = [];
+  };
   for (const block of blocks) {
     if (block.kind === 'loading') continue;
-    if (block.kind === 'thinking' && !block.text.trim()) continue;
+    if (block.kind === 'thinking') {
+      if (!block.text.trim()) continue;
+      const last = out.at(-1);
+      if (last?.kind === 'commands') last.thoughts.push(block);
+      else pending.push(block);
+      continue;
+    }
+    if (block.kind !== 'command') {
+      flush();
+      out.push({ kind: 'block', block });
+      continue;
+    }
     const last = out.at(-1);
-    if (block.kind !== 'command') out.push({ kind: 'block', block });
-    else if (last?.kind === 'commands') last.items.push(block);
-    else out.push({ kind: 'commands', items: [block] });
+    if (last?.kind === 'commands') last.items.push(block);
+    else {
+      out.push({ kind: 'commands', items: [block], thoughts: pending });
+      pending = [];
+    }
   }
+  flush();
   return out;
 }
 
@@ -79,6 +102,9 @@ export function describeStep(item: CommandBlock): Step {
   if (tool === 'browser_serve') return { verb: verbs('Started a server', 'Starting a server'), subject: '' };
   if (PAGE_LOOK.test(tool)) return { verb: verbs('Looked at page', 'Looking at page'), subject: '' };
   if (PAGE_READ.test(tool)) return { verb: verbs('Found on page', 'Finding on page'), subject: '' };
+  if (tool === 'Plan') return { verb: verbs('Planned', 'Planning'), subject: '' };
+  if (tool === 'PackageInfo') return { verb: verbs('Checked the package', 'Checking the package'), subject };
+  if (/^code_/.test(tool)) return { verb: verbs('Looked up in the code index', 'Looking up in the code index'), subject: `${tool.slice(5)} ${subject}`.trim() };
   return { verb: verbs('Used', 'Using'), subject: `${tool} ${subject}`.trim() };
 }
 

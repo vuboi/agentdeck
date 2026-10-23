@@ -29,6 +29,14 @@ export const BUILTIN: SlashItem[] = [
       'Implement this feature: $ARGUMENTS\n\nFirst read the code around it and follow the patterns already used. Write a short plan, then make the smallest complete change that does the job. Add or update tests, run the project\'s checks (build, lint, tests), and fix what they report. Finish with what changed, what you ran, and what you could not verify.',
   },
   {
+    name: 'commit',
+    description: 'Commit the changes and push them',
+    kind: 'builtin',
+    origin: 'AgentDeck',
+    template:
+      'Commit the changes in this project and push them. $ARGUMENTS\n\nRun git status and git diff to see exactly what changed. Stage only files that belong to this work: never a secret (.env, keys, tokens) or a generated file, and say so if you leave something out. If the branch is the default branch, make a branch first. Group the changes into one commit per purpose when they are unrelated. Write each message in the style of this repository (look at git log -5 first): one line that says what changed and why, no filler. Commit, then push the current branch (set the upstream if there is none). Never force-push, never skip hooks, never rewrite history that is already pushed. If a hook or the push fails, read the error, fix the cause and try again; do not give up at the first failure. End with the commit hashes, the branch, and where it was pushed.',
+  },
+  {
     name: 'fixbug',
     description: 'Find the root cause, fix it, prove it',
     kind: 'builtin',

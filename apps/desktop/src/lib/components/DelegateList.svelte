@@ -5,14 +5,20 @@
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { modelLabel } from '../models.svelte';
-  import { isDelegating, liveStats } from '../sessions.svelte';
+  import { isDelegating, liveStats, workspace } from '../sessions.svelte';
   import type { Block } from '../mock';
 
   // The work a message handed to other agents (`@agent` or a flow's steps), in one card like a run command: a header,
   // then a row per agent that follows its chat (what it is doing now, its state) and opens it.
   let { blocks }: { blocks: Extract<Block, { kind: 'delegate' }>[] } = $props();
 
-  const settledOf = (block: Extract<Block, { kind: 'delegate' }>) => (block.state === 'running' && !isDelegating(block.childId) ? 'failed' : block.state);
+  // A card still "running" with nothing running behind it: the run was cut off (the page was reloaded while it ran). The
+  // chat itself tells how far it got: one that has its answer is shown as answered, not as stopped.
+  const settledOf = (block: Extract<Block, { kind: 'delegate' }>) => {
+    if (block.state !== 'running' || isDelegating(block.childId)) return block.state;
+    const child = workspace.sessions.find((item) => item.id === block.childId);
+    return child && (child.messageCount ?? 0) >= 2 ? 'done' : 'failed';
+  };
   const done = $derived(blocks.filter((block) => settledOf(block) === 'done').length);
   const working = $derived(blocks.some((block) => settledOf(block) === 'running'));
   const flow = $derived(blocks.some((block) => block.step));
@@ -53,7 +59,7 @@
           {:else if settled === 'done'}
             <ZIcon zType="lucideCircleCheck" class="size-3.5" /> Answered
           {:else}
-            <ZIcon zType="lucideCircleX" class="size-3.5" /> <span class="max-w-32 truncate">{block.note ?? 'Stopped'}</span>
+            <ZIcon zType="lucideCircleX" class="size-3.5" /> <span class="max-w-32 truncate">{block.note ?? 'Interrupted'}</span>
           {/if}
         </span>
         <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />

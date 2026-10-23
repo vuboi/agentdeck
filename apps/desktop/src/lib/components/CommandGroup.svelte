@@ -3,7 +3,7 @@
   import { cubicOut } from 'svelte/easing';
   import { ZIcon, ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
   import { ticker } from '../clock.svelte';
-  import { argOf, describeStep, elapsed, liveState, summarize, toolOf, totalChange, type CommandBlock, type Counts } from '../blocks';
+  import { argOf, describeStep, elapsed, liveState, summarize, toolOf, totalChange, type CommandBlock, type Counts, type ThinkingBlock } from '../blocks';
   import { openImages } from '../preview.svelte';
 
   // A screenshot step: click its picture to see it large.
@@ -15,9 +15,13 @@
   // The steps an agent took, as one quiet line: "Created 2 files, ran 8 commands  +222 −0". While the agent
   // is still working that line carries the only loader, with the current step and a running clock; open it
   // for the list of steps, open a step for its command, output or diff.
-  let { items, live = false, startedAt }: { items: CommandBlock[]; live?: boolean; startedAt?: number } = $props();
+  let { items, thoughts = [], live = false, startedAt }: { items: CommandBlock[]; thoughts?: ThinkingBlock[]; live?: boolean; startedAt?: number } = $props();
 
   let open = $state(false);
+  let thinkingOpen = $state(false);
+  // Reasoning between the steps, in the order it came, as one text.
+  const thinkingText = $derived(thoughts.map((thought) => thought.text.trim()).join('\n\n'));
+  const thinkingNow = $derived(thoughts.some((thought) => thought.streaming));
   let rows = $state<Record<number, boolean>>({});
 
   const current = $derived(liveState(items));
@@ -55,6 +59,7 @@
       <ZShimmerText zText={current.label} />
       <span class="tabular-nums">{seconds}</span>
     {:else}
+      {#if thoughts.length > 0}<ZIcon zType="lucideBrain" class="size-3 shrink-0" />{/if}
       <span class="truncate font-medium">{summarize(items)}</span>
       {#if total}{@render chips(total)}{/if}
     {/if}
@@ -64,6 +69,22 @@
   <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
     <div class="min-h-0 overflow-hidden">
       <div class="mt-1.5 divide-y divide-border overflow-hidden rounded-xl border border-border">
+        {#if thoughts.length > 0}
+          <div>
+            <button type="button" class="flex h-9 w-full cursor-pointer items-center gap-2 px-3 text-left outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset" aria-expanded={thinkingOpen} onclick={() => (thinkingOpen = !thinkingOpen)}>
+              <ZIcon zType="lucideBrain" class="size-3.5 shrink-0 text-muted-foreground" />
+              <span class="font-medium text-foreground">Thinking</span>
+              <span class="text-muted-foreground">{thoughts.length === 1 ? '' : `${thoughts.length} times`}</span>
+              {#if thinkingNow}<ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="primary" />{/if}
+              <ZIcon zType="lucideChevronRight" class="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform duration-300 {thinkingOpen ? 'rotate-90' : ''}" />
+            </button>
+            <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {thinkingOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
+              <div class="min-h-0 overflow-hidden">
+                <p class="m-0 max-h-72 overflow-auto px-3 pt-1 pb-3 leading-relaxed whitespace-pre-wrap text-muted-foreground">{thinkingText}</p>
+              </div>
+            </div>
+          </div>
+        {/if}
         {#each items as item, index (item.id ?? index)}
           {@const step = describeStep(item)}
           <div in:slide={{ duration: 220, easing: cubicOut }}>

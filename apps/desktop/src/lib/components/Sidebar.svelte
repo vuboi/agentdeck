@@ -76,6 +76,9 @@
     else selected = [`session:${workspace.activeId}`];
   }
 
+  // A chat folds and unfolds only by its arrow; a project row also does it when clicked.
+  const toggleNode = (id: string) => (expanded = expanded.includes(id) ? expanded.filter((item) => item !== id) : [...expanded, id]);
+
   function fork(sessionId: string) {
     forkSession(sessionId);
     expanded = [...new Set([...expanded, `session:${sessionId}`])];
@@ -344,7 +347,6 @@
       {nodes}
       zSize="sm"
       zSelectable
-      zExpandOnClick
       zMaxHeight={treeHeight}
       zLabel="Projects and sessions"
       bind:expanded
@@ -353,11 +355,12 @@
     >
       {#snippet node(ctx)}
         {@const data = ctx.node.data}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events (the tree handles the keys) -->
         <span
           class="relative flex min-w-0 flex-1 items-center gap-2 self-stretch"
           data-session={data?.kind === 'session' ? data.session?.id : undefined}
           data-project={data?.kind === 'project' ? projectId(ctx.node.id) : undefined}
+          onclick={() => data?.kind === 'project' && toggleNode(ctx.node.id)}
           onpointerenter={() => data?.kind === 'session' && prefetchTranscript(data.session)}
         >
           {#if data?.kind === 'session' && data.session}

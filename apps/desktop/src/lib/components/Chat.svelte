@@ -3,6 +3,7 @@
   import { tick, untrack } from 'svelte';
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
+  import { showSession } from '../content-tabs.svelte';
   import { LOADER } from '../loaders';
   import { activeSession, AGENTS, answerPermission, chat, editMessage, forkSession, newSession, openTranscript, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
@@ -219,6 +220,11 @@
   });
   const atEnd = $derived($virtualizer.isAtEnd(JUMP_AFTER));
   const running = $derived(activeSession()?.status === 'working');
+  /** The chat the open one is a sub chat of, if it is one. */
+  const parentOfActive = $derived.by(() => {
+    const parentId = activeSession()?.parentId;
+    return parentId ? workspace.sessions.find((item) => item.id === parentId) : undefined;
+  });
 
   // While a reply streams the view follows it, but only for a reader who is already at the bottom:
   // scrolling up to read stops the following, sending a message (or the jump button) resumes it.
@@ -353,6 +359,16 @@
           <p class="m-0 text-xs">No open tabs. Start a chat from the sidebar.</p>
         </div>
       {/if}
+    {/if}
+    {#if contentTabs.active.startsWith('chat:') && parentOfActive}
+      <!-- A sub chat (a step of a flow, a delegated task, a fork): one click back to the chat it came from. -->
+      <div class="relative z-30 flex h-8 shrink-0 items-center gap-2 border-b border-border bg-background px-3 text-xs">
+        <button type="button" class="inline-flex h-6 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Back to {parentOfActive.title}" onclick={() => showSession(parentOfActive.id)}>
+          <ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-3.5 shrink-0" />
+          <span class="shrink-0">Back to</span>
+          <span class="truncate font-medium text-foreground">{parentOfActive.title}</span>
+        </button>
+      </div>
     {/if}
     <!-- Keyed by session so the ruler never carries scroll/hover state over from the previous chat. -->
     {#key workspace.activeId}
@@ -534,7 +550,7 @@
                         <!-- The newest group of a running reply is the live line; it carries the only loader. -->
                         <!-- Step lines in a row sit close together, like one list. -->
                         <div class="{afterSteps(parts, position) ? '-mt-1.5' : ''} {parts[position + 1]?.kind === 'block' ? '-mb-0.5' : ''}">
-                          <CommandGroup items={segment.items} live={false} startedAt={message.startedAt} />
+                          <CommandGroup items={segment.items} thoughts={segment.thoughts} live={false} startedAt={message.startedAt} />
                         </div>
                       {:else}
                         <ChatBlock block={segment.block} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} />
