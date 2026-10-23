@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ZIcon } from '@shival99/z-ui-svelte';
+  import { getPref, setPref } from '../prefs';
   import { browser } from '../browser.svelte';
   import DevEmpty from './DevEmpty.svelte';
   import { failed, loadBody, net, pretty, sizeText, timeText, TYPES, type NetRequest } from '../devtools-net.svelte';
@@ -7,6 +8,58 @@
   // The requests of the page, as in a browser's Network tab: a table, and for the chosen one its headers, payload,
   // response, timing and (for a WebSocket or an event stream) its messages.
   let { filter, type }: { filter: string; type: string } = $props();
+
+  // The table: columns the user can drag to resize (kept between runs), and only the rows on screen are drawn.
+  type Col = { id: 'method' | 'status' | 'name' | 'host' | 'type' | 'size' | 'time'; label: string; w: number; right?: boolean };
+  const COLS: Col[] = [
+    { id: 'method', label: 'Method', w: 64 },
+    { id: 'status', label: 'Status', w: 56 },
+    { id: 'name', label: 'Name', w: 220 },
+    { id: 'host', label: 'Host', w: 160 },
+    { id: 'type', label: 'Type', w: 72 },
+    { id: 'size', label: 'Size', w: 80, right: true },
+    { id: 'time', label: 'Time', w: 72, right: true },
+  ];
+  const ROW = 20;
+  let widths = $state<Record<string, number>>(Object.fromEntries(COLS.map((col) => [col.id, col.w])));
+  void getPref<Record<string, number>>('devtools.network.columns').then((saved) => {
+    if (saved) widths = { ...widths, ...saved };
+  });
+
+  function startResize(event: PointerEvent, col: Col) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragging = true;
+    hot = col.id;
+    const from = event.clientX;
+    const base = widths[col.id];
+    const move = (next: PointerEvent) => (widths[col.id] = Math.max(40, base + next.clientX - from));
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      dragging = false;
+      hot = null;
+      setPref('devtools.network.columns', $state.snapshot(widths));
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+  }
+
+  // The column whose edge the pointer is on or is dragging: its divider is drawn down the whole table.
+  let hot = $state<string | null>(null);
+  let dragging = $state(false);
+  const hotLeft = $derived.by(() => {
+    let left = 0;
+    for (const col of cols) {
+      left += widths[col.id];
+      if (col.id === hot) return left;
+    }
+    return null;
+  });
+
+  let scroller = $state<HTMLElement | null>(null);
+  let scrollTop = $state(0);
+  let viewHeight = $state(300);
 
   type Pane = 'headers' | 'payload' | 'response' | 'timing' | 'messages';
   let chosen = $state<string | null>(null);
@@ -22,6 +75,13 @@
   );
   const current = $derived(rows.find((request) => request.id === chosen) ?? null);
   const socket = $derived(current?.type === 'WebSocket' || current?.type === 'EventSource');
+  // The host column gives way while a request's details are open: they need the room.
+  const cols = $derived(COLS.filter((col) => !(current && col.id === 'host')));
+  const template = $derived(`${cols.map((col) => `${widths[col.id]}px`).join(' ')} minmax(0,1fr)`);
+  const minWidth = $derived(cols.reduce((sum, col) => sum + widths[col.id], 0) + 40);
+  const first = $derived(Math.max(0, Math.floor(scrollTop / ROW) - 6));
+  const last = $derived(Math.min(rows.length, Math.ceil((scrollTop + viewHeight) / ROW) + 6));
+  const slice = $derived(rows.slice(first, last));
 
   const statusTone = (request: NetRequest) => (request.error || request.status >= 400 ? 'text-destructive' : request.status >= 300 ? 'text-warning' : request.pending ? 'text-muted-foreground' : 'text-success');
   const nameOf = (url: string) => {
@@ -86,34 +146,63 @@
 {/snippet}
 
 <div class="flex min-h-0 flex-1 font-mono text-[11px]">
-  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto" role="table" aria-label="Requests">
-    <div class="sticky top-0 z-10 flex gap-2 border-b border-border bg-muted/60 px-2 py-0.5 text-muted-foreground backdrop-blur" role="row">
-      <span class="w-10 shrink-0">Method</span><span class="w-9 shrink-0">Status</span><span class="min-w-0 flex-1">Name</span>
-      {#if !current}<span class="w-28 shrink-0">Host</span>{/if}
-      <span class="w-14 shrink-0">Type</span><span class="w-16 shrink-0 text-right">Size</span><span class="w-14 shrink-0 text-right">Time</span>
+  <div bind:this={scroller} bind:clientHeight={viewHeight} onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)} class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto" role="table" aria-label="Requests" aria-rowcount={rows.length}>
+    <!-- No header while there is nothing to head. -->
+    {#if rows.length > 0}
+    <div class="sticky top-0 z-20 grid shrink-0 relative border-b border-border bg-muted/80 text-muted-foreground backdrop-blur select-none" style:grid-template-columns={template} style:min-width="{minWidth}px" role="row">
+      {#each cols as col (col.id)}
+        <span class="relative h-5 truncate px-2 leading-5 {col.right ? 'text-right' : ''}" role="columnheader">
+          {col.label}
+          <span class="absolute top-0 -right-1.5 z-10 h-5 w-3 cursor-col-resize after:absolute after:top-1 after:left-1.25 after:h-3 after:w-px after:bg-border" role="separator" aria-orientation="vertical" aria-label="Resize {col.label}" onpointerenter={() => !dragging && (hot = col.id)} onpointerleave={() => !dragging && (hot = null)} onpointerdown={(event) => startResize(event, col)}></span>
+        </span>
+      {/each}
+      <span></span>
+      {#if hotLeft !== null}
+        <div class="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-primary shadow-[0_0_6px_var(--primary)]" style:left="{hotLeft}px"></div>
+      {/if}
     </div>
-    {#each rows as request (request.id)}
-      <button
-        type="button"
-        role="row"
-        class="flex w-full cursor-pointer gap-2 border-b border-border/50 px-2 py-0.5 text-left outline-none hover:bg-muted/40 {chosen === request.id ? 'bg-primary/10' : failed(request) ? 'bg-destructive/5' : ''}"
-        onclick={() => pick(request)}
-      >
-        <span class="w-10 shrink-0 text-muted-foreground">{request.method}</span>
-        <span class="w-9 shrink-0 {statusTone(request)}">{request.error ? 'ERR' : request.pending && !request.status ? '…' : request.status}</span>
-        <span class="min-w-0 flex-1 truncate {failed(request) ? 'text-destructive' : ''}" title={request.url}>{nameOf(request.url)}</span>
-        {#if !current}<span class="w-28 shrink-0 truncate text-muted-foreground">{hostOf(request.url)}</span>{/if}
-        <span class="w-14 shrink-0 truncate text-muted-foreground">{typeLabel(request)}</span>
-        <span class="w-16 shrink-0 text-right text-muted-foreground">{request.fromCache ? '(cache)' : sizeText(request.size)}</span>
-        <span class="w-14 shrink-0 text-right text-muted-foreground">{timeText(request)}</span>
-      </button>
-    {:else}
+    {/if}
+    {#if rows.length === 0}
       {#if filter || type !== 'all'}
         <DevEmpty icon="lucideSearchX" title="No requests match" hint="Try another filter or type." />
       {:else}
         <DevEmpty icon="lucideActivity" title="No requests yet" hint="Reload the page to record its network activity." />
       {/if}
-    {/each}
+    {:else}
+      <div class="relative shrink-0" style:height="{rows.length * ROW}px" style:padding-top="{first * ROW}px" style:min-width="{minWidth}px" style:box-sizing="border-box">
+        {#if hotLeft !== null}
+          <div class="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-primary shadow-[0_0_6px_var(--primary)]" style:left="{hotLeft}px"></div>
+        {/if}
+        {#each slice as request (request.id)}
+          <button
+            type="button"
+            role="row"
+            class="grid h-5 w-full cursor-pointer border-b border-border/50 text-left leading-5 outline-none hover:bg-muted/40 {chosen === request.id ? 'bg-primary/10' : failed(request) ? 'bg-destructive/5' : ''}"
+            style:grid-template-columns={template}
+            onclick={() => pick(request)}
+          >
+            {#each cols as col (col.id)}
+              {#if col.id === 'method'}
+                <span class="truncate px-2 text-muted-foreground">{request.method}</span>
+              {:else if col.id === 'status'}
+                <span class="truncate px-2 {statusTone(request)}">{request.error ? 'ERR' : request.pending && !request.status ? '…' : request.status}</span>
+              {:else if col.id === 'name'}
+                <span class="truncate px-2 {failed(request) ? 'text-destructive' : ''}" title={request.url}>{nameOf(request.url)}</span>
+              {:else if col.id === 'host'}
+                <span class="truncate px-2 text-muted-foreground">{hostOf(request.url)}</span>
+              {:else if col.id === 'type'}
+                <span class="truncate px-2 text-muted-foreground">{typeLabel(request)}</span>
+              {:else if col.id === 'size'}
+                <span class="truncate px-2 text-right text-muted-foreground">{request.fromCache ? '(cache)' : sizeText(request.size)}</span>
+              {:else}
+                <span class="truncate px-2 text-right text-muted-foreground">{timeText(request)}</span>
+              {/if}
+            {/each}
+            <span></span>
+          </button>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   {#if current}

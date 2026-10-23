@@ -54,9 +54,19 @@ function blank(id: string, url: string, at: number): NetRequest {
 
 type Params = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
+// The app's own traffic (the page reports its console and network to the app through this host): not the page's.
+const OWN = /^(https?|wss?):\/\/agentdeck\.localhost[/:]|^agentdeck:/i;
+const own = new Set<string>();
+
 function apply(tab: string, event: string, p: Params) {
   const list = listOf(tab);
   const id = String(p.requestId ?? '');
+  if (event === 'Network.requestWillBeSent' && OWN.test(String(p.request?.url ?? ''))) {
+    own.add(`${tab}|${id}`);
+    if (own.size > 5000) own.clear();
+    return;
+  }
+  if (own.has(`${tab}|${id}`)) return;
   switch (event) {
     case 'Network.requestWillBeSent': {
       // A new page (its document request): the list starts again, unless the log is kept.
@@ -83,7 +93,9 @@ function apply(tab: string, event: string, p: Params) {
       return;
     }
     case 'Network.responseReceived': {
-      const request = find(tab, id) ?? (list.push(blank(id, p.response.url, Date.now())), list[list.length - 1]);
+      // A response whose request was not seen (it began before recording): nothing to attach it to.
+      const request = find(tab, id);
+      if (!request) return;
       const response = p.response;
       request.type = p.type ?? request.type;
       request.status = response.status;

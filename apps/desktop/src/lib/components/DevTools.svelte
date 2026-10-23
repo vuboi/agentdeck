@@ -213,9 +213,12 @@
   {#if tab === 'console'}
     <div class="min-h-0 flex-1 overflow-auto font-mono text-[11px]" role="log" aria-label="console">
       {#each lines as line, index (index)}
-        <div class="flex gap-2 border-b border-border/50 px-2 py-0.5 {tone(line.level)}">
+        <div class="group relative flex gap-2 border-b border-border/50 py-0.5 pr-7 pl-2 hover:bg-muted/40 {tone(line.level)}">
           <span class="shrink-0 tabular-nums opacity-70">{clock(line.at)}</span>
           <span class="min-w-0 break-all whitespace-pre-wrap {line.level === 'error' || line.level === 'warn' ? '' : 'text-foreground'}">{line.text}</span>
+          <button type="button" class="absolute top-0.5 right-1.5 grid size-4 cursor-pointer place-items-center rounded bg-background/80 text-muted-foreground opacity-0 outline-none group-hover:opacity-100 hover:text-primary focus-visible:opacity-100" aria-label="Copy this line" title="Copy" onclick={() => void copyText(line.text, 'the line')}>
+            <ZIcon zType={'lucideCopy' as ZIconName} zSize="11" />
+          </button>
         </div>
       {:else}
         {#if filter || level !== 'all'}

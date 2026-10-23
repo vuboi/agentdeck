@@ -198,35 +198,35 @@
   const visible = $derived(rows.filter((row) => !filter.trim() || `${row.key} ${row.value}`.toLowerCase().includes(filter.trim().toLowerCase())));
   const current = $derived(visible.find((row) => row.key === chosen) ?? null);
   const title = $derived(section.kind === 'local' ? 'Local storage' : section.kind === 'session' ? 'Session storage' : section.kind === 'cookies' ? 'Cookies' : section.kind === 'idb' ? `${section.db} › ${section.store}` : section.name);
-  const item = (active: boolean) => `flex w-full cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-left font-sans text-xs outline-none ${active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}`;
+  const item = (active: boolean) => `flex h-6 w-full shrink-0 cursor-pointer items-center gap-1.5 rounded px-2 text-left font-sans text-xs leading-none outline-none ${active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}`;
 </script>
 
 {#snippet entry(label: string, icon: string, target: Section)}
   <button type="button" class={item(same(section, target))} onclick={() => open(target)}>
-    <ZIcon zType={icon as ZIconName} class="size-3.5 shrink-0" /><span class="truncate">{label}</span>
+    <ZIcon zType={icon as ZIconName} zSize="14" class="shrink-0" /><span class="truncate">{label}</span>
   </button>
 {/snippet}
 
 <div class="flex min-h-0 flex-1 text-[11px]">
-  <nav class="flex w-44 shrink-0 flex-col gap-0.5 overflow-auto border-r border-border p-1" aria-label="Storage">
-    <div class="px-2 py-1 font-sans text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Storage</div>
+  <nav class="flex w-44 shrink-0 flex-col gap-px overflow-auto border-r border-border p-1" aria-label="Storage">
+    <div class="px-2 pt-0.5 pb-1 font-sans text-[10px] leading-none font-semibold tracking-wide text-muted-foreground uppercase">Storage</div>
     {@render entry('Local storage', 'lucideDatabase', { kind: 'local' })}
     {@render entry('Session storage', 'lucideHardDrive', { kind: 'session' })}
     {@render entry('Cookies', 'lucideCookie', { kind: 'cookies' })}
-    <div class="mt-1 px-2 py-1 font-sans text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">IndexedDB</div>
+    <div class="mt-2 px-2 pb-1 font-sans text-[10px] leading-none font-semibold tracking-wide text-muted-foreground uppercase">IndexedDB</div>
     {#each databases as db (db.name)}
-      <div class="truncate px-2 py-0.5 font-sans text-xs text-foreground/80" title={db.name}>{db.name}</div>
+      <div class="truncate px-2 pt-1 font-sans text-xs leading-4 text-foreground/80" title={db.name}>{db.name}</div>
       {#each db.stores as store (store)}
         <div class="pl-3">{@render entry(store, 'lucideTable2', { kind: 'idb', db: db.name, store })}</div>
       {/each}
     {:else}
-      <div class="px-2 py-0.5 font-sans text-xs text-muted-foreground">None</div>
+      <div class="px-2 font-sans text-xs leading-5 text-muted-foreground">None</div>
     {/each}
-    <div class="mt-1 px-2 py-1 font-sans text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Cache storage</div>
+    <div class="mt-2 px-2 pb-1 font-sans text-[10px] leading-none font-semibold tracking-wide text-muted-foreground uppercase">Cache storage</div>
     {#each caches as cache (cache.id)}
       {@render entry(cache.name, 'lucideArchive', { kind: 'cache', id: cache.id, name: cache.name })}
     {:else}
-      <div class="px-2 py-0.5 font-sans text-xs text-muted-foreground">None</div>
+      <div class="px-2 font-sans text-xs leading-5 text-muted-foreground">None</div>
     {/each}
     <div class="mt-auto grid gap-1 border-t border-border pt-1.5">
       <button type="button" class="h-6 cursor-pointer rounded border border-input px-2 font-sans text-xs outline-none hover:border-primary/60 disabled:pointer-events-none disabled:opacity-40 {armed === 'cache' ? 'border-destructive text-destructive' : ''}" disabled={!ready} onclick={() => confirmed('cache', clearCache)}>{armed === 'cache' ? 'Press again to clear' : 'Clear browser cache'}</button>
