@@ -37,7 +37,7 @@
     type Rect,
   } from '../browser.svelte';
   import { inTauri } from '../history';
-  import { MIRRORED_DIALOGS, mirrorMenus } from '../menu-overlay';
+  import { blurPage, cutHole, modalBlur, overPage, setBelow } from '../page-layer';
   import { layout } from '../layout.svelte';
   import { draftElements, draftImages, drafts, workspace } from '../sessions.svelte';
   import DevTools from './DevTools.svelte';
@@ -56,45 +56,9 @@
     addressInput.select();
   }
   let editing = $state(false);
-  // What cannot be mirrored above the page (a drawer, the gallery, a floating tool window over it): a picture of
-  // the page stands in, dimmed by the overlay's backdrop like any page would be. Taken only then: a capture is heavy
-  // work for the page's webview, and the search palette and modals never need one (menu-overlay.ts).
-  let standIn = $state<{ src: string; x: number; y: number; w: number; h: number } | null>(null);
-  async function coverPage() {
-    const place = frame();
-    if (place && stage && tab.opened) {
-      try {
-        const src = await capturePage();
-        const decoded = new Image();
-        decoded.src = src;
-        await decoded.decode().catch(() => {});
-        if (covered) {
-          const origin = stage.getBoundingClientRect();
-          standIn = { src, x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h };
-          await tick();
-          // The picture must be on screen before the page leaves, or one empty frame shows between them.
-          await painted();
-          // Moved aside rather than hidden: a hidden WebView2 stops drawing and comes back with a blank frame.
-          if (covered) await parkBrowser();
-          return;
-        }
-      } catch {
-        // No picture: the page simply hides.
-      }
-    }
-    if (covered) await hideBrowser();
-  }
+  let busy = $state('');
   /** Resolves once what was just rendered has been drawn. */
   const painted = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-  async function uncoverPage() {
-    await sync();
-    // The page is back in place and already drawn (it kept drawing aside); the picture goes once it is seen.
-    await painted();
-    if (!covered) standIn = null;
-  }
-  let busy = $state('');
-  /** A dialog is open: the page hides. Menus are mirrored above the page instead (menu-overlay.ts). */
-  let covered = $state(false);
   /** Where the phone / tablet sits in the stage (stage coordinates), for its frame. */
   let deviceBox = $state<{ x: number; y: number; w: number; h: number; zoom: number } | null>(null);
 
@@ -126,8 +90,6 @@
   // One placement at a time, the newest rectangle last: overlapping calls could land out of order and leave the page misplaced.
   let syncing = false;
   let again = false;
-  /** The tab whose page is on screen: switching to another one hides the rest first. */
-  let shownTab = '';
 
   async function sync() {
     if (syncing) {
@@ -145,29 +107,32 @@
     }
   }
 
+  /** Takes the page off screen. The app is filled where it was see-through first, so the window never shows through. */
+  async function takePageAway() {
+    cutHole(null, null);
+    await painted();
+    await hideBrowser();
+  }
+
   async function placePage() {
     // An empty tab (a new one, nothing typed yet) shows no page: the previous tab's page must go away.
-    if (inTauri() && !started && !covered && !layout.dragging) {
-      shownTab = '';
-      await hideBrowser();
+    if (inTauri() && !started && !layout.dragging) {
+      await takePageAway();
       return;
     }
-    if (!inTauri() || !started || covered || layout.dragging) return;
+    if (!inTauri() || !started || layout.dragging) return;
     const place = frame();
     if (!place) {
-      await hideBrowser();
+      await takePageAway();
       return;
     }
     const origin = stage!.getBoundingClientRect();
     deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
     try {
-      // Only the tab in front is on screen: switching tabs hides the others first. Showing an open tab again
-      // brings its own webview to the front (a hidden one stays hidden if only its bounds are moved).
-      if (shownTab !== tab.id) {
-        await hideBrowser();
-        shownTab = tab.id;
-      }
+      // Only the tab in front is on screen: showing it hides the others (once it is up, so no frame is left empty).
       await showBrowser(place.rect);
+      // The app is see-through where the page is, so whatever it opens over the page can sit above it.
+      cutHole(stage!, place.rect);
       if (tab.opened) await zoomBrowser(place.zoom);
     } catch (error) {
       // The page went away under us (closed, or being recreated for another device): open it again next time.
@@ -205,44 +170,25 @@
     }
   }
 
-  // The page is a native layer above the app: a dialog opened over it would hide behind it. Dialogs that can be
-  // mirrored are (menu-overlay.ts); any other modal one (a drawer, the gallery: it dims the whole app) covers the
-  // page, a floating tool window only where it lies over it. The Preview window holds the page itself, and the
-  // screenshot editor draws its own picture.
-  const MODALS = '[aria-modal="true"], [data-z-modal], [role="alertdialog"]';
-  const OVERLAYS = '[role="dialog"]:not([aria-label="Annotate screenshot"]):not([aria-label="Preview"]), [role="alertdialog"], [data-z-modal]';
-  function overlayOnPage(): boolean {
-    const page = stage?.getBoundingClientRect();
-    if (!page) return false;
-    for (const element of document.querySelectorAll<HTMLElement>(OVERLAYS)) {
-      if (element.contains(stage!)) continue;
-      // The search palette, a modal, a confirm: mirrored above the live page with its backdrop (menu-overlay.ts).
-      if (tab.opened && element.matches(MIRRORED_DIALOGS)) continue;
-      if (element.matches(MODALS)) return true;
-      const r = element.getBoundingClientRect();
-      if (r.width > 0 && r.right > page.left && r.left < page.right && r.bottom > page.top && r.top < page.bottom) return true;
-    }
-    return false;
-  }
-  function checkCovered() {
-    const now = overlayOnPage();
-    if (now === covered) return;
-    covered = now;
-    if (now) void coverPage();
-    else void uncoverPage();
+  // The page is a native layer above the app: anything the app opens over it would be hidden behind it. While
+  // something is over the page, the page goes below the app, which is see-through there (page-layer.ts).
+  function checkLayer() {
+    if (!inTauri() || !stage) return;
+    const over = tab.opened && overPage(stage, stage.getBoundingClientRect());
+    setBelow(over);
+    blurPage(over ? modalBlur() : '');
   }
   let observer: MutationObserver | undefined;
   let resizer: ResizeObserver | undefined;
-  let stopMirror: (() => void) | undefined;
 
   onMount(() => {
     void listenToPage();
-    stopMirror = mirrorMenus(() => (tab.opened && !covered && stage ? stage.getBoundingClientRect() : null));
     if (stage) {
       resizer = new ResizeObserver(() => void sync());
       resizer.observe(stage);
     }
-    observer = new MutationObserver(checkCovered);
+    // Opened at once, not on the next frame: the page goes below as the overlay appears.
+    observer = new MutationObserver(checkLayer);
     observer.observe(document.body, { childList: true, subtree: true });
     void sync();
     window.addEventListener('resize', onResize);
@@ -251,11 +197,11 @@
     let frameId = 0;
     const watch = () => {
       // A floating tool window dragged onto the page, or off it, changes no DOM: look every frame.
-      checkCovered();
+      checkLayer();
       const box = stage?.getBoundingClientRect();
       const key = box ? `${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)},${Math.round(box.height)}` : '';
-      // While a drag or a dialog holds the page back nothing is placed, so the change is kept for when it ends.
-      if (key !== last && !layout.dragging && !covered) {
+      // While a drag holds the page back nothing is placed, so the change is kept for when it ends.
+      if (key !== last && !layout.dragging) {
         last = key;
         void sync();
       }
@@ -267,12 +213,16 @@
   const onResize = () => void sync();
 
   onDestroy(() => {
-    stopMirror?.();
     resizer?.disconnect();
     observer?.disconnect();
     window.removeEventListener('resize', onResize);
     // Another tool took the panel: the page stays alive off-screen, so the agent can still look at it and act on it.
-    if (inTauri()) void parkBrowser();
+    if (inTauri()) {
+      cutHole(null, null);
+      setBelow(false);
+      blurPage('');
+      void parkBrowser();
+    }
   });
 
   // Opened by a link or the developer hook.
@@ -304,12 +254,11 @@
     void browser.activeId;
     void browser.landscape;
     void browser.device;
-    void covered;
     void started;
     void browser.devtools;
     void browser.devtoolsHeight;
     // A floating window being carried or resized: the page steps aside and comes back where it lands.
-    if (layout.dragging) untrack(() => void hideBrowser());
+    if (layout.dragging) untrack(() => void takePageAway());
     void layout.dragging;
     untrack(() => void sync());
   });
@@ -432,7 +381,6 @@
     { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url).then(() => toast.success('Address copied')) },
     { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
   ]);
-
 
   const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
@@ -593,7 +541,7 @@
       {#if deviceBox}
         <!-- The device: a bezel around the page (the page itself is the native layer above) and its caption. -->
         <div
-          class="pointer-events-none absolute border border-border bg-black shadow-lg {browser.device === 'mobile' ? 'rounded-2xl' : 'rounded-xl'}"
+          class="pointer-events-none absolute border-[10px] border-black shadow-lg ring-1 ring-border {browser.device === 'mobile' ? 'rounded-2xl' : 'rounded-xl'}"
           style:left="{deviceBox.x - 10}px"
           style:top="{deviceBox.y - 10}px"
           style:width="{deviceBox.w + 20}px"
@@ -607,7 +555,7 @@
           </button>
         </div>
       {/if}
-      {#if standIn}<img src={standIn.src} alt="" class="pointer-events-none absolute select-none" style:left="{standIn.x}px" style:top="{standIn.y}px" style:width="{standIn.w}px" style:height="{standIn.h}px" />{/if}
+
       {#if !started}
         <div class="absolute inset-0 grid place-items-center p-6 text-center text-xs text-muted-foreground">
           <div class="flex flex-col items-center gap-2">

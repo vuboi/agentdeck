@@ -446,20 +446,9 @@ pub(crate) async fn answer(
             Ok(json!({ "url": report["url"], "title": report["title"], "html": report["html"] }))
         }
         "/shot" => {
-            // The picture the page shows now, with a menu open over it laid on top; the file path is the answer.
+            // The picture the page shows now; the file path is the answer.
             let view = page(app, &active)?;
-            let mut bytes = crate::cdp::screenshot(&view).await?;
-            if let Some(menu) = crate::overlay::visible_view(app) {
-                if let Ok(layer) = crate::cdp::transparent_screenshot(&menu).await {
-                    let page_at = view.position().map_err(|error| error.to_string())?;
-                    let page_size = view.size().map_err(|error| error.to_string())?;
-                    let menu_at = menu.position().map_err(|error| error.to_string())?;
-                    let (dx, dy) = (menu_at.x - page_at.x, menu_at.y - page_at.y);
-                    if let Ok(joined) = compose(&bytes, &layer, dx, dy, page_size.width) {
-                        bytes = joined;
-                    }
-                }
-            }
+            let bytes = crate::cdp::screenshot(&view).await?;
             let path = std::env::temp_dir().join(format!("agentdeck-shot-{}.png", NEXT.fetch_add(1, Ordering::Relaxed)));
             std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
             Ok(json!({ "png": path.display().to_string() }))
@@ -676,59 +665,6 @@ fn frame_session(view: &tauri::Webview, frame: &str) -> Result<String, String> {
     found
         .map(|item| item.session.clone())
         .ok_or_else(|| format!("no frame matches {frame}; GET /frames lists them"))
-}
-
-/// Lays the menu overlay's picture over the page's, at its offset (physical pixels of the window). The page's
-/// picture may be at another scale than the window (a zoomed phone page); the offset follows that scale.
-fn compose(page: &[u8], layer: &[u8], dx: i32, dy: i32, page_width: u32) -> Result<Vec<u8>, String> {
-    let (mut base, width, height) = rgba(page)?;
-    let (top, top_width, top_height) = rgba(layer)?;
-    let ratio = width as f64 / page_width.max(1) as f64;
-    for row in 0..(top_height as f64 * ratio) as u32 {
-        for col in 0..(top_width as f64 * ratio) as u32 {
-            let x = (dx as f64 * ratio) as i64 + col as i64;
-            let y = (dy as f64 * ratio) as i64 + row as i64;
-            if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
-                continue;
-            }
-            let sx = ((col as f64 / ratio) as u32).min(top_width - 1);
-            let sy = ((row as f64 / ratio) as u32).min(top_height - 1);
-            let from = ((sy * top_width + sx) * 4) as usize;
-            let to = ((y as u32 * width + x as u32) * 4) as usize;
-            let alpha = top[from + 3] as u32;
-            for channel in 0..3 {
-                let over = top[from + channel] as u32;
-                let under = base[to + channel] as u32;
-                base[to + channel] = ((over * alpha + under * (255 - alpha)) / 255) as u8;
-            }
-        }
-    }
-    let mut out = Vec::new();
-    let mut encoder = png::Encoder::new(&mut out, width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
-    writer.write_image_data(&base).map_err(|error| error.to_string())?;
-    writer.finish().map_err(|error| error.to_string())?;
-    Ok(out)
-}
-
-/// A PNG as 8-bit RGBA pixels.
-fn rgba(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
-    let mut decoder = png::Decoder::new(bytes);
-    decoder.set_transformations(png::Transformations::normalize_to_color8());
-    let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
-    let mut buffer = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buffer).map_err(|error| error.to_string())?;
-    let pixels = &buffer[..info.buffer_size()];
-    let out = match info.color_type {
-        png::ColorType::Rgba => pixels.to_vec(),
-        png::ColorType::Rgb => pixels.chunks(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
-        png::ColorType::GrayscaleAlpha => pixels.chunks(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
-        png::ColorType::Grayscale => pixels.iter().flat_map(|&g| [g, g, g, 255]).collect(),
-        png::ColorType::Indexed => return Err("indexed PNG".into()),
-    };
-    Ok((out, info.width, info.height))
 }
 
 /// Asks the page of a tab for something and waits for its answer.

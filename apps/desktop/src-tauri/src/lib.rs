@@ -4,7 +4,6 @@ mod bridge;
 mod mcp;
 mod cdp;
 mod browser;
-mod overlay;
 mod servers;
 
 use ag_adapters::agent::claude::Claude;
@@ -489,9 +488,6 @@ pub fn run() {
         })
         .setup(|app| {
             bridge::start(app.handle().clone());
-            if let Err(error) = overlay::create(app.handle()) {
-                eprintln!("menu overlay: {error}");
-            }
             if let Ok(url) = std::env::var("AGENTDECK_BROWSER_SELFTEST") {
                 browser::selftest(app.handle().clone(), url);
             }
@@ -534,15 +530,12 @@ pub fn run() {
             browser::browser_navigate,
             browser::browser_reset,
             browser::browser_park,
+            browser::browser_layer,
             browser::browser_eval,
             browser::browser_zoom,
             browser::browser_close,
             browser::browser_capture,
             browser::browser_press,
-            overlay::overlay_eval,
-            overlay::overlay_show,
-            overlay::overlay_hide,
-            overlay::overlay_return_focus,
             browser::open_external
         ])
         .run(tauri::generate_context!())

@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "AgentDeck", "width": 1280, "height": 800, "minWidth": 320, "minHeight": 480, "center": true, "decorations": false }
+      { "label": "main", "title": "AgentDeck", "width": 1280, "height": 800, "minWidth": 320, "minHeight": 480, "center": true, "decorations": false, "transparent": true }
     ],
     "security": {
       "capabilities": ["default"],

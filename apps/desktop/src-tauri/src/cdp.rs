@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::{Manager, Webview};
+use tauri::Webview;
 
 /// A frame of another origin, attached to its own DevTools session.
 #[derive(Clone, Serialize)]
@@ -250,7 +250,6 @@ const CURSOR: &str = r##"((x, y, kind) => {
 async fn show_pointer(view: &Webview, x: f64, y: f64, kind: &str) {
     let script = format!("{CURSOR}({x}, {y}, {kind:?})");
     if evaluate(view, &script, None).await.is_ok() {
-        crate::overlay::pointer(view.app_handle(), x, y, kind);
         tokio::time::sleep(std::time::Duration::from_millis(520)).await;
     }
 }
@@ -333,9 +332,3 @@ pub async fn screenshot(view: &Webview) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())
 }
 
-/// The overlay's own picture, with a transparent background so it can be laid over the page.
-pub async fn transparent_screenshot(view: &Webview) -> Result<Vec<u8>, String> {
-    let clear = json!({ "color": { "r": 0, "g": 0, "b": 0, "a": 0 } });
-    call(view, "Emulation.setDefaultBackgroundColorOverride", clear, None).await?;
-    screenshot(view).await
-}

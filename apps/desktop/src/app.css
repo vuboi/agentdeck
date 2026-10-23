@@ -226,11 +226,6 @@ body {
   overflow: hidden;
 }
 
-/* A menu over a browser page is shown by its mirror above the page (menu-overlay.ts); the original stays, unseen. */
-[data-mirrored] {
-  opacity: 0 !important;
-}
-
 /* "Show more" under a long block: a smaller button with smaller text. */
 .z-show-more > .justify-center button {
   height: 1.5rem !important;

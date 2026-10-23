@@ -5,6 +5,8 @@
 //! screenshot and the element picker. Reports come back through the `agentdeck` URL scheme and are forwarded
 //! to the app window as `browser-report` events; page loads are forwarded as `browser-load` events.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::webview::PageLoadEvent;
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Webview, WebviewBuilder, WebviewUrl,
@@ -138,10 +140,48 @@ pub(crate) fn parse(url: &str) -> Result<tauri::Url, String> {
 }
 
 fn place(view: &Webview, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
-    view.set_position(LogicalPosition::new(x, y))
-        .map_err(|error| error.to_string())?;
-    view.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
+    set_rect(view, x, y, w, h)
+}
+
+/// Puts a child webview at a rectangle of the window (CSS pixels), in one step.
+///
+/// `set_position` then `set_size` are two moves of the page's host window, each queued (`SWP_ASYNCWINDOWPOS`) with
+/// the page's own bounds set in between, half old, half new: processed out of order they left the page torn or
+/// laid out at a size it no longer had, until the next resize. Here the host window moves and sizes at once, the
+/// page gets the same size, and WebView2 is told it moved. Edges are rounded, not the size, so the page lines up
+/// with the panel to the pixel.
+pub(crate) fn set_rect(view: &Webview, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let scale = view.window().scale_factor().map_err(|error| error.to_string())?;
+        let left = (x * scale).round() as i32;
+        let top = (y * scale).round() as i32;
+        let width = (((x + w) * scale).round() as i32 - left).max(1);
+        let height = (((y + h) * scale).round() as i32 - top).max(1);
+        view.with_webview(move |platform| {
+            use windows::Win32::Foundation::{HWND, RECT};
+            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+            // SAFETY: WebView2 and Win32 calls on the thread that owns the webview, as `with_webview` runs us.
+            unsafe {
+                let controller = platform.controller();
+                let mut host = HWND::default();
+                if controller.ParentWindow(&mut host).is_ok() {
+                    let _ = SetWindowPos(host, None, left, top, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
+                }
+                let _ = controller.SetBounds(RECT { left: 0, top: 0, right: width, bottom: height });
+                let _ = controller.NotifyParentWindowPositionChanged();
+            }
+        })
         .map_err(|error| error.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        view.set_bounds(tauri::Rect {
+            position: LogicalPosition::new(x, y).into(),
+            size: LogicalSize::new(w.max(1.0), h.max(1.0)).into(),
+        })
+        .map_err(|error| error.to_string())
+    }
 }
 
 /// Opens tab `tab` at `url` inside the given rectangle (window coordinates), or shows and moves it if it exists.
@@ -162,7 +202,11 @@ pub async fn browser_show(
     let _creating = CREATING.lock().await;
     if let Ok(view) = webview(&app, &tab) {
         place(&view, x, y, w, h)?;
-        return view.show().map_err(|error| error.to_string());
+        view.show().map_err(|error| error.to_string())?;
+        layer(&view, BELOW.load(Ordering::Relaxed));
+        // The other tabs go only now: hiding them first left a frame with no page at all.
+        hide_others(&app, &tab);
+        return Ok(());
     }
     let window = app.get_window("main").ok_or("no main window")?;
     let mut builder = WebviewBuilder::new(label(&tab), WebviewUrl::External(destination(&tab, &url)?))
@@ -215,7 +259,56 @@ pub async fn browser_show(
         .map_err(|error| error.to_string())?;
     allow_password_saving(&view);
     crate::cdp::watch_frames(&view);
+    layer(&view, BELOW.load(Ordering::Relaxed));
+    hide_others(&app, &tab);
     Ok(())
+}
+
+/// Hides every page but tab `tab`'s.
+fn hide_others(app: &AppHandle, tab: &str) {
+    let keep = label(tab);
+    for (name, view) in app.webviews() {
+        if name.starts_with(PREFIX) && name != keep {
+            let _ = view.hide();
+        }
+    }
+}
+
+/// Whether the pages are below the app (something of the app is open over the page).
+static BELOW: AtomicBool = AtomicBool::new(false);
+
+/// Puts a page above the app's own webview (the page takes the pointer and the keyboard) or below it.
+///
+/// The page is a native window: nothing of the app can be drawn over it. The app is see-through where the page is,
+/// so with the page below, the app draws its modal, menu or tooltip over the live page like anywhere else. Only
+/// the stacking order changes: instant, and the page keeps drawing.
+fn layer(view: &Webview, below: bool) {
+    #[cfg(windows)]
+    let _ = view.with_webview(move |platform| {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_BOTTOM, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE};
+        // SAFETY: plain Win32 calls on the window that hosts this webview, on its own thread.
+        unsafe {
+            let mut host = HWND::default();
+            if platform.controller().ParentWindow(&mut host).is_ok() {
+                let order = if below { HWND_BOTTOM } else { HWND_TOP };
+                let _ = SetWindowPos(host, Some(order), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+        }
+    });
+    #[cfg(not(windows))]
+    let _ = (view, below);
+}
+
+/// Puts every page below the app (`below`) or back above it.
+#[tauri::command]
+pub fn browser_layer(app: AppHandle, below: bool) {
+    BELOW.store(below, Ordering::Relaxed);
+    for (name, view) in app.webviews() {
+        if name.starts_with(PREFIX) {
+            layer(&view, below);
+        }
+    }
 }
 
 /// The page's own password manager: the browser offers to save a password after a sign-in and fills it next time,
@@ -314,7 +407,8 @@ pub fn browser_park(app: AppHandle) -> Result<(), String> {
             continue;
         }
         if name == front {
-            view.set_position(LogicalPosition::new(-20000.0, -20000.0)).map_err(|error| error.to_string())?;
+            let size = view.size().map_err(|error| error.to_string())?.to_logical::<f64>(view.window().scale_factor().map_err(|error| error.to_string())?);
+            set_rect(&view, -20000.0, -20000.0, size.width, size.height)?;
             view.show().map_err(|error| error.to_string())?;
         } else {
             view.hide().map_err(|error| error.to_string())?;
