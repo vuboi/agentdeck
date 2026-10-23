@@ -3,14 +3,37 @@
 html,body{margin:0;padding:0;background:transparent!important;overflow:hidden}
 #root{position:absolute}
 #root [data-z-hover-glide-highlight]{position:absolute;top:0;left:0;margin:0;z-index:-1;pointer-events:none;opacity:0}
-#root>*{position:static!important;inset:auto!important;transform:none!important;margin:0!important;opacity:1!important;visibility:visible!important}
+#root>*{position:static!important;inset:auto!important;transform:none!important;margin:0!important;opacity:1!important;visibility:visible!important;max-width:none!important;max-height:none!important}
 #root *{animation:none!important}
-#root *:not([data-z-hover-glide-highlight]){transition-property:background-color,color,border-color,opacity!important}
+#root *:not([data-z-hover-glide-highlight]):not([style*="transition"]){transition-property:background-color,color,border-color,opacity!important}
 </style></head><body><div id="root"></div><script>
 const BASE = navigator.userAgent.includes('Windows') ? 'http://agentdeck.localhost/' : 'agentdeck://localhost/';
 const post = (message) => fetch(BASE + 'r', { method: 'POST', body: JSON.stringify(message), mode: 'no-cors' }).catch(() => {});
 const root = document.getElementById('root');
 const PICK = 'button,a,[role=menuitem],[role=menuitemradio],[role=menuitemcheckbox],[role=option],[role=radio],[role=checkbox]';
+/** Makes `from` like `to`, keeping the elements that are still there. The glide highlight's place is the mirror's own. */
+function morph(from, to) {
+  if (from.nodeType !== to.nodeType || from.nodeName !== to.nodeName) {
+    from.replaceWith(to.cloneNode(true));
+    return;
+  }
+  if (from.nodeType !== 1) {
+    if (from.nodeValue !== to.nodeValue) from.nodeValue = to.nodeValue;
+    return;
+  }
+  const own = from.hasAttribute('data-z-hover-glide-highlight');
+  for (const name of [...from.getAttributeNames()]) if (!to.hasAttribute(name) && !(own && name === 'style')) from.removeAttribute(name);
+  for (const name of to.getAttributeNames()) {
+    if (own && name === 'style') continue;
+    const value = to.getAttribute(name);
+    if (from.getAttribute(name) !== value) from.setAttribute(name, value);
+  }
+  if ((from.tagName === 'INPUT' || from.tagName === 'TEXTAREA') && from.value !== (to.getAttribute('value') ?? to.textContent)) from.value = to.getAttribute('value') ?? to.textContent;
+  const a = [...from.childNodes];
+  const b = [...to.childNodes];
+  b.forEach((node, index) => (a[index] ? morph(a[index], node) : from.appendChild(node.cloneNode(true))));
+  for (const node of a.slice(b.length)) node.remove();
+}
 window.__overlay = {
   css(text) { document.getElementById('app').textContent = text; },
   clear() {
@@ -29,9 +52,18 @@ window.__overlay = {
     root.style.left = x + 'px';
     root.style.top = y + 'px';
     root.style.width = w + 'px';
-    root.innerHTML = html;
+    // The same menu again (a hover, a typed letter): patched in place, so its transitions play (the command
+    // palette's highlight glides to the hovered row). Another menu: drawn anew.
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    const next = template.content.firstElementChild;
+    const now = root.firstElementChild;
+    if (now && next && now.tagName === next.tagName && root.childElementCount === 1) morph(now, next);
+    else root.innerHTML = html;
     // A popover-API element is hidden unless opened in the top layer; the mirror is plain markup.
     for (const node of root.querySelectorAll('[popover]')) node.removeAttribute('popover');
+    // A scrolled list is shown where it is scrolled to (markup carries no scroll position).
+    for (const node of root.querySelectorAll('[data-mirror-scroll]')) node.scrollTop = Number(node.dataset.mirrorScroll);
     if (origin) {
       // A new menu opens like a z-ui popover. The overlay is hidden until shown, and frames only run once it is
       // on screen, so the animation starts exactly when it can be seen.
@@ -80,8 +112,23 @@ root.addEventListener('pointerleave', () => {
   for (const box of root.querySelectorAll('[data-z-hover-glide-highlight]')) box.style.opacity = '0';
 });
 addEventListener('keydown', (event) => post({ kind: 'overlay-key', key: event.key }));
+// The pointer over a row is the pointer over the real row: the real menu moves its highlight, the mirror follows.
+let hovered = null;
+root.addEventListener('pointermove', (event) => {
+  const item = event.target.closest(PICK);
+  if (!item || item === hovered) return;
+  hovered = item;
+  post({ kind: 'overlay-hover', index: [...root.querySelectorAll(PICK)].indexOf(item) });
+});
+root.addEventListener('pointerleave', () => (hovered = null));
+// Loaded (again): the app sends its styles now, not when the first menu opens.
+post({ kind: 'overlay-ready' });
 // The clear margin around the menu is not the menu: a press there goes to the app below.
 addEventListener('pointerdown', (event) => {
   if (!root.contains(event.target)) post({ kind: 'overlay-pass', x: event.clientX, y: event.clientY });
+  // The keyboard goes back to the app, where the real menu or dialog is.
+  else post({ kind: 'overlay-press' });
 });
+// A wheel over the mirror scrolls the real list, and the mirror follows.
+addEventListener('wheel', (event) => post({ kind: 'overlay-wheel', x: event.clientX, y: event.clientY, dx: event.deltaX, dy: event.deltaY }), { passive: true });
 </script></body></html>

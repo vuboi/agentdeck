@@ -37,7 +37,7 @@
     type Rect,
   } from '../browser.svelte';
   import { inTauri } from '../history';
-  import { mirrorMenus } from '../menu-overlay';
+  import { MIRRORED_DIALOGS, mirrorMenus } from '../menu-overlay';
   import { layout } from '../layout.svelte';
   import { draftElements, draftImages, drafts, workspace } from '../sessions.svelte';
   import DevTools from './DevTools.svelte';
@@ -56,23 +56,15 @@
     addressInput.select();
   }
   let editing = $state(false);
-  // A dialog over the page (search, a modal): the page cannot sit under it, so a picture of the page stands in,
-  // dimmed by the dialog's backdrop like any page would be. It is taken the moment a key or button is pressed,
-  // before the dialog appears, so the swap is instant.
+  // What cannot be mirrored above the page (a drawer, the gallery, a floating tool window over it): a picture of
+  // the page stands in, dimmed by the overlay's backdrop like any page would be. Taken only then: a capture is heavy
+  // work for the page's webview, and the search palette and modals never need one (menu-overlay.ts).
   let standIn = $state<{ src: string; x: number; y: number; w: number; h: number } | null>(null);
-  let early: { picture: Promise<string>; at: number } | null = null;
-  function takeEarly(event: Event) {
-    if (!inTauri() || !tab.opened || covered) return;
-    if (event instanceof KeyboardEvent && !(event.ctrlKey || event.metaKey || event.altKey)) return;
-    const picture = capturePage();
-    picture.catch(() => {});
-    early = { picture, at: Date.now() };
-  }
   async function coverPage() {
     const place = frame();
     if (place && stage && tab.opened) {
       try {
-        const src = await (early && Date.now() - early.at < 2000 ? early.picture : capturePage());
+        const src = await capturePage();
         const decoded = new Image();
         decoded.src = src;
         await decoded.decode().catch(() => {});
@@ -80,12 +72,25 @@
           const origin = stage.getBoundingClientRect();
           standIn = { src, x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h };
           await tick();
+          // The picture must be on screen before the page leaves, or one empty frame shows between them.
+          await painted();
+          // Moved aside rather than hidden: a hidden WebView2 stops drawing and comes back with a blank frame.
+          if (covered) await parkBrowser();
+          return;
         }
       } catch {
         // No picture: the page simply hides.
       }
     }
     if (covered) await hideBrowser();
+  }
+  /** Resolves once what was just rendered has been drawn. */
+  const painted = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  async function uncoverPage() {
+    await sync();
+    // The page is back in place and already drawn (it kept drawing aside); the picture goes once it is seen.
+    await painted();
+    if (!covered) standIn = null;
   }
   let busy = $state('');
   /** A dialog is open: the page hides. Menus are mirrored above the page instead (menu-overlay.ts). */
@@ -200,28 +205,44 @@
     }
   }
 
-  // The page is a native layer above the app: a dialog opened over it would hide behind it.
-  const OVERLAYS = '[role="dialog"]:not([aria-label="Annotate screenshot"]):not([aria-label="Preview"]), [data-z-modal]';
+  // The page is a native layer above the app: a dialog opened over it would hide behind it. Dialogs that can be
+  // mirrored are (menu-overlay.ts); any other modal one (a drawer, the gallery: it dims the whole app) covers the
+  // page, a floating tool window only where it lies over it. The Preview window holds the page itself, and the
+  // screenshot editor draws its own picture.
+  const MODALS = '[aria-modal="true"], [data-z-modal], [role="alertdialog"]';
+  const OVERLAYS = '[role="dialog"]:not([aria-label="Annotate screenshot"]):not([aria-label="Preview"]), [role="alertdialog"], [data-z-modal]';
+  function overlayOnPage(): boolean {
+    const page = stage?.getBoundingClientRect();
+    if (!page) return false;
+    for (const element of document.querySelectorAll<HTMLElement>(OVERLAYS)) {
+      if (element.contains(stage!)) continue;
+      // The search palette, a modal, a confirm: mirrored above the live page with its backdrop (menu-overlay.ts).
+      if (tab.opened && element.matches(MIRRORED_DIALOGS)) continue;
+      if (element.matches(MODALS)) return true;
+      const r = element.getBoundingClientRect();
+      if (r.width > 0 && r.right > page.left && r.left < page.right && r.bottom > page.top && r.top < page.bottom) return true;
+    }
+    return false;
+  }
+  function checkCovered() {
+    const now = overlayOnPage();
+    if (now === covered) return;
+    covered = now;
+    if (now) void coverPage();
+    else void uncoverPage();
+  }
   let observer: MutationObserver | undefined;
   let resizer: ResizeObserver | undefined;
   let stopMirror: (() => void) | undefined;
 
   onMount(() => {
     void listenToPage();
-    document.addEventListener('pointerdown', takeEarly, true);
-    document.addEventListener('keydown', takeEarly, true);
     stopMirror = mirrorMenus(() => (tab.opened && !covered && stage ? stage.getBoundingClientRect() : null));
     if (stage) {
       resizer = new ResizeObserver(() => void sync());
       resizer.observe(stage);
     }
-    observer = new MutationObserver(() => {
-      const now = document.querySelector(OVERLAYS) !== null;
-      if (now === covered) return;
-      covered = now;
-      if (now) void coverPage();
-      else void sync().then(() => setTimeout(() => (standIn = null), 60));
-    });
+    observer = new MutationObserver(checkCovered);
     observer.observe(document.body, { childList: true, subtree: true });
     void sync();
     window.addEventListener('resize', onResize);
@@ -229,6 +250,8 @@
     let last = '';
     let frameId = 0;
     const watch = () => {
+      // A floating tool window dragged onto the page, or off it, changes no DOM: look every frame.
+      checkCovered();
       const box = stage?.getBoundingClientRect();
       const key = box ? `${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)},${Math.round(box.height)}` : '';
       // While a drag or a dialog holds the page back nothing is placed, so the change is kept for when it ends.
@@ -244,8 +267,6 @@
   const onResize = () => void sync();
 
   onDestroy(() => {
-    document.removeEventListener('pointerdown', takeEarly, true);
-    document.removeEventListener('keydown', takeEarly, true);
     stopMirror?.();
     resizer?.disconnect();
     observer?.disconnect();

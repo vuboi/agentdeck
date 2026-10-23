@@ -542,8 +542,33 @@
     annReport();
   };
 
+  // ---- the backdrop of a dialog open in the app ----
+  // The app's dialogs dim and blur everything behind them; this page is behind them too, and only the page itself
+  // can blur its own content. It fades exactly like the app's backdrop (z-ui: 200ms in, ease-out-expo).
+  let shade = null;
+  let shadeGone = 0;
+  const showShade = (look) => {
+    clearTimeout(shadeGone);
+    if (look) {
+      if (!shade) {
+        shade = document.createElement('div');
+        shade.id = '__agentdeck_shade';
+      }
+      if (!shade.isConnected) document.documentElement.appendChild(shade);
+      shade.style.cssText = `position:fixed;inset:0;z-index:2147483646;will-change:opacity;opacity:0;${look}`;
+      // Started from where it is now, so the fade begins on the very next frame.
+      shade.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, easing: 'cubic-bezier(0.16, 1, 0.3, 1)', fill: 'forwards' });
+    } else if (shade && shade.isConnected) {
+      shade.getAnimations().forEach((animation) => animation.cancel());
+      shade.style.opacity = '1';
+      shade.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' });
+      shadeGone = setTimeout(() => shade.remove(), 160);
+    }
+  };
+
   // ---- requests from the app ----
   window.__agentdeck = {
+    shade: showShade,
     run(id, kind, arg) {
       if (kind === 'dom') {
         let html;

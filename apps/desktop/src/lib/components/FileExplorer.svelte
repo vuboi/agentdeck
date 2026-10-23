@@ -319,7 +319,7 @@
   {/key}
 {/if}
 
-<ZModal bind:open={renaming} zTitle="Rename" zWidth="400px" zBodyClass="min-h-0! py-3" zOkText="Rename" zCancelText="Cancel" zLoading={busy} onOk={doRename}>
+<ZModal bind:open={renaming} zTitle="Rename" zWidth="480px" zBodyClass="min-h-0! py-3" zOkText="Rename" zCancelText="Cancel" zLoading={busy} onOk={doRename}>
   <div class="flex flex-col gap-2">
     <ZInput bind:this={nameInput} bind:value={newName} zPlaceholder="New name" onEnter={doRename} />
     {#if renameError}<span class="text-xs text-destructive" role="alert">{renameError}</span>{/if}

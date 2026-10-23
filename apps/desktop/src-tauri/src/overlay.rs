@@ -37,6 +37,16 @@ pub fn overlay_eval(app: AppHandle, script: String) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// A press on the mirror gave the overlay the keyboard: hand it back to the app, whose field (the search of a
+/// mirrored dialog, say) still has the focus inside it, so typing goes on there.
+#[tauri::command]
+pub fn overlay_return_focus(app: AppHandle) -> Result<(), String> {
+    app.get_webview("main")
+        .ok_or("no main webview")?
+        .set_focus()
+        .map_err(|error| error.to_string())
+}
+
 /// Bumped on every show: a hide that waited for the closing animation is dropped when a menu opened since.
 static SHOWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Whether a menu is on screen in the overlay (for screenshots of the page).
@@ -82,6 +92,10 @@ pub fn overlay_show(app: AppHandle, script: Option<String>, x: f64, y: f64, w: f
         .map_err(|error| error.to_string())?;
     view.show().map_err(|error| error.to_string())?;
     to_front(&view);
+    // Showing a webview can give it the keyboard: it stays with the app, whose field (the palette's search) has it.
+    if let Some(main) = app.get_webview("main") {
+        let _ = main.set_focus();
+    }
     VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }

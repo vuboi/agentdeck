@@ -432,7 +432,7 @@
 
 <SearchPalette bind:open={searchOpen} />
 
-<ZModal bind:open={renaming} zTitle="Rename chat" zWidth="400px" zBodyClass="min-h-0! py-3" zOkText="Save" zCancelText="Cancel" zLoading={busy} zOkDisabled={Boolean(titleError)} onOk={doRename}>
+<ZModal bind:open={renaming} zTitle="Rename chat" zWidth="480px" zBodyClass="min-h-0! py-3" zOkText="Save" zCancelText="Cancel" zLoading={busy} zOkDisabled={Boolean(titleError)} onOk={doRename}>
   <div class="flex flex-col gap-2">
     <ZInput bind:this={nameInput} bind:value={title} zPlaceholder="Chat name" onEnter={doRename} />
     <div class="flex items-center justify-between text-xs">

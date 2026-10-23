@@ -542,6 +542,7 @@ pub fn run() {
             overlay::overlay_eval,
             overlay::overlay_show,
             overlay::overlay_hide,
+            overlay::overlay_return_focus,
             browser::open_external
         ])
         .run(tauri::generate_context!())
