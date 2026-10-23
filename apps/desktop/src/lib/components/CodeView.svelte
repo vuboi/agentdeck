@@ -6,7 +6,7 @@
 
   // Read-only source view. Rows have one fixed height, so a 1M-line file only mounts the rows on screen.
   // Colours arrive in chunks for the rows in view: the plain text is there at once, no spinner.
-  let { text, lang }: { text: string; lang?: string } = $props();
+  let { text, lang, added }: { text: string; lang?: string; /** Lines (1-based) a change added: marked in green. */ added?: ReadonlySet<number> } = $props();
 
   const ROW = 20; // px, equals leading-5
   const CHUNK = 240; // lines per tokenizer call
@@ -80,8 +80,9 @@
   <div class="relative min-w-full" style:height="{$virtualizer.getTotalSize()}px">
     {#each items as item (item.key)}
       {@const row = version >= 0 ? tokens.get(item.index) : undefined}
-      <div class="absolute top-0 left-0 flex w-max min-w-full whitespace-pre" style:height="{ROW}px" style:transform="translateY({item.start}px)">
-        <span class="sticky left-0 z-10 w-14 shrink-0 bg-background pr-3 text-right text-muted-foreground/60 select-none">{item.index + 1}</span>
+      {@const isAdded = added?.has(item.index + 1) ?? false}
+      <div class="absolute top-0 left-0 flex w-max min-w-full whitespace-pre {isAdded ? 'bg-emerald-500/10' : ''}" style:height="{ROW}px" style:transform="translateY({item.start}px)">
+        <span class="sticky left-0 z-10 w-14 shrink-0 bg-background pr-3 text-right select-none {isAdded ? 'font-bold text-emerald-500 shadow-[inset_2px_0_0_var(--color-emerald-500)]' : 'text-muted-foreground/60'}">{item.index + 1}</span>
         <span class="pr-6 text-foreground/90">
           {#if row}
             {#each row as token, index (index)}<span style:color={token.color}>{token.content}</span>{/each}

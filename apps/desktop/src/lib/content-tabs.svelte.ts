@@ -6,7 +6,7 @@ import { getPref, setPref } from './prefs';
 // Chats and files share one list; `active` is a tab id, or '' when every tab is closed.
 export type ContentTab =
   | { id: string; kind: 'chat'; sessionId: string }
-  | { id: string; kind: 'file'; name: string; path: string; root: string };
+  | { id: string; kind: 'file'; name: string; path: string; root: string; /** The file as it is, or what changed in it. */ view?: 'file' | 'changes' };
 
 export const contentTabs = $state({
   active: '' as string,
@@ -75,11 +75,11 @@ export function showSession(sessionId: string) {
 }
 
 /** Open a file as a tab. `path` is absolute; `root` is the project folder it must stay inside. */
-export function openFileTab(path: string, root: string) {
+export function openFileTab(path: string, root: string, view?: 'file' | 'changes') {
   const name = path.split(/[\\/]/).pop() ?? path;
-  if (!contentTabs.tabs.some((tab) => tab.id === path)) {
-    contentTabs.tabs.push({ id: path, kind: 'file', name, path, root });
-  }
+  const open = contentTabs.tabs.find((tab) => tab.id === path);
+  if (!open) contentTabs.tabs.push({ id: path, kind: 'file', name, path, root, view });
+  else if (view && open.kind === 'file') open.view = view;
   contentTabs.active = path;
 }
 

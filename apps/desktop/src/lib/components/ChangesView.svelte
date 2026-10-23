@@ -64,7 +64,7 @@
       toast.info('That file is deleted');
       return;
     }
-    openFileTab(`${root.replace(/[\/]+$/, '')}/${change.path}`, root);
+    openFileTab(`${root.replace(/[\/]+$/, '')}/${change.path}`, root, 'changes');
   }
 
   async function act(work: () => Promise<unknown>, done: string) {
