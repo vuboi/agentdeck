@@ -2,7 +2,8 @@
   import { ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { slide } from 'svelte/transition';
-  import { activity, audit, clearAudit, type Activity } from '../activity.svelte';
+  import { activity, audit, auditImage, clearAudit, type Activity } from '../activity.svelte';
+  import { openImages } from '../preview.svelte';
   import { elapsed } from '../blocks';
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
@@ -115,6 +116,18 @@
         <pre class="m-0 overflow-x-auto rounded-md border border-border bg-background px-2 py-1.5 font-mono whitespace-pre-wrap break-all">{item.input}</pre>
         {#if item.output}
           <pre class="m-0 max-h-48 overflow-auto px-1 font-mono whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
+        {/if}
+        {#if item.image}
+          <!-- The picture the call returned (a screenshot of the page): click to see it full size. -->
+          {#await auditImage(item.image)}
+            <div class="h-24 w-40 animate-pulse rounded-md border border-border bg-muted/40"></div>
+          {:then src}
+            <button type="button" class="block w-fit max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border" aria-label="Open the screenshot" onclick={() => openImages([{ src, name: `${item.name}.png` }], 0)}>
+              <img {src} alt="Screenshot returned by {item.name}" class="block max-h-60 max-w-full object-contain" />
+            </button>
+          {:catch}
+            <span class="text-muted-foreground">The screenshot is no longer on disk.</span>
+          {/await}
         {/if}
       </div>
     {/if}

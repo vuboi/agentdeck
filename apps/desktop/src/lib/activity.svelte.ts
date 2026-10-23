@@ -21,7 +21,22 @@ export type Activity = {
   startedAt: number;
   endedAt?: number;
   output?: string;
+  /** A picture the call returned (a screenshot): a data URL until it is saved, then its file name in the log. */
+  image?: string;
 };
+
+/** A saved picture, read back as a data URL; one read per picture. */
+const pictures = new Map<string, Promise<string>>();
+export function auditImage(image: string): Promise<string> {
+  if (image.startsWith('data:')) return Promise.resolve(image);
+  let found = pictures.get(image);
+  if (!found) {
+    found = tauriCall('audit_image_read', { name: image }).then(String);
+    found.catch(() => pictures.delete(image));
+    pictures.set(image, found);
+  }
+  return found;
+}
 
 const LIMIT = 1000;
 export const activity = $state<Activity[]>([]);
@@ -62,7 +77,22 @@ function record(item: Activity) {
   // Tool ids restart in every turn (Codex counts from item_0 each time), so a saved entry gets its own key.
   const entry = { ...item, key: `${item.key}@${item.startedAt}`, output: item.output?.slice(0, 4000) };
   audit.push(entry);
-  if (inTauri()) void tauriCall('audit_append', { line: JSON.stringify(entry) }).catch(() => {});
+  if (!inTauri()) return;
+  const picture = entry.image?.startsWith('data:') ? entry.image : undefined;
+  if (!picture) {
+    void tauriCall('audit_append', { line: JSON.stringify(entry) }).catch(() => {});
+    return;
+  }
+  // The picture goes to a file of its own; the log line, and the entry once saved, keep its name.
+  void tauriCall('audit_image_save', { image: picture })
+    .then((name) => {
+      const saved = String(name);
+      pictures.set(saved, Promise.resolve(picture));
+      const shown = audit.find((item) => item.key === entry.key);
+      if (shown) shown.image = saved;
+      return tauriCall('audit_append', { line: JSON.stringify({ ...entry, image: saved }) });
+    })
+    .catch(() => void tauriCall('audit_append', { line: JSON.stringify({ ...entry, image: undefined }) }).catch(() => {}));
 }
 
 /** Keeps the log in step with one event of a chat's run. */
@@ -87,12 +117,15 @@ export function trackActivity(sessionId: string, title: string, project: string,
     const item = activity.findLast((entry) => same(entry) && (entry.status === 'running' || entry.status === 'background')) ?? activity.findLast(same);
     if (!item) return;
     item.output = event.output.length > 4000 ? `${event.output.slice(0, 4000)}…` : event.output;
+    if (event.image) item.image = event.image;
     if (event.is_error) item.status = 'fail';
     // A background shell answers at once with its id; it keeps running after that.
     else item.status = item.background ? 'background' : 'ok';
     if (item.status !== 'background') {
       item.endedAt = Date.now();
       record(item);
+      // The log keeps the picture; the live list does not need a copy of it.
+      item.image = undefined;
     }
     if (item.status === 'ok' && (item.name === 'Write' || item.name === 'Edit' || item.name === 'Delete' || item.name === 'MultiEdit')) fileWrites.tick++;
   } else if (event.kind === 'done' || event.kind === 'error') {

@@ -140,11 +140,73 @@ fn audit_read() -> Result<String, String> {
 
 #[tauri::command]
 fn audit_clear() -> Result<(), String> {
+    match std::fs::remove_dir_all(audit_images()?) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
     match std::fs::remove_file(audit_file()?) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+/// Pictures a tool call returned (a screenshot of the page): `~/.agentdeck/audit-images`, one file each. The log
+/// line keeps the file's name, not the picture, so the log stays small.
+fn audit_images() -> Result<PathBuf, String> {
+    Ok(home_folder()?.join(".agentdeck").join("audit-images"))
+}
+
+/// Saves a picture given as a data URL (`data:image/png;base64,…`). Returns the file's name.
+#[tauri::command]
+async fn audit_image_save(image: String) -> Result<String, String> {
+    use base64::Engine;
+    tauri::async_runtime::spawn_blocking(move || {
+        let (head, data) = image.split_once(',').ok_or("not a data URL")?;
+        let extension = match head {
+            "data:image/png;base64" => "png",
+            "data:image/jpeg;base64" => "jpg",
+            "data:image/webp;base64" => "webp",
+            "data:image/gif;base64" => "gif",
+            other => return Err(format!("{other} is not a supported picture")),
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .map_err(|error| error.to_string())?;
+        let folder = audit_images()?;
+        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let name = format!("shot-{stamp:x}.{extension}");
+        std::fs::write(folder.join(&name), bytes).map_err(|error| error.to_string())?;
+        Ok(name)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// A saved picture as a data URL. Only a bare file name of that folder is read.
+#[tauri::command]
+async fn audit_image_read(name: String) -> Result<String, String> {
+    use base64::Engine;
+    tauri::async_runtime::spawn_blocking(move || {
+        if name.is_empty() || name.contains(['/', '\\']) || name.contains("..") {
+            return Err("not a picture of the audit log".to_string());
+        }
+        let mime = match name.rsplit('.').next() {
+            Some("png") => "image/png",
+            Some("jpg") => "image/jpeg",
+            Some("webp") => "image/webp",
+            Some("gif") => "image/gif",
+            _ => return Err("not a picture of the audit log".to_string()),
+        };
+        let bytes = std::fs::read(audit_images()?.join(&name)).map_err(|error| error.to_string())?;
+        Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Moves a saved session to `~/.agentdeck/trash` (not destroyed), so it leaves Claude and Codex too.
@@ -510,6 +572,8 @@ pub fn run() {
             audit_append,
             audit_read,
             audit_clear,
+            audit_image_save,
+            audit_image_read,
             folder_list,
             reveal_path,
             path_rename,
