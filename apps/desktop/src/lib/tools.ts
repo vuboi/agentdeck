@@ -13,4 +13,7 @@ export const TOOLS: Tool[] = [
   { value: 'Usage', label: 'Usage', icon: 'lucideActivity' as ZIconName },
 ];
 
-export const toolOf = (value: string) => TOOLS.find((tool) => tool.value === value) ?? TOOLS[0];
+/** Tools that have a window but no tab in the panel. */
+const EXTRA: Tool[] = [{ value: 'DevTools', label: 'Developer tools', icon: 'lucideSquareTerminal' as ZIconName }];
+
+export const toolOf = (value: string) => [...TOOLS, ...EXTRA].find((tool) => tool.value === value) ?? TOOLS[0];

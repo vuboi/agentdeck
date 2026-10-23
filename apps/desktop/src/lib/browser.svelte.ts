@@ -1,5 +1,6 @@
 // State and requests of the AgentDeck browser (see src-tauri/src/browser.rs). Every tab is its own webview; a script
 // injected into each page reports console, network and navigation, and answers DOM / screenshot / element requests.
+import { listenToNetwork } from './devtools-net.svelte';
 import { inTauri } from './history';
 import { layout } from './layout.svelte';
 
@@ -102,6 +103,7 @@ export async function listenToPage() {
   if (listening || !inTauri()) return;
   listening = true;
   const { listen } = await import('@tauri-apps/api/event');
+  void listenToNetwork();
   // The agent asked to open an address (browser_open): the same as a link opened in AgentDeck.
   await listen<{ url: string; newTab?: boolean }>('agent-open', ({ payload }) => openForAgent(payload.url, payload.newTab === true));
   // The agent switched the device (browser_device): pages are created again with that device's user agent.

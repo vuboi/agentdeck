@@ -89,7 +89,7 @@ fn label(tab: &str) -> String {
     format!("{PREFIX}{safe}")
 }
 
-fn webview(app: &AppHandle, tab: &str) -> Result<Webview, String> {
+pub(crate) fn webview(app: &AppHandle, tab: &str) -> Result<Webview, String> {
     app.get_webview(&label(tab))
         .ok_or_else(|| "the browser is not open".to_string())
 }
@@ -246,6 +246,9 @@ pub async fn browser_show(
                 }),
             );
         });
+    // Opaque white under the page: while the page's window is resized (the mark-up bar or the developer tools open and
+    // shrink the area) the strip not yet painted shows this, not black.
+    builder = builder.background_color(tauri::window::Color(255, 255, 255, 255));
     // A phone or tablet identifies itself as one, so sites send their mobile layout.
     if let Some(agent) = user_agent.as_deref() {
         builder = builder.user_agent(agent);
@@ -259,6 +262,7 @@ pub async fn browser_show(
         .map_err(|error| error.to_string())?;
     allow_password_saving(&view);
     crate::cdp::watch_frames(&view);
+    crate::cdp::watch_network(&view);
     layer(&view, BELOW.load(Ordering::Relaxed));
     hide_others(&app, &tab);
     Ok(())
@@ -613,4 +617,16 @@ pub fn selftest(app: AppHandle, url: String) {
         }
         app.exit(0);
     });
+}
+
+/// A DevTools call for the developer tools of the app: response bodies, cookies, storage, IndexedDB, caches. Only the
+/// domains those panels need; the rest of the protocol stays with the agent's tools.
+#[tauri::command]
+pub async fn devtools_cdp(app: AppHandle, tab: String, method: String, params: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+    const ALLOWED: [&str; 5] = ["Network.", "DOMStorage.", "IndexedDB.", "Storage.", "CacheStorage."];
+    if !ALLOWED.iter().any(|prefix| method.starts_with(prefix)) {
+        return Err(format!("{method} is not available to the developer tools"));
+    }
+    let view = webview(&app, &tab)?;
+    crate::cdp::call(&view, &method, params.unwrap_or_else(|| serde_json::json!({})), None).await
 }

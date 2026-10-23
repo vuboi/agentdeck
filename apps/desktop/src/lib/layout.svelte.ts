@@ -132,7 +132,21 @@ export function floatFromZone(tool: string, x: number, y: number) {
   layout.dragRequest = { tool, x, y };
 }
 
+/** The developer tools sit in the bottom zone, under the conversation: a fixed place that never resizes the page (a native layer). */
+export const DEVTOOLS = 'DevTools';
+export const devtoolsOpen = () => isAway(DEVTOOLS);
+export function setDevtools(open: boolean) {
+  if (!open) {
+    layout.floating = layout.floating.filter((win) => win.tool !== DEVTOOLS);
+    removeFromZones(DEVTOOLS);
+  } else if (!isAway(DEVTOOLS)) {
+    layout.docked.bottom.push(DEVTOOLS);
+  }
+}
+
 export function dockTool(tool: string, zone: Zone = 'tools') {
+  // The developer tools are not a panel tool: "dock back" and "close" both just close them.
+  if (tool === DEVTOOLS && zone === 'tools') return setDevtools(false);
   layout.floating = layout.floating.filter((win) => win.tool !== tool);
   removeFromZones(tool);
   if (zone === 'tools') {

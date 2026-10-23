@@ -308,8 +308,20 @@
     box.rows = 2;
     box.placeholder = 'Add a note…';
     box.value = original;
-    box.style.cssText = `position:absolute;left:${note.x1 + 14}px;top:${note.y1 + 14}px;width:220px;resize:none;padding:6px 8px;border:1px solid ${ANN_COLOR};border-radius:8px;background:#1b1b1b;color:#eee;font:12px/1.4 system-ui,sans-serif;outline:none;pointer-events:auto;z-index:2;box-shadow:0 4px 14px rgba(0,0,0,.4)`;
+    box.style.cssText = `position:absolute;left:0px;top:0px;width:220px;resize:none;padding:6px 8px;border:1px solid ${ANN_COLOR};border-radius:8px;background:#1b1b1b;color:#eee;font:12px/1.4 system-ui,sans-serif;outline:none;pointer-events:auto;z-index:2;box-shadow:0 4px 14px rgba(0,0,0,.4)`;
     ann.layer.appendChild(box);
+    // Beside the note, kept inside the visible page: too close to an edge, it steps back from it (below a note at the
+    // top, above one at the bottom, left of one at the right edge).
+    const room = 8;
+    const wide = box.offsetWidth || 220;
+    const tall = box.offsetHeight || 56;
+    const view = { left: window.scrollX, top: window.scrollY, right: window.scrollX + window.innerWidth, bottom: window.scrollY + window.innerHeight };
+    let left = note.x1 + 14;
+    let top = note.y1 + 14;
+    if (left + wide > view.right - room) left = note.x1 - 14 - wide;
+    if (top + tall > view.bottom - room) top = note.y1 - 14 - tall;
+    box.style.left = `${Math.max(view.left + room, left)}px`;
+    box.style.top = `${Math.max(view.top + room, top)}px`;
     ann.editing = box;
     annRender();
     box.focus();

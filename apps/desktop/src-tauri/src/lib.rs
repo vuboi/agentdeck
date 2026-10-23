@@ -747,6 +747,7 @@ pub fn run() {
             browser::browser_layer,
             browser::browser_eval,
             browser::browser_zoom,
+            browser::devtools_cdp,
             browser::browser_close,
             browser::browser_capture,
             browser::browser_press,

@@ -2,6 +2,7 @@
   import { ZIcon } from '@shival99/z-ui-svelte';
   import { toolOf } from '../tools';
   import BrowserView from './BrowserView.svelte';
+  import DevTools from './DevTools.svelte';
   import ChangesView from './ChangesView.svelte';
   import FileExplorer from './FileExplorer.svelte';
   import TasksView from './TasksView.svelte';
@@ -23,6 +24,8 @@
   <ChangesView />
 {:else if tool === 'Workflow'}
   <WorkflowView />
+{:else if tool === 'DevTools'}
+  <DevTools embedded />
 {:else if tool === 'MCP'}
   <McpView />
 {:else}

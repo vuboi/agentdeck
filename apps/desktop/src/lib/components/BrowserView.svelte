@@ -1,7 +1,7 @@
 <script lang="ts">
   import { fly } from 'svelte/transition';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
-  import { ZDropdownMenu, ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZDropdownMenu, ZIcon, ZLoading, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import { toast } from '../toast';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
@@ -45,9 +45,8 @@
   import { inTauri } from '../history';
   import { trackRun } from '../activity.svelte';
   import { blurPage, cutHole, modalBlur, overPage, setBelow } from '../page-layer';
-  import { layout } from '../layout.svelte';
+  import { devtoolsOpen, layout, setDevtools } from '../layout.svelte';
   import { activeSession, draftElements, draftImages, drafts, projectOf, workspace } from '../sessions.svelte';
-  import DevTools from './DevTools.svelte';
 
   // The AgentDeck browser: tabs, an address bar, device sizes, an element picker, devtools, and a markup view
   // whose result goes to the chat. The pages themselves are native webviews placed over the stage below.
@@ -316,8 +315,6 @@
     void browser.landscape;
     void browser.device;
     void started;
-    void browser.devtools;
-    void browser.devtoolsHeight;
     // The mark-up bar opens in this very update, so the page moves before the next frame is drawn.
     void browser.annotating;
     // A floating window being carried or resized: the page steps aside and comes back where it lands.
@@ -449,20 +446,9 @@
   const alive = $derived(servers.list.filter((item) => item.running));
   const portOf = (item: { url: string | null }) => item.url?.match(/:(\d+)/)?.[1];
   const runningFor = (age: number) => (age < 60 ? `${age}s` : age < 3600 ? `${Math.floor(age / 60)}m` : `${Math.floor(age / 3600)}h ${Math.floor((age % 3600) / 60)}m`);
-  const processItems = $derived<ZDropdownMenuItem[]>(
-    servers.list.length === 0
-      ? [{ label: 'Nothing is running in the background', icon: 'lucideServerOff' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: true }]
-      : [
-          ...servers.list.flatMap((item, index) => {
-            const name = `${item.command.length > 34 ? `${item.command.slice(0, 34)}…` : item.command}${portOf(item) ? ` · :${portOf(item)}` : ''}`;
-            return [
-              { label: `${item.running ? '' : 'Exited · '}${name} · ${runningFor(item.age)}`, icon: (item.running ? 'lucideExternalLink' : 'lucideCircleOff') as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: index > 0 ? ('before' as const) : undefined, disabled: !item.running || !item.url, onClick: () => item.url && openInPreview(item.url, 'auto') },
-              { label: item.running ? 'Stop' : 'Remove from the list', icon: 'lucideSquare' as ZIconName, iconSize: 12, class: 'text-xs! py-1 pl-6! text-destructive!', onClick: () => void stopServers(item.key) },
-            ];
-          }),
-          ...(servers.list.length > 1 ? [{ label: 'Stop all', icon: 'lucideSquare' as ZIconName, iconSize: 12, class: 'text-xs! py-1 text-destructive!', divide: 'before' as const, onClick: () => void stopServers(null) }] : []),
-        ],
-  );
+  const processName = (item: { command: string; url: string | null }) => `${item.command.length > 34 ? `${item.command.slice(0, 34)}…` : item.command}${portOf(item) ? ` · :${portOf(item)}` : ''}`;
+  let processButton = $state<HTMLElement | null>(null);
+  let processOpen = $state(false);
 
   const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
@@ -538,6 +524,39 @@
       </form>
       <div class="flex shrink-0 items-center gap-0.5">
         <!-- Desktop, tablet, phone: one group, the current one pressed. Rotate is part of it, off for desktop. -->
+        {#if browser.annotating}
+          <!-- Mark-up tools sit in this row, in place of the device buttons: a bar of their own would resize the native page. -->
+          <div class="mr-1 flex items-center gap-0.5" role="toolbar" aria-label="Mark up tools">
+            {#each MARK_TOOLS as item (item.tool)}
+              <button
+                type="button"
+                class="{icon} {browser.annotateTool === item.tool ? 'bg-primary/15 text-primary' : ''}"
+                aria-label={item.label}
+                aria-pressed={browser.annotateTool === item.tool}
+                {@attach zTooltip({ content: `${item.label}: ${item.hint}`, position: 'top' })}
+                onclick={() => void useTool(item.tool)}
+              >
+                <ZIcon zType={item.icon} class="size-4" />
+              </button>
+            {/each}
+            <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+            <button type="button" class={icon} aria-label="Undo" disabled={!browser.annotateUndo} {@attach zTooltip({ content: 'Undo (Ctrl+Z)', position: 'top' })} onclick={() => void markHistory('undo')}>
+              <ZIcon zType={'lucideUndo2' as ZIconName} class="size-4" />
+            </button>
+            <button type="button" class={icon} aria-label="Redo" disabled={!browser.annotateRedo} {@attach zTooltip({ content: 'Redo (Ctrl+Shift+Z)', position: 'top' })} onclick={() => void markHistory('redo')}>
+              <ZIcon zType={'lucideRedo2' as ZIconName} class="size-4" />
+            </button>
+            <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-destructive outline-none hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-40" aria-label={browser.annotateSelected ? 'Delete the selected note' : 'Delete all notes'} disabled={browser.annotateCount === 0} {@attach zTooltip({ content: browser.annotateSelected ? 'Delete the selected note' : 'Delete all notes', position: 'top' })} onclick={() => void markHistory('remove')}>
+              <ZIcon zType={'lucideTrash2' as ZIconName} class="size-4" />
+            </button>
+            {#if browser.annotateCount > 0}
+              <button type="button" class="ml-1 inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground outline-none hover:bg-primary/90 disabled:opacity-60" disabled={busy !== ''} onclick={() => void addMarksToChat()}>
+                <ZIcon zType={'lucidePlus' as ZIconName} class="size-3.5" />
+                Add to chat
+              </button>
+            {/if}
+          </div>
+        {:else}
         <div class="mr-1 items-center rounded-md border border-border p-px {compact ? 'hidden' : 'flex'}" role="radiogroup" aria-label="Device">
           {#each DEVICE_BUTTONS as item (item.value)}
             <button
@@ -565,59 +584,46 @@
               <ZIcon zType={'lucideRotateCw' as ZIconName} class="size-3.5" />
             </button>
         </div>
-        <button type="button" class="{icon} relative {browser.devtools ? 'bg-primary/15 text-primary' : ''}" aria-label="Developer tools" aria-pressed={browser.devtools} {@attach zTooltip({ content: 'Developer tools', position: 'top' })} onclick={() => (browser.devtools = !browser.devtools)}>
+        {/if}
+        <button type="button" class="{icon} relative {devtoolsOpen() ? 'bg-primary/15 text-primary' : ''}" aria-label="Developer tools" aria-pressed={devtoolsOpen()} {@attach zTooltip({ content: 'Developer tools', position: 'top' })} onclick={() => setDevtools(!devtoolsOpen())}>
           <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
           {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
         </button>
-<div data-page-menu class="relative flex items-center [&_svg]:size-3.5! [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0" {@attach zTooltip({ content: 'Running in the background', position: 'top' })}>
-          <ZDropdownMenu zItems={processItems} zIcon={'lucideServer' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={260} zWave={false} />
+        <button bind:this={processButton} type="button" data-page-menu class="{icon} relative {processOpen ? 'bg-primary/15 text-primary' : ''}" aria-label="Running in the background" aria-expanded={processOpen} {@attach zTooltip({ content: 'Running in the background', position: 'top' })} onclick={() => (processOpen = !processOpen)}>
+          <ZIcon zType={'lucideServer' as ZIconName} zSize="14" />
           {#if alive.length > 0}<span class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center text-[9px] leading-3.5 text-primary-foreground">{alive.length}</span>{/if}
-        </div>
-<div data-page-menu class="flex items-center [&_svg]:size-3.5! [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
+        </button>
+        <ZPopover anchor={processButton} bind:open={processOpen} zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth={300}>
+          {#snippet children({ close })}
+            <div class="grid gap-0.5 p-1">
+              {#if servers.list.length === 0}
+                <p class="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="12" /> Nothing is running in the background</p>
+              {/if}
+              {#each servers.list as item (item.key)}
+                <div class="flex items-center gap-1">
+                  <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 disabled:pointer-events-none disabled:opacity-50" disabled={!item.running || !item.url} onclick={() => { if (item.url) openInPreview(item.url, 'auto'); close(); }}>
+                    <ZIcon zType={(item.running ? 'lucideExternalLink' : 'lucideCircleOff') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground" />
+                    <span class="min-w-0 flex-1 truncate">{item.running ? '' : 'Exited · '}{processName(item)}</span>
+                    <span class="shrink-0 text-muted-foreground tabular-nums">{runningFor(item.age)}</span>
+                  </button>
+                  <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md bg-destructive/10 text-destructive outline-none hover:bg-destructive/20" aria-label={item.running ? 'Stop' : 'Remove from the list'} {@attach zTooltip({ content: item.running ? 'Stop' : 'Remove from the list', position: 'top' })} onclick={() => void stopServers(item.key)}>
+                    {#if item.running}<svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg>{:else}<ZIcon zType={'lucideX' as ZIconName} zSize="12" />{/if}
+                  </button>
+                </div>
+              {/each}
+              {#if servers.list.length > 1}
+                <button type="button" class="mt-0.5 flex cursor-pointer items-center gap-2 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive outline-none hover:bg-destructive/20" onclick={() => { void stopServers(null); close(); }}>
+                  <svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg> Stop all
+                </button>
+              {/if}
+            </div>
+          {/snippet}
+        </ZPopover>
+<div data-page-menu class="flex items-center [&_.z-icon]:size-3.5! [&_svg]:size-3.5! [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
                   <ZDropdownMenu zItems={menuItems} zIcon={'lucideSettings2' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
         </div>
       </div>
     </div>
-    {#if browser.annotating}
-      <!-- Flies in by transform, never by size: a growing bar would move the native page every frame and make it shake. -->
-      <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1" role="toolbar" aria-label="Mark up tools" in:fly={{ y: -8, duration: 200, opacity: 0 }}>
-        {#each MARK_TOOLS as item (item.tool)}
-          <button
-            type="button"
-            class="{icon} {browser.annotateTool === item.tool ? 'bg-primary/15 text-primary' : ''}"
-            aria-label={item.label}
-            aria-pressed={browser.annotateTool === item.tool}
-            {@attach zTooltip({ content: item.label, position: 'top' })}
-            onclick={() => void useTool(item.tool)}
-          >
-            <ZIcon zType={item.icon} class="size-4" />
-          </button>
-        {/each}
-        <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
-        <button type="button" class={icon} aria-label="Undo" disabled={!browser.annotateUndo} {@attach zTooltip({ content: 'Undo (Ctrl+Z)', position: 'top' })} onclick={() => void markHistory('undo')}>
-          <ZIcon zType={'lucideUndo2' as ZIconName} class="size-4" />
-        </button>
-        <button type="button" class={icon} aria-label="Redo" disabled={!browser.annotateRedo} {@attach zTooltip({ content: 'Redo (Ctrl+Shift+Z)', position: 'top' })} onclick={() => void markHistory('redo')}>
-          <ZIcon zType={'lucideRedo2' as ZIconName} class="size-4" />
-        </button>
-        <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-destructive outline-none hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-40" aria-label={browser.annotateSelected ? 'Delete the selected note' : 'Delete all notes'} disabled={browser.annotateCount === 0} {@attach zTooltip({ content: browser.annotateSelected ? 'Delete the selected note' : 'Delete all notes', position: 'top' })} onclick={() => void markHistory('remove')}>
-          <ZIcon zType={'lucideTrash2' as ZIconName} class="size-4" />
-        </button>
-        <span class="ml-1 min-w-0 truncate text-[11px] text-muted-foreground">{MARK_TOOLS.find((item) => item.tool === browser.annotateTool)?.hint}</span>
-        {#if browser.annotateCount > 0}
-          <button
-            type="button"
-            class="ml-auto inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground outline-none hover:bg-primary/90 disabled:opacity-60"
-            disabled={busy !== ''}
-            onclick={() => void addMarksToChat()}
-          >
-            <ZIcon zType={'lucidePlus' as ZIconName} class="size-3.5" />
-            Add to chat
-          </button>
-        {/if}
-      </div>
-    {/if}
-
     {#if browser.error}
       <div class="shrink-0 border-b border-border px-3 py-1 text-xs text-destructive" role="status">{browser.error}</div>
     {/if}
@@ -681,8 +687,5 @@
       {/if}
     </div>
 
-    {#if browser.devtools}
-      <DevTools />
-    {/if}
   {/if}
 </div>

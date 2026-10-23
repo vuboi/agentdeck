@@ -3,17 +3,24 @@
   import { ZDropdownMenu, ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import { browser } from '../browser.svelte';
+  import { setDevtools } from '../layout.svelte';
   import { toast } from '../toast';
+  import { clearNetwork, TYPES } from '../devtools-net.svelte';
+  import ApplicationPanel from './ApplicationPanel.svelte';
+  import DevEmpty from './DevEmpty.svelte';
+  import NetworkPanel from './NetworkPanel.svelte';
   import Splitter from './Splitter.svelte';
 
   // Console and network of the page, laid out like a browser's devtools: tabs, a filter, a bar to resize it.
-  let { onresize }: { onresize?: (height: number) => void } = $props();
+  let { onresize, embedded = false }: { onresize?: (height: number) => void; embedded?: boolean } = $props();
 
-  type Tab = 'console' | 'network';
+  type Tab = 'console' | 'network' | 'application';
   let tab = $state<Tab>('console');
   let filter = $state('');
   let level = $state<'all' | 'error' | 'warn' | 'info'>('all');
-  let onlyFailed = $state(false);
+  let netType = $state('all');
+  let typeOpen = $state(false);
+  let typeButton: HTMLElement | null = $state(null);
   let levelOpen = $state(false);
   let levelButton: HTMLElement | null = $state(null);
 
@@ -31,9 +38,6 @@
       return (level === 'all' || group === level) && matches(line.text);
     }),
   );
-  const requests = $derived(
-    browser.network.filter((line) => (!onlyFailed || line.status === 0 || line.status >= 400) && matches(`${line.method} ${line.url} ${line.status}`)),
-  );
   const errors = $derived(browser.console.filter((line) => line.level === 'error').length);
 
   const tone = (value: string) => (value === 'error' ? 'text-destructive bg-destructive/5' : value === 'warn' ? 'text-warning bg-warning/5' : 'text-muted-foreground');
@@ -50,7 +54,10 @@
 
   function clear() {
     if (tab === 'console') browser.console = [];
-    else browser.network = [];
+    else if (tab === 'network') {
+      clearNetwork(browser.activeId);
+      browser.network = [];
+    }
   }
 
   // ---------- copy: the log or the requests as text, to paste into a chat (fix a bug, write a DTO) ----------
@@ -98,11 +105,12 @@
   };
 </script>
 
-<div class="flex min-h-0 shrink-0 flex-col overflow-hidden" style:height="{browser.devtoolsHeight + 1}px" in:fly={{ y: -8, duration: 200, opacity: 0 }}>
-  <Splitter axis="y" label="Resize developer tools" onDelta={resize} />
-  <section class="flex shrink-0 flex-col bg-background" style:height="{browser.devtoolsHeight}px" aria-label="Developer tools">
+<!-- Embedded: it fills a window of its own (floating or docked), so the page is never resized for it. -->
+<div class="flex min-h-0 flex-col overflow-hidden {embedded ? 'h-full flex-1' : 'shrink-0'}" style:height={embedded ? undefined : `${browser.devtoolsHeight + 1}px`} in:fly={{ y: embedded ? 0 : -8, duration: embedded ? 0 : 200, opacity: 0 }}>
+  {#if !embedded}<Splitter axis="y" label="Resize developer tools" onDelta={resize} />{/if}
+  <section class="flex flex-col bg-background {embedded ? 'min-h-0 flex-1' : 'shrink-0'}" style:height={embedded ? undefined : `${browser.devtoolsHeight}px`} aria-label="Developer tools">
   <div class="flex shrink-0 items-center gap-1 border-b border-border px-1.5 py-1" role="tablist">
-    {#each [['console', 'Console'], ['network', 'Network']] as [value, label] (value)}
+    {#each [['console', 'Console'], ['network', 'Network'], ['application', 'Application']] as [value, label] (value)}
       <button
         type="button"
         role="tab"
@@ -154,46 +162,73 @@
           </div>
         {/snippet}
       </ZPopover>
-    {:else}
-      <label class="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground"><input type="checkbox" bind:checked={onlyFailed} /> Failed</label>
+    {:else if tab === 'network'}
+      <button
+        bind:this={typeButton}
+        type="button"
+        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-input bg-background px-1.5 text-xs outline-none hover:border-primary/60 {typeOpen ? 'border-primary' : ''}"
+        aria-haspopup="listbox"
+        aria-expanded={typeOpen}
+        aria-label="Type"
+        onclick={() => (typeOpen = !typeOpen)}
+      >
+        {TYPES.find((item) => item.value === netType)?.label}
+        <ZIcon zType="lucideChevronDown" class="size-3 text-muted-foreground" />
+      </button>
+      <ZPopover anchor={typeButton} bind:open={typeOpen} zTrigger="manual" zPosition="top-right" zOffset={4} zWidth={130}>
+        {#snippet children()}
+          <div class="flex w-full flex-col gap-0.5 p-1" role="listbox" aria-label="Type">
+            {#each TYPES as item (item.value)}
+              <button
+                type="button"
+                role="option"
+                aria-selected={netType === item.value}
+                class="flex w-full cursor-pointer items-center justify-between rounded px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {netType === item.value ? 'bg-primary/10 text-primary' : ''}"
+                onclick={() => {
+                  netType = item.value;
+                  typeOpen = false;
+                }}
+              >
+                {item.label}
+                {#if netType === item.value}<ZIcon zType="lucideCheck" class="size-3" />{/if}
+              </button>
+            {/each}
+          </div>
+        {/snippet}
+      </ZPopover>
     {/if}
+    {#if tab !== 'application'}
     <div class="flex items-center [&_.z-icon]:!size-3.5 [&_button]:size-5! [&_button]:rounded [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
       <ZDropdownMenu zItems={copyItems} zIcon={'lucideCopy' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="xs" zPosition="top-right" zOffset={6} zMinWidth={240} zWave={false} />
     </div>
     <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear" {@attach zTooltip({ content: 'Clear', position: 'top' })} onclick={clear}>
       <ZIcon zType={'lucideTrash2' as ZIconName} zSize="14" />
     </button>
-    <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Close" {@attach zTooltip({ content: 'Close', position: 'top' })} onclick={() => (browser.devtools = false)}>
+    {/if}
+    <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Close" {@attach zTooltip({ content: 'Close', position: 'top' })} onclick={() => setDevtools(false)}>
       <ZIcon zType="lucideX" zSize="14" />
     </button>
   </div>
 
-  <div class="min-h-0 flex-1 overflow-auto font-mono text-[11px]" role="log" aria-label={tab}>
-    {#if tab === 'console'}
+  {#if tab === 'console'}
+    <div class="min-h-0 flex-1 overflow-auto font-mono text-[11px]" role="log" aria-label="console">
       {#each lines as line, index (index)}
         <div class="flex gap-2 border-b border-border/50 px-2 py-0.5 {tone(line.level)}">
           <span class="shrink-0 tabular-nums opacity-70">{clock(line.at)}</span>
           <span class="min-w-0 break-all whitespace-pre-wrap {line.level === 'error' || line.level === 'warn' ? '' : 'text-foreground'}">{line.text}</span>
         </div>
       {:else}
-        <div class="p-3 text-muted-foreground">Nothing logged{filter || level !== 'all' ? ' for this filter' : ' yet'}.</div>
+        {#if filter || level !== 'all'}
+          <DevEmpty icon="lucideSearchX" title="Nothing matches" hint="Try another filter or level." />
+        {:else}
+          <DevEmpty icon="lucideTerminal" title="Nothing logged yet" hint="console.log output and errors of the page appear here." />
+        {/if}
       {/each}
-    {:else}
-      <div class="sticky top-0 flex gap-2 border-b border-border bg-muted/60 px-2 py-0.5 text-muted-foreground backdrop-blur">
-        <span class="w-10 shrink-0">Method</span><span class="w-9 shrink-0">Status</span><span class="w-32 shrink-0">Name</span><span class="min-w-0 flex-1">URL</span><span class="w-12 shrink-0 text-right">Time</span>
-      </div>
-      {#each requests as line, index (index)}
-        <div class="flex gap-2 border-b border-border/50 px-2 py-0.5 hover:bg-muted/40">
-          <span class="w-10 shrink-0 text-muted-foreground">{line.method}</span>
-          <span class="w-9 shrink-0 {statusTone(line.status)}">{line.status || 'ERR'}</span>
-          <span class="w-32 shrink-0 truncate">{name(line.url)}</span>
-          <span class="min-w-0 flex-1 truncate text-muted-foreground" title={line.url}>{line.url}</span>
-          <span class="w-12 shrink-0 text-right text-muted-foreground">{line.ms}ms</span>
-        </div>
-      {:else}
-        <div class="p-3 text-muted-foreground">No requests{filter || onlyFailed ? ' for this filter' : ' yet'}.</div>
-      {/each}
-    {/if}
-  </div>
+    </div>
+  {:else if tab === 'network'}
+    <NetworkPanel {filter} type={netType} />
+  {:else}
+    <ApplicationPanel {filter} />
+  {/if}
 </section>
 </div>

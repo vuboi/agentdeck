@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::Webview;
+use tauri::{Emitter, Manager, Webview};
 
 /// A frame of another origin, attached to its own DevTools session.
 #[derive(Clone, Serialize)]
@@ -186,6 +186,71 @@ fn remember(label: &str, event: &str, value: &Value) {
         }
     }
 }
+
+/// The network events the Network tab of the app is built from. They go to the app as `devtools-net`, untouched.
+const NETWORK_EVENTS: [&str; 12] = [
+    "Network.requestWillBeSent",
+    "Network.responseReceived",
+    "Network.loadingFinished",
+    "Network.loadingFailed",
+    "Network.requestServedFromCache",
+    "Network.webSocketCreated",
+    "Network.webSocketHandshakeResponseReceived",
+    "Network.webSocketFrameSent",
+    "Network.webSocketFrameReceived",
+    "Network.webSocketFrameError",
+    "Network.webSocketClosed",
+    "Network.eventSourceMessageReceived",
+];
+
+/// Turns the page's network recording on and passes each event to the app (the Network tab of the developer tools).
+pub fn watch_network(view: &Webview) {
+    subscribe_network(view);
+    let view = view.clone();
+    tauri::async_runtime::spawn(async move {
+        // Bodies are kept (up to these sizes) so the tab can show a response after the fact.
+        let params = json!({ "maxTotalBufferSize": 50_000_000, "maxResourceBufferSize": 10_000_000, "maxPostDataSize": 65_536 });
+        if let Err(error) = call(&view, "Network.enable", params, None).await {
+            eprintln!("network of {}: {error}", view.label());
+        }
+    });
+}
+
+#[cfg(windows)]
+fn subscribe_network(view: &Webview) {
+    use webview2_com::DevToolsProtocolEventReceivedEventHandler;
+    use windows::core::{HSTRING, PWSTR};
+
+    let app = view.app_handle().clone();
+    let label = view.label().to_string();
+    let _ = view.with_webview(move |platform| {
+        // SAFETY: WebView2 calls on the thread that owns the webview, as `with_webview` runs us.
+        unsafe {
+            let Ok(core) = platform.controller().CoreWebView2() else {
+                return;
+            };
+            for event in NETWORK_EVENTS {
+                let Ok(receiver) = core.GetDevToolsProtocolEventReceiver(&HSTRING::from(event)) else {
+                    continue;
+                };
+                let (app, label) = (app.clone(), label.clone());
+                let handler = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+                    let Some(args) = args else { return Ok(()) };
+                    let mut text = PWSTR::null();
+                    args.ParameterObjectAsJson(&mut text)?;
+                    let params: Value = serde_json::from_str(&webview2_com::take_pwstr(text)).unwrap_or_default();
+                    let _ = app.emit("devtools-net", json!({ "label": label, "event": event, "params": params }));
+                    Ok(())
+                }));
+                let mut token = 0i64;
+                let _ = receiver.add_DevToolsProtocolEventReceived(&handler, &mut token);
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn subscribe_network(_view: &Webview) {}
 
 /// Runs a script in the page (or in a frame's session) and returns its value.
 pub async fn evaluate(view: &Webview, script: &str, session: Option<String>) -> Result<Value, String> {
