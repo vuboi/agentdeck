@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { customProviderName } from '../models.svelte';
   import { untrack } from 'svelte';
   import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree, zModalService } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
@@ -299,8 +300,12 @@
   const agentTag = {
     claude: 'bg-orange-500/15 text-orange-500',
     codex: 'bg-emerald-500/15 text-emerald-500',
-    gemini: 'bg-sky-500/15 text-sky-500',
+    antigravity: 'bg-sky-500/15 text-sky-500',
+    custom: 'bg-violet-500/15 text-violet-500',
   } as const;
+  import { openSettings, warnings } from '../connectors.svelte';
+  import { ticker } from '../clock.svelte';
+  const limitWarnings = $derived(warnings(ticker.min));
 </script>
 
 <aside class="flex h-full min-w-0 flex-col bg-sidebar" aria-label="Sessions">
@@ -332,7 +337,7 @@
       <!-- First load: centred in the list, where the chats will appear. -->
       <div class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground" role="status">
         <ZIcon zType={'lucideLoaderCircle' as ZIconName} class="size-5 animate-spin text-primary" />
-        <span>Loading your Claude and Codex history…</span>
+        <span>Scanning AI agents on this machine…</span>
       </div>
     {/if}
     <ZTree
@@ -376,9 +381,9 @@
             <span class="grid shrink-0 place-items-center">
               <span class="col-start-1 row-start-1">
                 {#if (data.session.agents?.length ?? 1) > 1}
-                  <AgentStack agents={data.session.agents!} />
+                  <AgentStack agents={data.session.agents!} models={{ [data.session.agent]: data.session.model, ...data.session.agentModels }} />
                 {:else}
-                  <span class="block rounded px-1.5 py-px text-[10px] font-medium {agentTag[data.session.agent]}">{agentLabel(data.session.agent)}</span>
+                  <span class="block rounded px-1.5 py-px text-[10px] font-medium {agentTag[data.session.agent]}">{(data.session.agent === 'custom' && customProviderName(data.session.model)) || agentLabel(data.session.agent)}</span>
                 {/if}
               </span>
             </span>
@@ -413,8 +418,9 @@
   <div class="flex h-11 shrink-0 items-center gap-2 px-3 text-xs">
     <span class="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-[10px]">ZO</span>
     <span class="truncate">ZUI Organization</span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto h-6 w-6" aria-label="Account menu">
-      <ZIcon zType="lucideEllipsis" class="size-3.5" />
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="relative ml-auto h-6 w-6" aria-label="Settings (Ctrl+,)" title="Settings (Ctrl+,)" onclick={() => openSettings()}>
+      <ZIcon zType={'lucideSettings' as ZIconName} class="size-3.5" />
+      {#if limitWarnings.length > 0}<span class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-destructive" aria-label="Near a usage limit"></span>{/if}
     </ZButton>
   </div>
 

@@ -1,7 +1,7 @@
 /** A file a tool wrote: lines added and removed, and the text for a small diff. `create` once the result says so. */
 export type FileChange = { path: string; added: number; removed: number; before: string; after: string; create?: boolean };
 
-export type Agent = 'claude' | 'codex' | 'gemini';
+export type Agent = 'claude' | 'codex' | 'antigravity' | 'custom';
 export type Session = { id: string; title: string; agent: Agent; status: 'working' | 'idle' | 'waiting' };
 
 export type Block =
@@ -9,6 +9,8 @@ export type Block =
   | { kind: 'response'; text: string; streaming?: boolean }
   | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string }
   | { kind: 'loading'; label: string }
+  /** Part of the user's message handed to another agent in a chat of its own; `state` follows that chat. */
+  | { kind: 'delegate'; childId: string; agent: Agent; model: string; state: 'running' | 'done' | 'failed'; note?: string; /** The workflow step it runs, when it comes from a flow. */ step?: string }
   | { kind: 'image'; src: string; name: string }
   | { kind: 'element'; tag: string; text: string; selector: string }
   | { kind: 'permission'; requests: { id: string; tool: string; summary: string; allow: string }[]; state: 'pending' | 'allowed' | 'denied' };
@@ -39,7 +41,7 @@ export type Message = {
 export const sessions: Session[] = [
   { id: 's1', title: 'Build the settings panel', agent: 'claude', status: 'working' },
   { id: 's2', title: 'Review auth middleware', agent: 'codex', status: 'waiting' },
-  { id: 's3', title: 'Explore component options', agent: 'gemini', status: 'idle' },
+  { id: 's3', title: 'Explore component options', agent: 'antigravity', status: 'idle' },
 ];
 
 const longThinking =

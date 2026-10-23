@@ -1,3 +1,5 @@
+import { archiveTurn } from './archive';
+import { expandSlash } from './slash.svelte';
 import type { ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
 import {
   clock,
@@ -9,21 +11,23 @@ import {
   toBlocks,
   type HistorySession,
 } from './history';
-import { messages as mockMessages, type Message } from './mock';
+import { messages as mockMessages, type Block, type Message } from './mock';
 import { openInPreview } from './browser.svelte';
 import { trackActivity } from './activity.svelte';
-import { listenAgentEvents, saveAttachment, sendAgentTurn, stopAgentTurn, type AgentEvent } from './agent';
+import { listenAgentEvents, saveAttachment, sendAgentTurn, sendCustomTurn, stopAgentTurn, type AgentEvent } from './agent';
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
 import { estimateCost, recordUsage } from './usage';
-import { modelCatalog } from './models.svelte';
+import { customProviderName, modelCatalog, modelLabel, parseCustomModel } from './models.svelte';
+import { connectors } from './connectors.svelte';
 import { dequeue, enqueue } from './queue';
+import { inputsOf, normalizeGraph, presetOf, stepGroups, type WorkflowPreset, type WorkflowStep } from './workflows.svelte';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
-export type Agent = 'claude' | 'codex' | 'gemini';
+export type Agent = 'claude' | 'codex' | 'antigravity' | 'custom';
 export type Status = 'working' | 'idle' | 'waiting';
 /** Reasoning effort and the approval modes shared by the agent CLIs. */
-export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+export type Effort = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 export type Permission = 'ask' | 'edits' | 'plan' | 'auto' | 'yolo';
 
 export type Project = { id: string; name: string; path: string };
@@ -35,6 +39,8 @@ export type SessionItem = {
   /** Every agent that took part when an orchestrated chat mixes several; falls back to `[agent]`. */
   agents?: Agent[];
   model: string;
+  /** Effort a workflow step asks for; it replaces the chat's own level for this chat's turns. */
+  stepEffort?: string;
   /** Git branch the session works on, if any. A conversation branch is `parentId`, not this. */
   gitBranch?: string;
   status: Status;
@@ -67,20 +73,22 @@ export type SessionItem = {
 export const AGENT_TEXT: Record<Agent, string> = {
   claude: 'text-orange-500',
   codex: 'text-emerald-500 [&_path]:fill-current',
-  gemini: 'text-sky-500',
+  antigravity: 'text-sky-500',
+  custom: 'text-violet-500',
 };
 
 /** Brand logo per agent (z-icon brand set). */
 export const AGENT_ICON: Record<Agent, ZIconName> = {
   claude: 'brandClaude' as ZIconName,
   codex: 'brandOpenai' as ZIconName,
-  gemini: 'brandGemini' as ZIconName,
+  antigravity: 'brandGemini' as ZIconName,
+  custom: 'lucideServer' as ZIconName,
 };
 
 export const AGENTS: { value: Agent; label: string }[] = [
   { value: 'claude', label: 'Claude' },
   { value: 'codex', label: 'Codex' },
-  { value: 'gemini', label: 'Gemini' },
+  { value: 'antigravity', label: 'Antigravity' },
 ];
 
 /** Models per agent, from the catalogue in models.ts. */
@@ -97,9 +105,9 @@ const mockWorkspace = {
     { id: 's1', projectId: 'p1', title: 'Build the settings panel', agent: 'claude', model: 'claude-sonnet-5-5', gitBranch: 'main', status: 'working' },
     { id: 's2', projectId: 'p1', title: 'Try it with Codex', agent: 'codex', agents: ['claude', 'codex'], model: 'gpt-6-luna', gitBranch: 'main', status: 'waiting', parentId: 's1' },
     { id: 's3', projectId: 'p1', title: 'Codex, second attempt', agent: 'codex', model: 'gpt-5.6-luna', gitBranch: 'main', status: 'idle', parentId: 's2' },
-    { id: 's4', projectId: 'p1', title: 'Virtual chat list', agent: 'claude', agents: ['claude', 'codex', 'gemini'], model: 'claude-opus-5-5', gitBranch: 'feat/chat-virtual', status: 'idle' },
+    { id: 's4', projectId: 'p1', title: 'Virtual chat list', agent: 'claude', agents: ['claude', 'codex', 'antigravity'], model: 'claude-opus-5-5', gitBranch: 'feat/chat-virtual', status: 'idle' },
     { id: 's5', projectId: 'p2', title: 'Svelte 5 z-tabs styling', agent: 'claude', model: 'claude-sonnet-5-5', gitBranch: 'main', status: 'idle' },
-    { id: 's6', projectId: 'p2', title: 'Review the carousel API', agent: 'gemini', model: 'gemini-3-pro', gitBranch: 'feat/carousel', status: 'idle' },
+    { id: 's6', projectId: 'p2', title: 'Review the carousel API', agent: 'antigravity', model: 'gemini-4-argon', gitBranch: 'feat/carousel', status: 'idle' },
     { id: 's7', projectId: 'p3', title: 'Zoom check on mobile table', agent: 'claude', model: 'claude-haiku-5-5', gitBranch: 'fix/mobile-zoom', status: 'waiting' },
   ] as SessionItem[],
 };
@@ -141,13 +149,30 @@ export function persistLocal() {
   setPref('local.state', JSON.parse(JSON.stringify({ sessions, messages, activeId: workspace.activeId })));
 }
 
+/** The Gemini placeholder became Antigravity: chats saved under the old name move to the new one. */
+const renamedAgent = <T extends string | undefined>(agent: T): T => ((agent as string | undefined) === 'gemini' ? ('antigravity' as T) : agent);
+function renamedSession(item: SessionItem): SessionItem {
+  const moved = (map?: Record<string, unknown>) => (map && 'gemini' in map ? Object.fromEntries(Object.entries(map).map(([key, value]) => [key === 'gemini' ? 'antigravity' : key, value])) : map);
+  return {
+    ...item,
+    agent: renamedAgent(item.agent),
+    source: renamedAgent(item.source),
+    agents: item.agents?.map((agent) => renamedAgent(agent)),
+    agentIds: moved(item.agentIds) as SessionItem['agentIds'],
+    agentModels: moved(item.agentModels) as SessionItem['agentModels'],
+    // The placeholder models of Gemini do not exist in Antigravity: the picker chooses a real one.
+    model: (item.agent as string) === 'gemini' ? '' : item.model,
+  };
+}
+
 /** Read the saved local sessions back. Runs once at start-up, before the history import merges them. */
 const localReady = getPref<{ sessions: SessionItem[]; messages: Record<string, Message[]>; activeId?: string }>('local.state').then(
   (saved) => {
     if (!saved) return;
     // A reply that was still running when the app closed is not running any more.
-    for (const [id, list] of Object.entries(saved.messages ?? {})) localMessages[id] = list.map((message) => ({ ...message, live: false }));
-    for (const item of saved.sessions ?? []) {
+    for (const [id, list] of Object.entries(saved.messages ?? {})) localMessages[id] = list.map((message) => ({ ...message, agent: renamedAgent(message.agent), live: false }));
+    for (const savedItem of saved.sessions ?? []) {
+      const item = renamedSession(savedItem);
       // Empty new chats saved by an earlier version are not restored.
       if (isEmptyDraft(item)) continue;
       if (!workspace.sessions.some((existing) => existing.id === item.id)) workspace.sessions.push(item);
@@ -226,13 +251,14 @@ export function newSession(projectId =activeSession()?.projectId ?? workspace.pr
   dropEmptyDrafts();
   const uuid = crypto.randomUUID();
   const id = `claude:${uuid}`;
+  const start = startingPoint();
   workspace.sessions.push({
     id,
     projectId,
     title: 'New session',
-    agent: 'claude',
+    agent: start.agent,
     agentSession: uuid,
-    model: 'claude-sonnet-5-5',
+    model: start.model,
     gitBranch: projectId === NO_PROJECT ? undefined : base?.gitBranch,
     status: 'idle',
     draft: true,
@@ -241,10 +267,26 @@ export function newSession(projectId =activeSession()?.projectId ?? workspace.pr
   persistLocal();
 }
 
+/** Agent and model a new chat starts with: the last ones the user chatted with, else Claude's default. */
+function startingPoint(): { agent: Agent; model: string } {
+  if (lastChat.agent && (MODELS[lastChat.agent] ?? []).some((item) => item.value === lastChat.model)) {
+    return { agent: lastChat.agent, model: lastChat.model };
+  }
+  return { agent: 'claude', model: 'claude-sonnet-5-5' };
+}
+
 /** A new chat outside any project. */
 export function newChat() {
   newSession(NO_PROJECT);
 }
+
+/**
+ * Said to the agent when a message is about running or opening something. Agents follow the project's own notes
+ * (a skill that opens the user's Chrome, a shell command that starts the server), and a server started in the agent's
+ * own shell dies when the command ends, which leaves the Preview on a refused connection. These tools do not.
+ */
+const AGENTDECK_HINT =
+  '[AgentDeck] You run inside AgentDeck. To start a dev server or open a page, use the agentdeck tools: browser_serve (starts the server so it keeps running after your turn, and opens it in the Preview) or browser_open for an address that already answers. Then use browser_screenshot, browser_console and browser_network to look at it. Do not start servers in your own shell and do not open the system browser or Chrome: that server would stop when your command ends, and the user is looking at the AgentDeck Preview.' + '\n\n';
 
 /** The last thing asked in each chat: "open it", "run the app" decides whether a served page opens by itself. */
 const lastPrompt: Record<string, string> = {};
@@ -306,6 +348,21 @@ function withElements(text: string, elements: PageElement[]): string {
 }
 
 /** How the Composer's permission setting maps onto the CLI's `--permission-mode`; "ask" passes none. */
+/**
+ * The agent, model and effort of the last message the user actually sent. A new chat starts from them instead of a
+ * fixed default. Opening a chat to read it never changes this: only sending does.
+ */
+export const lastChat = $state<{ agent: Agent; model: string; effort: Effort } | { agent: null }>({ agent: null });
+void getPref<{ agent: Agent; model: string; effort: Effort }>('composer.lastChat').then((saved) => {
+  if (saved?.agent && saved.model) Object.assign(lastChat, saved);
+});
+function rememberLastChat(agent: Agent, model: string | null, effort: Effort) {
+  if (!model) return;
+  const saved = { agent, model, effort };
+  Object.assign(lastChat, saved);
+  setPref('composer.lastChat', saved);
+}
+
 const PERMISSION_MODE: Record<Permission, string | null> = { ask: null, edits: 'acceptEdits', plan: 'plan', auto: 'auto', yolo: 'bypassPermissions' };
 /** The permission setting of the Composer, read when a turn starts. */
 export const turnOptions = $state<{ permission: Permission; effort: Effort; /** What Enter does while a reply is running. */ whileRunning: 'queue' | 'interrupt' }>({
@@ -325,7 +382,7 @@ export function setWhileRunning(mode: 'queue' | 'interrupt') {
 const turns: Record<string, string> = {};
 
 /** Messages typed while the agent was still busy, waiting their turn. */
-export type Queued = { text: string; images: Attachment[]; elements: PageElement[] };
+export type Queued = { text: string; images: Attachment[]; elements: PageElement[]; mentions?: Mention[] };
 export const queued = $state<Record<string, Queued[]>>({});
 
 /** Whether a chat has a reply in progress (for the send / stop button). */
@@ -359,7 +416,7 @@ function modelFor(session: SessionItem): string | null {
   return fallback;
 }
 
-const agentLabel = (agent?: Agent) => (agent === 'codex' ? 'Codex' : agent === 'gemini' ? 'Gemini' : 'Claude');
+const agentLabel = (agent?: Agent, model?: string | null) => (agent === 'custom' && customProviderName(model)) || (agent === 'codex' ? 'Codex' : agent === 'antigravity' ? 'Antigravity' : agent === 'custom' ? 'Custom provider' : 'Claude');
 
 /**
  * What the other agents of this chat said since this agent last spoke, as text to put before the prompt.
@@ -384,7 +441,7 @@ function missedTurns(session: SessionItem, list: Message[]): string {
       .join('\n')
       .trim();
     const cut = text.length > 2500 ? `${text.slice(0, 2500)}…` : text;
-    return `${message.role === 'user' ? 'User' : agentLabel(writer(message))}: ${cut}`;
+    return `${message.role === 'user' ? 'User' : agentLabel(writer(message), message.model)}: ${cut}`;
   });
   let digest = lines.join('\n\n');
   if (digest.length > 16000) digest = `…${digest.slice(-16000)}`;
@@ -392,7 +449,7 @@ function missedTurns(session: SessionItem, list: Message[]): string {
 }
 
 /** One CLI run (`claude -p`, `codex exec`) in `session`, with a fresh live reply. Images go to disk first so the CLI can open them. */
-function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = []) {
+function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = [], preface = '') {
   if (images.length || !allow.length) lastPrompt[session.id] = text;
   // The CLI's own id for the conversation. Claude takes one we choose; Codex names its thread on the first turn
   // and reports it, so a new Codex chat starts without one.
@@ -401,8 +458,11 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   let cliId: string | null;
   let resume: boolean;
   const selectedModel = modelFor(session);
+  rememberLastChat(session.agent, selectedModel, (session.stepEffort ?? turnOptions.effort) as Effort);
   if (session.agent === first) {
-    const known = session.agentSession ?? (session.id.startsWith(prefix) ? session.id.slice(prefix.length) : undefined);
+    // A conversation whose last run never started is not resumed from its id (see handleAgentEvent).
+    const fromId = session.agentStarted === false ? undefined : session.id.startsWith(prefix) ? session.id.slice(prefix.length) : undefined;
+    const known = session.agentSession ?? fromId;
     cliId = known ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
     const modelChanged = Boolean(session.conversationModel && session.conversationModel !== selectedModel);
     if (modelChanged) {
@@ -424,9 +484,9 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   }
   const turn = nextId();
   turns[session.id] = turn;
-  const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent };
+  const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent, model: selectedModel ?? session.model };
   const list = messagesOf(session.id);
-  const context = missedTurns(session, list);
+  const context = preface + missedTurns(session, list);
   const asked = list.at(-1);
   list.push(reply);
   liveReplies[session.id] = list[list.length - 1]; // the stored (reactive) object
@@ -436,11 +496,41 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
   void (async () => {
     const paths = await Promise.all(images.map((image) => saveAttachment(image.mime, image.src.slice(image.src.indexOf(',') + 1))));
+    // A message that starts with `/name` is a command: its text goes to the agent, the chat keeps what was typed.
+    const body = await expandSlash(text, session.agent, cwd);
+    if (session.agent === 'custom') {
+      // A custom provider has no CLI to keep the conversation: the whole chat goes along with every turn.
+      const target = parseCustomModel(selectedModel);
+      const provider = connectors.custom.find((item) => item.id === target?.providerId);
+      if (!target || !provider) throw new Error('This provider was removed or turned off. Pick another model.');
+      const spoken = (message: Message) =>
+        message.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : [])).join('\n').trim();
+      const history = list
+        .slice(0, -2)
+        .map((message) => ({ role: message.role, content: spoken(message) }))
+        .filter((message) => message.content);
+      await sendCustomTurn({
+        session: session.id,
+        turn,
+        kind: provider.kind,
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey || null,
+        model: target.model,
+        messages: [...history, { role: 'user', content: body }],
+        permissionMode: PERMISSION_MODE[turnOptions.permission],
+        allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
+        cwd,
+        effort: (session.stepEffort ?? turnOptions.effort) as Effort,
+      });
+      return;
+    }
+    const hint = OPEN_WORDS.test(body) ? AGENTDECK_HINT : '';
     const prompt =
+      hint +
       context +
       (paths.length
-        ? `${text || 'Look at the attached image.'}\n\nAttached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
-        : text);
+        ? `${body || 'Look at the attached image.'}\n\nAttached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
+        : body);
     await sendAgentTurn({
       session: session.id,
       turn,
@@ -451,7 +541,7 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       // A model of another agent (left over from a switch) is never sent: the agent's own first model goes instead.
       model: selectedModel,
       permissionMode: PERMISSION_MODE[turnOptions.permission],
-      effort: turnOptions.effort,
+      effort: (session.stepEffort ?? turnOptions.effort) as Effort,
       allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
       cwd,
     });
@@ -536,6 +626,13 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
   // reloaded) and the turn must still finish, or the chat would spin for ever.
   const reply = liveReplies[sessionId] ?? messagesOf(sessionId).find((item) => item.id === replies[sessionId]);
   if (!session) return;
+  // Codex writes a thread's rollout, and Claude its session file, only once a run has started. A run stopped before
+  // that leaves an id with nothing to resume. The next message then starts a new conversation, instead of resuming
+  // that id again and failing the same way.
+  if (event.kind === 'error' && /no rollout found|no conversation found/i.test(event.message)) {
+    session.agentStarted = false;
+    session.agentSession = undefined;
+  }
   trackActivity(sessionId, session.title, workspace.projects.find((project) => project.id === session.projectId)?.name ?? '', event);
   if (!reply) {
     if (event.kind === 'done' || event.kind === 'error') {
@@ -593,6 +690,13 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
       });
     }
     openServedPage(sessionId, reply);
+    onDelegateDone(sessionId, reply, event.kind === 'error' ? event.message : null);
+    onHandbackDone(sessionId, reply, event.kind === 'error');
+    // Our own copy of the turn (agent, model, time), apart from what the CLIs store: the base for syncing later.
+    archiveTurn(
+      { id: sessionId, title: session.title, agent: session.agent, model: reply.model ?? session.model, projectPath: workspace.projects.find((project) => project.id === session.projectId)?.path ?? null },
+      [liveAsks[sessionId], reply].filter((message): message is Message => Boolean(message)),
+    );
     delete replies[sessionId];
     delete liveReplies[sessionId];
     delete liveAsks[sessionId];
@@ -605,7 +709,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     if (!session.path) void importHistory({ refresh: true });
     // Messages typed while it worked go next, one at a time.
     const next = dequeue(queued, sessionId);
-    if (next) setTimeout(() => send(sessionId, next.text, next.images, next.elements), 0);
+    if (next) setTimeout(() => send(sessionId, next.text, next.images, next.elements, next.mentions), 0);
   }
 }
 
@@ -622,18 +726,392 @@ if (inTauri()) {
   });
 }
 
+// ---------- delegating to another agent ----------
+// `@claude do this` in a chat does not switch the chat to Claude. The task runs in a chat of its own under this one
+// (a child: it shows in the sidebar and can be opened), with a summary of this chat as its background. When it has
+// answered, the answer goes back into this chat and the chat's own agent carries on with it. With several `@`s the
+// children run side by side and the agent is called once, when the last one has answered.
+
+type DelegateBatch = { main: string; task: string; pending: Set<string>; results: { label: string; text: string }[]; run: DelegateRun; /** A workflow preset's note to the agent that writes the final answer. */ orchestrator?: string; /** More for that agent: the findings the steps shared, where their notes are. */ memo?: string };
+type DelegateCard = Extract<Block, { kind: 'delegate' }>;
+const delegations = new Map<string, { batch: DelegateBatch; label: string; card: DelegateCard; node: RunNode }>();
+
+// What the Workflow tab draws: one run per delegated message (main chat -> a child per agent -> handback -> main agent).
+export type RunStats = { ms: number; tokens?: import('./usage').Tokens; cost: number | null; tools: number; last: string };
+export type RunNode = { childId: string; /** The preset step it runs, when the run comes from a workflow. */ stepId?: string; /** What it was handed (earlier answers) and what it answered, for the audit. */ input?: string; output?: string; agent: Agent; model: string; label: string; startedAt: number; endedAt?: number; state: 'running' | 'done' | 'failed'; note?: string; stats?: RunStats };
+export type DelegateRun = {
+  id: string;
+  main: string;
+  task: string;
+  /** Name of the workflow preset that planned this run; none for an `@agent` delegation. */
+  preset?: string;
+  /** The steps of the preset as they were when the run started (drawn as the canvas). */
+  plan?: import('./workflows.svelte').WorkflowStep[];
+  /** Steps that did not run because their condition failed. */
+  skipped?: string[];
+  /** The folder of the run's shared notes (BOARD.md, agents/, handoff/), when it could be made. */
+  folder?: string;
+  startedAt: number;
+  nodes: RunNode[];
+  /** waiting: children still working; running: the main agent is answering with their answers. */
+  handback: 'waiting' | 'running' | 'done' | 'failed';
+  handbackAt?: number;
+  endedAt?: number;
+  handbackStats?: RunStats;
+};
+const RUN_LIMIT = 20;
+export const delegateRuns = $state<DelegateRun[]>([]);
+
+function statsOf(reply: Message | undefined, startedAt: number): RunStats | undefined {
+  if (!reply) return undefined;
+  const text = reply.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : []));
+  const last = text.join("\n").split('\n').reverse().find((line) => line.trim()) ?? '';
+  const commands = reply.blocks.filter((block): block is Extract<Block, { kind: 'command' }> => block.kind === 'command');
+  const cost = reply.cost ?? (reply.tokens ? estimateCost(reply.tokens, reply.model) : null);
+  return {
+    ms: reply.ms ?? Date.now() - (reply.startedAt ?? startedAt),
+    tokens: reply.tokens ? { ...reply.tokens } : undefined,
+    cost,
+    tools: commands.length,
+    last: last.trim() || (commands.length ? commands[commands.length - 1].command : ''),
+  };
+}
+
+/** The numbers of a turn still being written in `sessionId` (read it again each second: the reply is not reactive here). */
+export const liveStats = (sessionId: string, startedAt: number) => statsOf(liveReplies[sessionId], startedAt);
+
+/** Whether the chat `childId` is still working on something it was handed. */
+export const isDelegating = (childId: string) => delegations.has(childId) || stepWaiters.has(childId);
+
+const firstLineOf = (text: string, max: number) => {
+  const line = text.split('\n')[0].trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+};
+
+const plainText = (message: Message) =>
+  message.blocks
+    .flatMap((block) => (block.kind === 'response' ? [block.text] : block.kind === 'command' ? [`(ran: ${block.command.slice(0, 160)})`] : []))
+    .join('\n')
+    .trim();
+
+/** The last messages of a chat as plain text, newest kept when it is long. */
+function digestOf(messages: Message[], limit = 6000): string {
+  const lines = messages.slice(-8).map((message) => {
+    const text = plainText(message);
+    return `${message.role === 'user' ? 'User' : agentLabel(message.agent, message.model)}: ${text.length > 1500 ? `${text.slice(0, 1500)}…` : text}`;
+  });
+  const joined = lines.join('\n\n');
+  return joined.length > limit ? `…${joined.slice(-limit)}` : joined;
+}
+
+/** What the `@chat` and `@project` mentions of a message add in front of the prompt. */
+function mentionContext(mentions: Mention[]): string {
+  const parts: string[] = [];
+  for (const mention of mentions) {
+    if (mention.kind === 'session') {
+      const messages = transcripts.get(mention.id)?.messages ?? localMessages[mention.id] ?? [];
+      parts.push(messages.length ? `Chat "${mention.label}", its latest messages:\n${digestOf(messages, 4000)}` : `Chat "${mention.label}" (not opened in this app yet, so no text of it is known here)`);
+    } else if (mention.kind === 'project') {
+      const project = workspace.projects.find((item) => item.id === mention.id);
+      if (project) parts.push(`Project "${project.name}" is at ${project.path}`);
+    }
+  }
+  return parts.length ? `The user attached this context:\n\n${parts.join('\n\n')}\n\n---\n` : '';
+}
+
+function delegate(main: SessionItem, asked: Message, task: string, targets: Mention[], preface: string, images: Attachment[], elements: PageElement[]) {
+  delegateRuns.push({ id: crypto.randomUUID(), main: main.id, task, startedAt: Date.now(), nodes: [], handback: 'waiting' });
+  if (delegateRuns.length > RUN_LIMIT) delegateRuns.splice(0, delegateRuns.length - RUN_LIMIT);
+  const run = delegateRuns[delegateRuns.length - 1];
+  const batch: DelegateBatch = { main: main.id, task, pending: new Set(), results: [], run };
+  const history = [...messagesOf(main.id)];
+  main.status = 'working';
+  for (const target of targets) {
+    const [agent, model] = target.id.split('/') as [Agent, string];
+    const uuid = crypto.randomUUID();
+    const id = `claude:${uuid}`;
+    workspace.sessions.push({
+      id,
+      projectId: main.projectId,
+      title: `@${agentLabel(agent)}: ${firstLineOf(task, 50)}`,
+      agent,
+      agentSession: uuid,
+      model,
+      gitBranch: main.gitBranch,
+      status: 'idle',
+      parentId: main.id,
+      draft: false,
+    });
+    const child = workspace.sessions.find((item) => item.id === id);
+    if (!child) continue;
+    asked.blocks.push({ kind: 'delegate', childId: id, agent, model, state: 'running' });
+    const card = asked.blocks[asked.blocks.length - 1] as DelegateCard;
+    const label = `${agentLabel(agent)} · ${modelLabel(model)}`;
+    run.nodes.push({ childId: id, agent, model, label, startedAt: Date.now(), state: 'running' });
+    const node = run.nodes[run.nodes.length - 1];
+    delegations.set(id, { batch, label, card, node });
+    batch.pending.add(id);
+    // The child has not spoken in this chat, so every earlier turn of it is background for the child.
+    const background = missedTurns({ ...child, agent: '' as Agent }, history);
+    const brief = `${preface}${background}You were asked from another chat, whose own agent is ${agentLabel(main.agent)}, to do this part of the work: ${task}\n\nFinish with a complete answer that agent can use without seeing your work.`;
+    send(id, task, images, elements, [], { preface: brief });
+  }
+  if (batch.pending.size === 0) {
+    main.status = 'idle';
+    delegateRuns.splice(delegateRuns.indexOf(run), 1);
+  }
+  persistLocal();
+}
+
+/** A child chat finished (or stopped, or failed): its card is settled, and the last one of a batch calls the agent back. */
+function onDelegateDone(childId: string, reply: Message, error: string | null) {
+  const waiter = stepWaiters.get(childId);
+  if (waiter) {
+    stepWaiters.delete(childId);
+    waiter(plainText({ ...reply, blocks: reply.blocks.filter((block) => block.kind === 'response') }), error, reply);
+    return;
+  }
+  const entry = delegations.get(childId);
+  if (!entry) return;
+  delegations.delete(childId);
+  const text = plainText({ ...reply, blocks: reply.blocks.filter((block) => block.kind === 'response') });
+  const ok = !error && text.length > 0;
+  entry.card.state = ok ? 'done' : 'failed';
+  entry.card.note = ok ? undefined : (error ?? 'no answer');
+  entry.node.state = ok ? 'done' : 'failed';
+  entry.node.note = ok ? undefined : (error ?? 'no answer');
+  entry.node.endedAt = Date.now();
+  entry.node.stats = statsOf(reply, entry.node.startedAt);
+  entry.batch.results.push({ label: entry.label, text: ok ? text : `(it did not answer: ${error ?? 'no text'})` });
+  entry.batch.pending.delete(childId);
+  if (entry.batch.pending.size === 0) handBack(entry.batch);
+}
+
+// ---------- workflow presets: the chat's agent as orchestrator ----------
+// A chat with a flow does not answer a message itself. Its steps run as child chats (sub sessions under it), each
+// stage after the one that feeds it; steps of one stage run side by side. To keep tokens down every step gets only
+// its own job, the task and the short handoffs of the steps that feed it, never their whole transcripts. The run has
+// a folder of shared notes (`.agentdeck/runs/<run>/`): BOARD.md, written by the app only (goal, plan, handoffs),
+// `agents/<name>.md`, one per step and written by that step only (findings, questions to the others and answers),
+// and `handoff/<n>-<name>.md`, the summary a step leaves for the next. One writer per file, so no locking is needed.
+// When the last stage is done the chat's own agent is called once with the handoffs and the findings.
+
+const stepWaiters = new Map<string, (text: string, error: string | null, reply: Message) => void>();
+
+const passes = (step: WorkflowStep, previous: string) => {
+  const { mode, text } = step.condition;
+  if (mode === 'always' || !text.trim()) return true;
+  const found = previous.toLowerCase().includes(text.trim().toLowerCase());
+  return mode === 'contains' ? found : !found;
+};
+
+/** Reads (no `content`) or writes one file of a run's notes; '' when it cannot. */
+async function runFile(root: string | null, run: string, name: string, content?: string): Promise<string> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const args = { root, run, name, ...(content === undefined ? {} : { content }) };
+    const out = await invoke(content === undefined ? 'run_file_read' : 'run_file_write', args);
+    return typeof out === 'string' ? out : '';
+  } catch {
+    return '';
+  }
+}
+
+const slugOf = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'step';
+
+/** The part of an answer meant for the next step: its "## Handoff" section, else its end. */
+function handoffOf(text: string): string {
+  const at = text.search(/^#{1,3}\s*handoff\b/im);
+  const part = (at >= 0 ? text.slice(at).replace(/^#{1,3}\s*handoff[^\n]*\n?/i, '') : text.slice(-1200)).trim();
+  return part.length > 1600 ? `${part.slice(0, 1600)}…` : part;
+}
+
+/** The findings (`[F]` lines) the steps wrote in their notes, without repeats, at most `limit` lines. */
+function findingsOf(notes: string[], limit = 30): string[] {
+  const seen = new Set<string>();
+  for (const text of notes) {
+    for (const line of text.split('\n')) {
+      const item = line.trim().replace(/^[-*]\s*/, '');
+      if (item.startsWith('[F]') && !seen.has(item)) seen.add(item);
+      if (seen.size >= limit) return [...seen];
+    }
+  }
+  return [...seen];
+}
+
+type FlowRunContext = { root: string | null; folder: string; board: string[]; slugs: Map<string, string>; handoffs: Map<string, string> };
+
+function boardText(task: string, preset: WorkflowPreset, ctx: FlowRunContext, groups: WorkflowStep[][]): string {
+  const plan = groups.map((group, stage) => `${stage + 1}. ${group.map((step) => `${step.name} (${agentLabel(step.agent, step.model)}) — notes: agents/${ctx.slugs.get(step.id)}.md`).join(' | ')}`).join('\n');
+  return [`# Run board — ${preset.name}`, '', `Goal: ${firstLineOf(task, 300)}`, '', '## Plan (one line per stage; steps of a stage run at the same time)', plan, '', '## Handoffs', ...(ctx.board.length ? ctx.board : ['(none yet)']), ''].join('\n');
+}
+
+function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: WorkflowStep, brief: string, task: string, previous: string, images: Attachment[], elements: PageElement[]) {
+  const agent = step.agent;
+  const model = step.model || MODELS[agent]?.[0]?.value || '';
+  const uuid = crypto.randomUUID();
+  const id = `claude:${uuid}`;
+  workspace.sessions.push({
+    id,
+    projectId: main.projectId,
+    title: `${step.name}: ${firstLineOf(task, 50)}`,
+    agent,
+    agentSession: uuid,
+    model,
+    gitBranch: main.gitBranch,
+    status: 'idle',
+    parentId: main.id,
+    stepEffort: step.effort || undefined,
+    draft: false,
+  });
+  asked.blocks.push({ kind: 'delegate', childId: id, agent, model, state: 'running', step: step.name });
+  const card = asked.blocks[asked.blocks.length - 1] as DelegateCard;
+  const label = `${step.name} · ${agentLabel(agent, model)}`;
+  run.nodes.push({ childId: id, stepId: step.id, agent, model, label, startedAt: Date.now(), state: 'running', input: previous });
+  const node = run.nodes[run.nodes.length - 1];
+  return new Promise<{ step: WorkflowStep; label: string; text: string; ok: boolean }>((resolve) => {
+    stepWaiters.set(id, (text, error, reply) => {
+      const ok = !error && text.length > 0;
+      card.state = ok ? 'done' : 'failed';
+      card.note = ok ? undefined : (error ?? 'no answer');
+      node.state = ok ? 'done' : 'failed';
+      node.note = card.note;
+      node.endedAt = Date.now();
+      node.stats = statsOf(reply, node.startedAt);
+      node.output = text;
+      resolve({ step, label, text: ok ? text : `(it did not answer: ${error ?? 'no text'})`, ok });
+    });
+    send(id, task, images, elements, [], { preface: brief });
+  });
+}
+
+async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPreset, task: string, preface: string, images: Attachment[], elements: PageElement[]) {
+  const runId = crypto.randomUUID();
+  const graph = normalizeGraph(preset.steps);
+  const links = inputsOf(graph);
+  const groups = stepGroups(graph);
+  delegateRuns.push({ id: runId, main: main.id, task, preset: preset.name, plan: JSON.parse(JSON.stringify(graph)), skipped: [], startedAt: Date.now(), nodes: [], handback: 'waiting' });
+  if (delegateRuns.length > RUN_LIMIT) delegateRuns.splice(0, delegateRuns.length - RUN_LIMIT);
+  const run = delegateRuns[delegateRuns.length - 1];
+  const batch: DelegateBatch = { main: main.id, task, pending: new Set(), results: [], run, orchestrator: preset.orchestrator.trim() || undefined };
+  main.status = 'working';
+
+  const root = workspace.projects.find((project) => project.id === main.projectId)?.path ?? null;
+  const slugs = new Map<string, string>();
+  graph.forEach((step, index) => slugs.set(step.id, `${index + 1}-${slugOf(step.name)}`));
+  const ctx: FlowRunContext = { root, folder: '', board: [], slugs, handoffs: new Map() };
+  const boardPath = await runFile(root, runId, 'BOARD.md', boardText(task, preset, ctx, groups));
+  ctx.folder = boardPath ? boardPath.replace(/[\\/]BOARD\.md$/, '') : '';
+  run.folder = ctx.folder || undefined;
+
+  let first = true;
+  for (const group of groups) {
+    const inputText = (step: WorkflowStep) =>
+      (links[step.id] ?? [])
+        .filter((from) => from !== 'start' && ctx.handoffs.has(from))
+        .map((from) => `### ${graph.find((item) => item.id === from)?.name ?? from}\n${ctx.handoffs.get(from)}`)
+        .join('\n\n');
+    const active = group.filter((step) => passes(step, inputText(step)));
+    for (const step of group) if (!active.includes(step)) run.skipped?.push(step.id);
+    if (active.length === 0) continue;
+    const board = boardText(task, preset, ctx, groups);
+    const done = await Promise.all(
+      active.map((step) => {
+        const slug = slugs.get(step.id) ?? slugOf(step.name);
+        const previous = inputText(step);
+        const others = active.filter((item) => item !== step).map((item) => `"${item.name}" (notes: agents/${slugs.get(item.id)}.md)`);
+        const where = ctx.folder || '.agentdeck/runs/' + runId;
+        const brief = [
+          preface,
+          `You are "${step.name}", one step of an AgentDeck workflow run from another chat (whose own agent is ${agentLabel(main.agent)}). Do only your own job:`,
+          step.prompt.trim() || 'Do your part of the task.',
+          '',
+          `Shared folder of this run: ${where}`,
+          `- BOARD.md: goal, plan and handoffs, written by the app (read-only for you). Its content now:`,
+          board,
+          `- Your notes file, only you write it: ${where}/agents/${slug}.md. Append, never rewrite earlier lines; one line per entry. [F] <fact others need> (path:line), [Q @name] <question>, [A @name] <answer>.`,
+          '- Never edit BOARD.md or the notes of another step.',
+          previous ? `\nHandoff from the step(s) before you (all you get from them; read their notes files only if you really need more):\n\n${previous}\n` : '',
+          others.length
+            ? `Working at the same time as you: ${others.join(', ')}. Read their notes before you start and after each major step, answer [Q @${step.name}] lines with [A] lines in your own file, and do not edit files another step says it is changing (write a [Q] instead).`
+            : '',
+          '',
+          'End your reply with a section "## Handoff" of at most 200 words: Result (1-3 sentences), Changed files (paths only), Facts the next step needs (at most 5 bullets), Open issues (at most 3 bullets). Only that section is passed on.',
+          '',
+        ]
+          .filter((line, index, all) => line !== '' || all[index - 1] !== '')
+          .join('\n');
+        return runStep(main, asked, run, step, brief, task, previous, first ? images : [], first ? elements : []);
+      }),
+    );
+    first = false;
+    for (const item of done) {
+      const handoff = item.ok ? handoffOf(item.text) : item.text;
+      ctx.handoffs.set(item.step.id, handoff);
+      const name = `handoff/${slugs.get(item.step.id)}.md`;
+      void runFile(root, runId, name, `# ${item.step.name}\n\n${handoff}\n`);
+      ctx.board.push(`- ${item.step.name}: ${name}${item.ok ? '' : ' (failed)'}`);
+      batch.results.push({ label: item.label, text: handoff });
+    }
+    void runFile(root, runId, 'BOARD.md', boardText(task, preset, ctx, groups));
+    // A step that failed ends the chain: the agent is told what happened so far.
+    if (done.some((item) => !item.ok)) break;
+  }
+  if (batch.results.length === 0) {
+    main.status = 'idle';
+    run.handback = 'failed';
+    run.endedAt = Date.now();
+    return;
+  }
+  const notes = await Promise.all(graph.map((step) => runFile(root, runId, `agents/${slugs.get(step.id)}.md`)));
+  const facts = findingsOf(notes);
+  batch.memo = [facts.length ? `Findings the steps shared:\n${facts.map((fact) => `- ${fact}`).join('\n')}` : '', ctx.folder ? `The run's notes are in ${ctx.folder} (BOARD.md, agents/, handoff/): open them only if you need more detail.` : '']
+    .filter(Boolean)
+    .join('\n\n');
+  handBack(batch);
+}
+
+/** The main agent finished the turn that got the answers: the run is over. */
+function onHandbackDone(sessionId: string, reply: Message, failed: boolean) {
+  const run = delegateRuns.find((item) => item.main === sessionId && item.handback === 'running');
+  if (!run) return;
+  run.handback = failed ? 'failed' : 'done';
+  run.endedAt = Date.now();
+  run.handbackStats = statsOf(reply, run.handbackAt ?? run.startedAt);
+}
+
+/** Puts the answers into the chat that asked, and runs its agent on them as soon as it is free. */
+function handBack(batch: DelegateBatch) {
+  const answers = batch.results.map((result) => `### ${result.label}\n${result.text}`).join('\n\n');
+  const memo = batch.memo ? `\n\n${batch.memo}` : '';
+  const finish = batch.orchestrator ? `${batch.orchestrator}\n\nThe user's request: ${batch.task}` : `Using their answers, finish the user's request: ${batch.task}`;
+  const prompt = `The agents you handed work to have answered.\n\n${answers}${memo}\n\n${finish}`;
+  const shown = `↩ ${batch.results.map((result) => result.label.split(' · ')[0]).join(', ')} answered`;
+  const go = (tries: number) => {
+    if (!replies[batch.main]) {
+      batch.run.handback = 'running';
+      batch.run.handbackAt = Date.now();
+      send(batch.main, shown, [], [], [], { prompt });
+    }
+    else if (tries < 900) setTimeout(() => go(tries + 1), 1000);
+  };
+  go(0);
+}
+
 /** Send from the message box. While the agent is busy: wait in line, or stop it and go first, as chosen. */
-export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = []) {
+export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = [], mentions: Mention[] = []) {
   const session = activeSession();
   if (!session || (!text.trim() && images.length === 0 && elements.length === 0)) return;
+  // A task for another agent needs words to say what the task is.
+  if (mentions.some((mention) => mention.kind === 'ai') && !text.trim()) return;
   if (replies[session.id]) {
     if (turnOptions.whileRunning === 'queue') {
-      enqueue(queued, session.id, { text, images, elements });
+      enqueue(queued, session.id, { text, images, elements, mentions });
       return;
     }
     stopTurn(session.id);
   }
-  send(session.id, text, images, elements);
+  send(session.id, text, images, elements, mentions);
 }
 
 /** Sends a queued message now: the reply running in the chat is stopped (what it wrote stays), and this one goes out. */
@@ -642,7 +1120,7 @@ export function steerQueued(sessionId: string, item: Queued) {
   if (rest.length) queued[sessionId] = rest;
   else delete queued[sessionId];
   if (replies[sessionId]) stopTurn(sessionId);
-  send(sessionId, item.text, item.images, item.elements);
+  send(sessionId, item.text, item.images, item.elements, item.mentions);
 }
 
 /** A message as it is recognised again in the chat's file (where it has another id than the one it got here). */
@@ -684,7 +1162,11 @@ export function editMessage(messageId: string, text: string) {
   send(session.id, text, images, []);
 }
 
-function send(sessionId: string, text: string, images: Attachment[], elements: PageElement[]) {
+/**
+ * `extra.prompt` is what the agent is sent when it differs from the text shown in the chat, and `extra.preface` goes in
+ * front of the prompt without being shown (context of a delegated task).
+ */
+function send(sessionId: string, text: string, images: Attachment[], elements: PageElement[], mentions: Mention[] = [], extra: { prompt?: string; preface?: string } = {}) {
   const session = workspace.sessions.find((item) => item.id === sessionId);
   const body = text.trim();
   if (!session || replies[sessionId]) return;
@@ -700,7 +1182,12 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
     ],
     at: new Date().toISOString(),
   });
-  if (inTauri() && (session.agent === 'claude' || session.agent === 'codex')) startTurn(session, withElements(body, elements), images);
+  const preface = (extra.preface ?? '') + mentionContext(mentions);
+  const targets = mentions.filter((mention) => mention.kind === 'ai');
+  const preset = presetOf(sessionId);
+  if (inTauri() && targets.length > 0 && body) delegate(session, messages[messages.length - 1], body, targets, preface, images, elements);
+  else if (inTauri() && preset && preset.steps.length > 0 && body && !extra.prompt && !extra.preface) void runWorkflow(session, messages[messages.length - 1], preset, body, preface, images, elements);
+  else if (inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'custom')) startTurn(session, withElements(extra.prompt ?? body, elements), images, [], preface);
   else if (inTauri()) {
     messages.push({
       id: nextId(),

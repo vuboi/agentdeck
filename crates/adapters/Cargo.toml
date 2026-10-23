@@ -5,7 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+base64 = "0.22"
 serde.workspace = true
-serde_json.workspace = true
+# `preserve_order`: agy's settings.json keeps its key order when a rule is added to it.
+serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "rt", "macros"] }

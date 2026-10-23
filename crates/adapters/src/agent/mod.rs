@@ -3,6 +3,7 @@
 //! Each provider knows its own flags and its own output format. The rest of the app only sees
 //! [`AgentEvent`], so adding a CLI means adding one [`Provider`] impl and nothing else.
 
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod runner;
@@ -58,14 +59,26 @@ pub enum AgentEvent {
     Error { message: String },
 }
 
-/// The address of the browser's MCP server for one chat: `/mcp?chat=<id>`. The bridge reads the chat from it.
-pub fn mcp_url(bridge: &str, owner: Option<&str>) -> String {
-    match owner {
-        Some(chat) => {
-            let safe: String = chat.chars().filter(|c| c.is_ascii_alphanumeric() || "-_:".contains(*c)).collect();
-            format!("{bridge}/mcp?chat={safe}")
-        }
-        None => format!("{bridge}/mcp"),
+/// The address of the browser's MCP server for one chat: `/mcp?chat=<id>&root=<folder>`. The bridge reads both from it.
+pub fn mcp_url(bridge: &str, owner: Option<&str>, cwd: Option<&std::path::Path>) -> String {
+    let mut query = Vec::new();
+    if let Some(chat) = owner {
+        let safe: String = chat.chars().filter(|c| c.is_ascii_alphanumeric() || "-_:".contains(*c)).collect();
+        query.push(format!("chat={safe}"));
+    }
+    // The project folder, for the code index.
+    if let Some(folder) = cwd {
+        let encoded: String = folder
+            .to_string_lossy()
+            .bytes()
+            .map(|byte| if byte.is_ascii_alphanumeric() || b"-_.~/".contains(&byte) { (byte as char).to_string() } else { format!("%{byte:02X}") })
+            .collect();
+        query.push(format!("root={encoded}"));
+    }
+    if query.is_empty() {
+        format!("{bridge}/mcp")
+    } else {
+        format!("{bridge}/mcp?{}", query.join("&"))
     }
 }
 
@@ -102,6 +115,11 @@ pub trait Provider: Send + Sync {
     fn args(&self, req: &TurnRequest) -> Vec<String>;
     /// One line of stdout to zero or more events. Lines this provider does not understand give none.
     fn parse_line(&self, line: &str) -> Vec<AgentEvent>;
+    /// Runs before the CLI starts, for what a turn needs that flags cannot say (a rule in the CLI's own settings).
+    /// An error stops the turn and is shown as its error.
+    fn prepare(&self, _req: &TurnRequest) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// One line describing a tool call's input: the part a person would look at.

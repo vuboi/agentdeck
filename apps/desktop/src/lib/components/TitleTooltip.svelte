@@ -49,8 +49,11 @@
 </script>
 
 {#if tip}
+  <!-- In the browser's top layer, like the popovers: no z-index can lift a tooltip above those. Shown last, it is on top. -->
   <div
-    class="pointer-events-none fixed z-[100] max-w-72 rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs font-medium whitespace-nowrap text-popover-foreground shadow-lg"
+    popover="manual"
+    {@attach (element) => element.showPopover?.()}
+    class="pointer-events-none fixed inset-auto m-0 max-w-72 overflow-visible rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs font-medium whitespace-nowrap text-popover-foreground shadow-lg"
     style:left="{tip.x}px"
     style:top="{tip.y}px"
     style:transform={tip.below ? 'translateX(-50%)' : 'translate(-50%, -100%)'}

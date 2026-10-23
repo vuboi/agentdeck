@@ -67,6 +67,8 @@ export const browser = $state({
   error: '',
   /** Open the page at once when the browser view mounts (developer hook, links). */
   autostart: '' as string,
+  /** The project command being started from the Preview (cwd|command), '' when none: it outlives the panel. */
+  starting: '',
   /** Comments pinned to elements of the page, waiting to be sent to the chat. */
   comments: [] as PageComment[],
   devtools: false,
@@ -101,7 +103,7 @@ export async function listenToPage() {
   listening = true;
   const { listen } = await import('@tauri-apps/api/event');
   // The agent asked to open an address (browser_open): the same as a link opened in AgentDeck.
-  await listen<{ url: string; newTab?: boolean }>('agent-open', ({ payload }) => openInPreview(payload.url, payload.newTab ? 'new' : 'current'));
+  await listen<{ url: string; newTab?: boolean }>('agent-open', ({ payload }) => openForAgent(payload.url, payload.newTab === true));
   // The agent switched the device (browser_device): pages are created again with that device's user agent.
   await listen<{ device: Device; landscape: boolean }>('agent-device', ({ payload }) => {
     if (!(payload.device in DEVICES)) return;
@@ -346,6 +348,49 @@ export function openInPreview(url: string, mode: 'auto' | 'current' | 'new' = 'a
   layout.toolsOpen = true;
 }
 
+/**
+ * The agent (browser_open, browser_serve) opens an address. With the Preview on screen it opens there, as a link would.
+ * Otherwise the Preview panel is left alone: the page is created off-screen, where it keeps drawing, so the agent can
+ * still look at it, click, read the console and take screenshots; the user finds it in the Preview when they open it.
+ */
+function openForAgent(url: string, inNewTab: boolean) {
+  if (!inTauri() || (layout.toolsOpen && layout.activeTool === 'Preview')) return openInPreview(url, inNewTab ? 'new' : 'current');
+  const front = activeTab();
+  const tab = inNewTab && front.url ? newTab(url) : front;
+  tab.url = url;
+  if (tab.opened) void call('browser_navigate', { tab: tab.id, url }).catch(() => {});
+  else void showBrowser({ x: -20000, y: -20000, w: 1100, h: 760 }).catch(() => {});
+}
+
 /** The right-click menu of a link, shown by LinkMenu. */
 /** The right-click menu of a link. `file` is set when the link is a file in the project: then `root` is its folder. */
 export const linkMenu = $state({ open: false, url: '', x: 0, y: 0, file: '', root: '' });
+
+// ---- running the project from the Preview ----
+export type RunTarget = { name: string; command: string; cwd: string; url: string | null; source: string };
+
+/** The ways the project in `cwd` can be run, read from its own files (scripts, launch.json, manage.py). */
+export const detectTargets = (cwd: string) => (inTauri() && cwd ? call<RunTarget[]>('detect_run_targets', { cwd }) : Promise.resolve([] as RunTarget[]));
+
+/** Starts the project as a server AgentDeck owns and returns the address once it answers. */
+export const runTarget = (target: RunTarget) => call<string>('run_target', { command: target.command, cwd: target.cwd, url: target.url });
+
+// ---- the servers running in the background ----
+export type ServerInfo = { key: number; command: string; cwd: string; url: string | null; pid: number; age: number; running: boolean };
+/** The dev servers AgentDeck started (from the Preview or by an agent), kept in step by `refreshServers`. */
+export const servers = $state<{ list: ServerInfo[] }>({ list: [] });
+
+export async function refreshServers() {
+  if (!inTauri()) return;
+  try {
+    servers.list = await call<ServerInfo[]>('servers_list');
+  } catch {
+    // The list stays as it was.
+  }
+}
+
+/** Stops one server (its key), or all of them, with every process they started. */
+export async function stopServers(key: number | null) {
+  await call('server_stop', { key });
+  await refreshServers();
+}

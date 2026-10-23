@@ -58,6 +58,9 @@ pub async fn drive_turn(
     req: &TurnRequest,
     mut emit: impl FnMut(AgentEvent),
 ) {
+    if let Err(message) = provider.prepare(req) {
+        return emit(AgentEvent::Error { message });
+    }
     let mut command = Command::new(binary);
     command
         .args(provider.args(req))

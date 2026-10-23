@@ -145,7 +145,7 @@ impl Provider for Codex {
         }
         config("developer_instructions", toml_string(APP_CONTEXT));
         if let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") {
-            config("mcp_servers.agentdeck.url", toml_string(&super::mcp_url(&bridge, req.owner.as_deref())));
+            config("mcp_servers.agentdeck.url", toml_string(&super::mcp_url(&bridge, req.owner.as_deref(), req.cwd.as_deref())));
         }
         if sandbox.is_none() {
             args.push("--dangerously-bypass-approvals-and-sandbox".to_string());

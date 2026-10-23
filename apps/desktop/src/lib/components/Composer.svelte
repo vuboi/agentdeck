@@ -3,6 +3,8 @@
   import { getPref, setPref } from '../prefs';
   import { ZButton, ZCommand, ZIcon, ZPopover, zSortable, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
+  import { loadSlash, slash, type SlashItem } from '../slash.svelte';
+  import { agyBlocks, agyModes, loadAgyModes } from '../agy-modes.svelte';
   import {
     activeSession,
     AGENTS,
@@ -11,6 +13,7 @@
     draftMentions,
     drafts,
     isRunning,
+    lastChat,
     rememberMixed,
     MODELS,
     projectOf,
@@ -62,6 +65,7 @@
   let dragging = $state(false);
   let area: HTMLTextAreaElement | undefined = $state();
   let paletteOpen = $state(false);
+  let slashOpen = $state(false);
   let innerW = $state(typeof window === 'undefined' ? 1280 : window.innerWidth);
 
   // Agent + model of this message. They follow the active session and can be overridden with @AI.
@@ -73,6 +77,15 @@
   $effect(() => {
     turnOptions.permission = permission;
     turnOptions.effort = effort;
+  });
+
+  // Antigravity's modes depend on the account. Find out which ones this account has, and never leave the chat on one
+  // it lacks (agy would ignore it and ask for every command): fall back to asking, the one setting that always exists.
+  $effect(() => {
+    if (agent === 'antigravity') void loadAgyModes();
+  });
+  $effect(() => {
+    if (agent === 'antigravity' && agyModes.loaded && agyBlocks(permission)) permission = 'ask';
   });
 
   // The picker belongs to each session: agent, model, effort, speed and approval mode are remembered per
@@ -95,6 +108,8 @@
     if (session) {
       agent = session.agent;
       model = session.model;
+      // A new chat also takes the effort of the last chat that was written in.
+      if (session.draft && lastChat.agent && lastChat.agent === session.agent && lastChat.model === session.model) effort = lastChat.effort;
     }
   }
 
@@ -134,8 +149,47 @@
   const agentIcon: Record<Agent, ZIconName> = {
     claude: 'brandClaude' as ZIconName,
     codex: 'brandOpenai' as ZIconName,
-    gemini: 'brandGemini' as ZIconName,
+    antigravity: 'brandGemini' as ZIconName,
+    custom: 'lucideServer' as ZIconName,
   };
+
+  // ---------- slash commands ----------
+  // The agent's own commands and skills, plus AgentDeck's: read for the agent and project of this chat.
+  const projectPath = $derived(workspace.projects.find((item) => item.id === workspace.sessions.find((entry) => entry.id === sessionId)?.projectId)?.path ?? null);
+  $effect(() => {
+    void loadSlash(agent, projectPath);
+  });
+  const agentLabel = $derived(AGENTS.find((entry) => entry.value === agent)?.label ?? agent);
+  const slashGroups = $derived.by<ZCommandGroup<SlashItem>[]>(() => {
+    const row = (item: SlashItem): ZCommandItem<SlashItem> => ({
+      id: `${item.kind}:${item.origin}:${item.name}`,
+      label: item.description ? `/${item.name}  ·  ${item.description}` : `/${item.name}`,
+      icon: (item.kind === 'skill' ? 'lucideSparkles' : item.kind === 'builtin' ? 'lucideZap' : 'lucideTerminal') as ZIconName,
+      keywords: [item.name, item.description, item.origin],
+      data: item,
+    });
+    const of = (kind: SlashItem['kind']) => slash.items.filter((item) => item.kind === kind).map(row);
+    return [
+      { heading: 'AgentDeck', items: of('builtin') },
+      { heading: `${agentLabel} commands`, items: of('prompt') },
+      { heading: `${agentLabel} skills`, items: of('skill') },
+    ].filter((group) => group.items.length > 0);
+  });
+
+  /** Puts `/name ` in the message box where the caret is, so the arguments can be typed right after it. */
+  function pickSlash(item: ZCommandItem<SlashItem>) {
+    const picked = item.data;
+    if (!picked) return;
+    const at = area?.selectionStart ?? draft.length;
+    const before = draft.slice(0, at);
+    const lead = before && !/\s$/.test(before) ? ' ' : '';
+    setDraft(`${before}${lead}/${picked.name} ${draft.slice(at)}`);
+    queueMicrotask(() => {
+      area?.focus();
+      const end = (before + lead + picked.name).length + 2;
+      area?.setSelectionRange(end, end);
+    });
+  }
 
   // ---------- mentions ----------
   const groups = $derived<ZCommandGroup<Mention>[]>([
@@ -162,7 +216,7 @@
       })),
     },
     {
-      heading: 'AI',
+      heading: 'Hand to an agent',
       items: AGENTS.flatMap((entry) =>
         MODELS[entry.value].map((entryModel) => ({
           id: `ai:${entry.value}/${entryModel.value}`,
@@ -177,15 +231,9 @@
   function pickMention(item: ZCommandItem<Mention>) {
     const picked = item.data;
     if (!picked) return;
-    if (picked.kind === 'ai') {
-      // An AI mention routes this message to that agent + model, so there is only ever one.
-      const [nextAgent, nextModel] = picked.id.split('/');
-      agent = nextAgent as Agent;
-      model = nextModel;
-      setMentions([...mentions.filter((entry) => entry.kind !== 'ai'), picked]);
-    } else if (!mentions.some((entry) => entry.kind === picked.kind && entry.id === picked.id)) {
-      setMentions([...mentions, picked]);
-    }
+    // An AI mention hands the message to that agent: it works in a chat of its own and the answer comes back here.
+    // Several can be added; they work side by side.
+    if (!mentions.some((entry) => entry.kind === picked.kind && entry.id === picked.id)) setMentions([...mentions, picked]);
   }
 
   const chipIcon: Record<Mention['kind'], ZIconName> = {
@@ -248,7 +296,9 @@
 
   function submit() {
     if (!hasInput) return;
-    sendMessage(draft, images, elements);
+    // Handing work to an agent needs words that say what the work is.
+    if (mentions.some((entry) => entry.kind === 'ai') && !draft.trim()) return;
+    sendMessage(draft, images, elements, mentions);
     draftElements[sessionId] = [];
     detail = null;
     setDraft('');
@@ -260,6 +310,10 @@
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       submit();
+    } else if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && /(^|\s)$/.test(draft.slice(0, area?.selectionStart ?? draft.length))) {
+      // A slash that starts a word opens the command list, as the @ opens mentions.
+      event.preventDefault();
+      slashOpen = true;
     } else if (event.key === '@') {
       // The palette takes over the @: pick a session, project or AI instead of typing the name.
       event.preventDefault();
@@ -317,7 +371,7 @@
     {#each elements.filter((item) => item.id === detail) as item (item.id)}
       <ZPopover anchor={chipAnchors[item.id]} open={true} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={360} onClose={() => (detail = null)}>
         {#snippet children()}
-          <div class="flex max-h-[min(60vh,420px)] w-[360px] flex-col gap-2 overflow-y-auto p-3 text-xs">
+          <div class="flex max-h-[min(60vh,420px)] w-full flex-col gap-2 overflow-y-auto p-3 text-xs">
             <div class="flex items-center gap-1.5 font-medium"><ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 text-primary" />Included with your message</div>
             <dl class="m-0 grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1.5">
               <dt class="text-muted-foreground">Element</dt><dd class="m-0 font-mono">&lt;{item.tag} /&gt;</dd>
@@ -412,11 +466,28 @@
 </form>
 
 <ZCommand
+  bind:open={slashOpen}
+  zGroups={slashGroups}
+  zSearch="fuzzy"
+  zSize="default"
+  zPlaceholder="Run a command or skill…"
+  zRootLabel="Commands"
+  onSelect={pickSlash}
+  onClosed={() => area?.focus()}
+>
+  {#snippet footer()}
+    <div class="flex gap-3 px-3 py-1.5 text-[10px] text-muted-foreground">
+      <span>↑↓ navigate</span><span>↵ use</span><span>esc close</span>
+    </div>
+  {/snippet}
+</ZCommand>
+
+<ZCommand
   bind:open={paletteOpen}
   zGroups={groups}
   zSearch="fuzzy"
   zSize="default"
-  zPlaceholder="Mention a session, project or AI…"
+  zPlaceholder="Mention a chat, a project, or hand work to an agent…"
   zRootLabel="Mention"
   onSelect={pickMention}
   onClosed={() => area?.focus()}

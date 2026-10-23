@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { customProviderName, modelLabel } from '../models.svelte';
   import { tick, untrack } from 'svelte';
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
@@ -8,6 +9,7 @@
   import { segments } from '../blocks';
   import { openImages, preview } from '../preview.svelte';
   import ChatBlock from './ChatBlock.svelte';
+  import DelegateList from './DelegateList.svelte';
   import CommandGroup from './CommandGroup.svelte';
   import LiveStatus from './LiveStatus.svelte';
   import MessageFooter from './MessageFooter.svelte';
@@ -97,7 +99,7 @@
   });
 
 
-  const agentText = { claude: 'text-orange-500', codex: 'text-emerald-500', gemini: 'text-sky-500' } as const;
+  const agentText = { claude: 'text-orange-500', codex: 'text-emerald-500', antigravity: 'text-sky-500', custom: 'text-violet-500' } as const;
   const agentName = (agent: string) => AGENTS.find((item) => item.value === agent)?.label ?? agent;
 
   // ---------- virtual list (same approach as ZChat) ----------
@@ -417,7 +419,8 @@
               <article class="group/msg mx-auto flex w-full min-w-0 max-w-3xl flex-col break-words py-2.5 px-3 min-[720px]:pr-6 min-[720px]:pl-12 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
                 {#if mine}
                   {@const pictures = message.blocks.flatMap((block) => (block.kind === 'image' ? [block] : []))}
-                  {@const words = message.blocks.filter((block) => block.kind !== 'image')}
+                  {@const words = message.blocks.filter((block) => block.kind !== 'image' && block.kind !== 'delegate')}
+                  {@const handed = message.blocks.filter((block) => block.kind === 'delegate')}
                   <!-- Pictures sit apart from the bubble as small tiles; click one to see it large. -->
                   {#if pictures.length > 0}
                     <div class="mb-1.5 flex max-w-[85%] flex-wrap gap-1.5 {theme.chatLayout === 'split' ? 'justify-end' : ''}">
@@ -472,15 +475,21 @@
                         {/each}
                       </div>
                     {/if}
+                    {#if handed.length > 0}<DelegateList blocks={handed} />{/if}
                     <MessageFooter {message} end={theme.chatLayout === 'split'} onfork={() => forkSession(workspace.activeId)} onedit={() => startEdit(message)} />
                   {/if}
                 {:else}
                   {@const parts = segments(message.blocks)}
                   {@const tail = parts.at(-1)}
                   {@const working = tail?.kind === 'commands' && tail.items.some((item) => item.status === 'running')}
-                  <div class="mb-1.5 flex items-baseline gap-2 text-xs">
-                    <span class="font-semibold {agentText[agent]}">{agentName(agent)}</span>
-                    <span class="text-muted-foreground">{message.time}</span>
+                  <div class="mb-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs">
+                    <span class="font-semibold {agentText[agent]}">{(agent === 'custom' && customProviderName(message.model)) || agentName(agent)}</span>
+                    {#if message.model}
+                      <span class="text-muted-foreground/40" aria-hidden="true">/</span>
+                      <span class="text-muted-foreground" title={message.model}>{modelLabel(message.model)}</span>
+                    {/if}
+                    <span class="text-muted-foreground/40" aria-hidden="true">·</span>
+                    <span class="text-muted-foreground/80 tabular-nums">{message.time}</span>
                     {#if message.tokens}
                       {@const cost = message.cost ?? estimateCost(message.tokens, message.model)}
                       {@const tokens = message.tokens}
@@ -509,10 +518,13 @@
                           {/if}
                         </div>
                       {/snippet}
-                      <!-- Tokens and cost as two small chips; hover for the breakdown. -->
-                      <span class="ml-0.5 flex items-center gap-1 text-[10px] tabular-nums" {@attach zTooltip({ content: usageTip, position: 'top' })}>
-                        <span class="rounded bg-muted px-1.5 py-px text-muted-foreground"><ZNumberTicker zValue={totalTokens(message.tokens)} zFormat="compact" zDuration={600} /> tokens</span>
-                        {#if cost != null}<span class="rounded bg-success/10 px-1.5 py-px font-medium text-success">{message.cost == null ? '≈ ' : ''}<ZNumberTicker zValue={cost} zFormat="currency" zCurrency="USD" zLocale="en-US" zMinimumFractionDigits={2} zMaximumFractionDigits={cost < 0.01 ? 3 : 2} zDuration={600} /></span>{/if}
+                      <!-- Tokens and cost, quiet and on the right; hover for the breakdown. -->
+                      <span class="ml-auto flex items-baseline gap-1.5 text-[11px] tabular-nums" {@attach zTooltip({ content: usageTip, position: 'top' })}>
+                        <span class="text-muted-foreground"><ZNumberTicker zValue={totalTokens(message.tokens)} zFormat="compact" zDuration={600} /> tokens</span>
+                        {#if cost != null}
+                          <span class="text-muted-foreground/40" aria-hidden="true">·</span>
+                          <span class="font-medium text-success">{message.cost == null ? '≈ ' : ''}<ZNumberTicker zValue={cost} zFormat="currency" zCurrency="USD" zLocale="en-US" zMinimumFractionDigits={2} zMaximumFractionDigits={cost < 0.01 ? 3 : 2} zDuration={600} /></span>
+                        {/if}
                       </span>
                     {/if}
                   </div>
@@ -530,12 +542,16 @@
                     {/each}
                     <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
                          editing…), as in Claude and Codex; the steps above stay plain, finished lines. -->
-                    {#if message.live}
-                      <LiveStatus {message} />
-                    {/if}
-                  </div>
-                  {#if !message.live && message.blocks.length > 0}
-                    <MessageFooter {message} onfork={() => forkSession(workspace.activeId)} />
+</div>
+                  <!-- The status line and the footer share one fixed-height slot, so the row does not jump when the reply ends. -->
+                  {#if message.live || message.blocks.length > 0}
+                    <div class="relative h-[30px] w-full shrink-0">
+                      {#if message.live}
+                        <div class="absolute inset-x-0 bottom-0 flex h-5 items-center"><LiveStatus {message} /></div>
+                      {:else}
+                        <MessageFooter {message} onfork={() => forkSession(workspace.activeId)} />
+                      {/if}
+                    </div>
                   {/if}
                 {/if}
               </article>

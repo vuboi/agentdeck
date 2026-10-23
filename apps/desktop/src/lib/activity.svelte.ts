@@ -1,5 +1,5 @@
 // What the agents did, across every chat: each tool call with its status, newest last. The Tasks panel shows
-// the ones still running (and those sent to the background); the Audit panel shows the whole log, kept on disk
+// the ones still running (and those sent to the background) and, below them, the whole log, kept on disk
 // in `~/.agentdeck/audit.jsonl` so it survives a restart.
 
 import type { AgentEvent } from './agent';
@@ -156,7 +156,23 @@ export function trackActivity(sessionId: string, title: string, project: string,
   }
 }
 
-export const clearActivity = () => activity.splice(0, activity.length);
+/**
+ * A project started from the Preview: shown as running in the Tasks panel, and written to the Audit log when it
+ * answers or fails. Returns the function that ends it.
+ */
+export function trackRun(sessionId: string, title: string, project: string, input: string) {
+  activity.push({ key: `${sessionId}:run:${++calls}`, sessionId, title, project, name: 'Run project', input, background: false, status: 'running', startedAt: Date.now() });
+  // The entry as the list holds it (reactive), so the panel sees it end.
+  const item = activity[activity.length - 1];
+  return (ok: boolean, output: string) => {
+    item.status = ok ? 'ok' : 'fail';
+    item.output = output.length > 4000 ? `${output.slice(0, 4000)}…` : output;
+    item.endedAt = Date.now();
+    record(item);
+  };
+}
+
+export const clearActivity =() => activity.splice(0, activity.length);
 
 /** Empties the Audit log, in memory and on disk. */
 export function clearAudit() {

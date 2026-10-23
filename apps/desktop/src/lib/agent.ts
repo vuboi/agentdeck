@@ -37,6 +37,24 @@ export async function sendAgentTurn(args: {
   await invoke('agent_send', args);
 }
 
+/** Start one turn on a custom provider: an OpenAI-compatible server that gets the whole conversation. */
+export async function sendCustomTurn(args: {
+  session: string;
+  turn: string;
+  kind: string;
+  baseUrl: string;
+  apiKey: string | null;
+  model: string;
+  messages: { role: string; content: string }[];
+  permissionMode: string | null;
+  allowedTools: string[];
+  cwd: string | null;
+  effort: string | null;
+}): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('custom_send', args);
+}
+
 /** Saves an image (base64, no prefix) where the agent CLI can open it, and returns its path. */
 export async function saveAttachment(mime: string, data: string): Promise<string> {
   const { invoke } = await import('@tauri-apps/api/core');

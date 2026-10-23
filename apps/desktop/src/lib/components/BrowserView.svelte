@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { slide } from 'svelte/transition';
-  import { cubicOut } from 'svelte/easing';
+  import { fly } from 'svelte/transition';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { ZDropdownMenu, ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
   import { toast } from '../toast';
@@ -28,6 +27,13 @@
     newTab,
     openExternal,
     recreateBrowser,
+    detectTargets,
+    refreshServers,
+    servers,
+    stopServers,
+    openInPreview,
+    runTarget as startTarget,
+    type RunTarget,
     reload,
     selectTab,
     showBrowser,
@@ -37,9 +43,10 @@
     type Rect,
   } from '../browser.svelte';
   import { inTauri } from '../history';
+  import { trackRun } from '../activity.svelte';
   import { blurPage, cutHole, modalBlur, overPage, setBelow } from '../page-layer';
   import { layout } from '../layout.svelte';
-  import { draftElements, draftImages, drafts, workspace } from '../sessions.svelte';
+  import { activeSession, draftElements, draftImages, drafts, projectOf, workspace } from '../sessions.svelte';
   import DevTools from './DevTools.svelte';
 
   // The AgentDeck browser: tabs, an address bar, device sizes, an element picker, devtools, and a markup view
@@ -65,6 +72,43 @@
   const tab = $derived(activeTab());
   const errors = $derived(browser.console.filter((line) => line.level === 'error').length);
   const started = $derived(Boolean(tab.url));
+
+  // ---- run the project: what it can run, read from its files; one click starts it and opens the page ----
+  const projectPath = $derived((() => {
+    const session = activeSession();
+    return (session && projectOf(session)?.path) || '';
+  })());
+  let targets = $state<RunTarget[]>([]);
+  // What is being started lives in the browser state, not here: leaving the panel and coming back keeps the spinner.
+  const starting = $derived(browser.starting);
+  $effect(() => {
+    const path = projectPath;
+    let current = true;
+    void detectTargets(path)
+      .then((list) => current && (targets = list))
+      .catch(() => current && (targets = []));
+    return () => (current = false);
+  });
+
+  async function runProject(target: RunTarget) {
+    if (starting) return;
+    browser.starting = `${target.cwd}|${target.command}`;
+    browser.error = '';
+    const session = activeSession();
+    // The Audit log gets the run: what was started, where, and the address it came up at (or why it did not).
+    const finish = trackRun(session?.id ?? '', session?.title ?? '', (session && projectOf(session)?.name) || '', `${target.command}\n${target.cwd}`);
+    try {
+      const url = await startTarget(target);
+      finish(true, `${target.name}: ${url}`);
+      // The same path a link takes: the front tab, or a new one when it already shows a page.
+      openInPreview(url, 'auto');
+    } catch (error) {
+      finish(false, String(error));
+      browser.error = String(error);
+    } finally {
+      browser.starting = '';
+    }
+  }
 
   // The address bar shows the front tab's address unless it is being typed in.
   $effect(() => {
@@ -110,9 +154,13 @@
   /** Takes the page off screen. The app is filled where it was see-through first, so the window never shows through. */
   async function takePageAway() {
     cutHole(null, null);
+    placed = '';
     await painted();
     await hideBrowser();
   }
+
+  /** Where the page was last placed (tab, rectangle, zoom): the same again is not sent again. */
+  let placed = '';
 
   async function placePage() {
     // An empty tab (a new one, nothing typed yet) shows no page: the previous tab's page must go away.
@@ -130,10 +178,17 @@
     deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
     try {
       // Only the tab in front is on screen: showing it hides the others (once it is up, so no frame is left empty).
-      await showBrowser(place.rect);
+      const { x, y, w, h } = place.rect;
+      const key = `${tab.id}|${place.zoom}|${tab.opened}|${Math.round(x * 100)},${Math.round(y * 100)},${Math.round(w * 100)},${Math.round(h * 100)}`;
+      if (key === placed) return;
+      const [shownTab, shownZoom] = placed.split('|');
+      // The page already on screen only moves: a plain move skips showing it and hiding the others again.
+      if (shownTab === tab.id && tab.opened) await moveBrowser(place.rect);
+      else await showBrowser(place.rect);
       // The app is see-through where the page is, so whatever it opens over the page can sit above it.
       cutHole(stage!, place.rect);
-      if (tab.opened) await zoomBrowser(place.zoom);
+      if (tab.opened && shownZoom !== String(place.zoom)) await zoomBrowser(place.zoom);
+      placed = key;
     } catch (error) {
       // The page went away under us (closed, or being recreated for another device): open it again next time.
       if (String(error).includes('the browser is not open')) {
@@ -208,7 +263,13 @@
       frameId = requestAnimationFrame(watch);
     };
     frameId = requestAnimationFrame(watch);
-    return () => cancelAnimationFrame(frameId);
+    // What runs in the background is read again every few seconds while the panel is on screen.
+    void refreshServers();
+    const poll = setInterval(() => void refreshServers(), 3000);
+    return () => {
+      cancelAnimationFrame(frameId);
+      clearInterval(poll);
+    };
   });
   const onResize = () => void sync();
 
@@ -257,6 +318,8 @@
     void started;
     void browser.devtools;
     void browser.devtoolsHeight;
+    // The mark-up bar opens in this very update, so the page moves before the next frame is drawn.
+    void browser.annotating;
     // A floating window being carried or resized: the page steps aside and comes back where it lands.
     if (layout.dragging) untrack(() => void takePageAway());
     void layout.dragging;
@@ -382,6 +445,25 @@
     { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
   ]);
 
+  // What runs in the background (servers started from the Preview or by an agent): open it, or stop it.
+  const alive = $derived(servers.list.filter((item) => item.running));
+  const portOf = (item: { url: string | null }) => item.url?.match(/:(\d+)/)?.[1];
+  const runningFor = (age: number) => (age < 60 ? `${age}s` : age < 3600 ? `${Math.floor(age / 60)}m` : `${Math.floor(age / 3600)}h ${Math.floor((age % 3600) / 60)}m`);
+  const processItems = $derived<ZDropdownMenuItem[]>(
+    servers.list.length === 0
+      ? [{ label: 'Nothing is running in the background', icon: 'lucideServerOff' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: true }]
+      : [
+          ...servers.list.flatMap((item, index) => {
+            const name = `${item.command.length > 34 ? `${item.command.slice(0, 34)}…` : item.command}${portOf(item) ? ` · :${portOf(item)}` : ''}`;
+            return [
+              { label: `${item.running ? '' : 'Exited · '}${name} · ${runningFor(item.age)}`, icon: (item.running ? 'lucideExternalLink' : 'lucideCircleOff') as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: index > 0 ? ('before' as const) : undefined, disabled: !item.running || !item.url, onClick: () => item.url && openInPreview(item.url, 'auto') },
+              { label: item.running ? 'Stop' : 'Remove from the list', icon: 'lucideSquare' as ZIconName, iconSize: 12, class: 'text-xs! py-1 pl-6! text-destructive!', onClick: () => void stopServers(item.key) },
+            ];
+          }),
+          ...(servers.list.length > 1 ? [{ label: 'Stop all', icon: 'lucideSquare' as ZIconName, iconSize: 12, class: 'text-xs! py-1 text-destructive!', divide: 'before' as const, onClick: () => void stopServers(null) }] : []),
+        ],
+  );
+
   const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
 </script>
@@ -487,13 +569,18 @@
           <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
           {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
         </button>
+<div data-page-menu class="relative flex items-center [&_svg]:size-3.5! [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0" {@attach zTooltip({ content: 'Running in the background', position: 'top' })}>
+          <ZDropdownMenu zItems={processItems} zIcon={'lucideServer' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={260} zWave={false} />
+          {#if alive.length > 0}<span class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center text-[9px] leading-3.5 text-primary-foreground">{alive.length}</span>{/if}
+        </div>
 <div data-page-menu class="flex items-center [&_svg]:size-3.5! [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
                   <ZDropdownMenu zItems={menuItems} zIcon={'lucideSettings2' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
         </div>
       </div>
     </div>
     {#if browser.annotating}
-      <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1" role="toolbar" aria-label="Mark up tools" transition:slide={{ duration: 160, easing: cubicOut }}>
+      <!-- Flies in by transform, never by size: a growing bar would move the native page every frame and make it shake. -->
+      <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1" role="toolbar" aria-label="Mark up tools" in:fly={{ y: -8, duration: 200, opacity: 0 }}>
         {#each MARK_TOOLS as item (item.tool)}
           <button
             type="button"
@@ -560,8 +647,35 @@
         <div class="absolute inset-0 grid place-items-center p-6 text-center text-xs text-muted-foreground">
           <div class="flex flex-col items-center gap-2">
             <ZIcon zType="lucideGlobe" class="size-8 opacity-60" />
-            <p class="m-0">Search or enter an address above.</p>
-            <p class="m-0 max-w-60">Dev servers on localhost work best. Inspect elements, mark up the page, and send it all to the chat.</p>
+            <p class="m-0">{targets.length ? 'Run the project, or enter an address above.' : 'Search or enter an address above.'}</p>
+            {#if targets.length}
+              <div class="mt-1 flex w-72 max-w-full flex-col gap-1 text-left" role="list" aria-label="Ways to run the project">
+                {#each targets as target (`${target.cwd}|${target.command}`)}
+                  {@const key = `${target.cwd}|${target.command}`}
+                  <div class="flex items-center gap-2 rounded-md border border-border bg-background/60 px-2.5 py-1.5" role="listitem">
+                    <div class="min-w-0 flex-1">
+                      <div class="flex min-w-0 items-center gap-1.5">
+                        <span class="truncate text-xs font-medium text-foreground">{target.name}</span>
+                        {#if target.url}<span class="shrink-0 rounded bg-muted px-1 font-mono text-[9px] leading-4">{target.url.match(/:(\d+)/)?.[1]}</span>{/if}
+                      </div>
+                      <div class="truncate font-mono text-[10px]" title={target.command}>{target.command}</div>
+                    </div>
+                    <button
+                      type="button"
+                      class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md outline-none hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                      aria-label="Run {target.name}"
+                      disabled={starting !== ''}
+                      {@attach zTooltip({ content: starting === key ? 'Starting…' : 'Run and open in the Preview', position: 'top' })}
+                      onclick={() => void runProject(target)}
+                    >
+                      {#if starting === key}<ZLoading zLoading zSpinner="spinner" zSize="xs" zColor="primary" />{:else}<ZIcon zType={'lucidePlay' as ZIconName} class="size-4" />{/if}
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="m-0 max-w-60">Dev servers on localhost work best. Inspect elements, mark up the page, and send it all to the chat.</p>
+            {/if}
           </div>
         </div>
       {/if}

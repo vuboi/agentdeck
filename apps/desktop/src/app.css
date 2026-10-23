@@ -169,8 +169,16 @@ html[data-warming] [data-z-popover] {
 .md-code-head { display: flex; align-items: center; justify-content: space-between; padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 0.6875rem; }
 .md-code-head button { cursor: pointer; padding: 0.1rem 0.4rem; border-radius: 0.3rem; font: inherit; }
 .md-code-head button:hover { background: var(--accent); color: var(--foreground); }
-.md-code pre { margin: 0; padding: 0.7rem 0.85rem; overflow-x: auto; background: transparent; }
-.md-code code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.78rem; line-height: 1.6; white-space: pre; }
+.md-code-head button { position: relative; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; padding: 0; }
+.md-code-head button svg { grid-area: 1 / 1; transition: opacity 0.18s, transform 0.18s; }
+.md-code-head .ic-check { opacity: 0; transform: scale(0.4); color: var(--success, #22c55e); }
+.md-code-head button[data-copied] .ic-copy { opacity: 0; transform: scale(0.4); }
+.md-code-head button[data-copied] .ic-check { opacity: 1; transform: scale(1); }
+.md-code-head .ic-check path { stroke-dasharray: 24; stroke-dashoffset: 24; }
+.md-code-head button[data-copied] .ic-check path { animation: md-check-draw 0.35s ease-out 0.05s forwards; }
+@keyframes md-check-draw { to { stroke-dashoffset: 0; } }
+.md-code pre { margin: 0; padding: 0.7rem 0.85rem; overflow-x: hidden; background: transparent; }
+.md-code code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.78rem; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* No focus outlines on the tree rows and the chat ruler: the selected row and hover already show where you are. */
 .z-tree [role='treeitem']:focus,

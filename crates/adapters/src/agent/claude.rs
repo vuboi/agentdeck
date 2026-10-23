@@ -121,7 +121,7 @@ impl Provider for Claude {
         if let Some(bridge) = &bridge {
             args.push("--mcp-config".to_string());
             args.push(
-                serde_json::json!({ "mcpServers": { "agentdeck": { "type": "http", "url": super::mcp_url(bridge, req.owner.as_deref()) } } })
+                serde_json::json!({ "mcpServers": { "agentdeck": { "type": "http", "url": super::mcp_url(bridge, req.owner.as_deref(), req.cwd.as_deref()) } } })
                     .to_string(),
             );
             args.push("--allowedTools".to_string());

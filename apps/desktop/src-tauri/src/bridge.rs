@@ -88,10 +88,18 @@ pub fn ingest(report: &Value) {
     }
 }
 
+const PREFERRED_PORT: u16 = 47821;
+
 /// Starts the server; its address goes to `AGENTDECK_BRIDGE`.
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let Ok(listener) = TcpListener::bind("127.0.0.1:0").await else {
+        // A fixed port first: an MCP server stored in Antigravity's own config (it has no per-turn flag) must keep
+        // its address between runs. If another program has it, any free port does and the MCP tab shows the link as stale.
+        let bound = match TcpListener::bind(("127.0.0.1", PREFERRED_PORT)).await {
+            Ok(listener) => Ok(listener),
+            Err(_) => TcpListener::bind("127.0.0.1:0").await,
+        };
+        let Ok(listener) = bound else {
             return;
         };
         let Ok(address) = listener.local_addr() else {
@@ -164,6 +172,9 @@ async fn serve(mut stream: TcpStream, app: AppHandle) -> std::io::Result<()> {
     if path == "/mcp" {
         let reply = if is_post_request(&head) {
             let chat = params.get("chat").cloned().unwrap_or_default();
+            if let Some(root) = params.get("root") {
+                crate::index::set_root(&chat, root);
+            }
             match crate::mcp::handle(&app, &body, &chat).await {
                 Some(text) => format!(
                     "HTTP/1.1 200 OK
@@ -599,6 +610,7 @@ pub(crate) async fn answer(
                     }
                 }
             }
+            crate::servers::set_url(port, target.as_str());
             let new_tab = wants_new_tab(params);
             let mut opened = open_page(app, target.as_str(), new_tab, params.get("chat").map_or("", String::as_str)).await?;
             opened["server"] = json!({ "command": command, "log": log.map(|path| path.to_string_lossy().into_owned()) });

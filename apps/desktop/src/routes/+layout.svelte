@@ -27,6 +27,9 @@
   });
 </script>
 
+<!-- No browser menu (Reload, Inspect, ...): the app's own menus listen on their elements and open themselves. F12 still opens the devtools. -->
+<svelte:window oncontextmenu={(event) => event.preventDefault()} />
+
 {@render children()}
 <TitleTooltip />
 <!-- Small pill notes for copy, delete and the like: see toast() in lib/toast.ts. -->

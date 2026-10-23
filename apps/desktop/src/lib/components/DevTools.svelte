@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { slide } from 'svelte/transition';
-  import { cubicOut } from 'svelte/easing';
+  import { fly } from 'svelte/transition';
   import { ZDropdownMenu, ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import { browser } from '../browser.svelte';
@@ -99,7 +98,7 @@
   };
 </script>
 
-<div class="flex min-h-0 shrink-0 flex-col overflow-hidden" style:height="{browser.devtoolsHeight + 1}px" transition:slide={{ duration: 260, easing: cubicOut }}>
+<div class="flex min-h-0 shrink-0 flex-col overflow-hidden" style:height="{browser.devtoolsHeight + 1}px" in:fly={{ y: -8, duration: 200, opacity: 0 }}>
   <Splitter axis="y" label="Resize developer tools" onDelta={resize} />
   <section class="flex shrink-0 flex-col bg-background" style:height="{browser.devtoolsHeight}px" aria-label="Developer tools">
   <div class="flex shrink-0 items-center gap-1 border-b border-border px-1.5 py-1" role="tablist">
@@ -136,7 +135,7 @@
       </button>
       <ZPopover anchor={levelButton} bind:open={levelOpen} zTrigger="manual" zPosition="top-right" zOffset={4} zWidth={110}>
         {#snippet children()}
-          <div class="flex w-[110px] flex-col gap-0.5 p-1" role="listbox" aria-label="Level">
+          <div class="flex w-full flex-col gap-0.5 p-1" role="listbox" aria-label="Level">
             {#each LEVELS as item (item.value)}
               <button
                 type="button"
@@ -158,14 +157,14 @@
     {:else}
       <label class="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground"><input type="checkbox" bind:checked={onlyFailed} /> Failed</label>
     {/if}
-    <div class="flex items-center [&_svg]:size-3.5! [&_button]:size-6! [&_button]:rounded [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
-      <ZDropdownMenu zItems={copyItems} zIcon={'lucideCopy' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="top-right" zOffset={6} zMinWidth={240} zWave={false} />
+    <div class="flex items-center [&_.z-icon]:!size-3.5 [&_button]:size-5! [&_button]:rounded [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
+      <ZDropdownMenu zItems={copyItems} zIcon={'lucideCopy' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="xs" zPosition="top-right" zOffset={6} zMinWidth={240} zWave={false} />
     </div>
-    <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear" {@attach zTooltip({ content: 'Clear', position: 'top' })} onclick={clear}>
-      <ZIcon zType={'lucideBan' as ZIconName} class="size-3.5" />
+    <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear" {@attach zTooltip({ content: 'Clear', position: 'top' })} onclick={clear}>
+      <ZIcon zType={'lucideTrash2' as ZIconName} zSize="14" />
     </button>
-    <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Close" {@attach zTooltip({ content: 'Close', position: 'top' })} onclick={() => (browser.devtools = false)}>
-      <ZIcon zType="lucideX" class="size-3.5" />
+    <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Close" {@attach zTooltip({ content: 'Close', position: 'top' })} onclick={() => (browser.devtools = false)}>
+      <ZIcon zType="lucideX" zSize="14" />
     </button>
   </div>
 

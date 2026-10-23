@@ -4,6 +4,9 @@
   import LinkMenu from '../lib/components/LinkMenu.svelte';
   import WindowControls from '../lib/components/WindowControls.svelte';
   import ThemePanel from '../lib/components/ThemePanel.svelte';
+  import SettingsModal from '../lib/components/SettingsModal.svelte';
+  import FlowEditor from '../lib/components/flow/FlowEditor.svelte';
+  import { openSettings, settings } from '../lib/connectors.svelte';
   import ToolsModal from '../lib/components/ToolsModal.svelte';
   import Sidebar from '../lib/components/Sidebar.svelte';
   import Chat from '../lib/components/Chat.svelte';
@@ -107,6 +110,12 @@
   function onKey(event: KeyboardEvent) {
     handleTerminalShortcut(event);
     if (event.key === 'Escape') layout.sidebarDrawer = false;
+    // Ctrl+, (Cmd+,): Settings.
+    if ((event.ctrlKey || event.metaKey) && event.key === ',') {
+      event.preventDefault();
+      if (settings.open) settings.open = false;
+      else openSettings();
+    }
     // Ctrl+T (Cmd+T on macOS): a new chat tab, the same as the + button.
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 't') {
       event.preventDefault();
@@ -188,6 +197,8 @@
 
   <LinkMenu />
   <ThemePanel />
+  <SettingsModal />
+  <FlowEditor />
   <ToolsModal />
   <WindowControls />
 </div>

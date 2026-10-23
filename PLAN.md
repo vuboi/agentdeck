@@ -228,3 +228,123 @@ Mỗi module có Definition of Done (DoD). Làm tuần tự, mỗi module = 1 co
 Vòng mỗi module: brief → Codex code → DoD check → Sonnet review → Codex fix (tối đa 2 vòng) → commit `feat(Mx): ...`.
 
 Quy ước code cho mọi agent: xem `AGENTS.md`.
+
+---
+
+## 6. Đợt tiếp theo (2026-10-23): quota, Antigravity, MCP, terminal thật
+
+Thứ tự: **M11 → M12 → M13 → M14**. M11 và M14 độc lập nhau, làm song song được (hai nhánh khác file). M13 làm sau M12 vì cần
+cả ba CLI. Mỗi module có brief đủ để giao thẳng cho Claude hoặc Codex (`codex exec -m gpt-6-luna`); phần "Gợi ý giao" nói
+nên giao ai. Quy ước chung vẫn là `AGENTS.md`. Mục "Cần verify" là việc đầu tiên của module: chạy thử CLI thật, ghi fixture
+(đã ẩn nội dung) rồi mới viết parser.
+
+### M11 — Trạng thái giới hạn token (Claude + Codex)
+
+**Mục tiêu.** Thấy ngay còn bao nhiêu quota của từng provider, bao lâu nữa reset, và có đủ cho việc sắp làm không. Đây là
+phần "exact" của M6; phần estimate/fallback vẫn ở M6/M8.
+
+**Nguồn dữ liệu (đã kiểm tra trên máy này).**
+
+| Provider | Nguồn | Dạng |
+|---|---|---|
+| Codex | Dòng `event_msg` / `token_count` trong rollout `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, trường `rate_limits` | `primary` (`window_minutes: 300` = cửa sổ 5h) và `secondary` (`10080` = tuần): `used_percent`, `resets_at` (epoch giây); thêm `plan_type`, `credits`, `rate_limit_reached_type` |
+| Claude | Claude Code đưa `rate_limits.five_hour` / `rate_limits.seven_day` (`used_percentage`, `resets_at`) vào JSON stdin của **statusline** (chỉ ở phiên tương tác, gói subscription). Máy này đã có tool bên thứ ba (AI Usage Meter) ghi chúng vào `~/.claude/usage-cache.json` | `%` đã dùng + giờ reset |
+
+**Việc cần làm.**
+1. `crates/quota`: `QuotaWindow` đúng như mục 3 (`provider, account, kind, used, limit, unit, resets_at, source, observed_at`), `QuotaSnapshot { provider, plan, windows[], credits? }`. `source = exact | estimated | reactive`.
+2. Reader **Codex**: `crates/adapters/src/quota/codex.rs` đọc rollout mới nhất, lấy `rate_limits` của dòng `token_count` cuối cùng (đọc từ cuối file, không parse cả file). Khi agent Codex đang chạy trong app, lấy thẳng từ stream nếu `codex exec --json` cũng phát event này (verify).
+3. Reader **Claude**, theo thứ tự ưu tiên, dừng ở nguồn đầu tiên có dữ liệu mới (< 10 phút):
+   a. `~/.claude/usage-cache.json` nếu có (`fetchedAt`, `rate_limits`);
+   b. event `rate_limit_event` trong stream-json của `claude -p` nếu CLI có phát (verify);
+   c. reactive: parse lỗi/limit-reached của turn (`source = reactive`, chỉ biết "đã chạm giới hạn, reset lúc X").
+   **Không** tự sửa `~/.claude/settings.json` (statusline của user đang do tool khác giữ). Không gọi API OAuth không công bố trừ khi user bật tay trong Settings, vì token nằm trong `~/.claude/.credentials.json`.
+4. Lệnh Tauri `quota_get` (đọc ngay) + event `quota-update` (đẩy khi file đổi, dùng `notify`; debounce 1s). Không poll mạng.
+5. Cache snapshot cuối cùng vào prefs để mở app là có số ngay, gắn nhãn `observed_at`.
+6. **UI** (tab `Usage` đang trống trong `tools.ts`/`ToolView.svelte`):
+   - Mỗi provider một card: tên + plan, hai thanh tiến trình (5h, tuần) theo `%`, countdown tới reset ("resets in 2h 14m", cập nhật qua `ticker`), badge `exact` / `est` / `stale` (khi `observed_at` > 15 phút).
+   - Màu theo ngưỡng (xanh < 70%, vàng 70–90, đỏ ≥ 90); thanh chạm 100% thì hiện "đang bị giới hạn, reset lúc …".
+   - Dưới card: tiêu thụ thật từ `usageLog` hiện có (`usage.ts`: token, cost) theo ngày/tuần, sparkline.
+   - Chip nhỏ ở composer / status bar: `5h 34% · 7d 12%` của agent đang chọn, bấm mở tab Usage. Khi ≥ 90%, composer cảnh báo trước khi gửi.
+   - Trạng thái trống: provider chưa đăng nhập hoặc chưa có dữ liệu thì card nói rõ vì sao và cách có dữ liệu, không để thanh 0%.
+7. Test đơn vị: parse fixture Codex và Claude (có cả trường thiếu/null), tính countdown, ngưỡng màu. Không gọi network.
+
+**Cần verify.** Codex `exec --json` có phát `token_count` không; stream-json của `claude -p` có `rate_limit_event` không; `resets_at` Claude là giây hay mili giây.
+
+**DoD.** Số trên tab Usage khớp với `/status` của Codex và statusline của Claude tại cùng thời điểm; đóng/mở app vẫn có số (stale); `cargo test -p ag-quota -p ag-adapters`, clippy, `svelte-check` sạch.
+
+**Gợi ý giao.** Reader + test Rust: Codex. UI card/chip/trạng thái trống: Claude (cần gu thiết kế, bám `z-ui-svelte`).
+
+### M12 — Antigravity (`agy`) như provider thứ ba
+
+**Hiện trạng.** Trait `Provider` (`crates/adapters/src/agent/mod.rs`) đã đủ để thêm CLI mới: một impl = `args()` + `parse_line()`, UI chỉ thấy `AgentEvent`. `AgentKind` trong protocol đã có `antigravity`. `models.svelte.ts` đang có provider placeholder `gemini` (model giả) và `provider_for` trong `lib.rs` chỉ biết `claude`/`codex`.
+
+**CLI thật (đã chạy thử, `agy` 1.4.5, `C:\Users\boi.vn\AppData\Local\agy\bin\agy.exe`).**
+- Một lượt: `agy -p "<prompt>" --output-format stream-json --model <id>`; nhiều lượt trong một process: `--input-format stream-json` (NDJSON trên stdin).
+- Cờ dùng được: `--model`, `--effort low|medium|high|xhigh|max`, `--mode accept-edits|auto|plan`, `--dangerously-skip-permissions`, `--conversation <id>` (resume), `--continue`, `--add-dir`, `--project`, `--sandbox`, `--print-timeout`.
+- `agy models` in `<id>\t<label>`; id đã gồm mức effort (`gemini-4-argon-high`, `claude-opus-5-5-medium`, `gpt-oss-120b-medium`…), và có cả model Claude/GPT-OSS chạy qua Antigravity.
+- `agy mcp add|remove|list|enable|disable` quản lý MCP (dùng ở M13).
+- Stream **không giống Claude**, mỗi dòng là một JSON có `event`:
+  - `{"event":"init","conversation_id","init":{"model","cwd","tools":[...]}}`
+  - `{"event":"step_update","step_update":{"step_index","state":"ACTIVE|DONE","step_type":"user_input|agent_response|…","text_delta","duration_seconds","usage":{input_tokens,output_tokens,thinking_tokens,cache_read_tokens,total_tokens}}}`
+  - `{"event":"result","result":{"conversation_id","status":"SUCCESS|…","response","duration_seconds","num_turns","usage"}}`
+- Tool list của agy có `browser_*`, `ask_permission`, `ask_question`, `call_mcp_tool`, … (agy có browser riêng; xem rủi ro cuối mục).
+
+**Cần verify (làm trước, ghi fixture vào `crates/adapters/tests/fixtures/agy/`).** Chạy `agy` với prompt cần tool (đọc file, sửa file, chạy shell, hỏi quyền) và ghi lại `step_type` của bước tool call/tool result, cách báo lỗi (`status` khác SUCCESS), cách yêu cầu quyền khi không có `--mode`, có event thinking không, có hiện quota/limit của Antigravity không (xem `~/.gemini/antigravity-cli`).
+
+**Việc cần làm.**
+1. `crates/adapters/src/agent/antigravity.rs`: `struct Antigravity` impl `Provider` (`id: "antigravity"`, `binary: "agy"`, `candidates`: `%LOCALAPPDATA%\agy\bin\agy.exe`, nhớ `.exe` trên Windows như `resolve_binary` đã làm).
+2. `args()`: map `TurnRequest` → cờ (`--conversation` khi `resume`, `--model`, `--effort`, `--mode` từ `permission_mode`, `--add-dir`/cwd, `--output-format stream-json`). Bảng map `permission_mode` ↔ `--mode` có test.
+3. `parse_line()`: `step_update` → `Delta` (text_delta của `agent_response`), `Thinking`, `ToolCall`/`ToolResult` (id = `step_index`, `change` cho tool sửa file qua `file_change` hiện có), `Usage` (`new_call` khi step mới bắt đầu), `result` → `Done { session_id: conversation_id, text: response, cost_usd: None }`, `status` lỗi → `Error`. Parser có state nhỏ (ghép delta theo `step_index`): dùng `Mutex` trong struct như `Codex::default()` đã làm.
+4. `models.rs`: `antigravity(home)` chạy `agy models` (timeout 10s, cache theo mtime của binary) → `ModelInfo`; gộp các id cùng gốc khác hậu tố `-low/-medium/-high` thành một model với `efforts` (picker đã có mục effort). Nếu `agy` không có hoặc lỗi thì danh sách rỗng + báo lý do, không dùng model giả.
+5. `lib.rs`: `provider_for("antigravity")`, `models_list`; UI: đổi `ProviderId` `'gemini'` thành `'antigravity'` trong `models.svelte.ts` (icon, nhãn "Antigravity"), migrate session đã lưu có `agent: 'gemini'` sang `antigravity` khi hydrate (như đã làm với tool `Audit` thành `Tasks` trong `layout.svelte.ts`).
+6. Browser tools: agy có `browser_*` riêng nên **không** tự gắn browser MCP của AgentDeck mặc định; cho bật ở M13 (`agy mcp add`). Ghi rõ trong tooltip để user không nhầm hai trình duyệt.
+7. History import (M3b) cho `~/.gemini/antigravity-cli` **không** nằm trong module này (chưa rõ định dạng); chỉ ghi lại vị trí file trong verify.
+8. Test: fixture JSONL thành chuỗi `AgentEvent` (text, tool, lỗi, nhiều lượt), `args()` từng tổ hợp, models parser với output `agy models` mẫu.
+
+**DoD.** Chọn Antigravity trong picker, chat một lượt thật có tool + dừng + resume bằng `--conversation`; model list lấy từ `agy models`; `cargo test -p ag-adapters`, clippy sạch, `svelte-check` sạch; Tasks và Usage ghi đúng lượt của agy.
+
+**Trạng thái (2026-10-23): xong.** `crates/adapters/src/agent/antigravity.rs`, `models::antigravity`, `provider_for`/`models_list` trong Tauri, UI đổi `gemini` thành `antigravity` (chat đã lưu tự chuyển). Đã verify bằng `agy` 1.4.5: tool step có `tool_name` + `tool_info.parameters` nhưng **không có nội dung file** (nên không có diff cho Write/Edit); không có event thinking; model đã có hậu tố mức effort, `--model <base> --effort <level>` chạy được còn `--model <id-có-hậu-tố> --effort` báo xung đột; `--conversation` với id lạ chỉ cảnh báo rồi mở hội thoại mới; `--mode auto` không dùng được ở tài khoản này (agy tự về mode mặc định); ở chế độ mặc định một tool cần quyền (ghi file) có thể treo, nên provider luôn thêm `--print-timeout 30m`; lệnh shell bị từ chối được báo ở `denied_actions` của `result`, agy không nói lệnh nào. Duyệt quyền: agy không có cờ allow, chỉ có luật `permissions.allow` trong `~/.gemini/antigravity-cli/settings.json`, khớp **chính xác** từng lệnh (đã thử: `command(echo hi)` không cho `echo hi there` hay `echo hi; echo evil`, và `*` không phải glob). Lệnh bị từ chối được lấy từ step tool (`denied_actions` chỉ báo loại), thẻ duyệt trả `agy:command(<lệnh>)`, và `Provider::prepare` ghi đúng luật đó vào settings trước lượt chạy lại (giữ phần còn lại của file, sao lưu một lần ra `settings.json.agentdeck.bak`, file hỏng thì không đụng). Lệnh có xuống dòng hoặc dấu ngoặc không thể viết thành luật an toàn nên không có thẻ duyệt. `--dangerously-skip-permissions` chỉ dùng khi user chọn chế độ bypass. Chạy thật: `cargo run -p ag-adapters --example agy_turn -- "<prompt>" gemini-3.8-flash` (lượt 2 resume lượt 1).
+
+**Gợi ý giao.** Codex (Rust thuần, theo mẫu `codex.rs`/`claude.rs`); Claude chỉ làm phần picker/migrate UI nếu muốn tách.
+
+### M13 — Quản lý MCP tập trung
+
+**Hiện trạng.** `mcp.rs` chỉ là MCP server của browser (AgentDeck là server). `claude.rs` inject bằng `--mcp-config`, `codex.rs` bằng `-c mcp_servers.agentdeck.url=…`. Chưa có chỗ user khai báo MCP server của họ.
+
+**Việc cần làm.**
+1. Model `McpServer { id, name, transport: stdio{command,args,env,cwd} | http{url,headers}, enabled, scope: global | project(path), agents: AgentKind[] }` lưu trong `~/.agentdeck/mcp.json` (secret trong `env`/`headers` lưu qua keyring của OS, file chỉ giữ tham chiếu; không commit).
+2. **Dịch ra từng CLI** (`crates/adapters/src/mcp_config.rs`, hàm thuần, test bằng snapshot):
+   - Claude: JSON `--mcp-config` (gộp với server `agentdeck` hiện có);
+   - Codex: các cờ `-c mcp_servers.<name>.…` hoặc đoạn `config.toml` tạm;
+   - Antigravity: `agy mcp add/remove/list` (CLI tự giữ trạng thái, nên AgentDeck đồng bộ: so `agy mcp list` với bảng của mình rồi add/remove phần lệch). Verify cú pháp `add`.
+3. **Nhập sẵn**: đọc (chỉ đọc) MCP đã có của user từ `~/.claude.json`/`.mcp.json`, `~/.codex/config.toml`, `agy mcp list`, hiện dạng "Nhập vào AgentDeck" từng cái.
+4. **Kiểm tra sống**: nút "Test" khởi MCP server (stdio hoặc HTTP) gọi `initialize` + `tools/list`, hiện số tool, lỗi và thời gian; timeout 10s; chạy ngoài luồng UI.
+5. **UI** (Settings hoặc tab mới `MCP`): danh sách server, bật/tắt theo agent, form thêm (stdio/http, env, header), trạng thái (ok/lỗi/chưa test), nút nhập, xoá có xác nhận. Server browser của AgentDeck hiện ở đầu danh sách, chỉ cho bật/tắt từng agent.
+6. `TurnRequest` thêm `mcp: Vec<McpServer>` đã lọc theo agent + project; `agent_send` đọc từ kho.
+7. Hub MCP của orchestrator (M8) dùng lại đúng kho này.
+
+**DoD.** Khai báo một MCP server một lần, dùng được ở cả Claude, Codex và Antigravity trong một chat thật (agent gọi được tool của nó); test snapshot cho ba bản dịch; không secret nào nằm trong log hoặc `mcp.json` dạng rõ.
+
+**Gợi ý giao.** Bản dịch + test + kho: Codex. UI quản lý: Claude.
+
+### M14 — Terminal thật (nhập lệnh, xem log)
+
+**Hiện trạng.** `Terminal.svelte` + `terminal.svelte.ts` là mock: `lines: string[]`, mỗi lệnh chỉ in dòng "(mock) command queued". Không có `xterm`, không có PTY.
+
+**Việc cần làm.**
+1. Rust: `portable-pty` (thêm vào `[workspace.dependencies]`). Lệnh Tauri `pty_open { id, cwd, shell?, cols, rows }`, `pty_write { id, data }`, `pty_resize { id, cols, rows }`, `pty_close { id }`; output đẩy bằng event `pty-data { id, data }` (gộp theo ~8ms hoặc 16KB để không nghẽn IPC), `pty-exit { id, code }`. Shell mặc định theo OS (Windows: `pwsh` nếu có, không thì `powershell`; Unix: `$SHELL`). Dọn process khi đóng tab và khi thoát app (không để shell mồ côi).
+2. Frontend: `@xterm/xterm` + `@xterm/addon-fit` + `@xterm/addon-webgl` (rơi về canvas nếu lỗi) + `addon-web-links`; thay vùng log mock bằng xterm; `ResizeObserver` gọi fit rồi `pty_resize`. Màu lấy từ token theme hiện có (`theme-tokens.ts`), đổi theo sáng/tối. Giữ tab, phím tắt, animation mở/đóng đang có.
+3. Mỗi tab một PTY, mở theo `cwd` của project đang chọn; đóng tab = kill PTY. Scrollback giữ trong xterm (10k dòng); lưu lên prefs chỉ 500 dòng cuối để "khôi phục nhìn" (không phải khôi phục process) và ghi rõ trên UI là shell mới.
+4. **Xem log của task nền**: tab terminal chỉ-đọc cho từng dev server do `browser_serve` khởi (server do AgentDeck giữ, `servers.rs`): cùng xterm nhưng không nhận input, có nút "Dừng". Từ một dòng trong Tasks (shell nền) bấm "Xem log" mở đúng tab đó.
+5. Tính năng nhỏ nhưng cần: copy/paste (Ctrl+Shift+C/V, chuột phải), tìm trong terminal (`addon-search`, Ctrl+F khi đang focus), xoá màn hình, đổi tên tab, "gửi lựa chọn vào chat" (chọn text thì thêm vào composer).
+6. Bảo mật: terminal chạy với quyền của user như mọi terminal; chỉ cửa sổ chính được gọi lệnh `pty_*` (capability của Tauri), `pty_open` không nhận đường dẫn shell tuỳ ý từ nội dung trang web trong Preview.
+7. Test: Rust test mở PTY chạy `echo`, đọc output, resize, close (trên Windows dùng `cmd /c echo`); không test network.
+
+**DoD.** Gõ lệnh tương tác thật (`pnpm dev`, `git log`, `python` REPL) chạy đúng, màu ANSI đúng, resize không vỡ dòng, đóng tab không còn process con (kiểm tra bằng Task Manager), tab log của dev server hiện output đang chạy; `cargo clippy`, `svelte-check` sạch.
+
+**Gợi ý giao.** PTY Rust + event: Codex. Tích hợp xterm/theme/tab/log nền: Claude.
+
+### Rủi ro chung
+- Định dạng của `agy`, `~/.claude/usage-cache.json`, rollout Codex đều **không được vendor công bố**: ghim phiên bản đã thấy (agy 1.4.5, Claude Code 2.1.306), parser dung thứ (dòng lạ bỏ qua và đếm), có contract test từ fixture.
+- Trình duyệt kép: Antigravity có `browser_*` của riêng nó; để mặc định tắt cho tới khi M13 cho chọn rõ.
+- M11 phụ thuộc vào việc user dùng gói subscription (API key thuần không có `rate_limits`): UI phải nói rõ "không áp dụng" thay vì để trống.

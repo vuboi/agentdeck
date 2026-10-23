@@ -48,9 +48,15 @@ export type Zone = 'tools' | DockZone;
 let floatingHydrated = false;
 getPref<{ floating: FloatingTool[]; activeTool: string; docked?: typeof layout.docked }>('layout.floating').then((saved) => {
   if (saved) {
-    layout.floating = saved.floating ?? [];
-    layout.activeTool = saved.activeTool ?? layout.activeTool;
-    if (saved.docked) layout.docked = { ...layout.docked, ...structuredClone(saved.docked) };
+    // Audit was folded into Tasks: a saved Audit window, tab or dock becomes Tasks.
+    const renamed = (tool: string) => (tool === 'Audit' ? 'Tasks' : tool);
+    layout.floating = (saved.floating ?? []).map((win) => ({ ...win, tool: renamed(win.tool) }));
+    layout.activeTool = renamed(saved.activeTool ?? layout.activeTool);
+    if (saved.docked) {
+      const docked = structuredClone(saved.docked);
+      for (const zone of Object.keys(docked) as (keyof typeof docked)[]) docked[zone] = [...new Set(docked[zone].map(renamed))];
+      layout.docked = { ...layout.docked, ...docked };
+    }
   }
   floatingHydrated = true;
 });

@@ -6,6 +6,13 @@ import { marked, type Tokens } from 'marked';
 const escapeHtml = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// The copy button holds both icons; `data-copied` on the button swaps them (see .md-code-head in app.css).
+const svg = (cls: string, body: string) =>
+  `<svg class="${cls}" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+const COPY_ICON =
+  svg('ic-copy', '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>') +
+  svg('ic-check', '<path d="M20 6 9 17l-5-5"/>');
+
 marked.use({
   gfm: true,
   breaks: true,
@@ -28,7 +35,7 @@ marked.use({
       return (
         `<div class="md-code" data-lang="${escapeHtml(language)}">` +
         `<div class="md-code-head"><span>${escapeHtml(language || 'text')}</span>` +
-        `<button type="button" data-copy>Copy</button></div>` +
+        `<button type="button" data-copy title="Copy" aria-label="Copy code">${COPY_ICON}</button></div>` +
         `<pre><code>${escapeHtml(text)}</code></pre></div>`
       );
     },

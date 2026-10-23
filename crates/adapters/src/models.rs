@@ -98,6 +98,48 @@ pub fn codex(codex_home: &Path) -> Vec<ModelInfo> {
         .collect()
 }
 
+const LEVELS: [&str; 3] = ["low", "medium", "high"];
+
+/// Antigravity's models from the output of `agy models`: one `<id>\t<label>` line each. The reasoning level is
+/// part of the id (`gemini-3.8-flash-high`), so ids that differ only by it become one model with levels, which
+/// `agy --model <base> --effort <level>` takes. A model with a single level keeps its full id.
+pub fn antigravity(listing: &str) -> Vec<ModelInfo> {
+    let entries: Vec<(&str, &str)> = listing
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(id, label)| (id.trim(), label.trim()))
+        .filter(|(id, _)| !id.is_empty())
+        .collect();
+    // The id without its level, and the level, when the id ends in one.
+    let split = |id: &str| LEVELS.iter().find_map(|level| id.strip_suffix(&format!("-{level}")).map(|base| (base.to_string(), *level)));
+    let mut models: Vec<ModelInfo> = Vec::new();
+    let mut folded: Vec<String> = Vec::new();
+    for (id, label) in &entries {
+        let Some((base, _)) = split(id) else {
+            models.push(plain(id, label));
+            continue;
+        };
+        if folded.contains(&base) {
+            continue;
+        }
+        let levels: Vec<&str> = entries.iter().filter_map(|(other, _)| split(other).filter(|(b, _)| *b == base).map(|(_, level)| level)).collect();
+        if levels.len() < 2 {
+            models.push(plain(id, label));
+            continue;
+        }
+        let efforts: Vec<String> = LEVELS.iter().filter(|level| levels.contains(level)).map(|level| level.to_string()).collect();
+        let default_effort = efforts.iter().find(|level| *level == "medium").or(efforts.first()).cloned();
+        let name = label.rsplit_once(" (").map_or(*label, |(name, _)| name);
+        models.push(ModelInfo { value: base.clone(), label: name.to_string(), description: String::new(), efforts, default_effort });
+        folded.push(base);
+    }
+    models
+}
+
+fn plain(id: &str, label: &str) -> ModelInfo {
+    ModelInfo { value: id.into(), label: label.into(), description: String::new(), efforts: Vec::new(), default_effort: None }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +181,33 @@ mod tests {
         assert_eq!(models.len(), 4);
         assert_eq!((models[3].value.as_str(), models[3].label.as_str()), ("claude-fable-5-1[1m]", "Fable 5.1"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn antigravity_folds_reasoning_levels_into_one_model() {
+        let listing = "Fetching available models...
+gemini-4-argon-medium	Gemini 4 Argon (Medium)
+gemini-4-argon-high	Gemini 4 Argon (High)
+gemini-4-argon-low	Gemini 4 Argon (Low)
+claude-opus-5-5-low	Claude Opus 5.5 (Low)
+claude-opus-5-5-high	Claude Opus 5.5 (High)
+gpt-oss-120b-medium	GPT-OSS 120B (Medium)
+";
+        let models = antigravity(listing);
+        assert_eq!(models.iter().map(|m| m.value.as_str()).collect::<Vec<_>>(), ["gemini-4-argon", "claude-opus-5-5", "gpt-oss-120b-medium"]);
+        assert_eq!(models[0].label, "Gemini 4 Argon");
+        assert_eq!(models[0].efforts, ["low", "medium", "high"]);
+        assert_eq!(models[0].default_effort.as_deref(), Some("medium"));
+        assert_eq!(models[1].efforts, ["low", "high"]);
+        assert_eq!(models[1].default_effort.as_deref(), Some("low"));
+        // A model with one level keeps its full id: there is nothing to choose.
+        assert_eq!((models[2].label.as_str(), models[2].efforts.len()), ("GPT-OSS 120B (Medium)", 0));
+    }
+
+    #[test]
+    fn antigravity_without_a_listing_has_no_models() {
+        assert!(antigravity("").is_empty());
+        assert!(antigravity("Fetching available models...
+").is_empty());
     }
 }

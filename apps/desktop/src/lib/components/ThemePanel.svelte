@@ -49,7 +49,7 @@
   onClosed={() => document.getElementById('theme-trigger')?.focus()}
 >
   {#snippet children()}
-    <div data-theme-panel class="flex w-[280px] min-w-[280px] flex-col gap-4 p-3">
+    <div data-theme-panel class="flex w-full flex-col gap-4 p-3">
       <div>
         {#key settled}
         <ZTabs

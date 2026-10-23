@@ -2,10 +2,20 @@ use std::path::{Path, PathBuf};
 
 mod bridge;
 mod mcp;
+mod index;
 mod cdp;
 mod browser;
 mod servers;
+mod detect;
+mod connectors;
+mod mcp_manage;
+mod slash_commands;
+mod pty;
+mod changes;
+mod custom_chat;
+mod mcp_client;
 
+use ag_adapters::agent::antigravity::Antigravity;
 use ag_adapters::agent::claude::Claude;
 use ag_adapters::agent::codex::Codex;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
@@ -57,12 +67,21 @@ async fn attachment_save(mime: String, data: String) -> Result<String, String> {
 
 /// The models an agent CLI offers, from its own cache on this machine.
 #[tauri::command]
-fn models_list(agent: String) -> Vec<ag_adapters::models::ModelInfo> {
+async fn models_list(agent: String) -> Vec<ag_adapters::models::ModelInfo> {
+    // `agy models` asks the server: off the main thread.
+    tauri::async_runtime::spawn_blocking(move || models_of(&agent)).await.unwrap_or_default()
+}
+
+fn models_of(agent: &str) -> Vec<ag_adapters::models::ModelInfo> {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_default();
-    match agent.as_str() {
+    match agent {
+        "antigravity" => {
+            let binary = resolve_binary(&Antigravity::default());
+            ag_adapters::models::antigravity(&ag_adapters::agent::antigravity::models_listing(binary))
+        }
         "claude" => ag_adapters::models::claude(&home),
         "codex" => {
             let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".codex"));
@@ -243,6 +262,67 @@ async fn file_read(root: String, path: String) -> Result<String, String> {
             return Err(format!("file is {size} bytes, the viewer stops at 2 MB"));
         }
         std::fs::read_to_string(&path).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// The folder of one workflow run: `<root>/.agentdeck/runs/<run>`, or under the home folder when the chat has no
+/// project. It holds the run's shared notes: `BOARD.md` (written by the app), `agents/<name>.md` (each agent its own)
+/// and `handoff/<n>-<name>.md` (what a step hands to the next).
+fn run_file(root: Option<String>, run: &str, name: &str) -> Result<PathBuf, String> {
+    let safe = |part: &str| !part.is_empty() && part != "." && part != ".." && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if !safe(run) || name.split('/').count() > 2 || !name.split('/').all(safe) {
+        return Err("bad run file name".to_string());
+    }
+    let base = match root {
+        Some(root) if !root.is_empty() => PathBuf::from(root),
+        _ => home_folder()?,
+    };
+    Ok(base.join(".agentdeck").join("runs").join(run).join(name))
+}
+
+/// Writes one file of a run's notes and returns its full path. The runs folder ignores itself in git.
+#[tauri::command]
+async fn run_file_write(root: Option<String>, run: String, name: String, content: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let file = run_file(root, &run, &name)?;
+        if let Some(folder) = file.parent() {
+            std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+        }
+        let runs = file
+            .ancestors()
+            .find(|path| path.file_name().is_some_and(|name| name == "runs"))
+            .map(|path| path.join(".gitignore"));
+        if let Some(runs) = runs {
+            if !runs.exists() {
+                std::fs::write(&runs, "*\n").map_err(|error| error.to_string())?;
+            }
+        }
+        std::fs::write(&file, content).map_err(|error| error.to_string())?;
+        Ok(file.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// One file of a run's notes as it is now (the last 64 KB when longer); empty when the agent has not written it.
+#[tauri::command]
+async fn run_file_read(root: Option<String>, run: String, name: String) -> Result<String, String> {
+    const MAX_BYTES: usize = 64 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        let file = run_file(root, &run, &name)?;
+        let Ok(text) = std::fs::read_to_string(file) else {
+            return Ok(String::new());
+        };
+        if text.len() <= MAX_BYTES {
+            return Ok(text);
+        }
+        let mut start = text.len() - MAX_BYTES;
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        Ok(text[start..].to_string())
     })
     .await
     .map_err(|error| error.to_string())?
@@ -449,6 +529,7 @@ fn provider_for(agent: &str) -> Result<Box<dyn Provider>, String> {
     match agent {
         "claude" => Ok(Box::new(Claude)),
         "codex" => Ok(Box::new(Codex::default())),
+        "antigravity" => Ok(Box::new(Antigravity::default())),
         other => Err(format!("no agent provider for `{other}` yet")),
     }
 }
@@ -461,6 +542,9 @@ async fn run_turn(
     provider: Box<dyn Provider>,
     req: TurnRequest,
 ) {
+    if provider.id() == "antigravity" {
+        mcp_manage::ensure_agy_link().await;
+    }
     let binary = resolve_binary(provider.as_ref());
     drive_turn(binary, provider.as_ref(), &req, |event| {
         let _ = app.emit(
@@ -508,6 +592,40 @@ async fn agent_send(
     if let Ok(mut running) = RUNNING.lock() {
         if let Some(previous) = running.insert(session, handle) {
             previous.abort(); // a chat runs one turn at a time
+        }
+    }
+    Ok(())
+}
+
+/// Sends a message to a custom provider (an OpenAI-compatible server). Same contract as `agent_send`: returns
+/// at once and the answer arrives as `agent-event`s. The whole conversation goes along: there is no CLI session.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // one parameter per field the frontend sends
+async fn custom_send(
+    app: AppHandle,
+    session: String,
+    turn: String,
+    kind: String,
+    base_url: String,
+    api_key: Option<String>,
+    model: String,
+    messages: Vec<custom_chat::ChatMessage>,
+    permission_mode: Option<String>,
+    allowed_tools: Vec<String>,
+    cwd: Option<String>,
+    effort: Option<String>,
+) -> Result<(), String> {
+    let chat = session.clone();
+    let config = custom_chat::Turn { kind, base_url, api_key, model, cwd: cwd.map(Into::into), permission_mode, allowed: allowed_tools, chat: session.clone(), effort };
+    let handle = tauri::async_runtime::spawn(async move {
+        custom_chat::run_turn(&app.clone(), config, messages, |event| {
+            let _ = app.emit("agent-event", AgentEnvelope { session: chat.clone(), turn: turn.clone(), event });
+        })
+        .await;
+    });
+    if let Ok(mut running) = RUNNING.lock() {
+        if let Some(previous) = running.insert(session, handle) {
+            previous.abort();
         }
     }
     Ok(())
@@ -569,6 +687,31 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             history_list,
+            changes::changes_list,
+            changes::change_diff,
+            changes::change_revert,
+            changes::change_revert_all,
+            changes::change_stage,
+            connectors::connectors_detect,
+            connectors::connector_install,
+            connectors::connector_login,
+            connectors::accounts_list,
+            connectors::account_switch,
+            connectors::account_add,
+            connectors::agy_modes,
+            mcp_manage::mcp_list,
+            slash_commands::commands_list,
+            slash_commands::command_read,
+            mcp_manage::mcp_test,
+            mcp_manage::mcp_add,
+            mcp_manage::mcp_remove,
+            mcp_manage::mcp_agy_link,
+            connectors::antigravity_quota,
+            connectors::account_adopt,
+            connectors::account_remove,
+            connectors::codex_auto_switch,
+            connectors::provider_probe,
+            connectors::local_scan,
             audit_append,
             audit_read,
             audit_clear,
@@ -584,10 +727,17 @@ pub fn run() {
             history_rename,
             history_delete,
             file_read,
+            run_file_write,
+            run_file_read,
             file_read_bytes,
             agent_send,
+            custom_send,
             agent_stop,
             attachment_save,
+            detect::detect_run_targets,
+            servers::servers_list,
+            servers::server_stop,
+            detect::run_target,
             browser::browser_show,
             browser::browser_bounds,
             browser::browser_hide,
@@ -600,8 +750,20 @@ pub fn run() {
             browser::browser_close,
             browser::browser_capture,
             browser::browser_press,
-            browser::open_external
+            browser::open_external,
+            pty::pty_open,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_close,
+            pty::pty_default_folder
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run AgentDeck desktop application");
+        .build(tauri::generate_context!())
+        .expect("failed to build AgentDeck desktop application")
+        .run(|_app, event| {
+            // The dev servers the agents asked for end with the app.
+            if let tauri::RunEvent::Exit = event {
+                servers::kill_all();
+                pty::kill_all();
+            }
+        });
 }

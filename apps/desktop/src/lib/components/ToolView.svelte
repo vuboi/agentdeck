@@ -2,8 +2,11 @@
   import { ZIcon } from '@shival99/z-ui-svelte';
   import { toolOf } from '../tools';
   import BrowserView from './BrowserView.svelte';
+  import ChangesView from './ChangesView.svelte';
   import FileExplorer from './FileExplorer.svelte';
   import TasksView from './TasksView.svelte';
+  import McpView from './McpView.svelte';
+  import WorkflowView from './WorkflowView.svelte';
 
   // The body of a workspace tool. Same view in the right panel and in the detached modal.
   let { tool }: { tool: string } = $props();
@@ -15,7 +18,13 @@
 {:else if tool === 'Preview'}
   <BrowserView />
 {:else if tool === 'Tasks' || tool === 'Audit'}
-  <TasksView log={tool === 'Audit'} />
+  <TasksView />
+{:else if tool === 'Diff'}
+  <ChangesView />
+{:else if tool === 'Workflow'}
+  <WorkflowView />
+{:else if tool === 'MCP'}
+  <McpView />
 {:else}
 
 <div class="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground" role="tabpanel" aria-label={current.label}>

@@ -4,10 +4,10 @@
 // Every call is best-effort: if IndexedDB is missing or blocked, the app just runs on its defaults.
 
 const DB_NAME = 'agentdeck';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 /** The collections. `prefs` keeps what has no collection of its own (pickers, last session, hidden projects…). */
-const STORES = ['prefs', 'transcripts', 'chats', 'tabs', 'terminal', 'layout', 'chatmeta', 'permissions'] as const;
+const STORES = ['prefs', 'transcripts', 'chats', 'tabs', 'terminal', 'layout', 'chatmeta', 'permissions', 'archive'] as const;
 type StoreName = (typeof STORES)[number];
 
 function storeOf(key: string): StoreName {
@@ -18,20 +18,21 @@ function storeOf(key: string): StoreName {
   if (key.startsWith('layout.')) return 'layout';
   if (key.startsWith('chat.')) return 'chatmeta'; // hidden turns, agent switches
   if (key.startsWith('permissions.')) return 'permissions';
+  if (key.startsWith('archive.')) return 'archive'; // the chat archive (archive.ts)
   return 'prefs';
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function openDb(): Promise<IDBDatabase> {
-  dbPromise ??= new Promise((resolve, reject) => {
+  dbPromise ??= new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = (event) => {
       const db = request.result;
       for (const name of STORES) if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       // Version 1 kept everything in `prefs`: each entry moves to its own collection (empty ones are dropped).
       const transaction = request.transaction;
-      if (event.oldVersion >= 1 && transaction) {
+      if (event.oldVersion === 1 && transaction) {
         const old = transaction.objectStore('prefs');
         old.openCursor().onsuccess = (found) => {
           const cursor = (found.target as IDBRequest<IDBCursorWithValue | null>).result;
@@ -47,8 +48,21 @@ function openDb(): Promise<IDBDatabase> {
         };
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      // Another window opening a newer version must not be held up by this one.
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      resolve(db);
+    };
     request.onerror = () => reject(request.error);
+    // An older window still holds the database open: do not wait forever (the app then runs on its defaults).
+    request.onblocked = () => setTimeout(() => reject(new Error('IndexedDB upgrade is blocked by another window')), 3000);
+  }).catch((error: unknown) => {
+    dbPromise = null;
+    throw error;
   });
   return dbPromise;
 }
@@ -70,6 +84,27 @@ export async function getPref<T>(key: string): Promise<T | undefined> {
     return await run<T | undefined>(key, 'readonly', (store) => store.get(key));
   } catch {
     return undefined;
+  }
+}
+
+/** Every entry whose key starts with `prefix`, from the collection that prefix belongs to. */
+export async function listPrefs<T>(prefix: string): Promise<[string, T][]> {
+  try {
+    const db = await openDb();
+    const name = storeOf(prefix);
+    return await new Promise<[string, T][]>((resolve, reject) => {
+      const found: [string, T][] = [];
+      const request = db.transaction(name, 'readonly').objectStore(name).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return resolve(found);
+        if (String(cursor.key).startsWith(prefix)) found.push([String(cursor.key), cursor.value as T]);
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    return [];
   }
 }
 

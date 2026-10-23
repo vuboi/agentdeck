@@ -1,13 +1,19 @@
 <script lang="ts">
   import { ZIcon } from '@shival99/z-ui-svelte';
+  import { customProviderName } from '../models.svelte';
   import { AGENT_ICON, AGENT_TEXT, AGENTS, type Agent } from '../sessions.svelte';
 
   // Overlapping brand logos for a chat that several agents work on together.
-  let { agents, max = 3 }: { agents: Agent[]; max?: number } = $props();
+  // A custom agent is named after its provider, from the model it used in this chat.
+  let { agents, models, max = 3 }: { agents: Agent[]; models?: Partial<Record<Agent, string>>; max?: number } = $props();
 
   const shown = $derived(agents.slice(0, max));
   const extra = $derived(agents.length - shown.length);
-  const names = $derived(agents.map((agent) => AGENTS.find((item) => item.value === agent)?.label ?? agent).join(', '));
+  const names = $derived(
+    agents
+      .map((agent) => (agent === 'custom' && customProviderName(models?.custom)) || AGENTS.find((item) => item.value === agent)?.label || agent)
+      .join(', '),
+  );
 </script>
 
 <span class="flex shrink-0 items-center -space-x-1" role="img" aria-label="Agents: {names}" title={names}>
