@@ -410,3 +410,38 @@ fn claude_answers_carry_their_token_usage_counted_once_per_call() {
     assert_eq!(answer.model.as_deref(), Some("claude-opus-5-5"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn codex_tokens_and_model_come_back_with_the_answer() {
+    let home = Home::new("codex-usage");
+    let msg = |role: &str, kind: &str, text: &str| {
+        json!({"timestamp":"2026-01-01T00:00:01Z","type":"response_item",
+               "payload":{"type":"message","role":role,"content":[{"type":kind,"text":text}]}})
+    };
+    let count = |total: u64, input: u64, cached: u64, output: u64| {
+        json!({"timestamp":"t","type":"event_msg","payload":{"type":"token_count","info":{
+            "total_token_usage":{"total_tokens":total},
+            "last_token_usage":{"input_tokens":input,"cached_input_tokens":cached,"output_tokens":output,"total_tokens":total}}}})
+    };
+    let path = home.write(
+        ".codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-usage1.jsonl",
+        &[
+            json!({"timestamp":"2026-01-01T00:00:00Z","type":"session_meta",
+                   "payload":{"id":"usage1","cwd":"C:/work/demo","timestamp":"2026-01-01T00:00:00Z"}}),
+            json!({"timestamp":"t","type":"turn_context","payload":{"model":"gpt-6.1-sol"}}),
+            msg("user", "input_text", "hello"),
+            msg("assistant", "output_text", "hi there"),
+            // The same count written twice is counted once.
+            count(150, 100, 60, 50),
+            count(150, 100, 60, 50),
+        ],
+    );
+    let messages = load(&home.roots(), Source::Codex, &path).unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[1].model.as_deref(), Some("gpt-6.1-sol"));
+    assert_eq!(
+        messages[1].usage,
+        Some(HistoryUsage { input: 40, output: 50, cache_read: 60, cache_write: 0 })
+    );
+    assert_eq!(messages[0].usage, None);
+}

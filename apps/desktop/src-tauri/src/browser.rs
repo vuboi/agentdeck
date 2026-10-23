@@ -303,6 +303,26 @@ pub fn browser_hide(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The Preview panel is not on screen (another tool is open): the front page is moved far off-screen but stays
+/// shown, so it keeps drawing. A hidden page stops rendering, and the agent's screenshots of it would hang; this
+/// way it can still look at the page and act on it. The other tabs are hidden as usual.
+#[tauri::command]
+pub fn browser_park(app: AppHandle) -> Result<(), String> {
+    let front = format!("{PREFIX}{}", crate::bridge::active_tab());
+    for (name, view) in app.webviews() {
+        if !name.starts_with(PREFIX) {
+            continue;
+        }
+        if name == front {
+            view.set_position(LogicalPosition::new(-20000.0, -20000.0)).map_err(|error| error.to_string())?;
+            view.show().map_err(|error| error.to_string())?;
+        } else {
+            view.hide().map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 /// The app window was reloaded (F5): the pages opened before it belong to tabs that no longer exist, yet they stay
 /// on screen above the new window. Close them all.
 #[tauri::command]

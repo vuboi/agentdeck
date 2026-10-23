@@ -15,7 +15,7 @@ use super::{
 pub struct Claude;
 
 /// Added to the CLI's system prompt on every turn.
-const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app that has its own built-in browser (the Preview panel). When the user asks you to open, preview, run or show a web page or a local dev server, do not open it with an external browser or any browser-automation tool. Find the start script that matches the framework the user asked for (package.json scripts, .claude/launch.json), then start it with the browser_serve tool (the command, the absolute project folder, the address it answers at): AgentDeck runs the server itself, so it keeps running after your turn, and opens the page in Preview. Never run a dev server in your own shell: it dies when your command or turn ends and Preview is left on a refused connection. If browser_serve reports a failed start, read the log it returns, fix the cause (config, missing install, port) and call it again; do not stop at the first error. If the page is already served, browser_open opens it. Then keep going in this same turn: screenshot, act on the page, screenshot again. Name the script you used in your reply.";
+const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app that has its own built-in browser (the Preview panel). When the user asks you to open, preview, run or show a web page or a local dev server, do not open it with an external browser or any browser-automation tool. Find the start script that matches the framework the user asked for (package.json scripts, .claude/launch.json), then start it with the browser_serve tool (the command, the absolute project folder, the address it answers at): AgentDeck runs the server itself, so it keeps running after your turn, and opens the page in Preview. Never run a dev server in your own shell: it dies when your command or turn ends and Preview is left on a refused connection. If browser_serve reports a failed start, read the log it returns, fix the cause (config, missing install, port) and call it again; do not stop at the first error. If the page is already served, browser_open opens it. Both open the page in the current Preview tab. Pass new_tab: true to open it in a tab of its own instead, so the current tab stays as it is: when another chat is driving the current tab, when you compare or debug two pages side by side, or when you look something up. Then keep going in this same turn: screenshot, act on the page, screenshot again. Name the script you used in your reply.";
 
 /// Text of a tool result: a plain string, or an array of `{ "type": "text", "text": … }`.
 fn result_text(content: &Value) -> String {
@@ -121,7 +121,7 @@ impl Provider for Claude {
         if let Some(bridge) = &bridge {
             args.push("--mcp-config".to_string());
             args.push(
-                serde_json::json!({ "mcpServers": { "agentdeck": { "type": "http", "url": format!("{bridge}/mcp") } } })
+                serde_json::json!({ "mcpServers": { "agentdeck": { "type": "http", "url": super::mcp_url(bridge, req.owner.as_deref()) } } })
                     .to_string(),
             );
             args.push("--allowedTools".to_string());
@@ -277,6 +277,7 @@ mod tests {
             effort: None,
             allowed_tools: Vec::new(),
             cwd: None,
+            owner: None,
         }
     }
 

@@ -283,7 +283,9 @@ function openServedPage(sessionId: string, reply: Message) {
   // You asked for it, or the answer says the page is open or running.
   if (!OPEN_WORDS.test(lastPrompt[sessionId] ?? '') && !OPEN_WORDS.test(text)) return;
   const found = previewUrl(text, lastPrompt[sessionId] ?? '');
-  if (found) openInPreview(found);
+  // An agent that opened the page itself (browser_open, browser_serve) has put it where it wanted: nothing to add.
+  const opened = reply.blocks.some((block) => block.kind === 'command' && /browser_(open|serve)/.test(block.command));
+  if (found && !opened) openInPreview(found);
 }
 
 /** The picked page elements as text the agent can use: where they are, what they look like, their markup. */
@@ -425,8 +427,10 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent };
   const list = messagesOf(session.id);
   const context = missedTurns(session, list);
+  const asked = list.at(-1);
   list.push(reply);
   liveReplies[session.id] = list[list.length - 1]; // the stored (reactive) object
+  if (asked?.role === 'user') liveAsks[session.id] = asked;
   replies[session.id] = reply.id;
   session.status = 'working';
   const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
@@ -484,6 +488,36 @@ export function answerPermission(messageId: string, blockIndex: number, answer: 
 const replies: Record<string, string> = {};
 /** The reply object of each running turn. */
 const liveReplies: Record<string, Message> = {};
+/** The message that started each running turn. */
+const liveAsks: Record<string, Message> = {};
+
+const askText = (message: Message) =>
+  message.blocks
+    .filter((block) => block.kind === 'response')
+    .map((block) => block.text)
+    .join('\n')
+    .trim();
+
+/**
+ * A chat opened again while its reply is still being written: what was loaded (a saved copy, or the file as the CLI
+ * has written it so far) does not hold the running turn, or holds only part of it. The live question and reply go
+ * on the end, in place of any copy of that question, so the text keeps growing where the reader left it.
+ */
+function withLive(sessionId: string, list: Message[]): Message[] {
+  const reply = liveReplies[sessionId];
+  const asked = liveAsks[sessionId];
+  if (!reply || !asked || list.includes(reply)) return list;
+  const want = askText(asked);
+  let cut = list.length;
+  // Only the last few can be this turn: an older message with the same words is another turn.
+  for (let index = list.length - 1; index >= Math.max(0, list.length - 3); index--) {
+    if (list[index].role === 'user' && askText(list[index]) === want) {
+      cut = index;
+      break;
+    }
+  }
+  return [...list.slice(0, cut), asked, reply];
+}
 
 /** Messages of a session: the live list for the active one, the remembered list for the others. */
 function messagesOf(sessionId: string): Message[] {
@@ -561,6 +595,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     openServedPage(sessionId, reply);
     delete replies[sessionId];
     delete liveReplies[sessionId];
+    delete liveAsks[sessionId];
     session.status = 'idle';
     persistLocal();
     // The CLI wrote the conversation to disk: pick it up so the row gets its path, in place (same id).
@@ -853,8 +888,8 @@ let transcriptToken = 0;
 type Transcript = { stamp: string; messages: Message[] };
 const transcripts = new Map<string, Transcript>();
 // The format version leads the stamp: a cached transcript from an older app version is read again (v2: token usage,
-// v3: the file each tool call changed, so a file's +/- counts survive a reload).
-const stampOf = (session: SessionItem) => `v3|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
+// v3: the file each tool call changed, so a file's +/- counts survive a reload; v4: Codex tokens and model).
+const stampOf = (session: SessionItem) => `v4|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
 const MAX_SAVED = 12;
 
 /** Agents and per-agent ids of saved chats that switched agent (the chat files cannot hold them). */
@@ -960,7 +995,7 @@ export async function openTranscript(session: SessionItem | undefined) {
   }
   if (cached) {
     // Show what we have right away; a stale copy is replaced as soon as the fresh one arrives.
-    chat.messages = cached.messages;
+    chat.messages = withLive(session.id, cached.messages);
     if (cached.stamp === stampOf(session)) return;
   } else {
     chat.loading = true;
@@ -968,7 +1003,7 @@ export async function openTranscript(session: SessionItem | undefined) {
   try {
     const fresh = await fetchTranscript(session);
     if (token !== transcriptToken) return;
-    chat.messages = fresh;
+    chat.messages = withLive(session.id, fresh);
     remember(session, fresh);
   } catch (error) {
     if (token !== transcriptToken) return;

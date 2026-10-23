@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::{AgentEvent, FileChange, Provider, TurnRequest};
 
 /// Added to Codex's instructions on every turn (the same facts Claude is given).
-const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app with its own built-in browser (the Preview panel). To show a local dev server, inspect the workspace scripts (package.json, .claude/launch.json), identify the requested framework, then start it with the browser_serve tool (the command, the absolute project folder, the address it answers at): AgentDeck runs the server itself, so it keeps running after your turn, and opens the page in Preview. Never run a dev server in your own shell: it dies when your command or turn ends and Preview is left on a refused connection. If browser_serve reports a failed start, read the log it returns, fix the cause (config, missing install, port) and call it again; do not stop at the first error. If the page is already served, browser_open opens it. Then keep going in this same turn: screenshot, act on the page, screenshot again. Name the script you used in your reply. In the z-ui workspace, use `pnpm start:svelte` for the Svelte 5 app (default http://localhost:4301) and `pnpm start:angular` for the Angular app (default http://localhost:4200); never use the Angular 4200 server when the user asks for Svelte, Svelte 5, or z-ui-svelte. When the user asks you to inspect or interact with that page, you MUST use the AgentDeck MCP tools on the Preview page: call browser_screenshot first, then browser_click/browser_fill/browser_key/browser_scroll as needed (browser_fill for form fields; browser_type only when the page reacts to each keystroke), and call browser_screenshot or browser_dom again to verify the result. Do not use an external Chrome tab, do not merely navigate to or mention the URL, and do not claim an interaction happened without a matching MCP result. You can also use browser_eval, browser_console, and browser_network for inspection. Never tell the user you cannot test in Preview.";
+const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app with its own built-in browser (the Preview panel). To show a local dev server, inspect the workspace scripts (package.json, .claude/launch.json), identify the requested framework, then start it with the browser_serve tool (the command, the absolute project folder, the address it answers at): AgentDeck runs the server itself, so it keeps running after your turn, and opens the page in Preview. Never run a dev server in your own shell: it dies when your command or turn ends and Preview is left on a refused connection. If browser_serve reports a failed start, read the log it returns, fix the cause (config, missing install, port) and call it again; do not stop at the first error. If the page is already served, browser_open opens it. Both open the page in the current Preview tab. Pass new_tab: true to open it in a tab of its own instead, so the current tab stays as it is: when another chat is driving the current tab, when you compare or debug two pages side by side, or when you look something up. Then keep going in this same turn: screenshot, act on the page, screenshot again. Name the script you used in your reply. In the z-ui workspace, use `pnpm start:svelte` for the Svelte 5 app (default http://localhost:4301) and `pnpm start:angular` for the Angular app (default http://localhost:4200); never use the Angular 4200 server when the user asks for Svelte, Svelte 5, or z-ui-svelte. When the user asks you to inspect or interact with that page, you MUST use the AgentDeck MCP tools on the Preview page: call browser_screenshot first, then browser_click/browser_fill/browser_key/browser_scroll as needed (browser_fill for form fields; browser_type only when the page reacts to each keystroke), and call browser_screenshot or browser_dom again to verify the result. Do not use an external Chrome tab, do not merely navigate to or mention the URL, and do not claim an interaction happened without a matching MCP result. You can also use browser_eval, browser_console, and browser_network for inspection. Never tell the user you cannot test in Preview.";
 
 /// What one run of the parser remembers between lines: the thread id for the final event, which commands
 /// were already announced, and whether the last thing written was answer text.
@@ -145,7 +145,7 @@ impl Provider for Codex {
         }
         config("developer_instructions", toml_string(APP_CONTEXT));
         if let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") {
-            config("mcp_servers.agentdeck.url", toml_string(&format!("{bridge}/mcp")));
+            config("mcp_servers.agentdeck.url", toml_string(&super::mcp_url(&bridge, req.owner.as_deref())));
         }
         if sandbox.is_none() {
             args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
@@ -311,6 +311,7 @@ mod tests {
             effort: Some("high".into()),
             allowed_tools: Vec::new(),
             cwd: None,
+            owner: None,
         }
     }
 

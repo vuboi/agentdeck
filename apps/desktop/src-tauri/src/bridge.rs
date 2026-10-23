@@ -26,6 +26,8 @@ struct Tab {
 #[derive(Default)]
 struct State {
     active: String,
+    /// Which chat last opened a page in each tab: a tab driven by one chat is not taken over by another.
+    owners: HashMap<String, String>,
     tabs: HashMap<String, Tab>,
     waiting: HashMap<String, oneshot::Sender<Value>>,
 }
@@ -38,6 +40,11 @@ fn push(list: &mut VecDeque<Value>, value: Value) {
     while list.len() > LIMIT {
         list.pop_front();
     }
+}
+
+/// The tab the agent's requests are about (the one last shown).
+pub fn active_tab() -> String {
+    STATE.lock().map(|state| state.active.clone()).unwrap_or_default()
 }
 
 /// The tab the user is looking at: what the agent's requests are about.
@@ -156,7 +163,8 @@ async fn serve(mut stream: TcpStream, app: AppHandle) -> std::io::Result<()> {
     // The same browser as an MCP server, for agents that take tools rather than curl.
     if path == "/mcp" {
         let reply = if is_post_request(&head) {
-            match crate::mcp::handle(&app, &body).await {
+            let chat = params.get("chat").cloned().unwrap_or_default();
+            match crate::mcp::handle(&app, &body, &chat).await {
                 Some(text) => format!(
                     "HTTP/1.1 200 OK
 Content-Type: application/json
@@ -256,8 +264,8 @@ fn tail(lines: Vec<Value>, limit: usize) -> Value {
 
 /// Opens `url` in the Preview panel (a tab of its own when another page is open there) and waits until the page
 /// answers the injected script: then it is ready to act on.
-async fn open_page(app: &AppHandle, url: &str) -> Result<Value, String> {
-    app.emit("agent-open", json!({ "url": url })).map_err(|error| error.to_string())?;
+async fn open_page(app: &AppHandle, url: &str, new_tab: bool, chat: &str) -> Result<Value, String> {
+    app.emit("agent-open", json!({ "url": url, "newTab": new_tab })).map_err(|error| error.to_string())?;
     let wanted = url.trim_end_matches('/').to_string();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while std::time::Instant::now() < deadline {
@@ -269,11 +277,28 @@ async fn open_page(app: &AppHandle, url: &str) -> Result<Value, String> {
         if let Ok(report) = ask(app, &tab, "dom", Value::Null).await {
             let shown = report["url"].as_str().unwrap_or_default();
             if shown.trim_end_matches('/').starts_with(&wanted) {
-                return Ok(json!({ "opened": shown, "title": report["title"], "tab": tab }));
+                if !chat.is_empty() {
+                    STATE.lock().map_err(|_| "busy".to_string())?.owners.insert(tab.clone(), chat.to_string());
+                }
+                return Ok(json!({ "opened": shown, "title": report["title"], "tab": tab, "newTab": new_tab }));
             }
         }
     }
     Err(format!("{url} did not open in Preview within 30 s"))
+}
+
+/// Whether a page the agent opens goes to a tab of its own. `new_tab` says it outright. Otherwise the front tab is
+/// used, unless it shows a page that another chat opened and drives: that one is left alone.
+fn wants_new_tab(params: &HashMap<String, String>) -> bool {
+    if let Some(value) = params.get("new_tab") {
+        return value == "1" || value == "true";
+    }
+    let chat = params.get("chat").map_or("", String::as_str);
+    let Ok(state) = STATE.lock() else {
+        return false;
+    };
+    let shows_a_page = state.tabs.get(&state.active).is_some_and(|tab| !tab.url.is_empty());
+    shows_a_page && state.owners.get(&state.active).is_some_and(|owner| !chat.is_empty() && owner != chat)
 }
 
 /// The MIME type of a file, from its extension, for the file the agent uploads.
@@ -537,7 +562,8 @@ pub(crate) async fn answer(
             if !crate::browser::answers(&target) {
                 return Err(format!("nothing answers at {target}: start the server with browser_serve first"));
             }
-            open_page(app, target.as_str()).await
+            let new_tab = wants_new_tab(params);
+            open_page(app, target.as_str(), new_tab, params.get("chat").map_or("", String::as_str)).await
         }
         "/device" => {
             let mode = params.get("mode").cloned().ok_or("send ?mode=desktop|tablet|mobile")?;
@@ -584,7 +610,8 @@ pub(crate) async fn answer(
                     }
                 }
             }
-            let mut opened = open_page(app, target.as_str()).await?;
+            let new_tab = wants_new_tab(params);
+            let mut opened = open_page(app, target.as_str(), new_tab, params.get("chat").map_or("", String::as_str)).await?;
             opened["server"] = json!({ "command": command, "log": log.map(|path| path.to_string_lossy().into_owned()) });
             Ok(opened)
         }

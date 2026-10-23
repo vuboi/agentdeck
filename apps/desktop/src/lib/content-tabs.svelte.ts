@@ -91,9 +91,37 @@ export function activateTab(id: string) {
 }
 
 /** Close a tab. Closing a chat tab only hides it: the session stays in the sidebar. */
+/** Tabs closed lately, the newest last: Ctrl+Shift+T brings the newest back. */
+const closed: ContentTab[] = [];
+function remember(tabs: ContentTab[]) {
+  for (const tab of tabs) {
+    const at = closed.findIndex((item) => item.id === tab.id);
+    if (at !== -1) closed.splice(at, 1);
+    closed.push({ ...tab });
+  }
+  if (closed.length > 20) closed.splice(0, closed.length - 20);
+}
+
+/** Opens the tab closed last again (a chat that was deleted since is skipped). Answers whether one came back. */
+export function reopenTab(): boolean {
+  while (closed.length > 0) {
+    const tab = closed.pop()!;
+    if (contentTabs.tabs.some((item) => item.id === tab.id)) continue;
+    if (tab.kind === 'chat') {
+      if (!workspace.sessions.some((item) => item.id === tab.sessionId)) continue;
+      openChatTab(tab.sessionId);
+    } else {
+      openFileTab(tab.path, tab.root);
+    }
+    return true;
+  }
+  return false;
+}
+
 export function closeTab(id: string) {
   const index = contentTabs.tabs.findIndex((tab) => tab.id === id);
   if (index === -1) return;
+  remember([contentTabs.tabs[index]]);
   contentTabs.tabs.splice(index, 1);
   if (contentTabs.active === id) {
     // The tab on the left, or the new first tab, becomes active; with no tabs left the area is empty.
@@ -111,6 +139,7 @@ export function fileRootOf(path: string, projectRoot: string): string {
 
 /** Closes every open tab. The chats themselves stay in the sidebar. */
 export function closeAllTabs() {
+  remember(contentTabs.tabs);
   contentTabs.tabs.splice(0, contentTabs.tabs.length);
   contentTabs.active = '';
 }
@@ -119,6 +148,7 @@ export function closeAllTabs() {
 export function closeOtherTabs(id: string) {
   const keep = contentTabs.tabs.find((tab) => tab.id === id);
   if (!keep) return;
+  remember(contentTabs.tabs.filter((tab) => tab.id !== id));
   contentTabs.tabs.splice(0, contentTabs.tabs.length, keep);
   activateTab(id);
 }
@@ -129,6 +159,12 @@ export function installTabShortcuts() {
   const onKey = (event: KeyboardEvent) => {
     const mod = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
+    // Ctrl+Shift+T: the tab closed last comes back, as in a browser.
+    if (mod && event.shiftKey && !event.altKey && key === 't') {
+      event.preventDefault();
+      reopenTab();
+      return;
+    }
     if (mod && !event.shiftKey && !event.altKey && key === 'k') {
       waiting = Date.now();
       return;

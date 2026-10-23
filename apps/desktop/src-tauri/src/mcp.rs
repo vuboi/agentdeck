@@ -27,8 +27,8 @@ const TOOLS: &[Tool] = &[
     Tool { name: "browser_key", route: "/key", description: "Presses a key: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, Space.", args: &[("key", "string", "", true)] },
     Tool { name: "browser_fill", route: "/fill", description: "Sets the value of the field matching a CSS selector and fires input and change.", args: &[("selector", "string", "", true), ("value", "string", "", true)] },
     Tool { name: "browser_device", route: "/device", description: "Switches the Preview between desktop, tablet and mobile (a phone or tablet user agent and screen size), to check a responsive layout. Answers with the viewport after the switch.", args: &[("mode", "string", "desktop, tablet or mobile", true), ("landscape", "boolean", "rotate the device", false)] },
-    Tool { name: "browser_serve", route: "/serve", description: "Starts a local dev server that AgentDeck owns, waits until its address answers, then opens it in the Preview panel. Use it for every dev server: one started in your own shell dies when your command or turn ends. If the address already answers, it only opens it. A failed start returns the end of the server's log.", args: &[("command", "string", "the start command, for example pnpm start:svelte", true), ("cwd", "string", "absolute path of the project folder", true), ("url", "string", "the address the server answers at, for example http://localhost:4301/", true)] },
-    Tool { name: "browser_open", route: "/open", description: "Opens an address in AgentDeck's Preview panel (a tab of its own when another page is open) and waits until the page is ready. Use it right after starting a dev server, then screenshot and act in the same turn.", args: &[("url", "string", "full address, for example http://localhost:4301/", true)] },
+    Tool { name: "browser_serve", route: "/serve", description: "Starts a local dev server that AgentDeck owns, waits until its address answers, then opens it in the Preview panel. Use it for every dev server: one started in your own shell dies when your command or turn ends. If the address already answers, it only opens it. A failed start returns the end of the server's log.", args: &[("command", "string", "the start command, for example pnpm start:svelte", true), ("cwd", "string", "absolute path of the project folder", true), ("url", "string", "the address the server answers at, for example http://localhost:4301/", true), ("new_tab", "boolean", "true: open it in a tab of its own, leaving the current tab as it is; false: use the current tab. Left out: the current tab, unless another chat is driving it.", false)] },
+    Tool { name: "browser_open", route: "/open", description: "Opens an address in AgentDeck's Preview panel (a tab of its own when another page is open) and waits until the page is ready. Use it right after starting a dev server, then screenshot and act in the same turn.", args: &[("url", "string", "full address, for example http://localhost:4301/", true), ("new_tab", "boolean", "true: open it in a tab of its own, leaving the current tab as it is (use it when another chat is driving the current tab, to compare, to debug side by side, or to look something up). false: use the current tab. Left out: the current tab, unless another chat is driving it.", false)] },
     Tool { name: "browser_drag", route: "/drag", description: "Drags one element onto another, as HTML5 drag and drop (dragstart, dragover, drop). Both are CSS selectors.", args: &[("from", "string", "CSS selector of the element to drag", true), ("to", "string", "CSS selector of the element to drop on", true)] },
     Tool { name: "browser_upload", route: "/upload", description: "Uploads a file from disk: sets it on an <input type=file>, or drops it on a drop zone. Give the absolute file path.", args: &[("selector", "string", "CSS selector of the file input or drop zone", true), ("path", "string", "absolute path of the file", true)] },
     Tool { name: "browser_eval", route: "/eval", description: "Runs JavaScript in the page (or in a frame, see browser_frames) and returns its value. Use it to read state or find an element's position with getBoundingClientRect().", args: &[("script", "string", "an expression; promises are awaited", true), ("frame", "string", "frame index or part of its address", false)] },
@@ -59,11 +59,14 @@ fn tool_list() -> Value {
     )
 }
 
-async fn call_tool(app: &AppHandle, name: &str, args: &Value) -> Value {
+async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Value {
     let Some(tool) = TOOLS.iter().find(|tool| tool.name == name) else {
         return json!({ "content": [{ "type": "text", "text": format!("unknown tool {name}") }], "isError": true });
     };
     let mut params = HashMap::new();
+    if !chat.is_empty() {
+        params.insert("chat".to_string(), chat.to_string());
+    }
     let mut body = String::new();
     if let Some(map) = args.as_object() {
         for (key, value) in map {
@@ -100,7 +103,7 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value) -> Value {
 }
 
 /// One JSON-RPC message. `None` for a notification (the HTTP answer is then 202 with no body).
-pub async fn handle(app: &AppHandle, body: &str) -> Option<String> {
+pub async fn handle(app: &AppHandle, body: &str, chat: &str) -> Option<String> {
     let request: Value = serde_json::from_str(body).ok()?;
     let id = request.get("id").cloned()?;
     let params = &request["params"];
@@ -113,7 +116,7 @@ pub async fn handle(app: &AppHandle, body: &str) -> Option<String> {
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tool_list() }),
-        "tools/call" => call_tool(app, params["name"].as_str().unwrap_or_default(), &params["arguments"]).await,
+        "tools/call" => call_tool(app, params["name"].as_str().unwrap_or_default(), &params["arguments"], chat).await,
         method => {
             return Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("unknown method {method}") } }).to_string());
         }

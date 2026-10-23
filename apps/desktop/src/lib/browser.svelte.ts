@@ -101,7 +101,7 @@ export async function listenToPage() {
   listening = true;
   const { listen } = await import('@tauri-apps/api/event');
   // The agent asked to open an address (browser_open): the same as a link opened in AgentDeck.
-  await listen<{ url: string }>('agent-open', ({ payload }) => openInPreview(payload.url));
+  await listen<{ url: string; newTab?: boolean }>('agent-open', ({ payload }) => openInPreview(payload.url, payload.newTab ? 'new' : 'current'));
   // The agent switched the device (browser_device): pages are created again with that device's user agent.
   await listen<{ device: Device; landscape: boolean }>('agent-device', ({ payload }) => {
     if (!(payload.device in DEVICES)) return;
@@ -224,6 +224,8 @@ async function openBrowser(rect: Rect) {
 }
 export const moveBrowser = (rect: Rect) => call('browser_bounds', { tab: activeTab().id, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
 export const hideBrowser = () => call('browser_hide');
+/** The panel is not on screen: the front page keeps running off-screen (a hidden page stops drawing and cannot be photographed). */
+export const parkBrowser = () => call('browser_park').catch(() => {});
 /** At start-up (also after F5): closes the pages a previous load of the window left running above it. */
 export const resetBrowser = () => (inTauri() ? call('browser_reset').catch(() => {}) : Promise.resolve());
 /** A picture of the front page taken by the engine (PNG data URL). */
@@ -327,12 +329,18 @@ export const openExternal = (url: string) => call('open_external', { url });
 export const isLocalUrl = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(url);
 
 /** Shows `url` in the browser: in the front tab when that is blank, in a new tab otherwise. */
-export function openInPreview(url: string) {
-  // A page already open in a tab is shown as it is; any other address gets a tab of its own, never the open page's.
-  const shown = browser.tabs.find((tab) => tab.url === url);
-  if (shown) browser.activeId = shown.id;
-  else if (activeTab().url) newTab(url);
-  else activeTab().url = url;
+/**
+ * `auto` (a link): a page already open in a tab is shown as it is; any other address gets a tab of its own, never the
+ * open page's. `current` (the agent): the front tab goes to the address. `new`: a tab of its own.
+ */
+export function openInPreview(url: string, mode: 'auto' | 'current' | 'new' = 'auto') {
+  if (mode === 'new') newTab(url);
+  else if (mode === 'auto') {
+    const shown = browser.tabs.find((tab) => tab.url === url);
+    if (shown) browser.activeId = shown.id;
+    else if (activeTab().url) newTab(url);
+    else activeTab().url = url;
+  }
   browser.autostart = url;
   layout.activeTool = 'Preview';
   layout.toolsOpen = true;

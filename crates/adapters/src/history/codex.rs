@@ -9,7 +9,7 @@ use std::{collections::HashMap, path::Path};
 use serde_json::Value;
 
 use super::util::{describe_tool, jsonl_files, read_lines, strip_ansi, truncate};
-use super::{HistoryBlock, HistoryMessage, HistorySession, Source};
+use super::{HistoryBlock, HistoryMessage, HistorySession, HistoryUsage, Source};
 
 const OUTPUT_LIMIT: usize = 6_000;
 
@@ -18,6 +18,7 @@ fn wanted(line: &str) -> bool {
     line.contains("\"type\":\"response_item\"")
         || line.contains("\"type\":\"session_meta\"")
         || line.contains("\"type\":\"event_msg\"")
+        || line.contains("\"type\":\"turn_context\"")
 }
 
 pub(super) fn list(root: &Path, index: &Path) -> Vec<HistorySession> {
@@ -107,10 +108,39 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
     let mut messages: Vec<HistoryMessage> = Vec::new();
     // call_id -> (message index, block index)
     let mut pending: HashMap<String, (usize, usize)> = HashMap::new();
+    // The model of the turn in progress, and the running total of tokens (the same count is written more than once).
+    let mut model: Option<String> = None;
+    let mut seen_total = 0u64;
 
     for (index, line) in lines.iter().enumerate() {
-        if str_of(line, "type") != "response_item" {
-            continue;
+        match str_of(line, "type") {
+            // The model each turn ran with.
+            "turn_context" => {
+                if let Some(name) = line.get("payload").map(|payload| str_of(payload, "model")).filter(|name| !name.is_empty()) {
+                    model = Some(name.to_owned());
+                }
+                continue;
+            }
+            // A token count belongs to the answer being written: it is added to the last assistant message.
+            "event_msg" => {
+                let Some(payload) = line.get("payload").filter(|payload| str_of(payload, "type") == "token_count") else {
+                    continue;
+                };
+                let total = payload["info"]["total_token_usage"]["total_tokens"].as_u64().unwrap_or(0);
+                let last = &payload["info"]["last_token_usage"];
+                if total > seen_total && last.is_object() {
+                    seen_total = total;
+                    let count = |key: &str| last[key].as_u64().unwrap_or(0);
+                    let cached = count("cached_input_tokens");
+                    let usage = HistoryUsage { input: count("input_tokens").saturating_sub(cached), output: count("output_tokens"), cache_read: cached, cache_write: 0 };
+                    if let Some(message) = messages.last_mut().filter(|message| message.role == "assistant") {
+                        HistoryUsage::merge(&mut message.usage, Some(usage));
+                    }
+                }
+                continue;
+            }
+            "response_item" => {}
+            _ => continue,
         }
         let Some(payload) = line.get("payload") else {
             continue;
@@ -175,7 +205,7 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
         } else {
             messages.push(HistoryMessage {
                 usage: None,
-                model: None,
+                model: if role == "assistant" { model.clone() } else { None },
                 id: format!("codex-{index}"),
                 role,
                 time,

@@ -187,6 +187,7 @@ mod unix_tests {
             effort: None,
             allowed_tools: Vec::new(),
             cwd: None,
+            owner: None,
         }
     }
 

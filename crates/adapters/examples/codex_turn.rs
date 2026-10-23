@@ -16,6 +16,7 @@ async fn turn(prompt: &str, thread: Option<String>, cwd: &std::path::Path) -> Ve
         effort: Some("low".into()),
         allowed_tools: Vec::new(),
         cwd: Some(cwd.to_path_buf()),
+        owner: None,
     };
     let mut events = Vec::new();
     drive_turn(resolve_binary(&codex), &codex, &request, |event| events.push(event)).await;

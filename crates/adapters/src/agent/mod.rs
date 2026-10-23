@@ -58,6 +58,17 @@ pub enum AgentEvent {
     Error { message: String },
 }
 
+/// The address of the browser's MCP server for one chat: `/mcp?chat=<id>`. The bridge reads the chat from it.
+pub fn mcp_url(bridge: &str, owner: Option<&str>) -> String {
+    match owner {
+        Some(chat) => {
+            let safe: String = chat.chars().filter(|c| c.is_ascii_alphanumeric() || "-_:".contains(*c)).collect();
+            format!("{bridge}/mcp?chat={safe}")
+        }
+        None => format!("{bridge}/mcp"),
+    }
+}
+
 /// One user message to send to an agent.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnRequest {
@@ -75,6 +86,8 @@ pub struct TurnRequest {
     pub allowed_tools: Vec<String>,
     /// Folder the CLI runs in. Claude files a conversation under the folder it ran from, so this is the project.
     pub cwd: Option<std::path::PathBuf>,
+    /// The AgentDeck chat this turn belongs to: the browser tools it calls are tagged with it (which chat drives a tab).
+    pub owner: Option<String>,
 }
 
 /// Everything provider-specific: how to start a turn and how to read its output.

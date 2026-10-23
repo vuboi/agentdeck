@@ -441,6 +441,7 @@ async fn agent_send(
         effort,
         allowed_tools,
         cwd: cwd.map(Into::into),
+        owner: Some(session.clone()),
     };
     let handle = tauri::async_runtime::spawn(run_turn(app, session.clone(), turn, provider, req));
     if let Ok(mut running) = RUNNING.lock() {
@@ -532,6 +533,7 @@ pub fn run() {
             browser::browser_hide,
             browser::browser_navigate,
             browser::browser_reset,
+            browser::browser_park,
             browser::browser_eval,
             browser::browser_zoom,
             browser::browser_close,

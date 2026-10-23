@@ -350,7 +350,7 @@
         {@const data = ctx.node.data}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span
-          class="relative flex min-w-0 flex-1 items-center gap-2"
+          class="relative flex min-w-0 flex-1 items-center gap-2 self-stretch"
           data-session={data?.kind === 'session' ? data.session?.id : undefined}
           data-project={data?.kind === 'project' ? projectId(ctx.node.id) : undefined}
           onpointerenter={() => data?.kind === 'session' && prefetchTranscript(data.session)}
@@ -359,11 +359,11 @@
             <!-- Branch lines (the tree's own guides are off): the project's line, and for a fork the line of its chat,
                  with a tick into the fork's dot. The last fork's line turns the corner and stops. -->
             {#if data.session.parentId}
-              <span class="pointer-events-none absolute -top-1 -bottom-1 -left-[43px] w-px bg-[var(--z-tree-guide)]" aria-hidden="true"></span>
-              <span class="pointer-events-none absolute -top-1 -left-[29px] w-px bg-[var(--z-tree-guide)] {data.last ? 'h-[calc(50%+4px)]' : '-bottom-1'}" aria-hidden="true"></span>
+              <span class="pointer-events-none absolute top-0 bottom-0 -left-[43px] w-px bg-[var(--z-tree-guide)]" aria-hidden="true"></span>
+              <span class="pointer-events-none absolute top-0 -left-[29px] w-px bg-[var(--z-tree-guide)] {data.last ? 'h-1/2' : 'bottom-0'}" aria-hidden="true"></span>
               <span class="pointer-events-none absolute top-1/2 -left-[29px] h-px w-[25px] bg-[var(--z-tree-guide)]" aria-hidden="true"></span>
             {:else}
-              <span class="pointer-events-none absolute -top-1 -bottom-1 -left-[29px] w-px bg-[var(--z-tree-guide)]" aria-hidden="true"></span>
+              <span class="pointer-events-none absolute top-0 bottom-0 -left-[29px] w-px bg-[var(--z-tree-guide)]" aria-hidden="true"></span>
             {/if}
             {#if data.session.status === 'working'}
               <span class="grid size-3 shrink-0 place-items-center text-success" role="status" aria-label="Running">

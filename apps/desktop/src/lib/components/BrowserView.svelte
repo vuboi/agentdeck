@@ -11,6 +11,7 @@
     browser,
     annotate,
     markHistory,
+    parkBrowser,
     cancelPick,
     pickElement,
     annotationNotes,
@@ -249,7 +250,8 @@
     resizer?.disconnect();
     observer?.disconnect();
     window.removeEventListener('resize', onResize);
-    if (inTauri()) void hideBrowser();
+    // Another tool took the panel: the page stays alive off-screen, so the agent can still look at it and act on it.
+    if (inTauri()) void parkBrowser();
   });
 
   // Opened by a link or the developer hook.
@@ -401,13 +403,13 @@
   const menuItems = $derived<ZDropdownMenuItem[]>([
     ...(compact
       ? [
-          ...DEVICE_BUTTONS.map((item) => ({ label: item.label, icon: item.icon, iconSize: '12', class: 'text-xs! py-1', checked: browser.device === item.value, onClick: () => (browser.device = item.value) })),
-          { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: browser.device === 'desktop', checked: browser.landscape && browser.device !== 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
+          ...DEVICE_BUTTONS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, class: 'text-xs! py-1', checked: browser.device === item.value, onClick: () => (browser.device = item.value) })),
+          { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: browser.device === 'desktop', checked: browser.landscape && browser.device !== 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
         ]
       : []),
-    { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: compact ? 'before' : undefined, disabled: !tab.url, onClick: () => void openExternal(tab.url) },
-    { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: '12', class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url).then(() => toast.success('Address copied')) },
-    { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: '12', class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
+    { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: compact ? 'before' : undefined, disabled: !tab.url, onClick: () => void openExternal(tab.url) },
+    { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url).then(() => toast.success('Address copied')) },
+    { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
   ]);
 
 
