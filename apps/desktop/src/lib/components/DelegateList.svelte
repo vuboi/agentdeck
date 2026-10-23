@@ -5,7 +5,7 @@
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { modelLabel } from '../models.svelte';
-  import { isDelegating, liveStats, workspace } from '../sessions.svelte';
+  import { isDelegating, isRunActive, liveStats, workspace } from '../sessions.svelte';
   import type { Block } from '../mock';
 
   // The work a message handed to other agents (`@agent` or a flow's steps), in one card like a run command: a header,
@@ -14,7 +14,9 @@
 
   // A card still "running" with nothing running behind it: the run was cut off (the page was reloaded while it ran). The
   // chat itself tells how far it got: one that has its answer is shown as answered, not as stopped.
-  const settledOf = (block: Extract<Block, { kind: 'delegate' }>) => {
+  const settledOf = (block: Extract<Block, { kind: 'delegate' }>): 'queued' | 'running' | 'done' | 'failed' | 'skipped' => {
+    // A step waiting its turn is queued while its run is going; once the run is gone it will never start.
+    if (block.state === 'queued') return isRunActive(blocks.map((item) => item.childId)) ? 'queued' : 'skipped';
     if (block.state !== 'running' || isDelegating(block.childId)) return block.state;
     const child = workspace.sessions.find((item) => item.id === block.childId);
     return child && (child.messageCount ?? 0) >= 2 ? 'done' : 'failed';
@@ -29,7 +31,7 @@
     void ticker.sec;
     return liveStats(childId, Date.now())?.last ?? '';
   }
-  const tone = { running: 'text-warning', done: 'text-success', failed: 'text-destructive' } as const;
+  const tone = { queued: 'text-muted-foreground', running: 'text-warning', done: 'text-success', failed: 'text-destructive', skipped: 'text-muted-foreground' } as const;
 </script>
 
 <div class="block-in w-full max-w-[85%] overflow-hidden rounded-lg border border-border bg-background">
@@ -44,7 +46,7 @@
   <div class="divide-y divide-border">
     {#each blocks as block (block.childId)}
       {@const settled = settledOf(block)}
-      <button type="button" class="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs outline-none hover:bg-muted/40 focus-visible:bg-muted/60" onclick={() => showSession(block.childId)}>
+      <button type="button" class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs outline-none {settled === 'queued' || settled === 'skipped' ? 'cursor-default opacity-70' : 'cursor-pointer hover:bg-muted/40 focus-visible:bg-muted/60'}" onclick={() => settled !== 'queued' && settled !== 'skipped' && showSession(block.childId)}>
         {#if block.agent === 'codex'}
           <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
         {:else}
@@ -58,6 +60,10 @@
             <ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="current" /> Working
           {:else if settled === 'done'}
             <ZIcon zType="lucideCircleCheck" class="size-3.5" /> Answered
+          {:else if settled === 'queued'}
+            <ZIcon zType="lucideClock" class="size-3.5" /> Queued
+          {:else if settled === 'skipped'}
+            <ZIcon zType="lucideMinusCircle" class="size-3.5" /> <span class="max-w-32 truncate">{block.note ?? 'Not run'}</span>
           {:else}
             <ZIcon zType="lucideCircleX" class="size-3.5" /> <span class="max-w-32 truncate">{block.note ?? 'Interrupted'}</span>
           {/if}

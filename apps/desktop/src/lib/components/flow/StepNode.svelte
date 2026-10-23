@@ -32,7 +32,7 @@
     const node = data.node;
     if (!node) return '';
     const seconds = Math.max(0, Math.round(((node.endedAt ?? ticker.sec) - node.startedAt) / 1000));
-    return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+    return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s`;
   });
   const STATE = {
     idle: { label: 'Waiting', tone: 'text-muted-foreground bg-muted' },
@@ -72,13 +72,13 @@
         {data.node?.note ?? stats?.last ?? (data.state === 'skipped' ? `Skipped: ${condition}` : data.state === 'idle' ? 'Waits for the steps above' : 'Starting…')}
       </p>
       {#if data.node}
-        <div class="mt-2 flex items-center gap-2.5 text-[10px] text-muted-foreground tabular-nums">
-          <span class="inline-flex items-center gap-1"><ZIcon zType={icon('lucideClock')} class="size-3" />{elapsed}</span>
-          {#if stats?.tokens}<span class="inline-flex items-center gap-1"><ZIcon zType={icon('lucideDatabase')} class="size-3" />{shortCount(totalTokens(stats.tokens))}</span>{/if}
-          {#if stats?.cost != null}<span class="inline-flex items-center gap-1"><ZIcon zType={icon('lucideCoins')} class="size-3" />{usd(stats.cost)}</span>{/if}
-          {#if stats && stats.tools > 0}<span class="inline-flex items-center gap-1"><ZIcon zType={icon('lucideTerminal')} class="size-3" />{stats.tools}</span>{/if}
-          <span class="flex-1"></span>
-          <button type="button" class="nodrag inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 text-primary hover:bg-primary/10" onclick={(event) => { event.stopPropagation(); if (data.node) showSession(data.node.childId); }}>
+        <!-- Wraps instead of running past the card: a long time or a big count moves the rest to a second line. -->
+        <div class="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground tabular-nums">
+          <span class="inline-flex items-center gap-1 whitespace-nowrap"><ZIcon zType={icon('lucideClock')} class="size-3 shrink-0" />{elapsed}</span>
+          {#if stats?.tokens}<span class="inline-flex items-center gap-1 whitespace-nowrap"><ZIcon zType={icon('lucideDatabase')} class="size-3 shrink-0" />{shortCount(totalTokens(stats.tokens))}</span>{/if}
+          {#if stats?.cost != null}<span class="inline-flex items-center gap-1 whitespace-nowrap"><ZIcon zType={icon('lucideCoins')} class="size-3 shrink-0" />{usd(stats.cost)}</span>{/if}
+          {#if stats && stats.tools > 0}<span class="inline-flex items-center gap-1 whitespace-nowrap"><ZIcon zType={icon('lucideTerminal')} class="size-3 shrink-0" />{stats.tools}</span>{/if}
+          <button type="button" class="nodrag ml-auto inline-flex shrink-0 cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 whitespace-nowrap text-primary hover:bg-primary/10" onclick={(event) => { event.stopPropagation(); if (data.node) showSession(data.node.childId); }}>
             Open<ZIcon zType={icon('lucideArrowRight')} class="size-3" />
           </button>
         </div>

@@ -839,6 +839,8 @@ export const liveStats = (sessionId: string, startedAt: number) => statsOf(liveR
 
 /** Whether the chat `childId` is still working on something it was handed. */
 export const isDelegating = (childId: string) => delegations.has(childId) || stepWaiters.has(childId);
+/** Whether a run that started some of these chats is still going (a step waiting in its queue is waiting for it). */
+export const isRunActive = (childIds: string[]) => delegateRuns.some((run) => !run.endedAt && run.nodes.some((node) => childIds.includes(node.childId)));
 
 const firstLineOf = (text: string, max: number) => {
   const line = text.split('\n')[0].trim();
@@ -1003,10 +1005,10 @@ function boardText(task: string, preset: WorkflowPreset, ctx: FlowRunContext, gr
   return [`# Run board — ${preset.name}`, '', `Goal: ${firstLineOf(task, 300)}`, '', '## Plan (one line per stage; steps of a stage run at the same time)', plan, '', '## Handoffs', ...(ctx.board.length ? ctx.board : ['(none yet)']), ''].join('\n');
 }
 
-function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: WorkflowStep, brief: string, task: string, previous: string, images: Attachment[], elements: PageElement[]) {
+function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: WorkflowStep, brief: string, task: string, previous: string, images: Attachment[], elements: PageElement[], queued?: { uuid: string; card: DelegateCard }) {
   const agent = step.agent;
   const model = step.model || MODELS[agent]?.[0]?.value || '';
-  const uuid = crypto.randomUUID();
+  const uuid = queued?.uuid ?? crypto.randomUUID();
   const id = `claude:${uuid}`;
   workspace.sessions.push({
     id,
@@ -1021,8 +1023,15 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
     stepEffort: step.effort || undefined,
     draft: false,
   });
-  asked.blocks.push({ kind: 'delegate', childId: id, agent, model, state: 'running', step: step.name });
-  const card = asked.blocks[asked.blocks.length - 1] as DelegateCard;
+  // Its card was made when the run began, as "queued": now it is working.
+  let card: DelegateCard;
+  if (queued) {
+    card = queued.card;
+    card.state = 'running';
+  } else {
+    asked.blocks.push({ kind: 'delegate', childId: id, agent, model, state: 'running', step: step.name });
+    card = asked.blocks[asked.blocks.length - 1] as DelegateCard;
+  }
   const label = `${step.name} · ${agentLabel(agent, model)}`;
   run.nodes.push({ childId: id, stepId: step.id, agent, model, label, startedAt: Date.now(), state: 'running', input: previous });
   const node = run.nodes[run.nodes.length - 1];
@@ -1061,6 +1070,15 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
   ctx.folder = boardPath ? boardPath.replace(/[\\/]BOARD\.md$/, '') : '';
   run.folder = ctx.folder || undefined;
 
+  // Every step has its card in the message from the start: the ones that wait say "Queued", the ones of a stage that
+  // runs together all say "Working" once it starts.
+  const cards = new Map<string, { uuid: string; card: DelegateCard }>();
+  for (const step of graph) {
+    const uuid = crypto.randomUUID();
+    asked.blocks.push({ kind: 'delegate', childId: `claude:${uuid}`, agent: step.agent, model: step.model || MODELS[step.agent]?.[0]?.value || '', state: 'queued', step: step.name });
+    cards.set(step.id, { uuid, card: asked.blocks[asked.blocks.length - 1] as DelegateCard });
+  }
+
   let first = true;
   for (const group of groups) {
     const inputText = (step: WorkflowStep) =>
@@ -1069,7 +1087,15 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
         .map((from) => `### ${graph.find((item) => item.id === from)?.name ?? from}\n${ctx.handoffs.get(from)}`)
         .join('\n\n');
     const active = group.filter((step) => passes(step, inputText(step)));
-    for (const step of group) if (!active.includes(step)) run.skipped?.push(step.id);
+    for (const step of group) {
+      if (active.includes(step)) continue;
+      run.skipped?.push(step.id);
+      const skipped = cards.get(step.id)?.card;
+      if (skipped) {
+        skipped.state = 'skipped';
+        skipped.note = 'Condition not met';
+      }
+    }
     if (active.length === 0) continue;
     const board = boardText(task, preset, ctx, groups);
     const done = await Promise.all(
@@ -1098,7 +1124,7 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
         ]
           .filter((line, index, all) => line !== '' || all[index - 1] !== '')
           .join('\n');
-        return runStep(main, asked, run, step, brief, task, previous, first ? images : [], first ? elements : []);
+        return runStep(main, asked, run, step, brief, task, previous, first ? images : [], first ? elements : [], cards.get(step.id));
       }),
     );
     first = false;
@@ -1113,6 +1139,13 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
     void runFile(root, runId, 'BOARD.md', boardText(task, preset, ctx, groups));
     // A step that failed ends the chain: the agent is told what happened so far.
     if (done.some((item) => !item.ok)) break;
+  }
+  // A step that failed ends the chain: those that never started say so, instead of waiting for ever.
+  for (const { card } of cards.values()) {
+    if (card.state === 'queued') {
+      card.state = 'skipped';
+      card.note = 'Not run';
+    }
   }
   if (batch.results.length === 0) {
     main.status = 'idle';

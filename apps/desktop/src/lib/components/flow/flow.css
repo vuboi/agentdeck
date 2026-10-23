@@ -50,9 +50,6 @@
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 4px 14px -6px rgb(0 0 0 / 0.12);
   transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s;
 }
-.flow-node:hover {
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 10px 26px -10px rgb(0 0 0 / 0.22);
-}
 .flow-node.is-selected {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent), 0 10px 26px -10px rgb(0 0 0 / 0.22);
@@ -116,20 +113,18 @@
 }
 
 /* ---- handles ---- */
-/* The library places a handle with `transform`; a hover only adds `scale` and a soft ring, so it never moves. */
+/* The library places a handle with `transform`: a hover only changes its colour, so it never looks moved. */
 .flow-canvas .svelte-flow__handle.flow-handle {
   width: 12px;
   height: 12px;
   border: 2px solid var(--primary);
   background: var(--card);
-  transition: scale 0.15s, background 0.15s, box-shadow 0.15s;
+  transition: background 0.15s;
 }
 .flow-canvas .svelte-flow__handle.flow-handle:hover,
 .flow-canvas .svelte-flow__handle.flow-handle.connectingfrom,
 .flow-canvas .svelte-flow__handle.flow-handle.valid {
   background: var(--primary);
-  scale: 1.15;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 28%, transparent);
 }
 .flow-canvas.flow-run .svelte-flow__handle.flow-handle {
   width: 8px;
@@ -154,10 +149,10 @@
   stroke: color-mix(in srgb, var(--primary) 70%, transparent);
 }
 .flow-canvas .svelte-flow__edge-path.flow-edge-active {
+  /* A solid line, so it always meets the circle at both ends: the light running down it is the moving dots. */
   stroke: var(--primary);
   stroke-width: 2.4;
-  stroke-dasharray: 7 7;
-  animation: flow-dash 0.55s linear infinite;
+  stroke-linecap: round;
 }
 .flow-canvas .svelte-flow__edge-path.flow-edge-skipped {
   stroke-dasharray: 2 6;

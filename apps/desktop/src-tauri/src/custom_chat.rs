@@ -851,7 +851,7 @@ async fn start_servers(cwd: Option<&Path>) -> Vec<Server> {
 
 /// Runs one turn: the conversation goes to the model, its tool calls are run and answered, until it replies in
 /// plain text. Ends with `Done`, `PermissionDenied` then `Done`, or `Error`.
-pub async fn run_turn(app: &AppHandle, turn: Turn, history: Vec<ChatMessage>, mut emit: impl FnMut(AgentEvent)) {
+pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>, mut emit: impl FnMut(AgentEvent)) {
     if !(turn.base_url.starts_with("http://") || turn.base_url.starts_with("https://")) {
         return emit(AgentEvent::Error { message: "the provider address must start with http:// or https://".into() });
     }
@@ -895,6 +895,9 @@ pub async fn run_turn(app: &AppHandle, turn: Turn, history: Vec<ChatMessage>, mu
     let mut edited = false;
     let mut checked = true;
     let mut nudged = false;
+    // A model that spends its whole answer on thinking (some local ones do, with big prompts): it is asked again, then asked
+    // again with thinking off, before the turn is called a failure.
+    let mut silent = 0;
     for _ in 0..MAX_STEPS {
         let step = match model_call(&client, &turn, &messages, &tools, &mut emit).await {
             Ok(step) => step,
@@ -922,7 +925,15 @@ pub async fn run_turn(app: &AppHandle, turn: Turn, history: Vec<ChatMessage>, mu
                 return emit(AgentEvent::Error { message: "the model hit its output limit before it finished: raise the limit or the context in the server, or ask for a smaller step".into() });
             }
             if answer.trim().is_empty() {
-                return emit(AgentEvent::Error { message: "the model gave no answer (it only thought). Try Thinking: Off or Low in the model picker".into() });
+                if silent < 2 {
+                    silent += 1;
+                    if silent == 2 {
+                        turn.effort = Some("off".into());
+                    }
+                    messages.push(json!({ "role": "user", "content": "You only thought and wrote no answer. Do not think again: call a tool now, or write your answer." }));
+                    continue;
+                }
+                return emit(AgentEvent::Error { message: "the model gave no answer (it only thought), even with thinking off. Pick another model, or try a smaller step".into() });
             }
             return emit(AgentEvent::Done { session_id: None, text: answer, cost_usd: None });
         }
