@@ -3,7 +3,10 @@
   import { getPref, setPref } from '../prefs';
   import { ZButton, ZCommand, ZIcon, ZPopover, zSortable, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
+  import { zFuzzyMatch, zHighlightPositions } from '@shival99/z-ui-svelte';
   import { loadSlash, slash, type SlashItem } from '../slash.svelte';
+  import { prepare, search } from '../palette';
+  import ElementCard from './ElementCard.svelte';
   import { agyBlocks, agyModes, loadAgyModes } from '../agy-modes.svelte';
   import {
     activeSession,
@@ -66,6 +69,9 @@
   let area: HTMLTextAreaElement | undefined = $state();
   let paletteOpen = $state(false);
   let slashOpen = $state(false);
+  // What is typed in each palette: the palette lists only the best rows for it (see palette.ts), so typing stays light.
+  let slashQuery = $state('');
+  let mentionQuery = $state('');
   let innerW = $state(typeof window === 'undefined' ? 1280 : window.innerWidth);
 
   // Agent + model of this message. They follow the active session and can be overridden with @AI.
@@ -176,6 +182,16 @@
     ].filter((group) => group.items.length > 0);
   });
 
+  const slashPrepared = $derived(slashOpen ? prepare(slashGroups, (item) => String(item.data?.name ?? item.label)) : []);
+  // AgentDeck's own commands lead, so the first row selected is one of them.
+  const slashShown = $derived(slashOpen ? search(slashPrepared, slashQuery, 40, 'AgentDeck') : []);
+
+  /** A label cut at the letters that matched what was typed, to show them in bold (as the palette does itself). */
+  function marked(label: string, typed: string) {
+    const hit = typed.trim() ? zFuzzyMatch(label, typed) : null;
+    return hit ? zHighlightPositions(label, hit.positions) : [{ text: label, match: false }];
+  }
+
   /** Puts `/name ` in the message box where the caret is, so the arguments can be typed right after it. */
   function pickSlash(item: ZCommandItem<SlashItem>) {
     const picked = item.data;
@@ -192,6 +208,7 @@
   }
 
   // ---------- mentions ----------
+  const projectNames = $derived(new Map(workspace.projects.map((project) => [project.id, project.name])));
   const groups = $derived<ZCommandGroup<Mention>[]>([
     {
       heading: 'Sessions',
@@ -201,7 +218,7 @@
           id: `session:${item.id}`,
           label: item.title,
           icon: (item.parentId ? 'lucideGitFork' : 'lucideMessageSquare') as ZIconName,
-          keywords: [projectOf(item)?.name ?? '', item.gitBranch ?? '', item.agent],
+          keywords: [projectNames.get(item.projectId) ?? '', item.gitBranch ?? '', item.agent],
           data: { kind: 'session' as const, id: item.id, label: item.title },
         })),
     },
@@ -227,6 +244,9 @@
       ),
     },
   ]);
+
+  const mentionPrepared = $derived(paletteOpen ? prepare(groups) : []);
+  const mentionShown = $derived(paletteOpen ? search(mentionPrepared, mentionQuery) : []);
 
   function pickMention(item: ZCommandItem<Mention>) {
     const picked = item.data;
@@ -371,21 +391,7 @@
     {#each elements.filter((item) => item.id === detail) as item (item.id)}
       <ZPopover anchor={chipAnchors[item.id]} open={true} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={360} onClose={() => (detail = null)}>
         {#snippet children()}
-          <div class="flex max-h-[min(60vh,420px)] w-full flex-col gap-2 overflow-y-auto p-3 text-xs">
-            <div class="flex items-center gap-1.5 font-medium"><ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 text-primary" />Included with your message</div>
-            <dl class="m-0 grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1.5">
-              <dt class="text-muted-foreground">Element</dt><dd class="m-0 font-mono">&lt;{item.tag} /&gt;</dd>
-              {#if item.note}<dt class="text-muted-foreground">Note</dt><dd class="m-0">{item.note}</dd>{/if}
-              <dt class="text-muted-foreground">Text</dt><dd class="m-0">{item.text || '—'}</dd>
-              <dt class="text-muted-foreground">Page</dt><dd class="m-0 break-all">{item.url}</dd>
-              <dt class="text-muted-foreground">Selector</dt><dd class="m-0 rounded bg-muted/60 px-1.5 py-1 font-mono text-[11px] break-all">{item.selector}</dd>
-              <dt class="text-muted-foreground">Size</dt><dd class="m-0">{item.box.w}×{item.box.h}</dd>
-            </dl>
-            <div class="text-muted-foreground">Computed styles</div>
-            <dl class="m-0 grid grid-cols-[7rem_1fr] gap-x-2 gap-y-0.5 font-mono text-[11px]">
-              {#each Object.entries(item.style) as [key, value] (key)}<dt class="text-muted-foreground">{key}</dt><dd class="m-0 break-all">{value}</dd>{/each}
-            </dl>
-          </div>
+          <ElementCard tag={item.tag} text={item.text} selector={item.selector} url={item.url} note={item.note} box={item.box} style={item.style} />
         {/snippet}
       </ZPopover>
     {/each}
@@ -467,14 +473,24 @@
 
 <ZCommand
   bind:open={slashOpen}
-  zGroups={slashGroups}
-  zSearch="fuzzy"
+  bind:query={slashQuery}
+  zGroups={slashShown}
+  zFilter={null}
+  zSearch="contains"
   zSize="default"
   zPlaceholder="Run a command or skill…"
   zRootLabel="Commands"
   onSelect={pickSlash}
   onClosed={() => area?.focus()}
 >
+  {#snippet item(row, state)}
+    <div class="flex min-w-0 items-center gap-3">
+      {#if row.icon}<ZIcon zType={row.icon} zSize="18" class="text-muted-foreground" />{/if}
+      <span class="truncate">
+        {#each marked(row.label, state.query) as part, at (at)}{#if part.match}<span class="font-semibold">{part.text}</span>{:else}{part.text}{/if}{/each}
+      </span>
+    </div>
+  {/snippet}
   {#snippet footer()}
     <div class="flex gap-3 px-3 py-1.5 text-[10px] text-muted-foreground">
       <span>↑↓ navigate</span><span>↵ use</span><span>esc close</span>
@@ -484,14 +500,24 @@
 
 <ZCommand
   bind:open={paletteOpen}
-  zGroups={groups}
-  zSearch="fuzzy"
+  bind:query={mentionQuery}
+  zGroups={mentionShown}
+  zFilter={null}
+  zSearch="contains"
   zSize="default"
   zPlaceholder="Mention a chat, a project, or hand work to an agent…"
   zRootLabel="Mention"
   onSelect={pickMention}
   onClosed={() => area?.focus()}
 >
+  {#snippet item(row, state)}
+    <div class="flex min-w-0 items-center gap-3">
+      {#if row.icon}<ZIcon zType={row.icon} zSize="18" class="text-muted-foreground" />{/if}
+      <span class="truncate">
+        {#each marked(row.label, state.query) as part, at (at)}{#if part.match}<span class="font-semibold">{part.text}</span>{:else}{part.text}{/if}{/each}
+      </span>
+    </div>
+  {/snippet}
   {#snippet footer()}
     <div class="flex gap-3 px-3 py-1.5 text-[10px] text-muted-foreground">
       <span>↑↓ navigate</span><span>↵ add</span><span>esc close</span>

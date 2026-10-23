@@ -12,7 +12,7 @@ export type Block =
   /** Part of the user's message handed to another agent in a chat of its own; `state` follows that chat. */
   | { kind: 'delegate'; childId: string; agent: Agent; model: string; state: 'running' | 'done' | 'failed'; note?: string; /** The workflow step it runs, when it comes from a flow. */ step?: string }
   | { kind: 'image'; src: string; name: string }
-  | { kind: 'element'; tag: string; text: string; selector: string }
+  | { kind: 'element'; tag: string; text: string; selector: string; /** What the chat keeps of the element: for its card, and to send it again when the message is edited. */ url?: string; title?: string; note?: string; html?: string; around?: string; box?: { x?: number; y?: number; w: number; h: number }; style?: Record<string, string> }
   | { kind: 'permission'; requests: { id: string; tool: string; summary: string; allow: string }[]; state: 'pending' | 'allowed' | 'denied' };
 
 export type Message = {

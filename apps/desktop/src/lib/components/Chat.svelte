@@ -455,6 +455,9 @@
                   {#if editingId === message.id}
                     <!-- Editing: the message becomes a box; Send replaces it and everything after it. -->
                     <div class="flex w-full max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 pt-3 pb-2.5 text-sm">
+                      {#each message.blocks.filter((block) => block.kind === 'element') as attached, at (at)}
+                        <ChatBlock block={attached} />
+                      {/each}
                       <textarea
                         bind:value={editText}
                         {@attach (node: HTMLTextAreaElement) => {
@@ -491,7 +494,7 @@
                         {/each}
                       </div>
                     {/if}
-                    {#if handed.length > 0}<DelegateList blocks={handed} />{/if}
+                    {#if handed.length > 0}<div class="mt-3 w-full"><DelegateList blocks={handed} /></div>{/if}
                     <MessageFooter {message} end={theme.chatLayout === 'split'} onfork={() => forkSession(workspace.activeId)} onedit={() => startEdit(message)} />
                   {/if}
                 {:else}

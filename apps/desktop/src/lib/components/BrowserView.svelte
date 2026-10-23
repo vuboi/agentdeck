@@ -449,15 +449,26 @@
   const processName = (item: { command: string; url: string | null }) => `${item.command.length > 34 ? `${item.command.slice(0, 34)}…` : item.command}${portOf(item) ? ` · :${portOf(item)}` : ''}`;
   let processButton = $state<HTMLElement | null>(null);
   let processOpen = $state(false);
-  // The age of a running server counts up every second while the list is open (the list itself is read every 3 s).
+  // The age of a running server counts up every second while the list is open. The list is read every 3 s and its ages
+  // are whole seconds, so using them as they come makes the number jump back and forth: each server's start time is kept
+  // instead, and only moved when a reading is clearly different (a restart, a long stall).
   let clock = $state(Date.now());
+  const starts = new Map<number, number>();
+  $effect(() => {
+    const read = servers.at;
+    for (const item of servers.list) {
+      const start = read - item.age * 1000;
+      const known = starts.get(item.key);
+      if (known === undefined || Math.abs(start - known) > 2500) starts.set(item.key, start);
+    }
+  });
   $effect(() => {
     if (!processOpen) return;
     clock = Date.now();
     const tick = setInterval(() => (clock = Date.now()), 1000);
     return () => clearInterval(tick);
   });
-  const ageOf = (item: { age: number; running: boolean }) => (item.running ? item.age + Math.max(0, Math.floor((clock - servers.at) / 1000)) : item.age);
+  const ageOf = (item: { key: number; age: number; running: boolean }) => (item.running ? Math.max(0, Math.floor((clock - (starts.get(item.key) ?? clock - item.age * 1000)) / 1000)) : item.age);
 
   const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');

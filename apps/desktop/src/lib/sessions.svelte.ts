@@ -1209,6 +1209,12 @@ export function editMessage(messageId: string, text: string) {
   const images: Attachment[] = list[index].blocks.flatMap((block) =>
     block.kind === 'image' ? [{ id: nextId(), name: block.name, mime: block.src.slice(5, block.src.indexOf(';')) || 'image/png', src: block.src }] : [],
   );
+  // The page elements sent with it go again too: an edit changes the words, not what was attached.
+  const elements: PageElement[] = list[index].blocks.flatMap((block) =>
+    block.kind === 'element'
+      ? [{ id: nextId(), tag: block.tag, text: block.text, selector: block.selector, html: block.html ?? '', around: block.around, box: { x: block.box?.x ?? 0, y: block.box?.y ?? 0, w: block.box?.w ?? 0, h: block.box?.h ?? 0 }, style: block.style ?? {}, url: block.url ?? '', title: block.title ?? '', note: block.note }]
+      : [],
+  );
   const removed = list.splice(index);
   if (session.path) {
     hidden[session.id] = [...new Set([...(hidden[session.id] ?? []), ...removed.flatMap((message) => [message.id, signature(message)])])];
@@ -1220,7 +1226,7 @@ export function editMessage(messageId: string, text: string) {
     localMessages[session.id] = list;
     persistLocal();
   }
-  send(session.id, text, images, []);
+  send(session.id, text, images, elements);
 }
 
 /**
@@ -1238,7 +1244,7 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
     time: clock(new Date().toISOString()),
     blocks: [
       ...images.map((image) => ({ kind: 'image' as const, src: image.src, name: image.name })),
-      ...elements.map((item) => ({ kind: 'element' as const, tag: item.tag, text: item.text, selector: item.selector })),
+      ...elements.map((item) => ({ kind: 'element' as const, tag: item.tag, text: item.text, selector: item.selector, url: item.url, title: item.title, note: item.note, html: item.html, around: item.around, box: { ...item.box }, style: { ...item.style } })),
       ...(body ? [{ kind: 'response' as const, text: body }] : []),
     ],
     at: new Date().toISOString(),
