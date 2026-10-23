@@ -103,6 +103,8 @@
     return id === 'agy' ? detected.antigravity : detected[id];
   };
 
+  /** Email of the account card whose Refresh button was clicked: only that card's icon spins. */
+  let refreshing = $state('');
   const busyOf = (...keys: string[]) => keys.map((key) => connectors.busy[key]).find(Boolean);
   const lastLog = (id: string) => connectors.logs[id]?.slice(-4) ?? [];
   const urlIn = (lines: string[]) => lines.map((line) => line.match(/https?:\/\/\S+/)?.[0]).filter(Boolean).pop();
@@ -531,15 +533,16 @@
                                   </span>
                                   {#if account.alias}<span class="block truncate text-[11px] text-muted-foreground">{account.email}</span>{/if}
                                 </span>
-                                {#if !account.active}
+                                {#if !account.active && !account.expired}
+                                  {@const switching = Boolean(connectors.busy[`switch:${provider}`]?.endsWith(account.email))}
                                   <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Use {account.email}" title="Use this account" disabled={Boolean(busyOf(`switch:${provider}`))} onclick={() => void switchAccount(provider, account)}>
-                                    <ZIcon zType={icon(connectors.busy[`switch:${provider}`] ? 'lucideLoaderCircle' : 'lucideArrowLeftRight')} class="size-3 {connectors.busy[`switch:${provider}`] ? 'animate-spin' : ''}" />
+                                    <ZIcon zType={icon(switching ? 'lucideLoaderCircle' : 'lucideArrowLeftRight')} class="size-3 {switching ? 'animate-spin' : ''}" />
                                   </ZButton>
-                                  {#if provider === 'codex'}
-                                    <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0 text-muted-foreground hover:!border-destructive/60 hover:!bg-destructive/10 hover:!text-destructive" aria-label="Remove {account.email}" title="Remove from the list" disabled={Boolean(busyOf(`remove:${provider}`))} onclick={() => void removeAccount(provider, account)}>
-                                      <ZIcon zType={icon('lucideTrash2')} class="size-3" />
-                                    </ZButton>
-                                  {/if}
+                                {/if}
+                                {#if !account.active && provider === 'codex'}
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0 text-muted-foreground hover:!border-destructive/60 hover:!bg-destructive/10 hover:!text-destructive" aria-label="Remove {account.email}" title="Remove from the list" disabled={Boolean(busyOf(`remove:${provider}`))} onclick={() => void removeAccount(provider, account)}>
+                                    <ZIcon zType={icon('lucideTrash2')} class="size-3" />
+                                  </ZButton>
                                 {/if}
                               </div>
                               {#if account.usage.length > 0}
@@ -561,6 +564,8 @@
                                   {/each}
                                 </div>
                                 {#if stale(account, ticker.min)}<p class="mt-1.5 text-[11px] text-muted-foreground">Figures are older than 15 minutes. Use Refresh.</p>{/if}
+                              {:else if account.expired}
+                                <p class="mt-1.5 text-[11px] text-destructive" role="alert">Signed out: the login expired (401). Sign in again to use this account; it cannot be switched to until then.</p>
                               {:else if account.status}
                                 <p class="mt-1.5 text-[11px] text-muted-foreground">{account.status}</p>
                               {/if}
@@ -572,8 +577,8 @@
                                   <span class="min-w-0 flex-1 truncate text-muted-foreground">
                                     {#if waiting}Waiting for the reset…{:else if ledger}Free resets: <b class="text-foreground tabular-nums">{ledger.left}</b> left{#if ledger.used > 0}<span>{" · " + ledger.used + " used"}</span>{/if}{:else}No free resets on this plan{/if}
                                   </span>
-                                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Refresh usage" title="Reload usage and count a reset" disabled={Boolean(busyOf('accounts:codex'))} onclick={() => void refreshAccounts('codex', true)}>
-                                    <ZIcon zType={icon('lucideRefreshCw')} class="size-3 {connectors.busy['accounts:codex'] ? 'animate-spin' : ''}" />
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Refresh usage" title="Reload usage and count a reset" disabled={Boolean(busyOf('accounts:codex'))} onclick={() => { refreshing = account.email; void refreshAccounts('codex', true).finally(() => (refreshing = '')); }}>
+                                    <ZIcon zType={icon('lucideRefreshCw')} class="size-3 {refreshing === account.email ? 'animate-spin' : ''}" />
                                   </ZButton>
                                   {#if waiting}
                                     <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 gap-1 px-2 text-[11px]" onclick={stopWaitingForReset}>

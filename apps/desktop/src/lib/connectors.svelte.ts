@@ -22,6 +22,8 @@ export type Account = {
   usage: UsageWindow[];
   observed_at: number | null;
   status: string | null;
+  /** The login ran out (a 401): sign in again; the account cannot be switched to meanwhile. */
+  expired: boolean;
 };
 export type Accounts = {
   manager: boolean;

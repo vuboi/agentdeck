@@ -391,6 +391,8 @@ pub struct Account {
     observed_at: Option<i64>,
     /// Why there is no usage (expired login, API off).
     status: Option<String>,
+    /// The login has expired (the usage call answered 401): the account must sign in again and cannot be switched to.
+    expired: bool,
 }
 
 #[derive(Serialize)]
@@ -418,6 +420,23 @@ fn window_label(minutes: i64) -> String {
         m if m % 60 == 0 => format!("{}h", m / 60),
         m => format!("{m}m"),
     }
+}
+
+/// Emails `codex-auth list` last showed with a 401 (signed out). The registry keeps no trace of that, only the table
+/// the tool prints, so the answer of the latest refresh is remembered here.
+static CODEX_EXPIRED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Rows of the `codex-auth list` table whose usage columns say `401`.
+fn expired_in_list(table: &str) -> Vec<String> {
+    table
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            words.next()?.parse::<u32>().ok()?;
+            let email = words.next()?;
+            words.any(|word| word == "401").then(|| email.to_owned())
+        })
+        .collect()
 }
 
 /// Accounts of `codex-auth`, from its registry file (no tokens in it).
@@ -450,6 +469,7 @@ fn parse_codex_registry(text: &str) -> Result<(Vec<Account>, Option<AutoSwitch>)
                         .collect();
                     let text = |name: &str| item[name].as_str().filter(|value| !value.is_empty()).map(str::to_owned);
                     Some(Account {
+                        expired: false,
                         id: text("email").unwrap_or_else(|| key.to_owned()),
                         email: text("email").unwrap_or_else(|| key.to_owned()),
                         alias: text("alias"),
@@ -515,6 +535,7 @@ fn parse_cswap(text: &str) -> Result<Vec<Account>, String> {
                         .collect();
                     let status = item["usageStatus"].as_str().filter(|status| *status != "ok").map(str::to_owned);
                     Some(Account {
+                        expired: status.as_deref() == Some("expired"),
                         id: number.to_string(),
                         email: item["email"].as_str().unwrap_or("(unknown)").to_owned(),
                         alias: item["alias"].as_str().filter(|alias| !alias.is_empty()).map(str::to_owned),
@@ -540,11 +561,23 @@ pub async fn accounts_list(provider: String, refresh: bool) -> Result<Accounts, 
             if refresh {
                 if let Some(auth) = &manager {
                     // `list` refreshes the usage figures in the registry as a side effect.
-                    let _ = capture(auth, &["list"], Duration::from_secs(40)).await;
+                    if let Ok(out) = capture(auth, &["list"], Duration::from_secs(40)).await {
+                        if let Ok(mut known) = CODEX_EXPIRED.lock() {
+                            *known = expired_in_list(&out.stdout);
+                        }
+                    }
                 }
             }
             match read_codex_registry(&codex_home()) {
-                Ok((accounts, auto_switch)) => Ok(Accounts { manager: manager.is_some(), accounts, auto_switch, error: None }),
+                Ok((mut accounts, auto_switch)) => {
+                    let known = CODEX_EXPIRED.lock().map(|known| known.clone()).unwrap_or_default();
+                    for account in accounts.iter_mut().filter(|account| known.contains(&account.email)) {
+                        account.expired = true;
+                        account.usage.clear();
+                        account.status = Some("signed out (401)".to_string());
+                    }
+                    Ok(Accounts { manager: manager.is_some(), accounts, auto_switch, error: None })
+                }
                 Err(error) => Ok(Accounts {
                     manager: manager.is_some(),
                     accounts: Vec::new(),
@@ -913,6 +946,16 @@ mod tests {
     }
 
     #[test]
+    fn expired_rows_are_found_in_the_list_table() {
+        let table = "  ACCOUNT  PLAN  5H USAGE  WEEKLY USAGE
+----
+01 a@x.com   Free   401   401   74d ago
+02 b@x.com   Business   100% (03:03 on 24 Oct)  88% (00:12 on 30 Oct)  Now
+";
+        assert_eq!(expired_in_list(table), vec!["a@x.com".to_string()]);
+    }
+
+    #[test]
     fn cswap_json_gives_accounts() {
         let text = r#"{"schemaVersion":1,"activeAccountNumber":2,"accounts":[
           {"number":1,"email":"a@x.com","active":false,"usageStatus":"expired"},
@@ -920,6 +963,7 @@ mod tests {
            "usage":{"fiveHour":{"pct":25.0,"resetsAt":"2026-06-22T23:29:59Z"},"sevenDay":{"pct":16.0,"resetsAt":"2026-06-26T17:59:59Z"}}}]}"#;
         let accounts = parse_cswap(text).expect("parses");
         assert_eq!(accounts[0].status.as_deref(), Some("expired"));
+        assert!(accounts[0].expired && !accounts[1].expired);
         assert!(accounts[0].usage.is_empty());
         assert!(accounts[1].active);
         assert_eq!(accounts[1].usage[0].pct, 25.0);
