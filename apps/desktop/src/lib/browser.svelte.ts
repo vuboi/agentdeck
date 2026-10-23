@@ -30,6 +30,8 @@ export type PickedElement = {
   tag: string;
   text: string;
   html: string;
+  /** Its place among its neighbours, as text (see `around` in the injected script). */
+  around?: string;
   box: { x: number; y: number; w: number; h: number };
   style: Record<string, string>;
 };
@@ -53,7 +55,7 @@ export type AnnotationNote = {
   x: number;
   y: number;
   /** For a mark on an element: which one, with its markup and look. */
-  element?: { tag: string; text: string; selector: string; html: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string> };
+  element?: { tag: string; text: string; selector: string; html: string; around?: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string> };
 };
 
 export const browser = $state({
@@ -380,12 +382,14 @@ export const runTarget = (target: RunTarget) => call<string>('run_target', { com
 // ---- the servers running in the background ----
 export type ServerInfo = { key: number; command: string; cwd: string; url: string | null; pid: number; age: number; running: boolean };
 /** The dev servers AgentDeck started (from the Preview or by an agent), kept in step by `refreshServers`. */
-export const servers = $state<{ list: ServerInfo[] }>({ list: [] });
+/** `at` is when the list was read: a running server's age grows from there between two readings. */
+export const servers = $state<{ list: ServerInfo[]; at: number }>({ list: [], at: Date.now() });
 
 export async function refreshServers() {
   if (!inTauri()) return;
   try {
     servers.list = await call<ServerInfo[]>('servers_list');
+    servers.at = Date.now();
   } catch {
     // The list stays as it was.
   }

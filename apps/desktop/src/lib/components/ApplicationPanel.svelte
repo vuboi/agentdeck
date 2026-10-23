@@ -2,8 +2,10 @@
   import { ZIcon } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { browser } from '../browser.svelte';
-  import { cdp, pretty } from '../devtools-net.svelte';
+  import { cdp } from '../devtools-net.svelte';
+  import { getPref, setPref } from '../prefs';
   import { toast } from '../toast';
+  import DataView from './DataView.svelte';
   import DevEmpty from './DevEmpty.svelte';
 
   // What the page keeps: local and session storage, cookies, IndexedDB, Cache Storage. Each can be read, filtered
@@ -34,8 +36,83 @@
   let error = $state('');
   let databases = $state<Idb[]>([]);
   let caches = $state<CacheName[]>([]);
-  let armed = $state('');
   let more = $state(false);
+
+  // The table: every column but the last can be dragged wider or narrower (kept between runs); the divider shows on
+  // hover and while dragging. Cookies get a column for each of their attributes.
+  type Col = { id: string; label: string; w: number; get: (row: Row) => string };
+  const attrs = (row: Row): Record<string, unknown> => {
+    try {
+      return JSON.parse(row.extra ?? '{}') as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  };
+  const attr = (name: string) => (row: Row) => String(attrs(row)[name] ?? '');
+  const COOKIE_COLS: Col[] = [
+    { id: 'name', label: 'Name', w: 160, get: (row) => row.key },
+    { id: 'value', label: 'Value', w: 220, get: (row) => row.value },
+    { id: 'domain', label: 'Domain', w: 150, get: attr('domain') },
+    { id: 'path', label: 'Path', w: 80, get: attr('path') },
+    { id: 'expires', label: 'Expires', w: 190, get: attr('expires') },
+    { id: 'httpOnly', label: 'HttpOnly', w: 72, get: (row) => (attrs(row).httpOnly ? '✓' : '') },
+    { id: 'secure', label: 'Secure', w: 64, get: (row) => (attrs(row).secure ? '✓' : '') },
+    { id: 'sameSite', label: 'SameSite', w: 0, get: attr('sameSite') },
+  ];
+  const cols = $derived<Col[]>(
+    section.kind === 'cookies'
+      ? COOKIE_COLS
+      : [
+          { id: 'key', label: section.kind === 'cache' ? 'URL' : 'Key', w: 240, get: (row) => row.key },
+          { id: 'value', label: section.kind === 'cache' ? 'Response' : 'Value', w: 0, get: (row) => row.value },
+        ],
+  );
+  let widths = $state<Record<string, number>>({});
+  void getPref<Record<string, number>>('devtools.application.columns').then((saved) => {
+    if (saved) widths = { ...saved, ...widths };
+  });
+  const widthOf = (col: Col) => widths[`${section.kind === 'cookies' ? 'cookie' : 'kv'}.${col.id}`] ?? col.w;
+  const template = $derived(`${cols.map((col, index) => (index === cols.length - 1 ? 'minmax(120px,1fr)' : `${widthOf(col)}px`)).join(' ')} 24px`);
+  const minWidth = $derived(cols.reduce((sum, col, index) => sum + (index === cols.length - 1 ? 120 : widthOf(col)), 24));
+  let hot = $state<string | null>(null);
+  let dragging = $state(false);
+  const hotLeft = $derived.by(() => {
+    let left = 0;
+    for (const col of cols) {
+      left += widthOf(col);
+      if (col.id === hot) return left;
+    }
+    return null;
+  });
+  function startResize(event: PointerEvent, col: Col) {
+    event.preventDefault();
+    dragging = true;
+    hot = col.id;
+    const key = `${section.kind === 'cookies' ? 'cookie' : 'kv'}.${col.id}`;
+    const from = event.clientX;
+    const base = widthOf(col);
+    const move = (next: PointerEvent) => (widths[key] = Math.max(48, Math.min(base + next.clientX - from, 700)));
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      dragging = false;
+      hot = null;
+      setPref('devtools.application.columns', $state.snapshot(widths));
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+  }
+  const oneLine = (value: string) => value.replace(/\s+/g, ' ').trim();
+  const sizeOf = (value: string) => (value.length < 1024 ? `${value.length} chars` : `${(value.length / 1024).toFixed(1)} kB`);
+
+  async function copy(value: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success(`Copied ${what}`);
+    } catch {
+      toast.error('Could not copy');
+    }
+  }
 
   const same = (a: Section, b: Section) => JSON.stringify(a) === JSON.stringify(b);
   const storageId = () => ({ securityOrigin: origin, isLocalStorage: section.kind === 'local' });
@@ -44,6 +121,35 @@
     if (remote.value !== undefined) return typeof remote.value === 'string' ? remote.value : JSON.stringify(remote.value, null, 2);
     return remote.description ?? '';
   };
+
+  // IndexedDB gives back remote objects: a function run on each turns it into JSON text (maps, sets, dates, buffers and
+  // cycles included), so what is shown is the data and not the word "Object".
+  const TO_JSON = `function () {
+    const seen = new WeakSet();
+    return JSON.stringify(this, (key, value) => {
+      if (typeof value === 'bigint') return value.toString() + 'n';
+      if (value instanceof Map) return { '[Map]': [...value] };
+      if (value instanceof Set) return { '[Set]': [...value] };
+      if (value instanceof Date) return value.toISOString();
+      if (value instanceof ArrayBuffer) return 'ArrayBuffer(' + value.byteLength + ')';
+      if (ArrayBuffer.isView(value)) return value.constructor.name + '(' + value.length + ')';
+      if (value && typeof value === 'object') {
+        if (seen.has(value)) return '[Circular]';
+        seen.add(value);
+      }
+      return value;
+    });
+  }`;
+  async function plain(id: string, remote: { value?: unknown; description?: string; objectId?: string; type?: string } | undefined): Promise<string> {
+    if (!remote) return '';
+    if (remote.value !== undefined || !remote.objectId) return text(remote);
+    try {
+      const answer = await cdp<{ result?: { value?: unknown } }>(id, 'Runtime.callFunctionOn', { objectId: remote.objectId, functionDeclaration: TO_JSON, returnByValue: true });
+      return typeof answer.result?.value === 'string' ? answer.result.value : text(remote);
+    } catch {
+      return text(remote);
+    }
+  }
 
   async function lists() {
     if (!ready) {
@@ -94,14 +200,18 @@
           extra: JSON.stringify({ domain: cookie.domain, path: cookie.path, expires: cookie.expires > 0 ? new Date(cookie.expires * 1000).toISOString() : 'session', httpOnly: cookie.httpOnly, secure: cookie.secure, sameSite: cookie.sameSite ?? '' }),
         }));
       } else if (view.kind === 'idb') {
-        const answer = await cdp<{ objectStoreDataEntries: { key: { value?: unknown; description?: string }; value: { value?: unknown; description?: string } }[]; hasMore: boolean }>(id, 'IndexedDB.requestData', {
+        type Remote = { value?: unknown; description?: string; objectId?: string };
+        const answer = await cdp<{ objectStoreDataEntries: { key: Remote; value: Remote }[]; hasMore: boolean }>(id, 'IndexedDB.requestData', {
           securityOrigin: origin,
           databaseName: view.db,
           objectStoreName: view.store,
           skipCount: 0,
           pageSize: 100,
+          objectGroup: 'agentdeck-idb',
         });
-        rows = answer.objectStoreDataEntries.map((entry) => ({ key: text(entry.key), value: text(entry.value) }));
+        const next = await Promise.all(answer.objectStoreDataEntries.map(async (entry) => ({ key: await plain(id, entry.key), value: await plain(id, entry.value) })));
+        void cdp(id, 'Runtime.releaseObjectGroup', { objectGroup: 'agentdeck-idb' }).catch(() => {});
+        rows = next;
         more = answer.hasMore;
       } else {
         const answer = await cdp<{ cacheDataEntries: { requestURL: string; requestMethod: string; responseStatus: number; responseStatusText: string }[]; returnCount: number }>(id, 'CacheStorage.requestEntries', { cacheId: view.id, skipCount: 0, pageSize: 100 });
@@ -157,15 +267,9 @@
     }
   }
 
-  /** A button that asks twice: the first press arms it, the second does it. */
-  function confirmed(key: string, run: () => Promise<void>) {
-    if (armed !== key) {
-      armed = key;
-      setTimeout(() => armed === key && (armed = ''), 3000);
-      return;
-    }
-    armed = '';
-    void run().catch((failure) => toast.error(String(failure)));
+  /** Runs a clearing action at once (as a browser's own tools do), and says if it failed. */
+  function run(action: () => Promise<void>) {
+    void action().catch((failure) => toast.error(`Could not clear: ${String(failure)}`));
   }
 
   async function clearSection() {
@@ -229,8 +333,8 @@
       <div class="px-2 font-sans text-xs leading-5 text-muted-foreground">None</div>
     {/each}
     <div class="mt-auto grid gap-1 border-t border-border pt-1.5">
-      <button type="button" class="h-6 cursor-pointer rounded border border-input px-2 font-sans text-xs outline-none hover:border-primary/60 disabled:pointer-events-none disabled:opacity-40 {armed === 'cache' ? 'border-destructive text-destructive' : ''}" disabled={!ready} onclick={() => confirmed('cache', clearCache)}>{armed === 'cache' ? 'Press again to clear' : 'Clear browser cache'}</button>
-      <button type="button" class="h-6 cursor-pointer rounded border border-input px-2 font-sans text-xs outline-none hover:border-primary/60 disabled:pointer-events-none disabled:opacity-40 {armed === 'site' ? 'border-destructive text-destructive' : ''}" disabled={!ready} onclick={() => confirmed('site', clearSite)}>{armed === 'site' ? 'Press again to clear' : 'Clear site data'}</button>
+      <button type="button" class="h-6 cursor-pointer rounded border border-input px-2 font-sans text-xs outline-none hover:border-primary/60 disabled:pointer-events-none disabled:opacity-40 " disabled={!ready} onclick={() => run(clearCache)}>Clear browser cache</button>
+      <button type="button" class="h-6 cursor-pointer rounded border border-input px-2 font-sans text-xs outline-none hover:border-primary/60 disabled:pointer-events-none disabled:opacity-40 " disabled={!ready} onclick={() => run(clearSite)}>Clear site data</button>
     </div>
   </nav>
 
@@ -242,46 +346,82 @@
       <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40" aria-label="Refresh" title="Refresh" disabled={!ready} onclick={() => { void lists(); void load(); }}>
         <ZIcon zType={'lucideRefreshCw' as ZIconName} class="size-3 {loading ? 'animate-spin' : ''}" />
       </button>
-      <button type="button" class="h-5 cursor-pointer rounded px-1.5 font-sans text-xs outline-none hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40 {armed === 'section' ? 'bg-destructive/10 text-destructive' : 'text-muted-foreground hover:text-destructive'}" disabled={!ready || (rows.length === 0 && section.kind !== 'cache')} onclick={() => confirmed('section', clearSection)}>{armed === 'section' ? 'Press again' : section.kind === 'cache' ? 'Delete cache' : 'Clear all'}</button>
+      <button type="button" class="h-5 cursor-pointer rounded px-1.5 font-sans text-xs outline-none hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40 text-muted-foreground hover:text-destructive" disabled={!ready || (rows.length === 0 && section.kind !== 'cache')} onclick={() => run(clearSection)}>{section.kind === 'cache' ? 'Delete cache' : 'Clear all'}</button>
     </div>
     <div class="flex min-h-0 flex-1">
-      <div class="min-w-0 flex-1 overflow-auto font-mono" role="table" aria-label={title}>
+      <div class="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-auto font-mono" role="table" aria-label={title}>
         {#if error}
           {#if !ready}
             <DevEmpty icon="lucideGlobe" title="No page open" hint="Open a page in the Preview to see what it keeps." />
           {:else}
             <DevEmpty icon="lucideTriangleAlert" tone="error" title="Could not read this" hint={error} />
           {/if}
-        {:else}
-          <div class="sticky top-0 z-10 flex gap-2 border-b border-border bg-muted/60 px-2 py-0.5 text-muted-foreground backdrop-blur" role="row"><span class="w-40 shrink-0">{section.kind === 'cache' ? 'URL' : 'Key'}</span><span class="min-w-0 flex-1">{section.kind === 'cache' ? 'Response' : 'Value'}</span></div>
-          {#each visible as row, index (row.key + index)}
-            <div class="group flex gap-2 border-b border-border/50 px-2 py-0.5 hover:bg-muted/40 {chosen === row.key ? 'bg-primary/10' : ''}" role="row">
-              <button type="button" class="flex min-w-0 flex-1 cursor-pointer gap-2 text-left outline-none" onclick={() => (chosen = row.key)}>
-                <span class="w-40 shrink-0 truncate" title={row.key}>{row.key}</span>
-                <span class="min-w-0 flex-1 truncate text-muted-foreground" title={row.value}>{row.value}</span>
-              </button>
-              {#if section.kind !== 'idb'}
-                <button type="button" class="grid size-4 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground opacity-0 outline-none group-hover:opacity-100 hover:text-destructive" aria-label="Delete" onclick={() => void remove(row)}><ZIcon zType="lucideX" class="size-3" /></button>
-              {/if}
-            </div>
+        {:else if visible.length === 0}
+          {#if loading}
+            <DevEmpty icon="lucideLoaderCircle" title="Loading…" />
+          {:else if filter}
+            <DevEmpty icon="lucideSearchX" title="Nothing matches" hint="Try another filter." />
           {:else}
-            {#if loading}
-              <DevEmpty icon="lucideLoaderCircle" title="Loading…" />
-            {:else if filter}
-              <DevEmpty icon="lucideSearchX" title="Nothing matches" hint="Try another filter." />
-            {:else}
-              <DevEmpty icon={section.kind === 'cookies' ? 'lucideCookie' : 'lucideInbox'} title={`${title} is empty`} hint="This page keeps nothing here." />
+            <DevEmpty icon={section.kind === 'cookies' ? 'lucideCookie' : 'lucideInbox'} title={`${title} is empty`} hint="This page keeps nothing here." />
+          {/if}
+        {:else}
+          <div class="sticky top-0 z-20 grid h-5 shrink-0 border-b border-border bg-muted/80 text-muted-foreground backdrop-blur select-none" style:grid-template-columns={template} style:min-width="{minWidth}px" role="row">
+            {#each cols as col, index (col.id)}
+              <span class="relative h-5 truncate px-2 leading-5" role="columnheader">
+                {col.label}
+                {#if index < cols.length - 1}
+                  <span class="absolute top-0 -right-1.5 z-10 h-5 w-3 cursor-col-resize after:absolute after:top-1 after:left-1.25 after:h-3 after:w-px after:bg-border" role="separator" aria-orientation="vertical" aria-label="Resize {col.label}" onpointerenter={() => !dragging && (hot = col.id)} onpointerleave={() => !dragging && (hot = null)} onpointerdown={(event) => startResize(event, col)}></span>
+                {/if}
+              </span>
+            {/each}
+            <span></span>
+          </div>
+          <div class="relative" style:min-width="{minWidth}px">
+            {#if hotLeft !== null}
+              <div class="pointer-events-none absolute -top-5 bottom-0 z-10 w-px bg-primary shadow-[0_0_6px_var(--primary)]" style:left="{hotLeft}px"></div>
             {/if}
-          {/each}
+            {#each visible as row, index (row.key + index)}
+              <div
+                class="group grid h-6 cursor-pointer items-center border-b border-border/50 hover:bg-muted/40 {chosen === row.key ? 'bg-primary/10' : ''}"
+                style:grid-template-columns={template}
+                role="row"
+                tabindex="0"
+                onclick={() => (chosen = row.key)}
+                onkeydown={(event) => (event.key === 'Enter' || event.key === ' ') && (chosen = row.key)}
+              >
+                {#each cols as col, at (col.id)}
+                  {@const value = col.get(row)}
+                  <span class="truncate px-2 {at === 0 ? '' : 'text-muted-foreground'}" title={oneLine(value).slice(0, 400)}>{oneLine(value)}</span>
+                {/each}
+                {#if section.kind !== 'idb'}
+                  <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground opacity-0 outline-none group-hover:opacity-100 hover:text-destructive" aria-label="Delete" onclick={(event) => { event.stopPropagation(); void remove(row); }}><ZIcon zType="lucideX" zSize="12" /></button>
+                {:else}
+                  <span></span>
+                {/if}
+              </div>
+            {/each}
+          </div>
         {/if}
       </div>
       {#if current}
-        <div class="w-[45%] min-w-60 shrink-0 overflow-auto border-l border-border p-2 font-mono">
-          <div class="mb-1 break-all font-sans text-xs font-semibold">{current.key}</div>
-          {#if current.extra}
-            <pre class="m-0 mb-2 break-all whitespace-pre-wrap text-muted-foreground">{pretty(current.extra)}</pre>
-          {/if}
-          <pre class="m-0 break-all whitespace-pre-wrap text-foreground">{pretty(current.value)}</pre>
+        <div class="flex w-[45%] min-w-64 shrink-0 flex-col border-l border-border">
+          <div class="flex h-7 shrink-0 items-center gap-1 border-b border-border px-2">
+            <ZIcon zType={'lucideKey' as ZIconName} zSize="12" class="shrink-0 text-muted-foreground" />
+            <span class="min-w-0 flex-1 truncate font-mono" title={current.key}>{oneLine(current.key)}</span>
+            <span class="shrink-0 text-muted-foreground">{sizeOf(current.value)}</span>
+            <button type="button" class="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Copy the key" title="Copy key" onclick={() => void copy(current.key, 'the key')}>
+              <ZIcon zType={'lucideCopy' as ZIconName} zSize="12" />
+            </button>
+            <button type="button" class="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Close details" onclick={() => (chosen = null)}>
+              <ZIcon zType="lucideX" zSize="12" />
+            </button>
+          </div>
+          <div class="flex min-h-0 flex-1 flex-col gap-2 p-2 font-mono">
+            {#if current.extra}
+              <DataView text={current.extra} label="attributes" />
+            {/if}
+            <div class="min-h-0 flex-1"><DataView text={current.value} label="value" fill /></div>
+          </div>
         </div>
       {/if}
     </div>

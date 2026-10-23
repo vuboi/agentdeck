@@ -18,7 +18,7 @@
   let tab = $state<Tab>('console');
   let filter = $state('');
   let level = $state<'all' | 'error' | 'warn' | 'info'>('all');
-  let netType = $state('all');
+  let netType = $state('fetch');
   let typeOpen = $state(false);
   let typeButton: HTMLElement | null = $state(null);
   let levelOpen = $state(false);

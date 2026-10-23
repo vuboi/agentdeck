@@ -241,3 +241,58 @@ export function pretty(text: string): string {
     return text;
   }
 }
+
+// ---- copy a request as a command, as a browser's "Copy as…" does ----
+
+/** The request headers worth repeating: no HTTP/2 pseudo headers, and no length (the tool works it out). */
+const sendable = (request: NetRequest) => request.reqHeaders.filter((item) => !item.name.startsWith(':') && item.name.toLowerCase() !== 'content-length');
+
+const bash = (text: string) => `'${text.replace(/'/g, `'\''`)}'`;
+
+export function asCurl(request: NetRequest): string {
+  const parts = [`curl ${bash(request.url)}`];
+  if (request.method !== 'GET') parts.push(`-X ${request.method}`);
+  for (const item of sendable(request)) parts.push(`-H ${bash(`${item.name}: ${item.value}`)}`);
+  if (request.postData) parts.push(`--data-raw ${bash(request.postData)}`);
+  return parts.join(' \\n  ');
+}
+
+export function asCurlCmd(request: NetRequest): string {
+  const quote = (text: string) => `"${text.replace(/"/g, '\\"').replace(/%/g, '^%').replace(/\r?\n/g, '^\n\n')}"`;
+  const parts = [`curl ${quote(request.url)}`];
+  if (request.method !== 'GET') parts.push(`-X ${request.method}`);
+  for (const item of sendable(request)) parts.push(`-H ${quote(`${item.name}: ${item.value}`)}`);
+  if (request.postData) parts.push(`--data-raw ${quote(request.postData)}`);
+  return parts.join(' ^\n  ');
+}
+
+export function asPowerShell(request: NetRequest): string {
+  const quote = (text: string) => `'${text.replace(/'/g, "''")}'`;
+  const headers = sendable(request).filter((item) => item.name.toLowerCase() !== 'content-type');
+  const type = request.reqHeaders.find((item) => item.name.toLowerCase() === 'content-type')?.value;
+  const lines = [`Invoke-WebRequest -Uri ${quote(request.url)} -Method ${request.method}`];
+  if (headers.length > 0) lines.push(`-Headers @{ ${headers.map((item) => `${quote(item.name)} = ${quote(item.value)}`).join('; ')} }`);
+  if (type) lines.push(`-ContentType ${quote(type)}`);
+  if (request.postData) lines.push(`-Body ${quote(request.postData)}`);
+  return lines.join(' `\n  ');
+}
+
+export function asFetch(request: NetRequest): string {
+  const init: Record<string, unknown> = { method: request.method };
+  const headers = Object.fromEntries(sendable(request).map((item) => [item.name, item.value]));
+  if (Object.keys(headers).length > 0) init.headers = headers;
+  if (request.postData) init.body = request.postData;
+  return `fetch(${JSON.stringify(request.url)}, ${JSON.stringify(init, null, 2)});`;
+}
+
+/** The colour of a method: reads, writes, replacements, removals look different at a glance. */
+export function methodTone(method: string): string {
+  switch (method.toUpperCase()) {
+    case 'GET': return 'text-sky-500';
+    case 'POST': return 'text-emerald-500';
+    case 'PUT': return 'text-amber-500';
+    case 'PATCH': return 'text-violet-500';
+    case 'DELETE': return 'text-red-500';
+    default: return 'text-slate-400';
+  }
+}

@@ -72,6 +72,9 @@ importers:
       marked:
         specifier: 17.0.6
         version: 17.0.6
+      prettier:
+        specifier: 3.9.10
+        version: 3.9.10
       shiki:
         specifier: 4.5.0
         version: 4.5.0

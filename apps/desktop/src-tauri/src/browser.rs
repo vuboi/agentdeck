@@ -624,7 +624,9 @@ pub fn selftest(app: AppHandle, url: String) {
 #[tauri::command]
 pub async fn devtools_cdp(app: AppHandle, tab: String, method: String, params: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
     const ALLOWED: [&str; 5] = ["Network.", "DOMStorage.", "IndexedDB.", "Storage.", "CacheStorage."];
-    if !ALLOWED.iter().any(|prefix| method.starts_with(prefix)) {
+    // IndexedDB hands back remote objects; turning one into text is a call on it (and letting go of them after).
+    const EXACT: [&str; 2] = ["Runtime.callFunctionOn", "Runtime.releaseObjectGroup"];
+    if !ALLOWED.iter().any(|prefix| method.starts_with(prefix)) && !EXACT.contains(&method.as_str()) {
         return Err(format!("{method} is not available to the developer tools"));
     }
     let view = webview(&app, &tab)?;

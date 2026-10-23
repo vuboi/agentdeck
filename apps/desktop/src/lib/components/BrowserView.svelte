@@ -349,7 +349,7 @@
       if (!picked) return;
       const { element, url, title } = picked;
       const id = workspace.activeId;
-      draftElements[id] = [...(draftElements[id] ?? []), { id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), box: element.box, style: element.style, url, title }];
+      draftElements[id] = [...(draftElements[id] ?? []), { id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url, title }];
       toast.success('Element added to the message');
     } catch (error) {
       browser.error = String(error);
@@ -408,7 +408,7 @@
       if (marked.length) {
         draftElements[id] = [
           ...(draftElements[id] ?? []),
-          ...marked.map(({ element, note }) => ({ id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), box: element.box, style: element.style, url: tab.url, title: tab.title, note })),
+          ...marked.map(({ element, note }) => ({ id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url: tab.url, title: tab.title, note })),
         ];
       }
       draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'page-notes.png', mime: 'image/png', src: picture }];
@@ -449,6 +449,15 @@
   const processName = (item: { command: string; url: string | null }) => `${item.command.length > 34 ? `${item.command.slice(0, 34)}…` : item.command}${portOf(item) ? ` · :${portOf(item)}` : ''}`;
   let processButton = $state<HTMLElement | null>(null);
   let processOpen = $state(false);
+  // The age of a running server counts up every second while the list is open (the list itself is read every 3 s).
+  let clock = $state(Date.now());
+  $effect(() => {
+    if (!processOpen) return;
+    clock = Date.now();
+    const tick = setInterval(() => (clock = Date.now()), 1000);
+    return () => clearInterval(tick);
+  });
+  const ageOf = (item: { age: number; running: boolean }) => (item.running ? item.age + Math.max(0, Math.floor((clock - servers.at) / 1000)) : item.age);
 
   const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
@@ -604,7 +613,7 @@
                   <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 disabled:pointer-events-none disabled:opacity-50" disabled={!item.running || !item.url} onclick={() => { if (item.url) openInPreview(item.url, 'auto'); close(); }}>
                     <ZIcon zType={(item.running ? 'lucideExternalLink' : 'lucideCircleOff') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground" />
                     <span class="min-w-0 flex-1 truncate">{item.running ? '' : 'Exited · '}{processName(item)}</span>
-                    <span class="shrink-0 text-muted-foreground tabular-nums">{runningFor(item.age)}</span>
+                    <span class="shrink-0 text-muted-foreground tabular-nums">{runningFor(ageOf(item))}</span>
                   </button>
                   <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md bg-destructive/10 text-destructive outline-none hover:bg-destructive/20" aria-label={item.running ? 'Stop' : 'Remove from the list'} {@attach zTooltip({ content: item.running ? 'Stop' : 'Remove from the list', position: 'top' })} onclick={() => void stopServers(item.key)}>
                     {#if item.running}<svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg>{:else}<ZIcon zType={'lucideX' as ZIconName} zSize="12" />{/if}
