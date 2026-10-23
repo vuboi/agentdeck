@@ -81,6 +81,8 @@ fn builtin_tools() -> Vec<Value> {
         function("WebSearch", "Searches the web and returns the first results (title, address, snippet). Follow up with WebFetch to read a page.", json!({ "query": { "type": "string" } }), &["query"]),
         function("Glob", "Finds files by name pattern (for example src/**/*.svelte or *.json). Returns paths relative to the project folder.", json!({ "pattern": { "type": "string" }, "path": { "type": "string", "description": "folder to search (default: the project folder)" } }), &["pattern"]),
         function("Grep", "Searches file contents with a regular expression. Returns path:line: text.", json!({ "pattern": { "type": "string", "description": "regular expression" }, "path": { "type": "string", "description": "folder or file (default: the project folder)" }, "glob": { "type": "string", "description": "only files matching this name pattern, e.g. *.ts" }, "ignore_case": { "type": "boolean" } }), &["pattern"]),
+        function("Plan", "Records your plan before you change anything: the files you will change and the steps. Edit, Write, Move and Delete refuse to run until this was called, and Edit and Write only touch the files listed here. Call it again with the full list if you find another file must change.", json!({ "goal": { "type": "string", "description": "what the user wants, in one sentence" }, "files": { "type": "array", "items": { "type": "string" }, "description": "paths of the files you will change or create, found with code_search, Grep or Glob" }, "steps": { "type": "array", "items": { "type": "string" }, "description": "the edits, in order, each saying where" }, "checks": { "type": "string", "description": "how you will check the result (a build, lint or test command, or a look at the Preview)" } }), &["goal", "files", "steps"]),
+        function("PackageInfo", "The latest version of a package, with its description, home page and whether it is deprecated, from the package registry (npm, crates.io or PyPI). Use it before writing code against a library, and compare with the version the project has.", json!({ "name": { "type": "string" }, "ecosystem": { "type": "string", "description": "npm (default), crates or pypi" } }), &["name"]),
         function("WebFetch", "Downloads a web page or API address and returns its text (HTML is reduced to its text).", json!({ "url": { "type": "string" } }), &["url"]),
         function("Skill", "Loads the full instructions of one of the skills listed in the system message. Call it when the task matches a skill, then follow what it says.", json!({ "name": { "type": "string", "description": "the skill's name" } }), &["name"]),
     ]
@@ -450,6 +452,126 @@ fn write_file(args: &Value, cwd: Option<&Path>) -> Outcome {
     }
 }
 
+/// A key that names one file however it was written (relative, with `./`, back slashes, other case on Windows).
+fn path_key(cwd: Option<&Path>, path: &str) -> String {
+    let full = resolve(cwd, path);
+    let full = std::fs::canonicalize(&full).unwrap_or(full);
+    full.to_string_lossy().replace('\\', "/").trim_start_matches("//?/").to_lowercase()
+}
+
+/// Lines of `text` around `at` (0-based), numbered, for showing the model what is really there.
+fn numbered_around(text: &str, at: usize, before: usize, after: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let from = at.saturating_sub(before);
+    let to = (at + after + 1).min(lines.len());
+    (from..to).map(|index| format!("{:>6}\t{}", index + 1, lines[index])).collect::<Vec<_>>().join("\n")
+}
+
+/// Why an Edit did not find its text: the nearest place in the file, so the next try can copy it exactly.
+fn not_found(text: &str, old: &str, path: &str) -> String {
+    let wanted: Vec<&str> = old.lines().map(str::trim).filter(|line| line.len() > 3).collect();
+    let lines: Vec<&str> = text.lines().collect();
+    let hit = wanted.iter().find_map(|line| lines.iter().position(|candidate| candidate.trim() == *line)).or_else(|| wanted.iter().find_map(|line| lines.iter().position(|candidate| candidate.contains(*line))));
+    match hit {
+        Some(at) => format!("old_string was not found in {path}: it must match the file exactly, spaces, tabs and line breaks included. The closest place is at line {}:\n{}\nCopy the text from here (Read the lines if you need more) and try again.", at + 1, numbered_around(text, at, 2, 8)),
+        None => format!("old_string was not found in {path}, and none of its lines is in the file. Read the file (or code_outline it), then copy the exact text you want to replace."),
+    }
+}
+
+/// The Plan tool: what will change, and where. Returns the plan as the model should see it, and the files it names.
+fn plan_tool(args: &Value, cwd: Option<&Path>) -> (Outcome, Option<std::collections::HashSet<String>>) {
+    let list = |name: &str| args[name].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
+    let (files, steps) = (list("files"), list("steps"));
+    if files.is_empty() || steps.is_empty() {
+        return (failed("Give the files you will change (find them with code_search, Grep or Glob first) and the steps."), None);
+    }
+    let mut keys = std::collections::HashSet::new();
+    let mut out = format!("Plan recorded: {}\nFiles:", args["goal"].as_str().unwrap_or_default());
+    for file in &files {
+        keys.insert(path_key(cwd, file));
+        out.push_str(&format!("\n- {file} ({})", if resolve(cwd, file).exists() { "exists: Read it before you edit it" } else { "will be created" }));
+    }
+    out.push_str("\nSteps:");
+    for (index, step) in steps.iter().enumerate() {
+        out.push_str(&format!("\n{}. {step}", index + 1));
+    }
+    if let Some(checks) = args["checks"].as_str().filter(|text| !text.trim().is_empty()) {
+        out.push_str(&format!("\nCheck with: {checks}"));
+    }
+    out.push_str("\nDo step 1 now. After the last step, run the check and look at the result before you answer.");
+    (ok(out), Some(keys))
+}
+
+/// The latest version of a package, from its registry.
+async fn package_info(args: &Value) -> Outcome {
+    let Some(name) = args["name"].as_str().map(str::trim).filter(|name| !name.is_empty() && name.len() < 120 && !name.contains(char::is_whitespace)) else { return failed("name is required") };
+    let client = match reqwest::Client::builder().timeout(Duration::from_secs(20)).user_agent("AgentDeck").build() {
+        Ok(client) => client,
+        Err(error) => return failed(error.to_string()),
+    };
+    let get = |url: String| {
+        let client = client.clone();
+        async move { client.get(url).send().await.map_err(|error| error.to_string())?.error_for_status().map_err(|error| error.to_string())?.json::<Value>().await.map_err(|error| error.to_string()) }
+    };
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
+    match args["ecosystem"].as_str().unwrap_or("npm") {
+        "crates" | "cargo" | "rust" => match get(format!("https://crates.io/api/v1/crates/{name}")).await {
+            Ok(json) => {
+                let krate = &json["crate"];
+                ok(format!("{name} (crates.io)\nlatest stable: {}\nnewest: {}\n{}\ndocs: {}\nhome: {}", text(&krate["max_stable_version"]), text(&krate["newest_version"]), text(&krate["description"]), text(&krate["documentation"]), text(&krate["homepage"])))
+            }
+            Err(error) => failed(format!("no answer for {name}: {error}")),
+        },
+        "pypi" | "python" => match get(format!("https://pypi.org/pypi/{name}/json")).await {
+            Ok(json) => ok(format!("{name} (PyPI)\nlatest: {}\n{}\nhome: {}\nrequires python: {}", text(&json["info"]["version"]), text(&json["info"]["summary"]), text(&json["info"]["home_page"]), text(&json["info"]["requires_python"]))),
+            Err(error) => failed(format!("no answer for {name}: {error}")),
+        },
+        _ => match get(format!("https://registry.npmjs.org/{}/latest", name.replace('/', "%2F"))).await {
+            Ok(json) => {
+                let tags = get(format!("https://registry.npmjs.org/-/package/{}/dist-tags", name.replace('/', "%2F"))).await.map(|tags| tags.to_string()).unwrap_or_default();
+                let deprecated = json["deprecated"].as_str().map(|why| format!("\nDEPRECATED: {why}")).unwrap_or_default();
+                ok(format!("{name} (npm)\nlatest: {}\ntags: {tags}\n{}\nhome: {}{deprecated}", text(&json["version"]), text(&json["description"]), text(&json["homepage"])))
+            }
+            Err(error) => failed(format!("no answer for {name}: {error}")),
+        },
+    }
+}
+
+/// What the project says about itself, for the model: the versions of its main libraries (so it writes for those, not for
+/// the ones it remembers), its scripts, and its own rules file.
+fn project_brief(cwd: Option<&Path>) -> String {
+    let Some(dir) = cwd else { return String::new() };
+    let mut out = String::new();
+    if let Ok(text) = std::fs::read_to_string(dir.join("package.json")) {
+        if let Ok(json) = serde_json::from_str::<Value>(&text) {
+            const MAIN: [&str; 24] = ["@angular/core", "@angular/material", "svelte", "@sveltejs/kit", "react", "react-dom", "next", "vue", "nuxt", "solid-js", "tailwindcss", "vite", "typescript", "rxjs", "zod", "@tauri-apps/api", "@ngrx/store", "@tanstack/query-core", "pinia", "express", "nestjs", "@nestjs/core", "prisma", "drizzle-orm"];
+            let mut found = Vec::new();
+            for section in ["dependencies", "devDependencies"] {
+                for (name, version) in json[section].as_object().into_iter().flatten() {
+                    if MAIN.contains(&name.as_str()) || name.starts_with("@shival99/") {
+                        found.push(format!("{name}@{}", version.as_str().unwrap_or_default()));
+                    }
+                }
+            }
+            if !found.is_empty() {
+                out.push_str(&format!("\n\nThe project's own versions (write code for these, not for older ones you may remember): {}.", found.join(", ")));
+            }
+            let scripts: Vec<&str> = json["scripts"].as_object().into_iter().flat_map(|map| map.keys().map(String::as_str)).take(16).collect();
+            if !scripts.is_empty() {
+                out.push_str(&format!("\npackage.json scripts: {}.", scripts.join(", ")));
+            }
+        }
+    }
+    for file in ["AGENTS.md", "CLAUDE.md"] {
+        if let Ok(text) = std::fs::read_to_string(dir.join(file)) {
+            let rules: String = text.chars().take(4500).collect();
+            out.push_str(&format!("\n\nThe project's rules ({file}); follow them:\n{rules}"));
+            break;
+        }
+    }
+    out
+}
+
 fn edit_file(args: &Value, cwd: Option<&Path>) -> Outcome {
     let (Some(path), Some(old), Some(new)) = (args["file_path"].as_str(), args["old_string"].as_str(), args["new_string"].as_str()) else {
         return failed("file_path, old_string and new_string are required");
@@ -459,12 +581,22 @@ fn edit_file(args: &Value, cwd: Option<&Path>) -> Outcome {
         Ok(text) => text,
         Err(error) => return failed(format!("could not read {path}: {error}")),
     };
+    // A file with Windows line ends, and a model that wrote its text with plain ones: the same text.
+    let crlf = text.contains("\r\n");
+    let fit = |piece: &str| if crlf && !piece.contains("\r\n") { piece.replace('\n', "\r\n") } else { piece.to_owned() };
+    let (old, new) = (fit(old), fit(new));
+    let (old, new) = (old.as_str(), new.as_str());
     match text.matches(old).count() {
-        0 => failed("old_string was not found in the file"),
-        1 => match std::fs::write(&target, text.replacen(old, new, 1)) {
-            Ok(()) => ok(format!("Edited {path}")),
-            Err(error) => failed(format!("could not write {path}: {error}")),
-        },
+        0 => failed(not_found(&text, old, path)),
+        1 => {
+            let line = text[..text.find(old).unwrap_or(0)].matches('\n').count();
+            let updated = text.replacen(old, new, 1);
+            match std::fs::write(&target, &updated) {
+                // The result is shown back, so the model sees where its text landed and what is around it.
+                Ok(()) => ok(format!("Edited {path} at line {}. It now reads:\n{}", line + 1, numbered_around(&updated, line, 3, new.lines().count() + 2))),
+                Err(error) => failed(format!("could not write {path}: {error}")),
+            }
+        }
         count if args["replace_all"].as_bool() == Some(true) => match std::fs::write(&target, text.replace(old, new)) {
             Ok(()) => ok(format!("Edited {path}: {count} replacements")),
             Err(error) => failed(format!("could not write {path}: {error}")),
@@ -662,13 +794,23 @@ async fn model_call(client: &reqwest::Client, turn: &Turn, messages: &[Value], t
 fn system_prompt(cwd: Option<&Path>, skills: &[ProviderCommand]) -> String {
     let folder = cwd.map(|dir| format!(" The working folder is {}.", dir.display())).unwrap_or_default();
     let mut prompt = format!(
-        "You are a coding agent running inside AgentDeck, a desktop app.{folder} You work through tools, and you only know what they show you. \
-         Files: LS (list a folder), Glob (find by name), Grep (search contents), Read, Write, Edit, MkDir, Move (also renames), Copy, Delete. Shell: Bash (any command: git, build, tests, installs). Web: WebSearch, then WebFetch to read a page. \
-         Look before you change: find and read the files first, then make the change, then check it (run the build or the tests). Call tools for real: never describe a tool call in text or pretend it ran. \
+        "You are a coding agent running inside AgentDeck, a desktop app.{folder} You work through tools, and you only know what they show you: never invent a file, a function, an API or a result. \
+         Tools. Code index (fast, use it first to find things): code_search (a symbol by name), code_outline (the structure of a file), code_definition (a symbol with its source), code_references (where a name is used), code_imports and code_importers (what a file needs, and what breaks if you change it). \
+         Files: LS, Glob (by name), Grep (by content), Read, Write, Edit, MkDir, Move (also renames), Copy, Delete. Shell: Bash (git, build, tests, installs). Knowledge: WebSearch then WebFetch (official docs, release notes), PackageInfo (latest version, deprecated or not). Plan. Skill. \
+         Call tools for real: never describe a tool call in text or pretend it ran. \
+         HOW YOU WORK on any task that changes files, in this order, one phase at a time. \
+         1 LOCATE. Find where the change belongs before anything else: code_search or code_outline for a name, Grep for a text or a class from the page, code_importers before changing something other files use. Read the files you found, around the place that matters. If a search finds nothing, try other words (a parent's name, the visible text, a component's selector) before guessing. \
+         2 CHECK CURRENT PRACTICE. Your memory of libraries is old. Read the versions the project uses (given below, or package.json, Cargo.toml). For any library or framework API you are not certain exists in that version, WebSearch for it with the version (for example \"angular 20 signal inputs\") and WebFetch the official documentation, or PackageInfo for the latest version and whether it is deprecated. Prefer what the project's own code already does: look at a neighbouring file doing something similar and copy its pattern, imports and components. Do not use APIs the docs mark deprecated. \
+         3 PLAN. Call Plan with the goal, the exact files you will change (the ones you found, not guesses), the steps and how you will check. Edit and Write refuse to run without it, and only touch the files in it. \
+         4 EDIT. One small change at a time with Edit (Read the file first; old_string copied exactly from what Read showed). Put it exactly where the request says, written like the code around it. Never rewrite a whole file for a small change and never create something elsewhere because it is easier. \
+         5 VERIFY. Run the project's own check with Bash (build, lint, type check, tests: see its scripts), read the errors and fix them, check with code_references that nothing that used a changed name broke, and if the Preview is open look at the page. Only then answer, saying what changed and in which files, and what you checked. \
+         A question or an explanation needs no plan: answer from what the tools show. \
          Browser: the browser_* tools drive the Preview panel, the page the user is looking at. To run a dev server use browser_serve (a server started with Bash dies when the command ends), then browser_open if needed. \
          To act on a page, call browser_elements for the list of buttons, links and fields with their numbers, then browser_click_element with a number (or the visible text, or a CSS selector); use browser_fill to fill a field by selector. Do not guess coordinates. \
          A dialog, drawer or menu that is open blocks the page behind it: close it first (its close button, or browser_key Escape) before acting on anything else. \
-         After each action call browser_elements or browser_dom again to see the result, and check browser_console for errors. Answer in the user's language."
+         After each action call browser_elements or browser_dom again to see the result, and check browser_console for errors. \
+         When the message names or attaches a page element (a selector, its text, its markup, where it sits), the change belongs to the code that renders that element: search for the words it shows to find the template, and edit exactly there. Answer in the user's language.{}",
+        project_brief(cwd)
     );
     if !skills.is_empty() {
         prompt.push_str("\n\nSkills you can load with the Skill tool when the task matches (name: what it is for):");
@@ -746,6 +888,13 @@ pub async fn run_turn(app: &AppHandle, turn: Turn, history: Vec<ChatMessage>, mu
 
     let mut answer = String::new();
     let mut retries = 0;
+    // Guard rails that do not depend on how well the model follows the prompt: it must plan before it changes files, change
+    // only planned files, read a file before editing it, and check its work before it answers.
+    let mut planned: Option<std::collections::HashSet<String>> = None;
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut edited = false;
+    let mut checked = true;
+    let mut nudged = false;
     for _ in 0..MAX_STEPS {
         let step = match model_call(&client, &turn, &messages, &tools, &mut emit).await {
             Ok(step) => step,
@@ -760,6 +909,13 @@ pub async fn run_turn(app: &AppHandle, turn: Turn, history: Vec<ChatMessage>, mu
                 retries += 1;
                 messages.push(json!({ "role": "assistant", "content": step.text }));
                 messages.push(json!({ "role": "user", "content": "That tool call was written as text, so it did not run. Call the tool through the tool-calling interface." }));
+                continue;
+            }
+            if edited && !checked && !nudged && !step.text.trim().is_empty() {
+                // It changed files and is about to answer without having run anything since: ask once for the check.
+                nudged = true;
+                messages.push(json!({ "role": "assistant", "content": step.text }));
+                messages.push(json!({ "role": "user", "content": "You changed files but have not checked the result. Before you answer: run the project's build, lint, type check or tests with Bash (see its package.json scripts or Cargo.toml), or look at the Preview, fix what fails, then give your final answer." }));
                 continue;
             }
             if step.finish == "length" {
@@ -782,7 +938,7 @@ pub async fn run_turn(app: &AppHandle, turn: Turn, history: Vec<ChatMessage>, mu
         for (call, id) in calls.iter().zip(&ids) {
             let args: Value = serde_json::from_str(if call.arguments.is_empty() { "{}" } else { &call.arguments }).unwrap_or(Value::Null);
             let user_tool = external.iter().find(|(exposed, _, _)| *exposed == call.name);
-            let builtin = matches!(call.name.as_str(), "Bash" | "Read" | "Write" | "Edit" | "Glob" | "Grep" | "WebFetch" | "WebSearch" | "Skill" | "LS" | "MkDir" | "Move" | "Copy" | "Delete");
+            let builtin = matches!(call.name.as_str(), "Bash" | "Read" | "Write" | "Edit" | "Glob" | "Grep" | "WebFetch" | "WebSearch" | "Skill" | "LS" | "MkDir" | "Move" | "Copy" | "Delete" | "Plan" | "PackageInfo");
             let shown = if builtin || user_tool.is_some() { call.name.clone() } else { format!("{MCP_PREFIX}{}", call.name) };
             emit(AgentEvent::ToolCall { id: id.clone(), name: shown, input: summarize_tool_input(&call.name, &args), change: change_for(&call.name, &args, turn.cwd.as_deref()), background: false });
             let outcome = if !args.is_object() {
@@ -795,10 +951,44 @@ pub async fn run_turn(app: &AppHandle, turn: Turn, history: Vec<ChatMessage>, mu
                         failed("this needs the user's approval; it was not run")
                     }
                     Decision::Allow => match call.name.as_str() {
-                        "Bash" => run_bash(args["command"].as_str().unwrap_or_default(), turn.cwd.as_deref()).await,
-                        "Read" => read_file(&args, turn.cwd.as_deref()),
-                        "Write" => write_file(&args, turn.cwd.as_deref()),
-                        "Edit" => edit_file(&args, turn.cwd.as_deref()),
+                        "Bash" => {
+                            checked = true;
+                            run_bash(args["command"].as_str().unwrap_or_default(), turn.cwd.as_deref()).await
+                        }
+                        "Read" => {
+                            let outcome = read_file(&args, turn.cwd.as_deref());
+                            if !outcome.is_error {
+                                seen.insert(path_key(turn.cwd.as_deref(), args["file_path"].as_str().unwrap_or_default()));
+                            }
+                            outcome
+                        }
+                        "Plan" => {
+                            let (outcome, files) = plan_tool(&args, turn.cwd.as_deref());
+                            if let Some(files) = files {
+                                planned = Some(files);
+                            }
+                            outcome
+                        }
+                        "PackageInfo" => package_info(&args).await,
+                        "Write" | "Edit" => {
+                            let path = args["file_path"].as_str().unwrap_or_default();
+                            let key = path_key(turn.cwd.as_deref(), path);
+                            let exists = resolve(turn.cwd.as_deref(), path).exists();
+                            let outcome = match &planned {
+                                None => failed("Call Plan first: say which files you will change (found with code_search, Grep or Glob), the steps, and how you will check. Then do the edit."),
+                                Some(files) if !files.contains(&key) => failed(format!("{path} is not in your plan. Change a file that is, or call Plan again with the full list if this one really must change too.")),
+                                Some(_) if exists && !seen.contains(&key) => failed(format!("Read {path} before you change it, so what you replace is copied exactly from the file.")),
+                                Some(_) if call.name == "Write" => write_file(&args, turn.cwd.as_deref()),
+                                Some(_) => edit_file(&args, turn.cwd.as_deref()),
+                            };
+                            if !outcome.is_error {
+                                seen.insert(key);
+                                edited = true;
+                                checked = false;
+                            }
+                            outcome
+                        }
+                        "Delete" | "Move" if planned.is_none() => failed("Call Plan first: say which files you will change and how you will check, then do this."),
                         "Glob" | "Grep" => {
                             let (name, cwd, args) = (call.name.clone(), turn.cwd.clone(), args.clone());
                             tokio::task::spawn_blocking(move || if name == "Glob" { glob_files(&args, cwd.as_deref()) } else { grep_files(&args, cwd.as_deref()) })
@@ -827,7 +1017,12 @@ pub async fn run_turn(app: &AppHandle, turn: Turn, history: Vec<ChatMessage>, mu
                                 let reply = servers[*index].call(tool, &args).await;
                                 Outcome { text: tail(&reply.text, OUTPUT_MAX), is_error: reply.is_error, image: reply.image }
                             }
-                            None => tokio::time::timeout(TOOL_LIMIT, browser_call(app, &chat, name, &args)).await.unwrap_or_else(|_| failed("the browser did not answer in time. Try browser_open again, then browser_elements.")),
+                            None => {
+                                if name.starts_with("browser_") {
+                                    checked = true;
+                                }
+                                tokio::time::timeout(TOOL_LIMIT, browser_call(app, &chat, name, &args)).await.unwrap_or_else(|_| failed("the browser did not answer in time. Try browser_open again, then browser_elements."))
+                            }
                         },
                     },
                 }
@@ -849,6 +1044,29 @@ mod tests {
 
     fn turn(mode: Option<&str>, allowed: &[&str]) -> Turn {
         Turn { kind: "openai".into(), base_url: String::new(), api_key: None, model: String::new(), cwd: None, permission_mode: mode.map(str::to_owned), allowed: allowed.iter().map(|s| s.to_string()).collect(), chat: String::new(), effort: None }
+    }
+
+    #[test]
+    fn edit_matches_text_across_line_ends_and_says_where_a_miss_is_close() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-edit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let file = dir.join("a.ts");
+        std::fs::write(&file, "one\r\ntwo\r\nthree\r\n").expect("write");
+        let miss = edit_file(&json!({ "file_path": file.to_string_lossy(), "old_string": "   three  ", "new_string": "x" }), None);
+        assert!(miss.is_error && miss.text.contains("closest place"), "{}", miss.text);
+        let args = json!({ "file_path": file.to_string_lossy(), "old_string": "two\nthree", "new_string": "2\n3" });
+        let done = edit_file(&args, None);
+        assert!(!done.is_error, "{}", done.text);
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "one\r\n2\r\n3\r\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_plan_names_its_files() {
+        let (outcome, files) = plan_tool(&json!({ "goal": "g", "files": ["src/a.ts"], "steps": ["do it"] }), None);
+        assert!(!outcome.is_error && files.is_some_and(|set| set.len() == 1));
+        let (outcome, files) = plan_tool(&json!({ "goal": "g", "files": [], "steps": [] }), None);
+        assert!(outcome.is_error && files.is_none());
     }
 
     #[test]

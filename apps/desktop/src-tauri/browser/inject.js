@@ -141,6 +141,29 @@
     }
     return parts.join(' > ');
   };
+  // Where the element sits among its neighbours: what comes before and after it in its parent. A model that has to put
+  // something "next to" or "after" an element needs this; the element's own markup does not say it.
+  const around = (element) => {
+    const parent = element.parentElement;
+    if (!parent) return '';
+    const brief = (node) => {
+      const classes = [...node.classList].slice(0, 3).map((name) => '.' + name).join('');
+      const text = cut((node.innerText || node.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' '), 40);
+      return `<${node.tagName.toLowerCase()}${node.id ? '#' + node.id : ''}${classes}>${text ? ' ' + text : ''}`;
+    };
+    const siblings = [...parent.children];
+    const at = siblings.indexOf(element);
+    const from = Math.max(0, at - 3);
+    const lines = siblings.slice(from, at + 4).map((node, index) => (from + index === at ? '→ ' : '  ') + brief(node) + (from + index === at ? '   (the element)' : ''));
+    return [
+      `Inside ${brief(parent)} (selector ${selectorOf(parent)}), child ${at + 1} of ${siblings.length}:`,
+      from > 0 ? '  …' : '',
+      ...lines,
+      at + 4 < siblings.length ? '  …' : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  };
   const describe = (element) => {
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -150,6 +173,7 @@
       tag: element.tagName.toLowerCase(),
       text: cut((element.innerText || '').trim().replace(/\s+/g, ' '), 300),
       html: cut(element.outerHTML, 3000),
+      around: around(element),
       box: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
       style: pick(['color', 'background-color', 'font-family', 'font-size', 'font-weight', 'display', 'position', 'margin', 'padding', 'border']),
     };
