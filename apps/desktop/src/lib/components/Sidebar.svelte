@@ -12,6 +12,7 @@
   import Splitter from './Splitter.svelte';
   import { layout } from '../layout.svelte';
   import { getPref, setPref } from '../prefs';
+  import { checkForUpdate, installUpdate, startUpdateChecks, updater } from '../updater.svelte';
   import {
     addProject,
     buildTree,
@@ -56,6 +57,17 @@
   function toggleSection(key: string) {
     collapsed = collapsed.includes(key) ? collapsed.filter((item) => item !== key) : [...collapsed, key];
     setPref('sidebar.collapsed', collapsed);
+  }
+  // App updates: checked in the background; the button next to Settings shows a dot when one is waiting.
+  let updateOpen = $state(false);
+  $effect(() => startUpdateChecks());
+  async function onUpdateClick() {
+    if (updater.status === 'idle' || updater.status === 'error') {
+      const found = await checkForUpdate();
+      if (found) updateOpen = true;
+      else if (updater.status === 'error') toast.error(`Could not check for updates: ${updater.error}`);
+      else toast.success('AgentDeck is up to date');
+    } else updateOpen = true;
   }
   const toggleMore = (key: string) => (showAll = showAll.includes(key) ? showAll.filter((item) => item !== key) : [...showAll, key]);
   const sectionKey = (nodeId: string) => nodeId.replace(/^section:/, '');
@@ -660,7 +672,11 @@
   <div class="flex h-11 shrink-0 items-center gap-2 px-3 text-xs">
     <span class="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-[10px]">ZO</span>
     <span class="truncate">ZUI Organization</span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="relative ml-auto h-6 w-6" aria-label="Settings (Ctrl+,)" title="Settings (Ctrl+,)" onclick={() => openSettings()}>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="relative ml-auto h-6 w-6" aria-label={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} title={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} onclick={onUpdateClick}>
+      <ZIcon zType={(updater.status === 'checking' ? 'lucideLoader' : 'lucideDownload') as ZIconName} class="size-3.5" />
+      {#if updater.status === 'available' || updater.status === 'downloading'}<span class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"></span>{/if}
+    </ZButton>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="relative h-6 w-6" aria-label="Settings (Ctrl+,)" title="Settings (Ctrl+,)" onclick={() => openSettings()}>
       <ZIcon zType={'lucideSettings' as ZIconName} class="size-3.5" />
       {#if limitWarnings.length > 0}<span class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-destructive" aria-label="Near a usage limit"></span>{/if}
     </ZButton>
@@ -679,6 +695,21 @@
 </aside>
 
 <SearchPalette bind:open={searchOpen} />
+
+<ZModal bind:open={updateOpen} zTitle={updater.status === 'error' ? 'Update failed' : `AgentDeck ${updater.version} is available`} zWidth="460px" zBodyClass="min-h-0! py-3" zOkText={updater.status === 'downloading' ? 'Downloading…' : updater.status === 'error' ? 'Try again' : 'Download and restart'} zCancelText="Later" onOk={installUpdate}>
+  <div class="flex flex-col gap-3 text-xs">
+    {#if updater.status === 'error'}
+      <p class="text-destructive">{updater.error}</p>
+    {:else}
+      {#if updater.notes}<p class="max-h-40 overflow-auto whitespace-pre-wrap text-muted-foreground">{updater.notes}</p>{/if}
+      {#if updater.status === 'downloading'}
+        <div class="h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full bg-primary transition-[width]" style:width="{Math.max(updater.progress, 0.03) * 100}%"></div></div>
+      {:else}
+        <p class="text-muted-foreground">The update is downloaded and installed, then AgentDeck restarts.</p>
+      {/if}
+    {/if}
+  </div>
+</ZModal>
 
 <ZModal bind:open={trustOpen} zTitle="Trust this folder?" zWidth="460px" zBodyClass="min-h-0! py-3" zOkText="Trust folder" zCancelText="Cancel" onOk={trustAndAdd}>
   <div class="flex flex-col gap-3 text-xs">

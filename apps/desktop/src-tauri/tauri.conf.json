@@ -21,9 +21,18 @@
   },
   "bundle": {
     "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico", "icons/icon.png"],
     "windows": {
       "nsis": { "installerIcon": "icons/icon.ico" }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENBRTFGRDY5Qjk3RjhBQjYKUldTMmluKzVhZjNoeW1JWFp5alpnVXExVDkwRGlMMEc1djRUaFpyNGZBMGtFN00vTzUvOUZCYUYK",
+      "endpoints": ["https://github.com/vuboi/agentdeck/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
     }
   }
 }

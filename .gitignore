@@ -9,3 +9,4 @@
 .env.*
 !*.env.example
 /apps/desktop/src-tauri/gen/
+/.tauri/
