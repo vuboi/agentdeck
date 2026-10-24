@@ -70,8 +70,8 @@ export const browser = $state({
   error: '',
   /** Open the page at once when the browser view mounts (developer hook, links). */
   autostart: '' as string,
-  /** The project command being started from the Preview (cwd|command), '' when none: it outlives the panel. */
-  starting: '',
+  /** The project commands being started from the Preview (cwd|command), none when empty: they outlive the panel, and several can start at once. */
+  starting: [] as string[],
   /** Comments pinned to elements of the page, waiting to be sent to the chat. */
   comments: [] as PageComment[],
   devtools: false,

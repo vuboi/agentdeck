@@ -1,7 +1,7 @@
 <script lang="ts">
   import { fly } from 'svelte/transition';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
-  import { ZDropdownMenu, ZIcon, ZLoading, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZDrawer, ZDropdownMenu, ZIcon, ZLoading, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import { toast } from '../toast';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
@@ -107,8 +107,9 @@
   });
 
   async function runProject(target: RunTarget) {
-    if (starting) return;
-    browser.starting = `${target.cwd}|${target.command}`;
+    const id = `${target.cwd}|${target.command}`;
+    if (starting.includes(id)) return;
+    browser.starting = [...browser.starting, id];
     browser.error = '';
     const session = activeSession();
     // The Audit log gets the run: what was started, where, and the address it came up at (or why it did not).
@@ -122,7 +123,7 @@
       finish(false, String(error));
       browser.error = String(error);
     } finally {
-      browser.starting = '';
+      browser.starting = browser.starting.filter((item) => item !== id);
     }
   }
 
@@ -585,6 +586,14 @@
   const portOf = (item: { url: string | null }) => item.url?.match(/:(\d+)/)?.[1];
   const runningFor = (age: number) => (age < 60 ? `${age}s` : age < 3600 ? `${Math.floor(age / 60)}m` : `${Math.floor(age / 3600)}h ${Math.floor((age % 3600) / 60)}m`);
   const processName = (item: { command: string; url: string | null }) => `${item.command.length > 34 ? `${item.command.slice(0, 34)}…` : item.command}${portOf(item) ? ` · :${portOf(item)}` : ''}`;
+  /** What a background server is doing, for its row: not answering yet, up on an address, or gone. */
+  function serverState(item: { key: number; age: number; url: string | null; running: boolean }) {
+    const age = ageOf(item);
+    if (!item.running) return { label: 'Stopped: the command ended', tone: 'text-destructive', hint: 'This server has stopped. Remove it from the list, or run it again.' };
+    if (item.url) return { label: `Running · ${item.url.replace(/^https?:\/\//, '')}`, tone: 'text-emerald-500', hint: '' };
+    if (age < 90) return { label: `Starting · waiting for port ${item.key} to answer`, tone: 'text-amber-500', hint: `Still starting: waiting for port ${item.key} to answer.` };
+    return { label: `Not answering on port ${item.key}`, tone: 'text-destructive', hint: `Nothing answers on port ${item.key}. The command may have failed or uses another port: run it in a terminal to see its output.` };
+  }
   let processButton = $state<HTMLElement | null>(null);
   let processOpen = $state(false);
   // The age of a running server counts up every second while the list is open. The list is read every 3 s and its ages
@@ -611,6 +620,23 @@
   const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
 </script>
+
+{#snippet processTitle()}
+  <span class="flex w-full min-w-0 items-center gap-2">
+    <span class="truncate">Running in the background</span>
+    <span class="rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground tabular-nums">{servers.list.length}</span>
+    <span class="flex-1"></span>
+    <button type="button" class="grid size-7 cursor-pointer place-items-center rounded-md border border-border bg-muted/60 outline-none hover:bg-accent" aria-label="Close" onclick={() => (processOpen = false)}><ZIcon zType={'lucideX' as ZIconName} class="size-4" /></button>
+  </span>
+{/snippet}
+
+{#snippet processFooter()}
+  {#if servers.list.length > 1}
+    <button type="button" class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-destructive/10 px-2 py-2 text-xs text-destructive outline-none hover:bg-destructive/20" onclick={() => { void stopServers(null); processOpen = false; }}>
+      <svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg> Stop all
+    </button>
+  {/if}
+{/snippet}
 
 <svelte:window onkeydown={onWindowKey} />
 
@@ -843,19 +869,20 @@
           <ZIcon zType={'lucideServer' as ZIconName} zSize="14" />
           {#if alive.length > 0}<span class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center text-[9px] leading-3.5 text-primary-foreground">{alive.length}</span>{/if}
         </button>
-        <ZPopover anchor={processButton} bind:open={processOpen} zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth={300}>
-          {#snippet children({ close })}
-            <!-- The padding is inside the scroller, so its scrollbar sits on the popover's own edge. -->
-            <div class="grid max-h-60 min-h-40 grid-cols-[minmax(0,1fr)] content-start overflow-y-auto p-1">
+        <ZDrawer bind:open={processOpen} zPlacement="right" zWidth="380px" zClosable={false} zTitle={processTitle} footer={processFooter}>
+<div class="flex min-h-full flex-col">
               {#if servers.list.length === 0}
                 <div class="col-start-1 row-start-1 flex min-h-38 flex-col items-center justify-center gap-2 self-center text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="24" /> Nothing is running in the background</div>
               {/if}
               {#each servers.list as item, index (`${item.key}:${item.pid}`)}
                 <!-- One line each, cut short when long; a line between rows. -->
-                <div class="flex min-w-0 items-center gap-1 py-0.5 {index > 0 ? 'border-t border-border' : ''}">
-                  <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 disabled:pointer-events-none disabled:opacity-50" disabled={!item.running || !item.url} onclick={() => { if (item.url) openInPreview(item.url, 'auto'); close(); }}>
-                    <ZIcon zType={(item.running ? 'lucideExternalLink' : 'lucideCircleOff') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground" />
-                    <span class="min-w-0 flex-1 truncate">{item.running ? '' : 'Exited · '}{processName(item)}</span>
+                <div class="flex min-w-0 items-center gap-1 p-1.5 {index > 0 ? 'border-t border-border' : ''}">
+                  <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10" onclick={() => { if (item.url && item.running) { openInPreview(item.url, 'auto'); processOpen = false; } else toast.info(serverState(item).hint); }}>
+                    <ZIcon zType={(item.running ? (item.url ? 'lucideExternalLink' : 'lucideLoaderCircle') : 'lucideCircleOff') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground {item.running && !item.url ? 'animate-spin' : ''}" />
+                    <span class="flex min-w-0 flex-1 flex-col leading-tight">
+                      <span class="truncate">{processName(item)}</span>
+                      <span class="truncate text-[11px] {serverState(item).tone}">{serverState(item).label}</span>
+                    </span>
                     <span class="shrink-0 text-muted-foreground tabular-nums">{runningFor(ageOf(item))}</span>
                   </button>
                   <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md bg-destructive/10 text-destructive outline-none hover:bg-destructive/20" aria-label={item.running ? 'Stop' : 'Remove from the list'} {@attach zTooltip({ content: item.running ? 'Stop' : 'Remove from the list', position: 'top' })} onclick={() => void stopServers(item.key)}>
@@ -863,14 +890,8 @@
                   </button>
                 </div>
               {/each}
-              {#if servers.list.length > 1}
-                <button type="button" class="mt-1 flex cursor-pointer items-center gap-2 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive outline-none hover:bg-destructive/20" onclick={() => { void stopServers(null); close(); }}>
-                  <svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg> Stop all
-                </button>
-              {/if}
-            </div>
-          {/snippet}
-        </ZPopover>
+</div>
+        </ZDrawer>
 <div data-page-menu class="flex items-center [&_.z-icon]:size-3.5! [&_svg]:size-3.5! [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
                   <ZDropdownMenu zItems={menuItems} zIcon={'lucideSettings2' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
         </div>
@@ -922,11 +943,11 @@
                       type="button"
                       class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md outline-none hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
                       aria-label="Run {target.name}"
-                      disabled={starting !== ''}
-                      {@attach zTooltip({ content: starting === key ? 'Starting…' : 'Run and open in the Preview', position: 'top' })}
+                      disabled={starting.includes(key)}
+                      {@attach zTooltip({ content: starting.includes(key) ? 'Starting…' : 'Run and open in the Preview', position: 'top' })}
                       onclick={() => void runProject(target)}
                     >
-                      {#if starting === key}<ZLoading zLoading zSpinner="spinner" zSize="xs" zColor="primary" />{:else}<ZIcon zType={'lucidePlay' as ZIconName} class="size-4" />{/if}
+                      {#if starting.includes(key)}<ZLoading zLoading zSpinner="spinner" zSize="xs" zColor="primary" />{:else}<ZIcon zType={'lucidePlay' as ZIconName} class="size-4" />{/if}
                     </button>
                   </div>
                 {/each}
