@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DevEmpty from './DevEmpty.svelte';
   import { ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { slide } from 'svelte/transition';
@@ -333,7 +334,7 @@
   {/if}
   <div bind:this={scroller} bind:clientHeight={viewport} class="min-h-0 flex-1 overflow-y-auto" style="overflow-anchor: none" onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)}>
     {#if days.length === 0}
-      <div class="p-4 text-center text-xs text-muted-foreground">{failedOnly ? 'No failures in this range.' : 'Nothing in this range.'}</div>
+      <DevEmpty icon={failedOnly ? 'lucideCircleCheck' : 'lucideListChecks'} title={failedOnly ? 'No failures' : 'Nothing in this range'} hint={failedOnly ? 'No tool call failed in this range.' : 'Tool calls of the agents show up here as they run.'} />
     {:else}
       {#if pinned}{@render dayHeader(pinned, true)}{/if}
       <div style="padding-top: {win.padTop}px; padding-bottom: {win.padBottom}px">
