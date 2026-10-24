@@ -383,7 +383,18 @@
 {#if waiting.length > 0}
   <!-- Messages typed while the agent works sit on a tray behind the composer: they go out one by one when it is
        free, or now with Steer. The composer overlaps the tray's lower edge. -->
-  <div class="mx-3 -mb-4 overflow-hidden rounded-t-2xl border border-b-0 border-border bg-card pb-4 shadow-md" role="list" aria-label="Queued messages" {@attach zSortable({ onSort: moveQueued, handle: '[data-handle]' })}>
+  <div class="mx-3 -mb-4 overflow-hidden rounded-t-2xl border border-b-0 border-border bg-card pb-4 shadow-md">
+    {#if waiting.length > 1}
+      <!-- A long queue can go in one go. Outside the sortable list, so it is not one of its rows. -->
+      <div class="flex items-center justify-between border-b border-border px-4 py-1 text-[11px] text-muted-foreground">
+        <span>{waiting.length} queued</span>
+        <button type="button" class="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 hover:bg-destructive/10 hover:text-destructive" onclick={() => delete queued[sessionId]}>
+          <ZIcon zType={'lucideTrash2' as ZIconName} zSize="12" class="size-3" />
+          <span>Clear all</span>
+        </button>
+      </div>
+    {/if}
+    <div role="list" aria-label="Queued messages" {@attach zSortable({ onSort: moveQueued, handle: '[data-handle]' })}>
     {#each waiting as item, index (item)}
       <div class="flex items-center gap-2.5 bg-card px-4 py-1 text-xs {index > 0 ? 'border-t border-border' : ''}" role="listitem">
         <!-- The list icon turns into a drag handle while the pointer is on it. -->
@@ -406,6 +417,7 @@
         </span>
       </div>
     {/each}
+    </div>
   </div>
 {/if}
 <form
@@ -485,7 +497,7 @@
     rows="1"
     wrap="soft"
     aria-label="Message"
-    placeholder={running ? `Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt` : 'Do anything…'}
+    placeholder={running ? `Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt` : `Do anything… (while it works: Enter queues, ${mac ? '⌘' : 'Ctrl'}+Enter interrupts)`}
     class="max-h-45 min-h-6 w-full resize-none overflow-x-hidden break-words border-0 bg-transparent px-1 pt-0.5 pb-1.5 text-sm leading-normal outline-none placeholder:text-muted-foreground"
   ></textarea>
 
