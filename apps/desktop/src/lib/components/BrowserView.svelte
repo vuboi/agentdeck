@@ -584,15 +584,23 @@
   // What runs in the background (servers started from the Preview or by an agent): open it, or stop it.
   const alive = $derived(servers.list.filter((item) => item.running));
   const portOf = (item: { url: string | null }) => item.url?.match(/:(\d+)/)?.[1];
-  const runningFor = (age: number) => (age < 60 ? `${age}s` : age < 3600 ? `${Math.floor(age / 60)}m` : `${Math.floor(age / 3600)}h ${Math.floor((age % 3600) / 60)}m`);
+  const runningFor = (age: number) => (age < 60 ? `${age}s` : age < 3600 ? `${Math.floor(age / 60)}m ${age % 60}s` : `${Math.floor(age / 3600)}h ${Math.floor((age % 3600) / 60)}m ${age % 60}s`);
   const processName = (item: { command: string; url: string | null }) => `${item.command.length > 34 ? `${item.command.slice(0, 34)}…` : item.command}${portOf(item) ? ` · :${portOf(item)}` : ''}`;
   /** What a background server is doing, for its row: not answering yet, up on an address, or gone. */
   function serverState(item: { key: number; age: number; url: string | null; running: boolean }) {
     const age = ageOf(item);
+    if (!item.running && !item.url) return { label: `Stopped: no answer on port ${item.key}`, tone: 'text-destructive', hint: `It never answered on port ${item.key} and was stopped. The command may have failed or uses another port: run it in a terminal to see its output.` };
     if (!item.running) return { label: 'Stopped: the command ended', tone: 'text-destructive', hint: 'This server has stopped. Remove it from the list, or run it again.' };
     if (item.url) return { label: `Running · ${item.url.replace(/^https?:\/\//, '')}`, tone: 'text-emerald-500', hint: '' };
     if (age < 90) return { label: `Starting · waiting for port ${item.key} to answer`, tone: 'text-amber-500', hint: `Still starting: waiting for port ${item.key} to answer.` };
     return { label: `Not answering on port ${item.key}`, tone: 'text-destructive', hint: `Nothing answers on port ${item.key}. The command may have failed or uses another port: run it in a terminal to see its output.` };
+  }
+  /** The project a server runs in: the sidebar project that holds its folder, else the folder's own name. */
+  function projectNameOf(cwd: string) {
+    const flat = (path: string) => path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const here = flat(cwd);
+    const found = workspace.projects.find((project) => project.path && (here === flat(project.path) || here.startsWith(`${flat(project.path)}/`)));
+    return found?.name ?? (cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd);
   }
   let processButton = $state<HTMLElement | null>(null);
   let processOpen = $state(false);
@@ -869,21 +877,22 @@
           <ZIcon zType={'lucideServer' as ZIconName} zSize="14" />
           {#if alive.length > 0}<span class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center text-[9px] leading-3.5 text-primary-foreground">{alive.length}</span>{/if}
         </button>
-        <ZDrawer bind:open={processOpen} zPlacement="right" zWidth="380px" zClosable={false} zTitle={processTitle} footer={processFooter}>
-<div class="flex min-h-full flex-col">
+        <ZDrawer bind:open={processOpen} zPlacement="right" zWidth="380px" zFloating zClosable={false} zTitle={processTitle} footer={processFooter}>
+<div class="flex min-h-full flex-col gap-2">
               {#if servers.list.length === 0}
                 <div class="col-start-1 row-start-1 flex min-h-38 flex-col items-center justify-center gap-2 self-center text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="24" /> Nothing is running in the background</div>
               {/if}
               {#each servers.list as item, index (`${item.key}:${item.pid}`)}
                 <!-- One line each, cut short when long; a line between rows. -->
-                <div class="flex min-w-0 items-center gap-1 p-1.5 {index > 0 ? 'border-t border-border' : ''}">
-                  <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10" onclick={() => { if (item.url && item.running) { openInPreview(item.url, 'auto'); processOpen = false; } else toast.info(serverState(item).hint); }}>
+                <div class="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
+                  <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left text-xs outline-none" onclick={() => { if (item.url && item.running) { openInPreview(item.url, 'auto'); processOpen = false; } else toast.info(serverState(item).hint); }}>
                     <ZIcon zType={(item.running ? (item.url ? 'lucideExternalLink' : 'lucideLoaderCircle') : 'lucideCircleOff') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground {item.running && !item.url ? 'animate-spin' : ''}" />
                     <span class="flex min-w-0 flex-1 flex-col leading-tight">
-                      <span class="truncate">{processName(item)}</span>
-                      <span class="truncate text-[11px] {serverState(item).tone}">{serverState(item).label}</span>
+                      <span class="truncate text-[11px] text-muted-foreground" title={item.cwd}>{projectNameOf(item.cwd)}</span>
+                      <span class="mt-0.5 truncate">{processName(item)}</span>
+                      <span class="mt-1 truncate text-[11px] {serverState(item).tone}">{serverState(item).label}</span>
                     </span>
-                    <span class="shrink-0 text-muted-foreground tabular-nums">{runningFor(ageOf(item))}</span>
+                    <span class="shrink-0 whitespace-nowrap text-muted-foreground tabular-nums">{runningFor(ageOf(item))}</span>
                   </button>
                   <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md bg-destructive/10 text-destructive outline-none hover:bg-destructive/20" aria-label={item.running ? 'Stop' : 'Remove from the list'} {@attach zTooltip({ content: item.running ? 'Stop' : 'Remove from the list', position: 'top' })} onclick={() => void stopServers(item.key)}>
                     {#if item.running}<svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg>{:else}<ZIcon zType={'lucideX' as ZIconName} zSize="12" />{/if}

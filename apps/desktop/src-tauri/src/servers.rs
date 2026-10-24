@@ -187,9 +187,19 @@ pub struct ServerInfo {
     pub running: bool,
 }
 
+/// How long a server may stay without answering on its port before it is stopped.
+const NO_ANSWER_SECS: u64 = 300;
+
 #[tauri::command]
 pub fn servers_list() -> Vec<ServerInfo> {
     let Ok(mut running) = RUNNING.lock() else { return Vec::new() };
+    // A server that never answered on its port is stopped after a while: it is stuck, or it uses another port.
+    for server in running.iter_mut() {
+        let waited = server.started.elapsed().map_or(0, |age| age.as_secs());
+        if server.url.is_none() && waited > NO_ANSWER_SECS && matches!(server.child.try_wait(), Ok(None)) {
+            kill_tree(&mut server.child);
+        }
+    }
     running
         .iter_mut()
         .map(|server| ServerInfo {
