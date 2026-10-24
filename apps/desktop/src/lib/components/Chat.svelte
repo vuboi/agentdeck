@@ -117,12 +117,15 @@
   const INITIAL = 14;
   let windowSize = $state(INITIAL);
   const from = $derived(Math.max(0, chat.messages.length - windowSize));
+  // Older rows are mounted a few at a time and well before the top is reached: one big batch is one long frame, felt
+  // as a jolt while scrolling.
+  const STEP = 10;
   function revealOlder() {
-    if (from > 0) windowSize += PAGE;
+    if (from > 0) windowSize += STEP;
     // Everything loaded is mounted: read the next page from the chat's file.
     else if (chat.older > 0) {
       void loadOlder(activeSession()).then((added) => {
-        windowSize += added;
+        windowSize += Math.min(added, STEP);
         if (added > 0) toast.info(`Loaded ${added} earlier messages${chat.older > 0 ? '' : ' · start of the conversation'}`);
       });
     }
@@ -305,7 +308,7 @@
   function onViewportScroll() {
     if (!viewportEl) return;
     following = viewportEl.scrollHeight - viewportEl.scrollTop - viewportEl.clientHeight < 120;
-    if (viewportEl.scrollTop < 600) revealOlder();
+    if (viewportEl.scrollTop < 1500) revealOlder();
   }
   // Follows what is on screen, not what has arrived: the answer is revealed word by word, so the list grows a little
   // every frame. Each time its measured height changes the view is put at the bottom right away (same frame, no
