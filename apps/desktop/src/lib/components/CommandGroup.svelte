@@ -118,7 +118,7 @@
               <div class="min-h-0 overflow-hidden">
                 <div class="flex flex-col gap-2 px-3 pt-1 pb-3">
                   {#if item.change}
-                    <div class="max-h-60 overflow-auto rounded-md border border-border bg-background py-1 font-mono text-[11px] leading-relaxed">
+                    <div class="max-h-60 overflow-auto rounded-lg border border-border bg-background py-1 font-mono text-[11px] leading-relaxed">
                       <div class="px-3 pb-1 text-muted-foreground">{item.change.path}</div>
                       {#each diffLines(item) as row}
                         <div class="px-3 whitespace-pre-wrap break-all {row.sign === '+' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-destructive/10 text-destructive'}">{row.sign} {row.line}</div>

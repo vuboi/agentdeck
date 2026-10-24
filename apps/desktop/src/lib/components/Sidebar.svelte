@@ -576,7 +576,7 @@
   <!-- The buttons float over the tag (and the end of the name) instead of reserving their width on every row. -->
   <span class="relative flex shrink-0 items-center self-stretch">
     <!-- Same box as the row's hover pill (full height, its right edge and corners), so the fade blends into it. -->
-    <span class="invisible absolute top-0 -right-1 bottom-(--z-tree-row-gap) z-10 flex items-center gap-1 rounded-r-(--radius-lg) bg-[linear-gradient(to_right,transparent,var(--row-bg,var(--color-muted))_20px)] pr-1 pl-6 group-data-menu-row/tree-row:visible group-hover/tree-row:visible group-focus-within/tree-row:visible">
+    <span class="invisible absolute top-0 -right-1 bottom-(--z-tree-row-gap) z-10 flex items-center gap-1 rounded-r-(--radius-small) bg-[linear-gradient(to_right,transparent,var(--row-bg,var(--color-muted))_20px)] pr-1 pl-6 group-data-menu-row/tree-row:visible group-hover/tree-row:visible group-focus-within/tree-row:visible">
       <button type="button" class={ACTION} aria-label={isPinnedSession(session.id) ? 'Unpin' : 'Pin'} onclick={(event) => { event.stopPropagation(); togglePinSession(session.id); }}>
         <ZIcon zType={(isPinnedSession(session.id) ? 'lucidePinOff' : 'lucidePin') as ZIconName} zSize="14" class="size-3.5 rotate-45" />
       </button>
@@ -733,7 +733,7 @@
               {@const pinnedFolder = isPinnedProject(data.path ?? '')}
               <!-- Same floating, fading overlay as a chat row: pin, then a new session in it. -->
               <span class="relative flex shrink-0 items-center self-stretch">
-                <span class="invisible absolute top-0 -right-1 bottom-(--z-tree-row-gap) z-10 flex items-center gap-1 rounded-r-(--radius-lg) bg-[linear-gradient(to_right,transparent,var(--row-bg,var(--color-muted))_20px)] pr-1 pl-6 group-hover/tree-row:visible group-focus-within/tree-row:visible group-data-menu-row/tree-row:visible">
+                <span class="invisible absolute top-0 -right-1 bottom-(--z-tree-row-gap) z-10 flex items-center gap-1 rounded-r-(--radius-small) bg-[linear-gradient(to_right,transparent,var(--row-bg,var(--color-muted))_20px)] pr-1 pl-6 group-hover/tree-row:visible group-focus-within/tree-row:visible group-data-menu-row/tree-row:visible">
                   {#if data.path}
                     <button type="button" class={ACTION} aria-label={pinnedFolder ? 'Unpin' : 'Pin'} onclick={(event) => { event.stopPropagation(); togglePinProject(id); }}>
                       <ZIcon zType={(pinnedFolder ? 'lucidePinOff' : 'lucidePin') as ZIconName} zSize="14" class="size-3.5 rotate-45" />

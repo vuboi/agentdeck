@@ -4,9 +4,9 @@ const KEY = 'agentdeck.theme';
 export type ChatLayout = 'split' | 'single';
 type Saved = { primary: Primary; neutral: Neutral; mode: Mode; chatLayout: ChatLayout };
 const DEFAULTS: Saved = { primary: 'violet', neutral: 'zinc', mode: 'dark', chatLayout: 'split' };
-// Fixed corner radius (not user-configurable): z-ui buttons use rounded-md/sm, i.e. radius minus 2px / 4px,
-// so 0.375rem collapses them to near-square corners.
-const RADIUS = 0.625;
+// The corner radii live in app.css (--radius-small / --radius-large). `--radius` itself is what z-ui falls back to when
+// something reads it directly: the large size.
+const RADIUS = 0.375;
 
 function read(): Saved {
   try {

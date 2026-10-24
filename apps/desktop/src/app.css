@@ -5,6 +5,54 @@
 @import 'tailwindcss/utilities.css' layer(utilities);
 @import '@shival99/z-ui-svelte/styles.css';
 
+/* ---- Corner radius: two sizes, set here and nowhere else ----
+   Small is for what you press or point at (buttons, inputs, tabs, rows, chips, tooltips); large is for surfaces that
+   hold them (popovers, cards, panels, the message box, code blocks). Round things (dots, pills, avatars: rounded-full,
+   9999px, 50%) are not part of this and stay round. The Tailwind scale and z-ui's own scale both read these. */
+:root {
+  --radius-small: 4px;
+  --radius-large: 6px;
+  --radius-row: 3px;
+  --radius-xs: 2px;
+  --radius-sm: var(--radius-small);
+  --radius-md: var(--radius-small);
+  --radius-lg: var(--radius-large);
+  --radius-xl: var(--radius-large);
+  --radius-2xl: var(--radius-large);
+  --radius-3xl: var(--radius-large);
+}
+/* Rows of a tree are things you point at: a notch under small (z-ui draws them with the large radius), and a hair
+   more air between them. The hover highlight, the open row and the selected row all share the one radius (the Explorer
+   and the chat list are both trees). */
+.z-tree {
+  --z-tree-row-gap: 2.3px;
+}
+.z-tree-row,
+.z-tree-row::before,
+.z-tree [data-z-hover-glide-highlight] {
+  border-radius: var(--radius-row);
+}
+/* Surfaces that float (popover, dropdown, tooltip, dialog, drawer) are large: their items inside are small, and a
+   container needs more radius than what it holds or the corners look pinched. z-ui gives some of them the small step. */
+.z-popover-host,
+.z-tooltip-host,
+.z-dropdown-menu-content,
+.z-modal-content,
+.z-drawer-content {
+  border-radius: var(--radius-large);
+}
+/* z-ui declares its scale with `@theme inline`, which bakes the values into the utilities (rounded-xl and the like), so the
+   same scale is declared here too. The :root block above is for CSS that reads the variables at run time. */
+@theme inline {
+  --radius-xs: 2px;
+  --radius-sm: var(--radius-small);
+  --radius-md: var(--radius-small);
+  --radius-lg: var(--radius-large);
+  --radius-xl: var(--radius-large);
+  --radius-2xl: var(--radius-large);
+  --radius-3xl: var(--radius-large);
+}
+
 body {
   min-height: 100vh;
   margin: 0;
@@ -155,19 +203,19 @@ html[data-warming] [data-z-popover] {
 .md strong { font-weight: 600; }
 .md :not(pre) > code {
   padding: 0.1rem 0.35rem;
-  border-radius: 0.3rem;
+  border-radius: var(--radius-small);
   background: var(--muted);
   font-size: 0.8em;
 }
-.md-table { margin: 0 0 0.75rem; overflow-x: auto; border: 1px solid var(--border); border-radius: 0.6rem; background: var(--muted); }
+.md-table { margin: 0 0 0.75rem; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
 .md-table table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .md-table th, .md-table td { padding: 0.4rem 0.8rem; text-align: left; border: 0; }
 .md-table th { font-weight: 600; color: var(--muted-foreground); font-size: 0.75rem; border-bottom: 1px solid var(--border); }
 .md-table tr + tr td { border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent); }
-.md img { max-width: 100%; border-radius: 0.5rem; }
-.md-code { margin: 0 0 0.75rem; overflow: hidden; border: 1px solid var(--border); border-radius: 0.6rem; background: var(--muted); }
+.md img { max-width: 100%; border-radius: var(--radius-large); }
+.md-code { margin: 0 0 0.75rem; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
 .md-code-head { display: flex; align-items: center; justify-content: space-between; padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 0.6875rem; }
-.md-code-head button { cursor: pointer; padding: 0.1rem 0.4rem; border-radius: 0.3rem; font: inherit; }
+.md-code-head button { cursor: pointer; padding: 0.1rem 0.4rem; border-radius: var(--radius-small); font: inherit; }
 .md-code-actions { display: flex; align-items: center; gap: 0.1rem; }
 .md-code-head button:hover { background: var(--accent); color: var(--foreground); }
 .md-code-head button { position: relative; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; padding: 0; }

@@ -584,7 +584,7 @@
               role="radio"
               aria-checked={browser.device === item.value}
               aria-label={item.label}
-              class="grid h-6 w-7 cursor-pointer place-items-center rounded-[5px] outline-none {browser.device === item.value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+              class="grid h-6 w-7 cursor-pointer place-items-center rounded-sm outline-none {browser.device === item.value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
               {@attach zTooltip({ content: item.label, position: 'top' })}
               onclick={() => (browser.device = item.value)}
             >
@@ -597,7 +597,7 @@
               aria-label="Rotate"
               aria-pressed={browser.landscape}
               disabled={browser.device === 'desktop'}
-              class="grid h-6 w-7 cursor-pointer place-items-center rounded-[5px] outline-none disabled:pointer-events-none disabled:opacity-40 {browser.landscape && browser.device !== 'desktop' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+              class="grid h-6 w-7 cursor-pointer place-items-center rounded-sm outline-none disabled:pointer-events-none disabled:opacity-40 {browser.landscape && browser.device !== 'desktop' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
               {@attach zTooltip({ content: 'Rotate', position: 'top' })}
               onclick={() => (browser.landscape = !browser.landscape)}
             >
