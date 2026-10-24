@@ -136,9 +136,11 @@ export async function listenToPage() {
     } else if (payload.kind === 'nav' && tab) {
       tab.url = String(payload.url);
       tab.title = String(payload.title ?? '');
-      tab.favicon = String(payload.favicon ?? '');
+      void loadIcon(tab, String(payload.favicon ?? ''));
+      recordVisit(tab.url, tab.title);
     } else if (payload.kind === 'title' && tab) {
       tab.title = String(payload.title ?? '');
+      recordVisit(tab.url, tab.title);
     }
   });
   // The page started or finished loading: drives the spinner on the tab and the reload button.
@@ -183,7 +185,17 @@ function ask<T extends Report>(kind: string, arg: unknown = null, timeout = 1500
 // ---- tabs ----
 export type Rect = { x: number; y: number; w: number; h: number };
 
+/** The most tabs the browser keeps open: every tab is a live webview. */
+export const MAX_TABS = 8;
+export const tabsFull = () => browser.tabs.length >= MAX_TABS;
+
 export function newTab(url = '') {
+  // At the limit the front tab is used instead: a link or the agent still gets its page.
+  if (tabsFull()) {
+    const front = activeTab();
+    if (url) front.url = url;
+    return front;
+  }
   if (browser.annotating) void stopAnnotating();
   browser.error = '';
   const tab = blankTab(url);
@@ -214,6 +226,117 @@ export function selectTab(id: string) {
   if (browser.annotating && id !== browser.activeId) void stopAnnotating();
   browser.activeId = id;
 }
+
+// ---- the icon of a tab ----
+// The page reports the address of its icon; the app's content policy only allows images from itself, so the picture is
+// fetched by the app (browser_favicon) and kept by site, so a site's icon is asked for once.
+const icons = new Map<string, string>();
+const iconsAsked = new Map<string, Promise<string>>();
+const originOf = (url: string) => {
+  try {
+    return /^https?:$/.test(new URL(url).protocol) ? new URL(url).origin : '';
+  } catch {
+    return '';
+  }
+};
+
+async function loadIcon(tab: BrowserTab, href: string) {
+  const page = tab.url;
+  const origin = originOf(page);
+  if (!origin || !inTauri()) {
+    tab.favicon = '';
+    return;
+  }
+  const key = `${origin}|${href}`;
+  const known = icons.get(key);
+  if (known !== undefined) {
+    tab.favicon = known;
+    return;
+  }
+  let asked = iconsAsked.get(key);
+  if (!asked) {
+    asked = call<string>('browser_favicon', { page, icon: href || null })
+      .catch(() => '')
+      .finally(() => iconsAsked.delete(key));
+    iconsAsked.set(key, asked);
+  }
+  const data = await asked;
+  icons.set(key, data);
+  if (originOf(tab.url) === origin) tab.favicon = data;
+}
+
+// ---- what was visited: the address bar suggests from it ----
+export type Visit = { url: string; title: string; visits: number; last: number };
+const HISTORY_KEY = 'agentdeck.browser.history';
+const HISTORY_MAX = 400;
+function readHistory(): Visit[] {
+  try {
+    const list = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]') as Visit[];
+    return Array.isArray(list) ? list.filter((item) => item && typeof item.url === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+export const visited = $state<{ list: Visit[] }>({ list: readHistory() });
+
+/** One entry per address (the part after # does not make another); pages that are not web pages are left out. */
+export function recordVisit(url: string, title: string) {
+  if (!originOf(url) || url.includes('agentdeck-error')) return;
+  const clean = url.split('#')[0];
+  const found = visited.list.find((item) => item.url === clean);
+  const now = Date.now();
+  if (found) {
+    // The title arrives a moment after the address: only a new address counts as a visit.
+    if (now - found.last > 3000) found.visits += 1;
+    found.last = now;
+    if (title) found.title = title;
+  } else {
+    visited.list.push({ url: clean, title, visits: 1, last: now });
+    if (visited.list.length > HISTORY_MAX) {
+      visited.list.sort((a, b) => b.last - a.last);
+      visited.list.length = HISTORY_MAX;
+    }
+  }
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(visited.list));
+  } catch {
+    // Not kept: the list still works for this session.
+  }
+}
+
+/** History entries matching what was typed, the best first: how often and how recently they were visited decide. */
+export function matchHistory(query: string, limit = 5): Visit[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const now = Date.now();
+  return visited.list
+    .map((item) => {
+      const url = item.url.replace(/^https?:\/\/(www\.)?/, '').toLowerCase();
+      const title = item.title.toLowerCase();
+      if (!words.every((word) => url.includes(word) || title.includes(word))) return { item, score: -1 };
+      const days = (now - item.last) / 86400000;
+      const prefix = words.length === 1 && url.startsWith(words[0]) ? 2 : 1;
+      return { item, score: prefix * (1 + Math.log2(item.visits)) / (1 + days / 7) };
+    })
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((entry) => entry.item);
+}
+
+export function forgetVisit(url: string) {
+  const index = visited.list.findIndex((item) => item.url === url);
+  if (index === -1) return;
+  visited.list.splice(index, 1);
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(visited.list));
+  } catch {
+    // Not kept.
+  }
+}
+
+/** What Google suggests for a search being typed (empty when offline). */
+export const searchSuggestions = (query: string) => (inTauri() ? call<string[]>('browser_suggest', { query }).catch(() => [] as string[]) : Promise.resolve([] as string[]));
 
 let showing: Promise<void> | null = null;
 /** Shows the front tab's page in `rect`, creating it the first time (or after a device change). */

@@ -39,9 +39,21 @@ importers:
       '@agentdeck/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@aiden0z/pptx-renderer':
+        specifier: ^1.4.0
+        version: 1.4.0
+      '@codemirror/commands':
+        specifier: 6.11.1
+        version: 6.11.1
+      '@codemirror/state':
+        specifier: 6.7.6
+        version: 6.7.6
+      '@codemirror/view':
+        specifier: 6.43.15
+        version: 6.43.15
       '@shival99/z-ui-svelte':
         specifier: 0.1.10
-        version: 0.1.10(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(svelte@5.57.2)(tailwindcss@4.3.3)
+        version: 0.1.10(@aiden0z/pptx-renderer@1.4.0)(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(docx-preview@0.4.1)(svelte@5.57.2)(tailwindcss@4.3.3)
       '@tauri-apps/api':
         specifier: ^2.0.0
         version: 2.12.4
@@ -72,6 +84,9 @@ importers:
       boneyard-js:
         specifier: ^1.10.0
         version: 1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0))
+      docx-preview:
+        specifier: ^0.4.1
+        version: 0.4.1
       dompurify:
         specifier: 3.4.17
         version: 3.4.17
@@ -84,6 +99,9 @@ importers:
       shiki:
         specifier: 4.5.0
         version: 4.5.0
+      xlsx:
+        specifier: 0.18.5
+        version: 0.18.5
     devDependencies:
       '@ng-icons/lucide':
         specifier: ^36.1.0
@@ -106,6 +124,9 @@ importers:
       html-to-image:
         specifier: ^1.11.13
         version: 1.11.13
+      ng2-pdfjs-viewer:
+        specifier: ^26.5.0
+        version: 26.5.0(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))
       svelte:
         specifier: ^5.40.0
         version: 5.57.2
@@ -138,6 +159,14 @@ packages:
 
   '@acemir/cssom@0.9.32':
     resolution: {integrity: sha512-OijrAUu7rrJhSIoHNg6LMPS5e344nwUHA+1EFYYjrh64D+GmytUsfBQjci45TjT+rd5Spsp8B5xsZDT+TgyXXQ==}
+
+  '@aiden0z/pptx-renderer@1.4.0':
+    resolution: {integrity: sha512-GUQbdJCYjTfXkJWtSgo5pIYXZYQjOQLlnjfRYE5ycpWgPa8rIK711wQa0kAl71H++vYnFYUp9fjQkKB8K/6ShA==}
+    peerDependencies:
+      pdfjs-dist: '>=5 <7'
+    peerDependenciesMeta:
+      pdfjs-dist:
+        optional: true
 
   '@angular-devkit/core@22.2.3':
     resolution: {integrity: sha512-bi1oBjJeg1XCgRrBYSuJikaJV4sO/mcnyFE/0a1H646yHhQpVYoU/M2Vh69Qv8h+YoMfC7RuSxT4LZHaubhhLw==}
@@ -192,6 +221,21 @@ packages:
 
   '@chenglou/pretext@0.0.5':
     resolution: {integrity: sha512-A8GZN10REdFGsyuiUgLV8jjPDDFMg5GmgxGWV0I3igxBOnzj+jgz2VMmVD7g+SFyoctfeqHFxbNatKSzVRWtRg==}
+
+  '@codemirror/commands@6.11.1':
+    resolution: {integrity: sha512-O/4hG3SC1YwcmQ0d2UVNDs+AsaNWd1iHVxbTeEBuqH+6bExAiPK3iS/BvpY6rZGURALv4ZD3sIgcCmRvw3ehBg==}
+
+  '@codemirror/language@6.13.1':
+    resolution: {integrity: sha512-zfvU2r3TyylQLMj/te+5CnQ0rSqZi8B1oTCBbQkagcLW4Xc6imab6qN+pEJhsuNOLaJqiRyBXp9UhWA1DhVvDw==}
+
+  '@codemirror/state@6.7.6':
+    resolution: {integrity: sha512-kAz+AncRtKuIknedxT1bq4XwXv4UowhbkHU1myPrtVb/jZtImWuV5BXzv5vK6i3kYACsdiZiQKFQQ5Mq7elW8w==}
+
+  '@codemirror/streamparser@6.0.0':
+    resolution: {integrity: sha512-JTFPF6xrfjt0mnfGPgzcLiMwYmvIyNaoizp8BYzv8FE8KrT6GBGDZ190rtt+O7Wke3gG/MFHyiY9YGNeimof4w==}
+
+  '@codemirror/view@6.43.15':
+    resolution: {integrity: sha512-HHsfpqFeHyXLs983pSRe38Xajs0vFWZQ2BuX0m7Ki8w3jZ5iD8cuR3lBz2/5/X53Dhf32SBHKh6rtSTB6tKeGw==}
 
   '@csstools/color-helpers@6.1.2':
     resolution: {integrity: sha512-grhRy3OKmniaAEKXMjua5z/EODX0MSqBGjunw8+j/3HQjOnahs2AGhvEOIYVUWcU6ScApbhLhVrQTX8XqrMrow==}
@@ -432,6 +476,18 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@lezer/common@1.5.4':
+    resolution: {integrity: sha512-xt3Q4z64xM+xhg4M7NXqw1N//1O74bUFo5kz6fwMeC4qwxSuRdwkYSmjcqCEEKYkNw5e67f2hcNqBoNERAEU0w==}
+
+  '@lezer/highlight@1.2.5':
+    resolution: {integrity: sha512-O1GMVKgtf5YspFaRzpmqkVgMtIk2HG9uMAbH6wdAIdNh3TVzCsch/+cRi+6l2//UGDKe6NB9BW3cvuR5ezMQ0w==}
+
+  '@lezer/lr@1.4.11':
+    resolution: {integrity: sha512-UwgZcl1R66H2hDzBrA7kWyYmX6s8p5TQ+e/t7CuvgCtBEPxbEPaHYHu+pJBvTvDotEJpuQkJjbXuHiw5Cixxgw==}
+
+  '@marijn/find-cluster-break@1.0.4':
+    resolution: {integrity: sha512-Wy0V7+SGUjnF9/TkiM1hKVDPj7jKXduPNboMVtHTA8dySMURWqfg/JZ9E2Sq8JgSJmkl7k7Qe9FLeMSrSraWmQ==}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
@@ -1516,6 +1572,9 @@ packages:
     resolution: {integrity: sha512-NT7w2JVU7DFroFdYkeq8cywxrgjPHWkdX1wjpRQXPX5Asews3tA+Ght6lddQO5Mkumffp3X7GEqku3epj2toIw==}
     engines: {node: '>= 10'}
 
+  crelt@1.0.7:
+    resolution: {integrity: sha512-aK6BbWfhf4U/wCcLHKPJl/xa6VkVstRaPywWtMKGwuOLc/wZTyQYuoxgvZnNsBvv7Kg3YTBQYYBCggcviQczuA==}
+
   css-tree@3.2.1:
     resolution: {integrity: sha512-X7sjQzceUhu1u7Y/ylrRZFU2FS6LRiFVp6rKLPg23y3x3c3DOKAwuXGDp+PAGjh6CSnCjYeAul8pcT8bAl+lSA==}
     engines: {node: ^10 || ^12.20.0 || ^14.13.0 || >=15.0.0}
@@ -1626,6 +1685,9 @@ packages:
   dijkstrajs@1.0.3:
     resolution: {integrity: sha512-qiSlmBq9+BCdCA/L46dw8Uy93mloxsPSbwnm5yrKn2vMPiy8KyAskTF6zuV/j5BMsmOGZDPs7KjU+mjb670kfA==}
 
+  docx-preview@0.4.1:
+    resolution: {integrity: sha512-Dv4g+LeE0swHpPvNC0lAT0YsR5Zq5pAxw7d3vHQ8EChBLgIrqqe9VPL5nVt2HBJap8bEZbXUI0TJob7kBeNU9w==}
+
   dompurify@3.4.17:
     resolution: {integrity: sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==}
 
@@ -1635,6 +1697,9 @@ packages:
 
   duplexer2@0.1.4:
     resolution: {integrity: sha512-asLFVfWWtJ90ZyOUHMqk7/S2w2guQKxUI2itj3d92ADHhxUSbCMGi1f1cBcJ7xM1To+pE/Khbwo1yuNbMEPKeA==}
+
+  echarts@6.1.0:
+    resolution: {integrity: sha512-q0yaFPggC9FUdsWH4blavRWFmxdrIodbkoKNAjJudAI6CA9gNPxHtV2RcZNEepZVlk4yvBYkOkbk6HIVpIyHZA==}
 
   embla-carousel@8.6.0:
     resolution: {integrity: sha512-SjWyZBHJPbqxHOzckOfo8lHisEaJWmwd23XppYFYVh10bU66/Pn5tkVkbkCMZVdbUE5eTCI2nD8OyIP4Z+uwkA==}
@@ -2213,10 +2278,19 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
+  mtx-decompressor@1.8.0:
+    resolution: {integrity: sha512-suXE376dUmLX4PPxSmVmdWvu09oeesqmlE5NfKjb6XIUpDRjF2Mn47kM8nXWRkHb3l7ac0P+Crp0J0O984imRQ==}
+
   nanoid@3.3.20:
     resolution: {integrity: sha512-uKdg2G3GNCKQn9byYOpxbGqrT2fGO5KRt5J/8b3pok8rT6qxGWF6hxMyJiEYtAf+FVyYuD9hRaDqX5uPFYJ4ZQ==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
+
+  ng2-pdfjs-viewer@26.5.0:
+    resolution: {integrity: sha512-LFMdpHM+Lg4TW+vJj53mKglwSPXtnqW6wz5Ho3mCUYYzIK1lAVhBIBtZ/wb0woLph4dbBrWPR0MEL5ycFDUC5g==}
+    peerDependencies:
+      '@angular/common': '>=10.0.0'
+      '@angular/core': '>=10.0.0'
 
   normalize-path@3.0.0:
     resolution: {integrity: sha512-6eZs5Ls3WtCisHWp9S2GUy8dqkpGi4BVSz3GaqiE6ezub0512ESztXUwUB6C6IKbQkY2Pnb/mD4WYojCRwcwLA==}
@@ -2591,6 +2665,9 @@ packages:
     resolution: {integrity: sha512-yDPMNjp4WyfYBkHnjIRLfca1i6KMyGCtsVgoKe/z1+6vukgaENdgGBZt+ZmKPc4gavvEZ5OgHfHdrazhgNyG7w==}
     engines: {node: '>=12'}
 
+  style-mod@4.1.4:
+    resolution: {integrity: sha512-XXWIQt633/EpAFx8aZDOTjBzrCaGmhvEQlQo6MVPfa2OzO2cWo+4hV9h+6UkHYlXGfy+ODXKUdP7Pthmcu5ATw==}
+
   svelte-check@4.7.7:
     resolution: {integrity: sha512-Ge2IMdeTpbJuzNFGRiiMg0RWgbScysKQu7xwcyFJ22+DU9F5nPX51+Q3gHmGqRxYQMx2knreVWt5oCtfe0vf2g==}
     engines: {node: '>= 18.0.0'}
@@ -2665,6 +2742,9 @@ packages:
 
   trim-lines@3.0.1:
     resolution: {integrity: sha512-kRj8B+YHZCc9kQYdWfJB2/oUl9rA99qbowYYBtr4ui4mZyAQ2JpvVBd/6U2YloATfqBhBTSMhTpgBHtU0Mf3Rg==}
+
+  tslib@2.3.0:
+    resolution: {integrity: sha512-N82ooyxVNm6h1riLCoyS9e3fuJ3AMG2zIZs2Gd1ATcSFjSA23Q0fzjjZeh0jbJvWVDZ0cJT8yaNNaaXHzueNjg==}
 
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
@@ -2874,12 +2954,21 @@ packages:
     resolution: {integrity: sha512-9qv4rlDiopXg4E69k+vMHjNN63YFMe9sZMrdlvKnCjlCRWeCBswPPMPUfx+ipsAWq1LXHe70RcbaHdJJpS6hyQ==}
     engines: {node: '>= 10'}
 
+  zrender@6.1.0:
+    resolution: {integrity: sha512-oEGMDB6pOP2S6OwRR4PdVv610zrjnA3Bh+JnSG12fYJlBKjtNAoEb5fSUoCOOINlH96I2fU38/A2UpRKs67xYQ==}
+
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
 
   '@acemir/cssom@0.9.32': {}
+
+  '@aiden0z/pptx-renderer@1.4.0':
+    dependencies:
+      echarts: 6.1.0
+      jszip: 3.10.2
+      mtx-decompressor: 1.8.0
 
   '@angular-devkit/core@22.2.3':
     dependencies:
@@ -2937,6 +3026,36 @@ snapshots:
 
   '@chenglou/pretext@0.0.5':
     optional: true
+
+  '@codemirror/commands@6.11.1':
+    dependencies:
+      '@codemirror/language': 6.13.1
+      '@codemirror/state': 6.7.6
+      '@codemirror/view': 6.43.15
+      '@lezer/common': 1.5.4
+
+  '@codemirror/language@6.13.1':
+    dependencies:
+      '@codemirror/state': 6.7.6
+      '@codemirror/streamparser': 6.0.0
+      '@codemirror/view': 6.43.15
+      '@lezer/common': 1.5.4
+      '@lezer/highlight': 1.2.5
+      '@lezer/lr': 1.4.11
+      style-mod: 4.1.4
+
+  '@codemirror/state@6.7.6':
+    dependencies:
+      '@marijn/find-cluster-break': 1.0.4
+
+  '@codemirror/streamparser@6.0.0': {}
+
+  '@codemirror/view@6.43.15':
+    dependencies:
+      '@codemirror/state': 6.7.6
+      crelt: 1.0.7
+      style-mod: 4.1.4
+      w3c-keyname: 2.2.8
 
   '@csstools/color-helpers@6.1.2': {}
 
@@ -3097,6 +3216,18 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  '@lezer/common@1.5.4': {}
+
+  '@lezer/highlight@1.2.5':
+    dependencies:
+      '@lezer/common': 1.5.4
+
+  '@lezer/lr@1.4.11':
+    dependencies:
+      '@lezer/common': 1.5.4
+
+  '@marijn/find-cluster-break@1.0.4': {}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
@@ -3301,7 +3432,7 @@ snapshots:
 
   '@shikijs/vscode-textmate@10.1.0': {}
 
-  '@shival99/z-ui-svelte@0.1.10(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(svelte@5.57.2)(tailwindcss@4.3.3)':
+  '@shival99/z-ui-svelte@0.1.10(@aiden0z/pptx-renderer@1.4.0)(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(docx-preview@0.4.1)(svelte@5.57.2)(tailwindcss@4.3.3)':
     dependencies:
       '@dayflow/blossom-color-picker-svelte': 1.3.0(svelte@5.57.2)
       '@floating-ui/dom': 1.8.0
@@ -3341,7 +3472,9 @@ snapshots:
       tiptap-extension-resize-image: 1.4.7(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/extension-image@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1)))(@tiptap/pm@3.30.1)
       xlsx: 0.18.5
     optionalDependencies:
+      '@aiden0z/pptx-renderer': 1.4.0
       boneyard-js: 1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0))
+      docx-preview: 0.4.1
     transitivePeerDependencies:
       - '@noble/hashes'
       - '@tiptap/extensions'
@@ -4036,6 +4169,8 @@ snapshots:
       crc-32: 1.2.2
       readable-stream: 3.6.2
 
+  crelt@1.0.7: {}
+
   css-tree@3.2.1:
     dependencies:
       mdn-data: 2.27.1
@@ -4145,6 +4280,10 @@ snapshots:
 
   dijkstrajs@1.0.3: {}
 
+  docx-preview@0.4.1:
+    dependencies:
+      jszip: 3.10.2
+
   dompurify@3.4.17:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
@@ -4158,6 +4297,11 @@ snapshots:
   duplexer2@0.1.4:
     dependencies:
       readable-stream: 2.3.8
+
+  echarts@6.1.0:
+    dependencies:
+      tslib: 2.3.0
+      zrender: 6.1.0
 
   embla-carousel@8.6.0: {}
 
@@ -4824,7 +4968,15 @@ snapshots:
 
   ms@2.1.3: {}
 
+  mtx-decompressor@1.8.0: {}
+
   nanoid@3.3.20: {}
+
+  ng2-pdfjs-viewer@26.5.0(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2)):
+    dependencies:
+      '@angular/common': 22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2)
+      '@angular/core': 22.2.3(rxjs@7.8.2)
+      tslib: 2.8.1
 
   normalize-path@3.0.0: {}
 
@@ -5329,6 +5481,8 @@ snapshots:
     dependencies:
       ansi-regex: 6.4.0
 
+  style-mod@4.1.4: {}
+
   svelte-check@4.7.7(picomatch@4.0.7)(svelte@5.57.2)(typescript@5.9.3):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
@@ -5421,6 +5575,8 @@ snapshots:
       which-typed-array: 1.1.24
 
   trim-lines@3.0.1: {}
+
+  tslib@2.3.0: {}
 
   tslib@2.8.1: {}
 
@@ -5664,5 +5820,9 @@ snapshots:
       archiver-utils: 3.0.4
       compress-commons: 4.1.2
       readable-stream: 3.6.2
+
+  zrender@6.1.0:
+    dependencies:
+      tslib: 2.3.0
 
   zwitch@2.0.4: {}

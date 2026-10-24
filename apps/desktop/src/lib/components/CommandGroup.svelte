@@ -5,6 +5,7 @@
   import { ticker } from '../clock.svelte';
   import { argOf, describeStep, elapsed, liveState, summarize, toolOf, totalChange, type CommandBlock, type Counts, type ThinkingBlock } from '../blocks';
   import { openImages } from '../preview.svelte';
+  import { imagePathsIn, loadImagePath } from '../attachments';
 
   // A screenshot step: click its picture to see it large.
   const showShot = (event: Event, src: string) => {
@@ -17,6 +18,25 @@
   // for the list of steps, open a step for its command, output or diff.
   let { items, thoughts = [], live = false, startedAt }: { items: CommandBlock[]; thoughts?: ThinkingBlock[]; live?: boolean; startedAt?: number } = $props();
 
+  // A tool that saved its picture and returned only the file path: the picture is read from disk once the step is done.
+  let fromPaths = $state<Record<string, string>>({});
+  const pathsOf = (item: CommandBlock) => (item.image || item.status === 'running' || toolOf(item.command) === 'Bash' && /(rm|del|Remove-Item)/.test(item.command) ? [] : imagePathsIn(item.output ?? ''));
+  $effect(() => {
+    for (const path of items.flatMap(pathsOf)) {
+      if (path in fromPaths) continue;
+      fromPaths[path] = '';
+      void loadImagePath(path).then((src) => {
+        if (src) fromPaths[path] = src;
+      });
+    }
+  });
+  const shots = $derived(
+    items.flatMap((item, index) =>
+      item.image
+        ? [{ src: item.image, name: `screenshot-${index + 1}.png` }]
+        : pathsOf(item).flatMap((path) => (fromPaths[path] ? [{ src: fromPaths[path], name: path.split(/[\/]/).pop() ?? 'image.png' }] : [])),
+    ),
+  );
   let open = $state(false);
   let thinkingOpen = $state(false);
   // Reasoning between the steps, in the order it came, as one text.
@@ -143,4 +163,14 @@
       </div>
     </div>
   </div>
+  {#if shots.length > 0}
+    <!-- Pictures the tools returned (screenshots), shown in the chat too, not only inside the opened steps. -->
+    <div class="mt-1.5 flex flex-wrap gap-2" aria-label="Images from the tools">
+      {#each shots as shot, position (position)}
+        <button type="button" class="block cursor-zoom-in overflow-hidden rounded-lg border border-border outline-none transition hover:ring-2 hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-ring" aria-label="Open image {position + 1} of {shots.length}" onclick={() => openImages(shots, position)}>
+          <img src={shot.src} alt={shot.name} class="block max-h-36 max-w-60 object-contain" />
+        </button>
+      {/each}
+    </div>
+  {/if}
 </div>

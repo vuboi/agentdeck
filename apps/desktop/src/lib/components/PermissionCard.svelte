@@ -1,13 +1,15 @@
 <script lang="ts">
   import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
+  import { AGENTS, type Agent } from '../sessions.svelte';
   import type { Block } from '../mock';
 
   // The agent wants to run something it was not allowed to: say what, and let the user decide.
-  let { block, onanswer }: { block: Extract<Block, { kind: 'permission' }>; onanswer?: (answer: 'once' | 'always' | 'deny') => void } = $props();
+  let { block, onanswer, agent }: { block: Extract<Block, { kind: 'permission' }>; onanswer?: (answer: 'once' | 'always' | 'deny') => void; /** The agent that asks (its own name is shown). */ agent?: Agent } = $props();
+  const who = $derived(AGENTS.find((item) => item.value === agent)?.label ?? 'The agent');
 
   const verb = (tool: string) =>
     /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(tool) ? 'edit a file' : tool === 'Bash' ? 'run a command' : `use ${tool}`;
-  const wants = $derived(block.requests.length === 1 ? `Claude wants to ${verb(block.requests[0].tool)}` : `Claude wants to do ${block.requests.length} things`);
+  const wants = $derived(block.requests.length === 1 ? `${who} wants to ${verb(block.requests[0].tool)}` : `${who} wants to do ${block.requests.length} things`);
 </script>
 
 <div class="block-in overflow-hidden rounded-xl border {block.state === 'pending' ? 'border-warning/50 bg-warning/5' : 'border-border bg-muted/20'} text-xs" role="group" aria-label="Permission request">

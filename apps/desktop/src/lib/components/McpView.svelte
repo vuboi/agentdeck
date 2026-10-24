@@ -111,23 +111,23 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="MCP">
-  <div class="flex h-8 shrink-0 items-center gap-1 border-b border-border px-3 text-xs">
+  <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-3 text-[13px]">
     <span class="font-semibold">MCP</span>
     <span class="text-muted-foreground tabular-nums">{entries.length}</span>
     {#if mcp.loading}<ZIcon zType={icon('lucideLoaderCircle')} class="size-3 animate-spin text-muted-foreground" />{/if}
     <span class="ml-auto"></span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0 text-muted-foreground" aria-label="Test every server" title="Test every server" disabled={entries.length === 0} onclick={() => void refreshAndTest()}>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Test every server" title="Test every server" disabled={entries.length === 0} onclick={() => void refreshAndTest()}>
       <ZIcon zType={icon('lucideActivity')} class="size-3.5" />
     </ZButton>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0 text-muted-foreground" aria-label="Reload the list" title="Reload the list" onclick={() => void loadMcp()}>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Reload the list" title="Reload the list" onclick={() => void loadMcp()}>
       <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5 {mcp.loading ? 'animate-spin' : ''}" />
     </ZButton>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 gap-1 px-2 text-xs {adding ? 'bg-primary/10 text-primary' : ''}" aria-expanded={adding} onclick={() => (adding = !adding)}>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1 px-2 text-xs {adding ? 'bg-primary/10 text-primary' : ''}" aria-expanded={adding} onclick={() => (adding = !adding)}>
       <ZIcon zType={icon('lucidePlus')} class="size-3.5" /> Add
     </ZButton>
   </div>
 
-  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]">
+  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
     {#if !inTauri()}
       <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground">
         <ZIcon zType={icon('lucidePlug')} zSize="28" class="size-7 opacity-60" />

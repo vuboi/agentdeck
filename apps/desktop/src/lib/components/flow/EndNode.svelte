@@ -9,6 +9,7 @@
   let { data, selected }: NodeProps & { data: EndData } = $props();
   const icon = (name: string) => name as ZIconName;
   const start = $derived(data.kind === 'start');
+  const across = $derived(data.dir === 'right');
   const sub = $derived.by(() => {
     if (start) return data.run ? data.run.task.split('\n')[0] : 'The message you send';
     if (data.mode === 'edit') return 'Combines the handoffs';
@@ -17,7 +18,7 @@
 </script>
 
 <div class="flow-node flow-end state-{data.state} {selected ? 'is-selected' : ''}" style="width:224px">
-  {#if !start}<Handle type="target" position={Position.Top} class="flow-handle" isConnectable={false} />{/if}
+  {#if !start}<Handle type="target" position={across ? Position.Left : Position.Top} class="flow-handle" isConnectable={false} />{/if}
   <div class="flex items-center gap-2.5 px-3 py-2.5">
     <span class="grid size-8 shrink-0 place-items-center rounded-full {start ? 'bg-primary/12 text-primary' : 'bg-violet-500/12 text-violet-600 dark:text-violet-400'}">
       <ZIcon zType={icon(start ? 'lucideMessageSquare' : 'lucideBot')} class="size-4" />
@@ -32,5 +33,5 @@
       <ZIcon zType={icon('lucideCircleCheck')} class="size-3.5 shrink-0 text-emerald-500" />
     {/if}
   </div>
-  {#if start}<Handle type="source" position={Position.Bottom} class="flow-handle" />{/if}
+  {#if start}<Handle type="source" position={across ? Position.Right : Position.Bottom} class="flow-handle" />{/if}
 </div>

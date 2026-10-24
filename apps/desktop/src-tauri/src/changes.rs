@@ -251,9 +251,61 @@ pub async fn change_stage(root: String, path: String, stage: bool) -> Result<(),
     .await
 }
 
+/// The local branches of a repository and the one that is checked out.
+#[derive(serde::Serialize)]
+pub struct Branches {
+    /// Empty (None) on a detached HEAD or an unborn branch without commits.
+    pub current: Option<String>,
+    /// Most recently committed first.
+    pub branches: Vec<String>,
+}
+
+fn branches(root: &str) -> Result<Branches, String> {
+    let top = toplevel(root)?;
+    let current = String::from_utf8_lossy(&git_ok(&top, &["branch", "--show-current"])?).trim().to_string();
+    let listed = git_ok(&top, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"])?;
+    let branches = String::from_utf8_lossy(&listed).lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect();
+    Ok(Branches { current: (!current.is_empty()).then_some(current), branches })
+}
+
+/// A branch name that cannot be read as an option or smuggle in another argument.
+fn checked_branch(name: &str) -> Result<&str, String> {
+    let bad = name.is_empty() || name.starts_with('-') || name.chars().any(|c| c.is_whitespace() || c.is_control());
+    if bad {
+        Err("not a branch name".to_string())
+    } else {
+        Ok(name)
+    }
+}
+
+/// The local branches of the project's repository, and the current one.
+#[tauri::command]
+pub async fn git_branches(root: String) -> Result<Branches, String> {
+    blocking(move || branches(&root)).await
+}
+
+/// Switches the repository to a local branch. Git's own message comes back when it refuses (local changes in the way).
+#[tauri::command]
+pub async fn git_switch(root: String, branch: String) -> Result<(), String> {
+    blocking(move || {
+        let top = toplevel(&root)?;
+        let name = checked_branch(&branch)?;
+        git_ok(&top, &["switch", name]).map(|_| ())
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branch_names_cannot_be_options() {
+        assert!(checked_branch("feat/x").is_ok());
+        assert!(checked_branch("--detach").is_err());
+        assert!(checked_branch("a b").is_err());
+        assert!(checked_branch("").is_err());
+    }
 
     #[test]
     fn paths_must_stay_inside() {

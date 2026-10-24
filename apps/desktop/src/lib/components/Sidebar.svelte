@@ -6,7 +6,7 @@
   import Logo from './Logo.svelte';
   import { toast } from '../toast';
   import AgentStack from './AgentStack.svelte';
-  import { contentTabs, showSession } from '../content-tabs.svelte';
+  import { contentTabs, openChatTab, showSession } from '../content-tabs.svelte';
   import SearchPalette from './SearchPalette.svelte';
   import DockZone from './DockZone.svelte';
   import Splitter from './Splitter.svelte';
@@ -530,6 +530,7 @@
   function addSession(id: string) {
     if (id === NO_PROJECT) newChat();
     else newSession(id);
+    openChatTab(workspace.activeId);
   }
 
   const ACTION = 'grid size-5 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-foreground/10 hover:text-foreground';
@@ -539,6 +540,7 @@
     zTooltip({ content, position: 'right', autoDetect: true, maxWidth: '200px', class: 'max-w-[200px]! whitespace-normal break-words', offset: 6, anchor: node.closest<HTMLElement>('.z-tree-row') })(node);
 
   const statusColor = { working: 'bg-success', waiting: 'bg-warning', idle: 'bg-muted-foreground/40' } as const;
+  const dotFallback = { working: 'var(--color-success, #22c55e)', waiting: 'var(--color-warning, #f59e0b)', idle: undefined } as const;
   const agentLabel = (agent: string) => agent[0].toUpperCase() + agent.slice(1);
   // Each agent has its own tint so rows are readable at a glance.
   const agentTag = {
@@ -558,7 +560,8 @@
       <ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="current" />
     </span>
   {:else}
-    <span class="size-1.5 shrink-0 rounded-full {statusColor[session.status]}" aria-label={session.status}></span>
+    <!-- Never an empty slot: a running chat whose row is not the main one gets the dot (with a fallback colour). -->
+    <span class="size-1.5 shrink-0 rounded-full {statusColor[session.status]}" style:background-color={dotFallback[session.status]} aria-label={session.status}></span>
   {/if}
 {/snippet}
 
@@ -621,7 +624,7 @@
   <div class="border-b border-border px-2 py-2">
     <div class="flex gap-1">
       <!-- Lit while the open chat is a new one nobody wrote in yet; the message box is focused, ready to type. -->
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 min-w-0 flex-1 justify-start gap-2 px-2 text-xs {pending ? 'bg-primary/15! text-primary!' : ''}" onclick={() => { newSession(); focusComposer(); }}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 min-w-0 flex-1 justify-start gap-2 px-2 text-xs {pending ? 'bg-[color-mix(in_oklab,var(--color-primary)_16%,var(--color-background))]! text-foreground!' : ''}" onclick={() => { newSession(); openChatTab(workspace.activeId); focusComposer(); }}>
         <ZIcon zType="lucidePlus" class="size-3.5" />
         New session
       </ZButton>
@@ -773,7 +776,7 @@
     <div class="flex shrink-0" style:height="{layout.sizes.sidebarZone}px"><DockZone zone="sidebar" /></div>
   {/if}
 
-  <div class="flex h-11 shrink-0 items-center gap-2 px-3 text-xs">
+  <div class="flex h-11 shrink-0 items-center gap-2 border-t border-border px-3 text-xs">
     {#if appInfo.version}<span class="truncate rounded-sm bg-primary/15 px-1.5 py-0.5 text-[11px] font-medium text-primary tabular-nums">Version {appInfo.version}</span>{/if}
     <ZButton zWave={false} zType="ghost" zSize="sm" class="relative ml-auto h-6 w-6" aria-label={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} title={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} onclick={onUpdateClick}>
       <ZIcon zType={(turning ? 'lucideLoaderCircle' : 'lucideArrowDownToLine') as ZIconName} class="size-3.5 {turning ? 'animate-spin' : ''}" />

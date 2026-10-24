@@ -10,9 +10,27 @@
   function show(element: Element) {
     const text = element.getAttribute('data-tip');
     if (!text) return;
+    // `data-tip-clip`: only when the label inside is really cut short (a tab title), never for a label that fits.
+    if (element.hasAttribute('data-tip-clip')) {
+      const label = element.querySelector<HTMLElement>('.truncate') ?? (element as HTMLElement);
+      if (label.scrollWidth <= label.clientWidth) return;
+    }
     const box = element.getBoundingClientRect();
     const below = box.top < 44;
-    tip = { text, x: Math.min(Math.max(box.left + box.width / 2, 8), window.innerWidth - 8), y: below ? box.bottom + 6 : box.top - 6, below };
+    tip = { text, x: box.left + box.width / 2, y: below ? box.bottom + 6 : box.top - 6, below };
+  }
+
+  /** Centres the card on the anchor, then pulls it back inside the window (it may be wider than the room at one side). */
+  function place(card: HTMLElement) {
+    if (!tip) return;
+    const margin = 8;
+    const width = card.offsetWidth;
+    const height = card.offsetHeight;
+    const left = Math.min(Math.max(tip.x - width / 2, margin), Math.max(margin, window.innerWidth - width - margin));
+    let top = tip.below ? tip.y : tip.y - height;
+    top = Math.min(Math.max(top, margin), Math.max(margin, window.innerHeight - height - margin));
+    card.style.left = `${left}px`;
+    card.style.top = `${top}px`;
   }
 
   function hide() {
@@ -52,11 +70,11 @@
   <!-- In the browser's top layer, like the popovers: no z-index can lift a tooltip above those. Shown last, it is on top. -->
   <div
     popover="manual"
-    {@attach (element) => element.showPopover?.()}
-    class="pointer-events-none fixed inset-auto m-0 max-w-72 overflow-visible rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs font-medium whitespace-nowrap text-popover-foreground shadow-lg"
-    style:left="{tip.x}px"
-    style:top="{tip.y}px"
-    style:transform={tip.below ? 'translateX(-50%)' : 'translate(-50%, -100%)'}
+    {@attach (element) => {
+      element.showPopover?.();
+      place(element);
+    }}
+    class="pointer-events-none fixed inset-auto m-0 w-max max-w-[min(18rem,calc(100vw-16px))] overflow-visible rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs font-medium break-words whitespace-normal text-popover-foreground shadow-lg"
     role="tooltip"
   >
     {tip.text}

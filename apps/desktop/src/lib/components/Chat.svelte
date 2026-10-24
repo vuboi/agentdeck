@@ -7,10 +7,14 @@
   import { LOADER } from '../loaders';
   import { toast } from '../toast';
   import { setEagerColour, whenColoured } from '../markdown';
-  import { activeSession, AGENTS, answerPermission, answerQuestions, chat, editMessage, forkSession, isRunning, loadOlder, newSession, openTranscript, pendingProject, workspace } from '../sessions.svelte';
+  import { copyMessage } from '../attachments';
+  import { openSelectionMenu } from '../selection-menu.svelte';
+  import FileChip from './FileChip.svelte';
+  import { activeSession, AGENTS, answerPermission, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, newSession, openTranscript, pendingProject, workspace } from '../sessions.svelte';
+  import { ticker } from '../clock.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
-  import { openImages, preview } from '../preview.svelte';
+  import { openAttachment, openImages, preview, releasePreview, revealPreviewed } from '../preview.svelte';
   import ChatBlock from './ChatBlock.svelte';
   import DelegateList from './DelegateList.svelte';
   import CommandGroup from './CommandGroup.svelte';
@@ -30,7 +34,21 @@
   function finishEdit(id: string) {
     if (!editText.trim()) return;
     editMessage(id, editText);
+    window.dispatchEvent(new Event('agentdeck:scrolltoend'));
     editingId = null;
+  }
+
+  // "Copy all" on a message with attachments: its text, pictures, notes and files go on the clipboard together, and
+  // pasting into the message box restores them all (see attachments.ts).
+  async function copyAll(message: Message) {
+    const { images, elements, files } = attachmentsOf(message);
+    const text = message.blocks.map((block) => (block.kind === 'response' ? block.text : '')).join('\n').trim();
+    try {
+      await copyMessage({ v: 1, text, images, elements, files });
+      toast.success('Copied with attachments');
+    } catch {
+      toast.error('Could not copy');
+    }
   }
 
   // Whether the part before this one, skipping blocks that draw nothing (empty reasoning), is also a step line.
@@ -50,7 +68,7 @@
   import Composer from './Composer.svelte';
   import ToolbarActions from './ToolbarActions.svelte';
   import FileView from './FileView.svelte';
-  import { activateTab, closeAllTabs, closeOtherTabs, closeTab, contentTabs, openChatTab, type ContentTab } from '../content-tabs.svelte';
+  import { activateTab, closeAllTabs, closeOtherTabs, closeTab, contentTabs, openChatTab, saveTab, type ContentTab } from '../content-tabs.svelte';
   import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
 
   // Right click on a tab: close it, the others, or all of them.
@@ -63,7 +81,12 @@
     tabMenu = { x: event.clientX, y: event.clientY, id };
     tabMenuOpen = true;
   }
+  // Save shows only for a file tab with unsaved edits; it saves that tab, in front or not.
+  const menuTab = $derived(tabMenu ? contentTabs.tabs.find((tab) => tab.id === tabMenu?.id) : undefined);
   const tabContextItems = $derived<ZDropdownMenuItem[]>([
+    ...(menuTab?.kind === 'file' && menuTab.dirty
+      ? [{ label: 'Save', icon: 'lucideSave', iconSize: '12', shortcut: 'Ctrl+S', divide: 'after', class: 'text-xs! py-1', onClick: () => tabMenu && void saveTab(tabMenu.id) } as ZDropdownMenuItem]
+      : []),
     { label: 'Close tab', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+W', class: 'text-xs! py-1', onClick: () => tabMenu && closeTab(tabMenu.id) },
     { label: 'Close other tabs', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+K Ctrl+O', class: 'text-xs! py-1', onClick: () => tabMenu && closeOtherTabs(tabMenu.id) },
     { label: 'Close all tabs', icon: 'lucideListX', iconSize: '12', shortcut: 'Ctrl+K Ctrl+W', divide: 'before', class: 'text-xs! py-1', onClick: () => closeAllTabs() },
@@ -87,6 +110,7 @@
     contentTabs.tabs.map((tab) => ({
       label: tabLabel(tab),
       checked: contentTabs.active === tab.id,
+      class: contentTabs.active === tab.id ? 'bg-primary/15! text-primary!' : undefined,
       onClick: () => activateTab(tab.id),
     })),
   );
@@ -323,9 +347,21 @@
     for (const message of chat.messages.slice(-3).reverse()) {
       const index = message.blocks.findIndex((block) => block.kind === 'permission' && block.state === 'pending');
       const block = message.blocks[index];
-      if (block?.kind === 'permission') return { block, messageId: message.id, index };
+      if (block?.kind === 'permission') return { block, messageId: message.id, index, agent: message.agent ?? activeSession()?.source ?? activeSession()?.agent };
     }
     return null;
+  });
+  /** Flow steps (chats this one handed work to) stopped on an approval card: they wait for a yes in their own chat. */
+  const stepApprovals = $derived.by(() => {
+    void ticker.sec;
+    const found: { childId: string; step: string; agent: string }[] = [];
+    for (const message of chat.messages.slice(-12)) {
+      for (const block of message.blocks) {
+        if (block.kind !== 'delegate' || found.some((item) => item.childId === block.childId) || !needsApproval(block.childId)) continue;
+        found.push({ childId: block.childId, step: block.step ?? 'A step', agent: AGENTS.find((item) => item.value === block.agent)?.label ?? 'The agent' });
+      }
+    }
+    return found;
   });
   const atEnd = $derived($virtualizer.isAtEnd(JUMP_AFTER));
   const running = $derived(activeSession()?.status === 'working');
@@ -357,12 +393,28 @@
   });
   // Your own message always brings you back to the bottom: only when one is added at the end. The list is also
   // replaced when older messages are loaded above, and a chat whose last message is yours would then jump to the end.
+  // Only for a message sent by the person (the composer announces it with `agentdeck:scrolltoend`): a message that
+  // goes out by itself from the queue must not pull a reader away from what they scrolled up to.
   let lastMessageId: string | undefined;
+  let userSentUntil = 0;
+  function toEnd() {
+    following = true;
+    stickToEnd(1500);
+    void pinToNewest();
+  }
+  $effect(() => {
+    const onSent = () => {
+      userSentUntil = performance.now() + 800;
+      toEnd();
+    };
+    window.addEventListener('agentdeck:scrolltoend', onSent);
+    return () => window.removeEventListener('agentdeck:scrolltoend', onSent);
+  });
   $effect(() => {
     const last = chat.messages.at(-1);
     const added = last?.id !== lastMessageId;
     lastMessageId = last?.id;
-    if (added && revealed && last?.role === 'user') untrack(() => ((following = true), stickToEnd(1500), pinToNewest()));
+    if (added && revealed && last?.role === 'user' && performance.now() < userSentUntil) untrack(toEnd);
   });
 
   async function jumpToTurn(turn: number) {
@@ -408,12 +460,14 @@
               tabindex="0"
               aria-selected={active}
               title={tab.kind === 'file' ? tab.path : label}
+              data-tip-clip
               class="flex h-7 max-w-56 shrink-0 cursor-pointer items-center justify-between gap-1.5 rounded-md py-0 pr-2.5 pl-2.5 text-xs outline-none focus-visible:ring-0 {active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
               onclick={() => activateTab(tab.id)}
               oncontextmenu={(event) => openTabMenu(event, tab.id)}
               onkeydown={(event) => event.key === 'Enter' && activateTab(tab.id)}
             >
               <span class="truncate">{label}</span>
+              {#if tab.kind === 'file' && tab.dirty}<span class="size-1.5 shrink-0 rounded-full bg-current" title="Unsaved changes" aria-label="Unsaved changes"></span>{/if}
               <button type="button" class="grid size-4.5 shrink-0 cursor-pointer place-items-center rounded-full outline-none focus-visible:ring-0 hover:bg-primary/20" aria-label="Close {label}" onclick={(event) => { event.stopPropagation(); closeTab(tab.id); }}>
                 <ZIcon zType="lucideX" zSize="12" class="size-3" />
               </button>
@@ -577,10 +631,11 @@
           {#if message}
             <div class="absolute top-0 left-0 w-full" data-index={row.index} style:transform="translateY({row.start}px)" {@attach measureRow}>
               <!-- No avatars: your messages are a bubble (right side, or left in one-sided mode); the agent is just its coloured name. -->
-              <article class="group/msg mx-auto flex w-full min-w-0 max-w-3xl flex-col break-words py-2.5 px-3 min-[720px]:pr-6 min-[720px]:pl-12 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
+              <article oncontextmenu={(event) => openSelectionMenu(event, message.blocks.map((block) => (block.kind === 'response' ? block.text : '')).filter(Boolean).join('\n\n'))} class="group/msg mx-auto flex w-full min-w-0 max-w-3xl flex-col break-words py-2.5 px-3 min-[720px]:pr-6 min-[720px]:pl-12 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
                 {#if mine}
                   {@const pictures = message.blocks.flatMap((block) => (block.kind === 'image' ? [block] : []))}
-                  {@const words = message.blocks.filter((block) => block.kind !== 'image' && block.kind !== 'delegate')}
+                  {@const words = message.blocks.filter((block) => block.kind !== 'image' && block.kind !== 'delegate' && block.kind !== 'file')}
+                  {@const documents = message.blocks.flatMap((block) => (block.kind === 'file' ? [block] : []))}
                   {@const handed = message.blocks.filter((block) => block.kind === 'delegate')}
                   <!-- Pictures sit apart from the bubble as small tiles; click one to see it large. -->
                   {#if pictures.length > 0}
@@ -594,6 +649,13 @@
                         >
                           <img src={picture.src} alt={picture.name} class="size-full object-cover" />
                         </button>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if documents.length > 0}
+                    <div class="mb-1.5 flex max-w-[85%] flex-wrap gap-1.5 {theme.chatLayout === 'split' ? 'justify-end' : ''}">
+                      {#each documents as file}
+                        <FileChip name={file.name} size={file.size} onclick={() => void openAttachment(file.path, file.name, file.size)} />
                       {/each}
                     </div>
                   {/if}
@@ -640,7 +702,7 @@
                       </div>
                     {/if}
                     {#if handed.length > 0}<div class="mt-3 w-full"><DelegateList blocks={handed} /></div>{/if}
-                    <MessageFooter {message} end={theme.chatLayout === 'split'} onfork={() => forkSession(workspace.activeId)} onedit={() => startEdit(message)} />
+                    <MessageFooter {message} end={theme.chatLayout === 'split'} onfork={() => forkSession(workspace.activeId)} onedit={() => startEdit(message)} oncopyall={pictures.length + documents.length + message.blocks.filter((block) => block.kind === 'element').length > 0 ? () => copyAll(message) : undefined} />
                   {/if}
                 {:else}
                   {@const parts = segments(message.blocks)}
@@ -703,7 +765,7 @@
                       {:else if segment.kind === 'plan'}
                         <PlanCard items={segment.items} />
                       {:else}
-                        <ChatBlock block={segment.block} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} answered={chat.messages.at(-1)?.id !== message.id} />
+                        <ChatBlock block={segment.block} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} answered={chat.messages.at(-1)?.id !== message.id} />
                       {/if}
                     {/each}
                     <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
@@ -738,13 +800,21 @@
         <!-- A pending approval sits right above the input, where the eye already is. -->
         {#if pendingApproval}
           <div class="mb-2">
-            <PermissionCard block={pendingApproval.block} onanswer={(answer) => answerPermission(pendingApproval.messageId, pendingApproval.index, answer)} />
+            <PermissionCard block={pendingApproval.block} agent={pendingApproval.agent} onanswer={(answer) => answerPermission(pendingApproval.messageId, pendingApproval.index, answer)} />
           </div>
         {/if}
+        <!-- A flow step that needs approval waits in its own chat: say which, and take the user there. -->
+        {#each stepApprovals as item (item.childId)}
+          <div class="mb-2 flex items-center gap-2 rounded-xl border border-warning/50 bg-warning/5 px-3 py-2 text-xs" role="status">
+            <ZIcon zType="lucideShieldAlert" class="size-3.5 shrink-0 text-warning" />
+            <span class="min-w-0 flex-1 truncate"><span class="font-medium">{item.step}</span> ({item.agent}) needs your approval to continue</span>
+            <ZButton zWave={false} zType="default" zSize="sm" class="h-7 shrink-0 px-3 text-xs" onclick={() => showSession(item.childId)}>Open step</ZButton>
+          </div>
+        {/each}
         <Composer />
       </div>
     </div>
   {/if}
 </main>
 
-<ZGalleryPreview bind:file={preview.file} files={preview.files} />
+<ZGalleryPreview bind:file={preview.file} files={preview.files} onClose={releasePreview} onDownload={revealPreviewed} />

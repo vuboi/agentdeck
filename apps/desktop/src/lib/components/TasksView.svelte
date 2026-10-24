@@ -298,37 +298,37 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Tasks">
-  <div class="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
+  <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-[13px]">
     <span class="font-medium">Tasks</span>
     {#if runningCount > 0}
       <span class="flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-px text-[10px] text-primary tabular-nums"><ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="current" />{runningCount}</span>
     {/if}
     <span class="text-muted-foreground tabular-nums">{shown.length}</span>
-    <button type="button" class="ml-auto grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-40" aria-label={allFolded ? 'Unfold all days' : 'Fold all days'} disabled={days.length === 0} {@attach zTooltip({ content: allFolded ? 'Unfold all days' : 'Fold all days', position: 'top' })} onclick={() => foldAll(!allFolded)}>
-      <ZIcon zType={(allFolded ? 'lucideChevronsUpDown' : 'lucideChevronUp') as ZIconName} class="size-3.5" />
+    <button type="button" class="ml-auto grid size-7 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-40" aria-label={allFolded ? 'Unfold all days' : 'Fold all days'} disabled={days.length === 0} {@attach zTooltip({ content: allFolded ? 'Unfold all days' : 'Fold all days', position: 'top' })} onclick={() => foldAll(!allFolded)}>
+      <ZIcon zType={(allFolded ? 'lucideChevronsUpDown' : 'lucideChevronUp') as ZIconName} class="size-4" />
     </button>
-    <button type="button" class="grid size-6 cursor-pointer place-items-center rounded {failedOnly ? 'bg-destructive/15 text-destructive' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" aria-label="Failed only" aria-pressed={failedOnly} {@attach zTooltip({ content: 'Failed only', position: 'top' })} onclick={() => (failedOnly = !failedOnly)}>
-      <ZIcon zType={'lucideCircleX' as ZIconName} class="size-3.5" />
+    <button type="button" class="grid size-7 cursor-pointer place-items-center rounded {failedOnly ? 'bg-destructive/15 text-destructive' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" aria-label="Failed only" aria-pressed={failedOnly} {@attach zTooltip({ content: 'Failed only', position: 'top' })} onclick={() => (failedOnly = !failedOnly)}>
+      <ZIcon zType={'lucideCircleX' as ZIconName} class="size-4" />
     </button>
-    <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-40" aria-label="Copy the failures" disabled={failures.length === 0} {@attach zTooltip({ content: copied ? 'Copied' : `Copy ${failures.length} failure${failures.length === 1 ? '' : 's'}`, position: 'top' })} onclick={copyFailures}>
-      <ZIcon zType={(copied ? 'lucideCheck' : 'lucideCopy') as ZIconName} class="size-3.5" />
+    <button type="button" class="grid size-7 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-40" aria-label="Copy the failures" disabled={failures.length === 0} {@attach zTooltip({ content: copied ? 'Copied' : `Copy ${failures.length} failure${failures.length === 1 ? '' : 's'}`, position: 'top' })} onclick={copyFailures}>
+      <ZIcon zType={(copied ? 'lucideCheck' : 'lucideCopy') as ZIconName} class="size-4" />
     </button>
-    <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear the whole log" {@attach zTooltip({ content: 'Clear all', position: 'top' })} onclick={clearAudit}>
-      <ZIcon zType={'lucideBan' as ZIconName} class="size-3.5" />
+    <button type="button" class="grid size-7 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear the whole log" {@attach zTooltip({ content: 'Clear all', position: 'top' })} onclick={clearAudit}>
+      <ZIcon zType={'lucideBan' as ZIconName} class="size-4" />
     </button>
   </div>
   <!-- How far back the history reaches. -->
-  <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-1.5" role="tablist" aria-label="Range">
+  <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-2" role="tablist" aria-label="Range">
     {#each RANGES as item (item.value)}
-      <button type="button" role="tab" aria-selected={range === item.value} class="shrink-0 cursor-pointer rounded-full px-2.5 py-0.5 text-[11px] {range === item.value ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
+      <button type="button" role="tab" aria-selected={range === item.value} class="shrink-0 cursor-pointer rounded-full px-3 py-1 text-xs {range === item.value ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
     {/each}
   </div>
   {#if projects.length > 1}
     <!-- Projects with entries in the range. -->
-    <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-1.5" role="tablist" aria-label="Projects">
-      <button type="button" role="tab" aria-selected={chosenProject === null} class="shrink-0 cursor-pointer rounded-full px-2.5 py-0.5 text-[11px] {chosenProject === null ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = null)}>All projects</button>
+    <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-2" role="tablist" aria-label="Projects">
+      <button type="button" role="tab" aria-selected={chosenProject === null} class="shrink-0 cursor-pointer rounded-full px-3 py-1 text-xs {chosenProject === null ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = null)}>All projects</button>
       {#each projects as name (name)}
-        <button type="button" role="tab" aria-selected={chosenProject === name} class="shrink-0 cursor-pointer rounded-full px-2.5 py-0.5 text-[11px] {chosenProject === name ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = name)}>{name || 'No project'}</button>
+        <button type="button" role="tab" aria-selected={chosenProject === name} class="shrink-0 cursor-pointer rounded-full px-3 py-1 text-xs {chosenProject === name ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = name)}>{name || 'No project'}</button>
       {/each}
     </div>
   {/if}

@@ -21,6 +21,11 @@
   --radius-2xl: var(--radius-large);
   --radius-3xl: var(--radius-large);
 }
+/* A value or placeholder longer than its field ends in an ellipsis instead of being cut off. */
+input {
+  text-overflow: ellipsis;
+}
+
 /* No focus outline or ring anywhere (the open row, a focused button, an input): state is shown by colour only. */
 :focus,
 :focus-visible,
@@ -232,21 +237,22 @@ html[data-warming] [data-z-popover] {
 .md-table th { font-weight: 600; color: var(--muted-foreground); font-size: 0.75rem; border-bottom: 1px solid var(--border); }
 .md-table tr + tr td { border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent); }
 .md img { max-width: 100%; border-radius: var(--radius-large); }
-.md-code { margin: 0 0 0.75rem; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
-.md-code-head { display: flex; align-items: center; justify-content: space-between; padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 0.6875rem; }
-.md-code-head button { cursor: pointer; padding: 0.1rem 0.4rem; border-radius: var(--radius-small); font: inherit; }
+.md-code { margin: 0 0 0.75rem; overflow: clip; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
+.md-code-head, .md-code-foot { position: sticky; z-index: 1; display: flex; align-items: center; justify-content: space-between; background: var(--muted); color: var(--muted-foreground); font-size: 0.6875rem; }
+.md-code-head { top: 0; padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); }
+.md-code-foot { bottom: 0; justify-content: flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid var(--border); }
 .md-code-actions { display: flex; align-items: center; gap: 0.1rem; }
-.md-code-head button:hover { background: var(--accent); color: var(--foreground); }
-.md-code-head button { position: relative; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; padding: 0; }
-.md-code-head button svg { grid-area: 1 / 1; transition: opacity 0.18s, transform 0.18s; }
-.md-code-head .ic-check { opacity: 0; transform: scale(0.4); color: var(--success, #22c55e); }
-.md-code-head button[data-copied] .ic-copy { opacity: 0; transform: scale(0.4); }
-.md-code-head button[data-copied] .ic-check { opacity: 1; transform: scale(1); }
-.md-code-head .ic-check path { stroke-dasharray: 24; stroke-dashoffset: 24; }
-.md-code-head button[data-copied] .ic-check path { animation: md-check-draw 0.35s ease-out 0.05s forwards; }
+.md-code-head button, .md-code-foot button { position: relative; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; padding: 0; cursor: pointer; border-radius: var(--radius-small); font: inherit; }
+.md-code-head button:hover, .md-code-foot button:hover { background: var(--accent); color: var(--foreground); }
+.md-code-head button svg, .md-code-foot button svg { grid-area: 1 / 1; transition: opacity 0.18s, transform 0.18s; }
+.md-code-head .ic-check, .md-code-foot .ic-check { opacity: 0; transform: scale(0.4); color: var(--success, #22c55e); }
+.md-code-head button[data-copied] .ic-copy, .md-code-foot button[data-copied] .ic-copy { opacity: 0; transform: scale(0.4); }
+.md-code-head button[data-copied] .ic-check, .md-code-foot button[data-copied] .ic-check { opacity: 1; transform: scale(1); }
+.md-code-head .ic-check path, .md-code-foot .ic-check path { stroke-dasharray: 24; stroke-dashoffset: 24; }
+.md-code-head button[data-copied] .ic-check path, .md-code-foot button[data-copied] .ic-check path { animation: md-check-draw 0.35s ease-out 0.05s forwards; }
 @keyframes md-check-draw { to { stroke-dashoffset: 0; } }
-.md-code pre { margin: 0; padding: 0.7rem 0.85rem; overflow-x: hidden; background: transparent; }
-.md-code code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.78rem; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.md-code pre { margin: 0; padding: 0.7rem 0.85rem; overflow-x: auto; background: transparent; }
+.md-code code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.78rem; line-height: 1.6; white-space: pre; }
 
 /* No focus outlines on the tree rows and the chat ruler: the selected row and hover already show where you are. */
 .z-tree [role='treeitem']:focus,

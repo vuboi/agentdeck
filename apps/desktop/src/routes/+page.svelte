@@ -2,6 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { ZDrawer } from '@shival99/z-ui-svelte';
   import LinkMenu from '../lib/components/LinkMenu.svelte';
+  import SelectionMenu from '../lib/components/SelectionMenu.svelte';
   import WindowControls from '../lib/components/WindowControls.svelte';
   import ThemePanel from '../lib/components/ThemePanel.svelte';
   import SettingsModal from '../lib/components/SettingsModal.svelte';
@@ -203,6 +204,7 @@
   </ZDrawer>
 
   <LinkMenu />
+  <SelectionMenu />
   <ThemePanel />
   <SettingsModal />
   <FlowEditor />

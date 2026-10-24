@@ -6,7 +6,8 @@
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { customProviderName, modelLabel } from '../models.svelte';
-  import { answerQuestions, isDelegating, isRunActive, liveStats, workspace } from '../sessions.svelte';
+  import { answerQuestions, delegateRuns, isDelegating, isRunActive, liveStats, needsApproval, workspace } from '../sessions.svelte';
+  import { shortCount, totalTokens, usd } from '../usage';
   import QuestionCard from './QuestionCard.svelte';
   import type { Block } from '../mock';
 
@@ -36,6 +37,33 @@
   }
   /** A step asking an earlier step something right now: what it asks, in the row's middle line. */
   const talkLine = (block: Extract<Block, { kind: 'delegate' }>) => (block.talking ? `Asking ${block.talking}: ${block.talkText ?? ''}` : '');
+  // A row opens in place to show a step's numbers; only its arrow goes to the step's own chat.
+  let openRows = $state<Record<string, boolean>>({});
+  const nodeOf = (childId: string) => delegateRuns.find((run) => run.nodes.some((node) => node.childId === childId))?.nodes.find((node) => node.childId === childId);
+  const span = (ms: number) => {
+    const seconds = Math.max(0, Math.round(ms / 1000));
+    return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+  };
+  const snippet = (text: string) => {
+    const flat = text.replace(/\s+/g, ' ').trim();
+    return flat.length > 280 ? `${flat.slice(0, 279)}…` : flat;
+  };
+  /** What a row shows when opened: agent, model, state, time, tokens, cost, tool calls and the start of its answer. */
+  function detail(block: Extract<Block, { kind: 'delegate' }>, settled: string) {
+    void ticker.sec;
+    const node = nodeOf(block.childId);
+    const stats = node && node.state !== 'running' ? node.stats : liveStats(block.childId, node?.startedAt ?? Date.now());
+    const ms = node ? (node.endedAt ?? Date.now()) - node.startedAt : stats?.ms;
+    return {
+      status: { queued: 'Queued', running: 'Working', asking: 'Asking you', done: 'Answered', failed: 'Failed', skipped: 'Not run' }[settled] ?? settled,
+      time: ms != null && settled !== 'queued' && settled !== 'skipped' ? span(ms) : '',
+      tokens: stats?.tokens ? shortCount(totalTokens(stats.tokens)) : '',
+      cost: stats?.cost != null ? usd(stats.cost) : '',
+      tools: stats?.tools ?? 0,
+      answer: snippet(node?.output ?? stats?.last ?? ''),
+      note: block.note ?? node?.note ?? '',
+    };
+  }
   const tone = { queued: 'text-muted-foreground', running: 'text-primary', asking: 'text-primary', done: 'text-emerald-500', failed: 'text-destructive', skipped: 'text-muted-foreground' } as const;
 </script>
 
@@ -52,7 +80,10 @@
   <div class="divide-y divide-border">
     {#each blocks as block (block.childId)}
       {@const settled = settledOf(block)}
-      <button type="button" class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs outline-none {settled === 'queued' || settled === 'skipped' ? 'cursor-default opacity-70' : 'cursor-pointer hover:bg-muted/40 focus-visible:bg-muted/60'}" onclick={() => settled !== 'queued' && settled !== 'skipped' && showSession(block.childId)}>
+      {@const jumpable = settled !== 'queued' && settled !== 'skipped'}
+      {@const expanded = openRows[block.childId] ?? false}
+      <div class="flex w-full items-stretch {settled === 'queued' || settled === 'skipped' ? 'opacity-70' : ''}">
+      <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-left text-xs outline-none hover:bg-muted/40 focus-visible:bg-muted/60" aria-expanded={expanded} aria-label="Details of {block.step ?? block.agent}" onclick={() => (openRows[block.childId] = !expanded)}>
         {#if block.agent === 'codex'}
           <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
         {:else if block.agent === 'custom'}
@@ -80,8 +111,26 @@
             <ZIcon zType="lucideCircleX" class="size-3.5" /> <span class="max-w-32 truncate">{block.note ?? 'Interrupted'}</span>
           {/if}
         </span>
-        <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
+        {#if needsApproval(block.childId)}<span class="shrink-0 rounded-full bg-warning/15 px-1.5 py-px text-[10px] font-medium text-warning">Needs approval</span>{/if}
       </button>
+      <button type="button" class="grid w-9 shrink-0 place-items-center text-muted-foreground outline-none hover:bg-muted/40 hover:text-primary focus-visible:bg-muted/60 {jumpable ? 'cursor-pointer' : 'cursor-default opacity-40'}" disabled={!jumpable} aria-label="Open the chat of {block.step ?? block.agent}" title="Open this step's chat" onclick={() => jumpable && showSession(block.childId)}>
+        <ZIcon zType="lucideChevronRight" class="size-3.5" />
+      </button>
+      </div>
+      {#if expanded}
+        {@const info = detail(block, settled)}
+        <div class="flex flex-col gap-1.5 border-t border-border/60 bg-muted/20 px-3 py-2 text-[11px]">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground tabular-nums">
+            <span><span class="text-foreground">{block.agent === 'codex' ? 'Codex' : block.agent === 'claude' ? 'Claude' : block.agent === 'custom' ? (customProviderName(block.model) ?? 'Custom') : 'Antigravity'}</span> · {modelLabel(block.model)}</span>
+            <span class="{tone[settled]}">{info.status}</span>
+            {#if info.time}<span class="inline-flex items-center gap-1"><ZIcon zType="lucideClock" class="size-3" />{info.time}</span>{/if}
+            {#if info.tokens}<span class="inline-flex items-center gap-1"><ZIcon zType="lucideDatabase" class="size-3" />{info.tokens}</span>{/if}
+            {#if info.cost}<span class="inline-flex items-center gap-1"><ZIcon zType="lucideCoins" class="size-3" />{info.cost}</span>{/if}
+            {#if info.tools > 0}<span class="inline-flex items-center gap-1"><ZIcon zType="lucideTerminal" class="size-3" />{info.tools} tool calls</span>{/if}
+          </div>
+          {#if info.answer || info.note}<p class="m-0 leading-snug break-words text-muted-foreground">{info.answer || info.note}</p>{:else}<p class="m-0 text-muted-foreground/70 italic">No output yet</p>{/if}
+        </div>
+      {/if}
       <!-- A step that asked the user first: its questions are answered right here, and the run goes on. -->
       {#if settled === 'asking' && block.questions?.length}
         <div class="border-t border-border bg-muted/20 p-2.5">

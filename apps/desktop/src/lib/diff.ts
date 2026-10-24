@@ -26,10 +26,40 @@ export function parseDiff(diff: string): DiffRow[] {
 
 export const countsOf = (rows: DiffRow[]) => ({ added: rows.filter((row) => row.kind === 'add').length, removed: rows.filter((row) => row.kind === 'del').length });
 
-/** The lines of the new file that were added or changed, for marking them in the plain view of the file. */
-export const addedLines = (rows: DiffRow[]) => new Set(rows.filter((row) => row.kind === 'add' && row.now !== undefined).map((row) => row.now!));
+/**
+ * What git says about the lines of the file as it is now, as VS Code's gutter shows it: lines only added (green),
+ * lines that replace others (modified, blue), and the line after lines that were only taken out (red).
+ */
+export function changeLines(rows: DiffRow[]): { added: Set<number>; modified: Set<number>; removed: Set<number> } {
+  const added = new Set<number>();
+  const modified = new Set<number>();
+  const removed = new Set<number>();
+  let dels = 0;
+  let adds: number[] = [];
+  let last = 0;
+  const flush = (next?: number) => {
+    if (adds.length > 0) for (const line of adds) (dels > 0 ? modified : added).add(line);
+    else if (dels > 0) {
+      const at = next ?? last;
+      if (at > 0) removed.add(at);
+    }
+    dels = 0;
+    adds = [];
+  };
+  for (const row of rows) {
+    if (row.kind === 'del') dels++;
+    else if (row.kind === 'add') {
+      adds.push(row.now!);
+      last = row.now!;
+    } else if (row.kind === 'ctx') {
+      flush(row.now);
+      last = row.now ?? last;
+    } else flush();
+  }
+  flush();
+  return { added, modified, removed };
+}
 
-/** Where a file is in a project folder, as git names it (forward slashes, no leading slash). */
 export function relativeTo(root: string, path: string): string {
   const clean = (text: string) => text.replace(/\\/g, '/').replace(/\/+$/, '');
   const [r, p] = [clean(root), clean(path)];

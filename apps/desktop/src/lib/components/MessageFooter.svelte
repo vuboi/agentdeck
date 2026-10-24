@@ -7,7 +7,7 @@
   import type { Message } from '../mock';
 
   // Under each answer: copy, fork, how long it took, and how long ago it was (hover for the date).
-  let { message, onfork, onedit, end = false }: { message: Message; onfork: () => void; onedit?: () => void; end?: boolean } = $props();
+  let { message, onfork, onedit, oncopyall, end = false }: { message: Message; onfork: () => void; onedit?: () => void; /** Your message with attachments: copies text, pictures, notes and files together. */ oncopyall?: () => void; end?: boolean } = $props();
 
   let copied = $state(false);
   async function copy() {
@@ -26,6 +26,11 @@
   <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Copy answer" onclick={copy} {@attach zTooltip({ content: copied ? 'Copied' : 'Copy', position: 'top' })}>
     <ZIcon zType={copied ? 'lucideCheck' : 'lucideCopy'} zSize="14" class="size-[14px]!" />
   </ZButton>
+  {#if oncopyall}
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Copy all with attachments" onclick={oncopyall} {@attach zTooltip({ content: 'Copy all (with attachments)', position: 'top' })}>
+      <ZIcon zType={'lucideCopyPlus' as ZIconName} zSize="14" class="size-[14px]!" />
+    </ZButton>
+  {/if}
   <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Fork chat from here" onclick={onfork} {@attach zTooltip({ content: 'Fork chat', position: 'top' })}>
     <ZIcon zType="lucideGitBranchPlus" zSize="14" class="size-[14px]!" />
   </ZButton>

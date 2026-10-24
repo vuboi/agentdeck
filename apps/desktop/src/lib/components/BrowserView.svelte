@@ -18,11 +18,14 @@
     stopAnnotating,
     closeTab,
     DEVICES,
+    MAX_TABS,
+    forgetVisit,
     forward,
     goTo,
     capturePage,
     hideBrowser,
     listenToPage,
+    matchHistory,
     moveBrowser,
     newTab,
     openExternal,
@@ -35,9 +38,11 @@
     runTarget as startTarget,
     type RunTarget,
     reload,
+    searchSuggestions,
     selectTab,
     showBrowser,
     stop,
+    tabsFull,
     zoomBrowser,
     type Device,
     type Rect,
@@ -53,13 +58,25 @@
   let stage: HTMLDivElement | undefined = $state();
   let address = $state('');
   let addressInput: HTMLInputElement | undefined = $state();
+  // A click that focuses the address selects it all; the mouse button coming up would put the caret back and undo it.
+  let focusedByClick = false;
+  /** Selects the whole address, and again a moment later: whatever deselects it right after focus (the caret put back by
+   *  the mouse, a value written to the field) is undone, until the user has typed something. */
+  function selectAddress(input: HTMLInputElement) {
+    input.select();
+    for (const delay of [0, 50, 150, 400]) {
+      setTimeout(() => {
+        if (document.activeElement === input && !dirty) input.select();
+      }, delay);
+    }
+  }
 
   // Ctrl+L: the address, selected, ready to type over, while this browser is the one on screen.
   function onWindowKey(event: KeyboardEvent) {
     if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'l' || !addressInput) return;
     event.preventDefault();
     addressInput.focus();
-    addressInput.select();
+    selectAddress(addressInput);
   }
   let editing = $state(false);
   let busy = $state('');
@@ -214,6 +231,7 @@
     if (!url) return;
     browser.error = '';
     editing = false;
+    dirty = false;
     address = url;
     // The address is set before the page opens, so the first open never uses a stale one.
     if (tab.opened) await goTo(url);
@@ -222,6 +240,126 @@
       await tick();
       await sync();
     }
+  }
+
+  // ---- address bar: security, and suggestions while typing ----
+  const SEARCH = 'https://www.google.com/search?q=';
+  const searchUrl = (text: string) => `${SEARCH}${encodeURIComponent(text)}`;
+  type Suggestion = { kind: 'go' | 'search' | 'history' | 'google'; text: string; url: string; title?: string };
+  /** Typed in, not just focused: suggestions only follow what the user writes. */
+  let dirty = $state(false);
+  let closed = $state(false);
+  let picked = $state(-1);
+  let remote = $state<string[]>([]);
+
+  const suggestions = $derived.by<Suggestion[]>(() => {
+    const text = address.trim();
+    if (!editing || !dirty || !text) return [];
+    const target = normalize(text);
+    const isSearch = target.startsWith(SEARCH);
+    const list: Suggestion[] = [isSearch ? { kind: 'search', text, url: target } : { kind: 'go', text, url: target }];
+    for (const visit of matchHistory(text)) if (visit.url !== target) list.push({ kind: 'history', text: visit.url, url: visit.url, title: visit.title });
+    if (!isSearch) list.push({ kind: 'search', text, url: searchUrl(text) });
+    for (const phrase of remote) if (phrase.toLowerCase() !== text.toLowerCase()) list.push({ kind: 'google', text: phrase, url: searchUrl(phrase) });
+    return list.slice(0, 10);
+  });
+  const suggestOpen = $derived(!closed && suggestions.length > 0);
+
+  // Google's own suggestions for a search, a moment after typing stops (fetched by the app, not the page).
+  $effect(() => {
+    const text = address.trim();
+    const wanted = editing && dirty && text && normalize(text).startsWith(SEARCH);
+    if (!wanted) {
+      remote = [];
+      return;
+    }
+    let current = true;
+    const timer = setTimeout(() => void searchSuggestions(text).then((found) => current && (remote = found)), 180);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  });
+
+  function choose(item: Suggestion) {
+    address = item.url;
+    void go();
+  }
+
+  function onAddressKey(event: KeyboardEvent) {
+    const count = suggestions.length;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (!count) return;
+      event.preventDefault();
+      closed = false;
+      picked = event.key === 'ArrowDown' ? (picked + 1 >= count ? -1 : picked + 1) : picked < 0 ? count - 1 : picked - 1;
+    } else if (event.key === 'Enter' && suggestOpen && picked >= 0) {
+      event.preventDefault();
+      choose(suggestions[picked]);
+    } else if (event.key === 'Delete' && event.shiftKey && suggestOpen && suggestions[picked]?.kind === 'history') {
+      event.preventDefault();
+      forgetVisit(suggestions[picked].url);
+      picked = -1;
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      if (suggestOpen) closed = true;
+      else {
+        address = tab.url;
+        dirty = false;
+        addressInput?.blur();
+      }
+    }
+  }
+
+  const security = $derived.by(() => {
+    try {
+      const url = new URL(tab.url);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+      const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname) || url.hostname.endsWith('.localhost');
+      const secure = url.protocol === 'https:';
+      return {
+        kind: secure ? ('secure' as const) : local ? ('local' as const) : ('insecure' as const),
+        protocol: url.protocol.slice(0, -1).toUpperCase(),
+        host: url.hostname,
+        port: url.port || (secure ? '443' : '80'),
+      };
+    } catch {
+      return null;
+    }
+  });
+  let lockButton = $state<HTMLElement | null>(null);
+  let lockOpen = $state(false);
+
+  // ---- tabs: no scrollbar; when they do not fit an arrow lists them all, and the front one stays in view ----
+  let tabStrip: HTMLDivElement | undefined = $state();
+  let tabStripWidth = $state(0);
+  let tabsOverflow = $state(false);
+  $effect(() => {
+    void browser.tabs.length;
+    void tabStripWidth;
+    void tick().then(() => {
+      tabsOverflow = browser.tabs.length > 1 && !!tabStrip && tabStrip.scrollWidth > tabStrip.clientWidth + 1;
+    });
+  });
+  $effect(() => {
+    const id = browser.activeId;
+    void browser.tabs.length;
+    void tabStripWidth;
+    void tick().then(() => {
+      const strip = tabStrip;
+      const el = strip?.querySelector<HTMLElement>(`[data-tab-id="${id}"]`);
+      if (!strip || !el) return;
+      if (el.offsetLeft < strip.scrollLeft) strip.scrollLeft = el.offsetLeft;
+      else if (el.offsetLeft + el.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = el.offsetLeft + el.offsetWidth - strip.clientWidth;
+    });
+  });
+  const tabMenuItems = $derived<ZDropdownMenuItem[]>(browser.tabs.map((item) => ({ label: tabTitle(item), class: item.id === browser.activeId ? 'text-xs! py-1 bg-primary/15! text-primary!' : 'text-xs! py-1', checked: item.id === browser.activeId, onClick: () => selectTab(item.id) })));
+  function addTab() {
+    if (tabsFull()) {
+      toast.info(`Tab limit reached (${MAX_TABS}). Close a tab to open another.`);
+      return;
+    }
+    newTab();
   }
 
   // The page is a native layer above the app: anything the app opens over it would be hidden behind it. While
@@ -481,14 +619,16 @@
     <div class="grid flex-1 place-items-center p-6 text-center text-xs text-muted-foreground">The browser runs in the AgentDeck desktop app.</div>
   {:else}
     <!-- Tabs -->
-    <div class="flex shrink-0 items-center gap-1 px-2 py-1.5" role="tablist" aria-label="Browser tabs">
-      <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+    <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2" role="tablist" aria-label="Browser tabs">
+      <div class="relative flex min-w-0 shrink items-center">
+      <div bind:this={tabStrip} bind:clientWidth={tabStripWidth} class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
         {#each browser.tabs as item (item.id)}
           <div
+            data-tab-id={item.id}
             role="tab"
             tabindex="0"
             aria-selected={item.id === browser.activeId}
-            class="group/tab flex h-7 min-w-24 max-w-44 shrink cursor-pointer items-center gap-1.5 rounded-lg pr-1 pl-2 text-xs outline-none {item.id === browser.activeId ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+            class="group/tab flex h-7 min-w-24 max-w-44 shrink-0 cursor-pointer items-center gap-1.5 rounded-md pr-1 pl-2 text-xs outline-none {item.id === browser.activeId ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
             onclick={() => selectTab(item.id)}
             onkeydown={(event) => event.key === 'Enter' && selectTab(item.id)}
             title={tabTitle(item)}
@@ -503,19 +643,29 @@
               {/if}
             </span>
             <span class="min-w-0 flex-1 truncate">{tabTitle(item)}</span>
-            <button type="button" class="grid size-4.5 shrink-0 cursor-pointer place-items-center rounded-full outline-none hover:bg-primary/20" aria-label="Close tab" onclick={(event) => { event.stopPropagation(); void closeTab(item.id); }}>
-              <ZIcon zType="lucideX" class="size-3" />
+            <button type="button" class="grid size-4.5 shrink-0 cursor-pointer place-items-center rounded-full outline-none focus-visible:ring-0 hover:bg-primary/20" aria-label="Close tab" onclick={(event) => { event.stopPropagation(); void closeTab(item.id); }}>
+              <ZIcon zType="lucideX" zSize="12" class="size-3" />
             </button>
           </div>
         {/each}
       </div>
-      <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-lg text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="New tab" {@attach zTooltip({ content: 'New tab', position: 'top' })} onclick={() => newTab()}>
+      {#if tabsOverflow}
+        <!-- Fade into the background, as the chat's tab bar does: a tab that is cut off does not end in a hard edge. -->
+        <div class="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-r from-transparent to-background" aria-hidden="true"></div>
+      {/if}
+      </div>
+      {#if tabsOverflow}
+        <div data-page-menu class="flex shrink-0 items-center bg-background [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:outline-none [&_button]:focus-visible:ring-0">
+          <ZDropdownMenu zItems={tabMenuItems} zIcon={'lucideChevronDown' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
+        </div>
+      {/if}
+      <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary {tabsFull() ? 'opacity-40' : ''}" aria-label="New tab" aria-disabled={tabsFull()} {@attach zTooltip({ content: tabsFull() ? `Tab limit reached (${MAX_TABS})` : 'New tab', position: 'top' })} onclick={addTab}>
         <ZIcon zType="lucidePlus" class="size-4" />
       </button>
     </div>
 
     <!-- Address bar: navigation and inspector on the left, the address in the middle, markup / devtools / menu on the right -->
-    <div bind:clientWidth={barWidth} class="flex shrink-0 items-center gap-1 border-b border-border px-2 pb-1.5">
+    <div bind:clientWidth={barWidth} class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-2">
       <div class="flex shrink-0 items-center gap-0.5">
         <button type="button" class={icon} aria-label="Back" {@attach zTooltip({ content: 'Back', position: 'top' })} onclick={() => void back()}><ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-4" /></button>
         <button type="button" class={icon} aria-label="Forward" {@attach zTooltip({ content: 'Forward', position: 'top' })} onclick={() => void forward()}><ZIcon zType={'lucideArrowRight' as ZIconName} class="size-4" /></button>
@@ -529,18 +679,98 @@
           <ZIcon zType={'lucideMousePointer2' as ZIconName} class="size-4" />
         </button>
       </div>
-      <form class="min-w-0 flex-1" onsubmit={(event) => { event.preventDefault(); void go(); }}>
+      <form class="relative min-w-0 flex-1" onsubmit={(event) => { event.preventDefault(); void go(); }}>
+        <button
+          bind:this={lockButton}
+          type="button"
+          class="absolute top-0.5 left-0.5 z-10 grid size-6 cursor-pointer place-items-center rounded outline-none hover:bg-primary/10 {security?.kind === 'secure' ? 'text-emerald-600 dark:text-emerald-400' : security?.kind === 'insecure' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}"
+          aria-label={security ? 'Site information' : 'Search'}
+          aria-expanded={lockOpen}
+          disabled={!security}
+          {@attach zTooltip({ content: security ? (security.kind === 'secure' ? 'Connection is secure' : security.kind === 'local' ? 'Local address' : 'Connection is not secure') : 'Search', position: 'bottom' })}
+          onclick={() => (lockOpen = !lockOpen)}
+        >
+          {#if security?.kind === 'secure'}
+            <svg viewBox="0 0 24 24" class="size-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+          {:else if security?.kind === 'insecure'}
+            <ZIcon zType={'lucideTriangleAlert' as ZIconName} class="size-3.5" />
+          {:else if security}
+            <svg viewBox="0 0 24 24" class="size-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></svg>
+          {:else}
+            <ZIcon zType={'lucideSearch' as ZIconName} class="size-3.5" />
+          {/if}
+        </button>
         <input
           bind:this={addressInput}
           bind:value={address}
-          class="h-7 w-full rounded-md border border-border bg-muted/40 px-3 text-xs outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:bg-background"
+          class="h-7 w-full border bg-muted/40 pr-3 pl-8 text-xs outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:bg-background {suggestOpen ? 'rounded-t-md rounded-b-none border-primary border-b-border bg-background' : 'rounded-md border-border'}"
           placeholder="Search or enter an address"
           aria-label="Address"
+          role="combobox"
+          aria-expanded={suggestOpen}
+          aria-controls="address-suggestions"
+          aria-autocomplete="list"
           spellcheck="false"
           autocomplete="off"
-          onfocus={(event) => { editing = true; (event.currentTarget as HTMLInputElement).select(); }}
-          onblur={() => (editing = false)}
+          oninput={() => { dirty = true; closed = false; picked = -1; }}
+          onkeydown={onAddressKey}
+          onfocus={(event) => { editing = true; dirty = false; closed = false; picked = -1; selectAddress(event.currentTarget as HTMLInputElement); }}
+          onblur={() => { editing = false; dirty = false; }}
+          onmousedown={() => (focusedByClick = document.activeElement !== addressInput)}
+          onmouseup={(event) => {
+            if (!focusedByClick) return;
+            focusedByClick = false;
+            event.preventDefault();
+          }}
         />
+        {#if suggestOpen}
+          <!-- Drawn by the app over the page (data-page-over puts the page below the app while this is open). -->
+          <div id="address-suggestions" data-page-over role="listbox" tabindex="-1" class="absolute top-full right-0 left-0 z-50 max-h-72 overflow-x-hidden overflow-y-auto rounded-t-none rounded-b-md border border-t-0 border-primary bg-popover p-1 text-popover-foreground shadow-lg" onmousedown={(event) => event.preventDefault()}>
+            {#each suggestions as item, index (`${item.kind}|${item.url}`)}
+              <div
+                role="option"
+                tabindex="-1"
+                aria-selected={index === picked}
+                class="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs {index === picked ? 'bg-primary/15 text-primary' : 'hover:bg-primary/10'}"
+                onmousemove={() => (picked = index)}
+                onclick={() => choose(item)}
+                onkeydown={(event) => event.key === 'Enter' && choose(item)}
+              >
+                <ZIcon zType={(item.kind === 'history' ? 'lucideClock' : item.kind === 'go' ? 'lucideGlobe' : 'lucideSearch') as ZIconName} class="size-3.5 shrink-0 text-muted-foreground" />
+                {#if item.kind === 'search'}
+                  <span class="min-w-0 flex-1 truncate">Search Google for "{item.text}"</span>
+                {:else if item.kind === 'go'}
+                  <span class="min-w-0 flex-1 truncate">Go to {item.text}</span>
+                {:else if item.kind === 'history'}
+                  <span class="min-w-0 flex-1 truncate">{item.title || item.text.replace(/^https?:\/\//, '')}</span>
+                  {#if item.title}<span class="max-w-[50%] shrink truncate text-muted-foreground">{item.text.replace(/^https?:\/\/(www\.)?/, '')}</span>{/if}
+                {:else}
+                  <span class="min-w-0 flex-1 truncate">{item.text}</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+        <ZPopover anchor={lockButton} bind:open={lockOpen} zTrigger="manual" zPosition="bottom-left" zOffset={6} zWidth={280}>
+          {#snippet children()}
+            {#if security}
+              <div class="grid gap-2 p-3 text-xs">
+                <div class="flex items-center gap-2 font-medium {security.kind === 'secure' ? 'text-emerald-600 dark:text-emerald-400' : security.kind === 'insecure' ? 'text-amber-600 dark:text-amber-400' : ''}">
+                  {security.kind === 'secure' ? 'Connection is secure' : security.kind === 'local' ? 'Local address (not encrypted)' : 'Connection is not secure'}
+                </div>
+                <p class="m-0 text-muted-foreground">
+                  {security.kind === 'secure' ? 'Data sent to this site is encrypted.' : security.kind === 'local' ? 'This page runs on your own machine, so nothing leaves it.' : 'Anything you send to this site can be read by others. Do not enter passwords or card numbers.'}
+                </p>
+                <dl class="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+                  <dt class="text-muted-foreground">Protocol</dt><dd class="m-0">{security.protocol}</dd>
+                  <dt class="text-muted-foreground">Host</dt><dd class="m-0 truncate" title={security.host}>{security.host}</dd>
+                  <dt class="text-muted-foreground">Port</dt><dd class="m-0">{security.port}</dd>
+                </dl>
+                {#if security.kind === 'secure'}<p class="m-0 text-[11px] text-muted-foreground">Certificate details are not available in the embedded browser.</p>{/if}
+              </div>
+            {/if}
+          {/snippet}
+        </ZPopover>
       </form>
       <div class="flex shrink-0 items-center gap-0.5">
         <!-- Desktop, tablet, phone: one group, the current one pressed. Rotate is part of it, off for desktop. -->
@@ -615,7 +845,8 @@
         </button>
         <ZPopover anchor={processButton} bind:open={processOpen} zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth={300}>
           {#snippet children({ close })}
-            <div class="grid min-h-40 grid-cols-[minmax(0,1fr)] content-start p-1">
+            <!-- The padding is inside the scroller, so its scrollbar sits on the popover's own edge. -->
+            <div class="grid max-h-60 min-h-40 grid-cols-[minmax(0,1fr)] content-start overflow-y-auto p-1">
               {#if servers.list.length === 0}
                 <div class="col-start-1 row-start-1 flex min-h-38 flex-col items-center justify-center gap-2 self-center text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="24" /> Nothing is running in the background</div>
               {/if}

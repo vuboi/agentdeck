@@ -109,13 +109,13 @@
 <div class="flex min-h-0 flex-col overflow-hidden {embedded ? 'h-full flex-1' : 'shrink-0'}" style:height={embedded ? undefined : `${browser.devtoolsHeight + 1}px`} in:fly={{ y: embedded ? 0 : -8, duration: embedded ? 0 : 200, opacity: 0 }}>
   {#if !embedded}<Splitter axis="y" label="Resize developer tools" onDelta={resize} />{/if}
   <section class="flex flex-col bg-background {embedded ? 'min-h-0 flex-1' : 'shrink-0'}" style:height={embedded ? undefined : `${browser.devtoolsHeight}px`} aria-label="Developer tools">
-  <div class="flex shrink-0 items-center gap-1 border-b border-border px-1.5 py-1" role="tablist">
+  <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5" role="tablist">
     {#each [['console', 'Console'], ['network', 'Network'], ['application', 'Application']] as [value, label] (value)}
       <button
         type="button"
         role="tab"
         aria-selected={tab === value}
-        class="flex h-6 cursor-pointer items-center gap-1 rounded px-2 text-xs outline-none {tab === value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+        class="flex h-7 cursor-pointer items-center gap-1 rounded px-2 text-xs outline-none {tab === value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
         onclick={() => (tab = value as Tab)}
       >
         {label}
@@ -124,7 +124,7 @@
     {/each}
     <input
       bind:value={filter}
-      class="mx-1 h-6 min-w-0 flex-1 rounded border border-input bg-background px-2 text-xs outline-none focus:border-primary"
+      class="mx-1 h-7 min-w-0 flex-1 rounded border border-input bg-background px-2 text-xs outline-none focus:border-primary"
       placeholder="Filter"
       aria-label="Filter"
     />
@@ -132,7 +132,7 @@
       <button
         bind:this={levelButton}
         type="button"
-        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-input bg-background px-1.5 text-xs outline-none hover:border-primary/60 {levelOpen ? 'border-primary' : ''}"
+        class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded border border-input bg-background px-1.5 text-xs outline-none hover:border-primary/60 {levelOpen ? 'border-primary' : ''}"
         aria-haspopup="listbox"
         aria-expanded={levelOpen}
         aria-label="Level"
@@ -166,7 +166,7 @@
       <button
         bind:this={typeButton}
         type="button"
-        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-input bg-background px-1.5 text-xs outline-none hover:border-primary/60 {typeOpen ? 'border-primary' : ''}"
+        class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded border border-input bg-background px-1.5 text-xs outline-none hover:border-primary/60 {typeOpen ? 'border-primary' : ''}"
         aria-haspopup="listbox"
         aria-expanded={typeOpen}
         aria-label="Type"
@@ -198,14 +198,14 @@
       </ZPopover>
     {/if}
     {#if tab !== 'application'}
-    <div class="flex items-center [&_.z-icon]:!size-3.5 [&_button]:size-5! [&_button]:rounded [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
+    <div class="flex items-center [&_.z-icon]:!size-3.5 [&_button]:size-6! [&_button]:rounded [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
       <ZDropdownMenu zItems={copyItems} zIcon={'lucideCopy' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="xs" zPosition="top-right" zOffset={6} zMinWidth={240} zWave={false} />
     </div>
-    <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear" {@attach zTooltip({ content: 'Clear', position: 'top' })} onclick={clear}>
+    <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear" {@attach zTooltip({ content: 'Clear', position: 'top' })} onclick={clear}>
       <ZIcon zType={'lucideTrash2' as ZIconName} zSize="14" />
     </button>
     {/if}
-    <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Close" {@attach zTooltip({ content: 'Close', position: 'top' })} onclick={() => setDevtools(false)}>
+    <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Close" {@attach zTooltip({ content: 'Close', position: 'top' })} onclick={() => setDevtools(false)}>
       <ZIcon zType="lucideX" zSize="14" />
     </button>
   </div>

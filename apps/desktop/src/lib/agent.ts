@@ -46,7 +46,7 @@ export async function sendCustomTurn(args: {
   baseUrl: string;
   apiKey: string | null;
   model: string;
-  messages: { role: string; content: string }[];
+  messages: { role: string; content: string; images?: string[]; files?: string[] }[];
   permissionMode: string | null;
   allowedTools: string[];
   cwd: string | null;
@@ -60,6 +60,36 @@ export async function sendCustomTurn(args: {
 export async function saveAttachment(mime: string, data: string): Promise<string> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<string>('attachment_save', { mime, data });
+}
+
+/** Saves a document (base64, no prefix) where the agent CLI can open it, and returns its path. */
+export async function saveFileAttachment(name: string, data: string): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('attachment_save_file', { name, data });
+}
+
+/** Size in bytes of a file on disk (a dropped one); null for a folder. */
+export async function fileSize(path: string): Promise<number | null> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<number | null>('attachment_stat', { path });
+}
+
+/** A picture saved on disk (a tool's screenshot) as a data URL; rejects for anything that is not a small image file. */
+export async function readImageDataUrl(path: string): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('read_image_data_url', { path });
+}
+
+/** The bytes of a file on disk (at most 50 MB), for the document preview. */
+export async function readFileBytes(path: string): Promise<ArrayBuffer> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<ArrayBuffer>('read_file_bytes', { path });
+}
+
+/** Shows an attached file, selected, in the system file manager. */
+export async function revealFile(path: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('attachment_reveal', { path });
 }
 
 /** Subscribe to every agent event. Returns the unlisten function. */

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProjectBar from './ProjectBar.svelte';
   import { untrack } from 'svelte';
   import { getPref, setPref } from '../prefs';
   import { ZButton, ZCommand, ZIcon, ZPopover, zSortable, zTooltip } from '@shival99/z-ui-svelte';
@@ -13,6 +14,7 @@
     AGENTS,
     draftElements,
     draftImages,
+    draftFiles,
     draftMentions,
     drafts,
     isRunning,
@@ -30,10 +32,16 @@
     type Agent,
     type Effort,
     type Attachment,
+    type FileAttachment,
     type Mention,
     type Permission,
   } from '../sessions.svelte';
-  import { openImages } from '../preview.svelte';
+  import { openAttachment, openImages } from '../preview.svelte';
+  import FileChip from './FileChip.svelte';
+  import { clipFromPaste, imageMime, isImageName } from '../attachments';
+  import { fileSize, saveFileAttachment } from '../agent';
+  import { inTauri } from '../history';
+  import { toast } from '../toast';
   import ModelPicker from './ModelPicker.svelte';
 
   // What is typed belongs to the open session: switch away and back and it is still there.
@@ -53,6 +61,10 @@
     draftMentions[sessionId] = value;
   };
   const images = $derived(draftImages[sessionId] ?? []);
+  const attached = $derived(draftFiles[sessionId] ?? []);
+  const setFiles = (value: FileAttachment[]) => {
+    draftFiles[sessionId] = value;
+  };
   const elements = $derived(draftElements[sessionId] ?? []);
   const running = $derived(isRunning(sessionId));
   const mac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
@@ -72,12 +84,13 @@
     const list = [...waiting];
     const at = list.indexOf(item);
     if (at === -1) return;
-    if (hasInput) list[at] = { text: draft, images: [...images], elements: [...elements], mentions: [...mentions] };
+    if (hasInput) list[at] = { text: draft, images: [...images], elements: [...elements], mentions: [...mentions], files: [...attached] };
     else list.splice(at, 1);
     if (list.length) queued[sessionId] = list;
     else delete queued[sessionId];
     setDraft(item.text);
     setImages(item.images);
+    setFiles(item.files ?? []);
     draftElements[sessionId] = item.elements;
     setMentions(item.mentions ?? []);
     requestAnimationFrame(() => {
@@ -86,7 +99,7 @@
       resize();
     });
   }
-  const hasInput = $derived(draft.trim().length > 0 || images.length > 0 || elements.length > 0);
+  const hasInput = $derived(draft.trim().length > 0 || images.length > 0 || elements.length > 0 || attached.length > 0);
   let detail = $state<string | null>(null);
   let chipAnchors = $state<Record<string, HTMLElement | null>>({});
   const setImages = (value: Attachment[]) => {
@@ -106,7 +119,7 @@
   let agent = $state<Agent>('claude');
   let model = $state('claude-sonnet-5-5');
   let effort = $state<Effort>('medium');
-  let fast = $state(false);
+  let fast = $state(true);
   let permission = $state<Permission>('auto');
   $effect(() => {
     turnOptions.permission = permission;
@@ -138,6 +151,8 @@
       permission = saved.permission;
       return;
     }
+    // A chat with nothing saved starts with fast mode on.
+    fast = true;
     const session = workspace.sessions.find((item) => item.id === sessionId);
     if (session) {
       agent = session.agent;
@@ -321,14 +336,124 @@
     return { id: crypto.randomUUID(), name: file.name || 'pasted image', mime, src: canvas.toDataURL(mime, 0.88) };
   }
 
+  const DOC_MAX = 25 * 1024 * 1024; // the backend refuses larger ones too
+
   async function addFiles(files: File[]) {
+    const isPicture = (file: File) => /^image\/(png|jpeg|gif|webp)$/.test(file.type);
+    const id = sessionId;
+    const pictures = files.filter(isPicture);
+    const documents = files.filter((file) => !isPicture(file));
     const room = MAX_IMAGES - images.length;
-    const added = (await Promise.all(files.slice(0, Math.max(0, room)).map((file) => toAttachment(file).catch(() => null)))).filter((item): item is Attachment => item !== null);
-    if (added.length) setImages([...images, ...added]);
+    const added = (await Promise.all(pictures.slice(0, Math.max(0, room)).map((file) => toAttachment(file).catch(() => null)))).filter((item): item is Attachment => item !== null);
+    if (added.length) draftImages[id] = [...(draftImages[id] ?? []), ...added];
+    if (documents.length) await addDocuments(documents, id);
   }
 
+  const readBase64 = (file: Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).slice(String(reader.result).indexOf(',') + 1));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
+  /** Documents picked or dropped as File objects: written to disk (the agent is given the path). */
+  async function addDocuments(documents: File[], id: string) {
+    if (!inTauri()) {
+      toast.error('Attaching documents needs the desktop app');
+      return;
+    }
+    const added: FileAttachment[] = [];
+    for (const file of documents) {
+      if (file.size > DOC_MAX) {
+        toast.error(`${file.name} is larger than 25 MB`);
+        continue;
+      }
+      try {
+        const path = await saveFileAttachment(file.name || 'file', await readBase64(file));
+        added.push({ id: crypto.randomUUID(), name: file.name || 'file', path, size: file.size });
+      } catch {
+        toast.error(`Could not attach ${file.name}`);
+      }
+    }
+    if (added.length) draftFiles[id] = [...(draftFiles[id] ?? []), ...added];
+  }
+
+  /** Files dropped on the window arrive as paths (Tauri's drop event): used where they are, pictures are read for a thumbnail. */
+  async function addPaths(paths: string[]) {
+    const id = sessionId;
+    const docs: FileAttachment[] = [];
+    const pics: Attachment[] = [];
+    const { invoke } = await import('@tauri-apps/api/core');
+    for (const path of paths) {
+      const name = path.split(/[\/]/).pop() ?? path;
+      try {
+        if (isImageName(name) && images.length + pics.length < MAX_IMAGES) {
+          const base64 = await invoke<string>('file_read_bytes', { root: path.replace(/[\/][^\/]*$/, ''), path });
+          const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+          const picture = await toAttachment(new File([bytes], name, { type: imageMime(name) }));
+          if (picture) pics.push(picture);
+          continue;
+        }
+        const size = await fileSize(path);
+        if (size === null) continue; // a folder
+        if (size > DOC_MAX) {
+          toast.error(`${name} is larger than 25 MB`);
+          continue;
+        }
+        docs.push({ id: crypto.randomUUID(), name, path, size });
+      } catch {
+        toast.error(`Could not attach ${name}`);
+      }
+    }
+    if (pics.length) draftImages[id] = [...(draftImages[id] ?? []), ...pics];
+    if (docs.length) draftFiles[id] = [...(draftFiles[id] ?? []), ...docs];
+  }
+
+  // Tauri swallows the browser's own file drop, so the window's drop event is used: a drop over the conversation area
+  // attaches the files.
+  let formEl: HTMLFormElement | undefined = $state();
+  $effect(() => {
+    if (!inTauri()) return;
+    let off: (() => void) | undefined;
+    let gone = false;
+    void import('@tauri-apps/api/webview').then(async ({ getCurrentWebview }) => {
+      const stop = await getCurrentWebview().onDragDropEvent((event) => {
+        const area = formEl?.closest('main')?.getBoundingClientRect();
+        const payload = event.payload;
+        if (payload.type === 'leave') {
+          dragging = false;
+          return;
+        }
+        const ratio = window.devicePixelRatio || 1;
+        const inside = !!area && payload.position.x / ratio >= area.left && payload.position.x / ratio <= area.right && payload.position.y / ratio >= area.top && payload.position.y / ratio <= area.bottom;
+        if (payload.type === 'drop') {
+          dragging = false;
+          if (inside && payload.paths.length) void addPaths(payload.paths);
+        } else dragging = inside;
+      });
+      if (gone) stop();
+      else off = stop;
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  });
+
   function onPaste(event: ClipboardEvent) {
-    const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'));
+    // Pasting what "Copy all" copied from a message brings back its text, pictures, notes and files.
+    const clip = clipFromPaste(event.clipboardData);
+    if (clip) {
+      event.preventDefault();
+      const at = area?.selectionStart ?? draft.length;
+      setDraft(`${draft.slice(0, at)}${clip.text}${draft.slice(area?.selectionEnd ?? at)}`);
+      if (clip.images.length) setImages([...images, ...clip.images.map((item) => ({ ...item, id: crypto.randomUUID() }))]);
+      if (clip.elements.length) draftElements[sessionId] = [...elements, ...clip.elements.map((item) => ({ ...item, id: crypto.randomUUID() }))];
+      if (clip.files.length) setFiles([...attached, ...clip.files.map((item) => ({ ...item, id: crypto.randomUUID() }))]);
+      return;
+    }
+    const files = [...(event.clipboardData?.files ?? [])];
     if (files.length === 0) return; // plain text pastes as usual
     event.preventDefault();
     void addFiles(files);
@@ -346,12 +471,15 @@
     if (!hasInput) return;
     // Handing work to an agent needs words that say what the work is.
     if (mentions.some((entry) => entry.kind === 'ai') && !draft.trim()) return;
-    sendMessage(draft, images, elements, mentions, whileRunning);
+    sendMessage(draft, images, elements, mentions, whileRunning, attached);
+    // Sent by hand: the chat goes to its newest content, even if it was scrolled up.
+    window.dispatchEvent(new Event('agentdeck:scrolltoend'));
     draftElements[sessionId] = [];
     detail = null;
     setDraft('', { sent: true });
     setMentions([]);
     setImages([]);
+    setFiles([]);
   }
 
   function onKeydown(event: KeyboardEvent) {
@@ -402,7 +530,7 @@
           <ZIcon zType={'lucideListChecks' as ZIconName} class="size-3.5 group-hover/handle:hidden" />
           <ZIcon zType={'lucideGripVertical' as ZIconName} class="hidden size-3.5 group-hover/handle:block" />
         </span>
-        <span class="min-w-0 flex-1 truncate text-foreground">{item.text || (item.images.length ? 'Image' : 'Element')}</span>
+        <span class="min-w-0 flex-1 truncate text-foreground">{item.text || (item.images.length ? 'Image' : item.files?.length ? 'File' : 'Element')}</span>
         <button type="button" class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => steerQueued(sessionId, item)}>
           <ZIcon zType={'lucideArrowRight' as ZIconName} class="size-3" />
           <span>Steer</span>
@@ -421,6 +549,7 @@
   </div>
 {/if}
 <form
+  bind:this={formEl}
   class="relative z-10 min-w-0 rounded-2xl border bg-card px-2.5 pt-2 pb-1.5 shadow-lg min-[720px]:px-3 min-[720px]:pt-2.5 min-[720px]:pb-1.5 transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
   onsubmit={(event) => { event.preventDefault(); submit(); }}
   ondragover={(event) => { if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); dragging = true; } }}
@@ -469,6 +598,13 @@
       {/each}
     </div>
   {/if}
+  {#if attached.length > 0}
+    <div class="mb-2 flex flex-wrap gap-2" aria-label="Attached files">
+      {#each attached as file (file.id)}
+        <FileChip name={file.name} size={file.size} onclick={() => void openAttachment(file.path, file.name, file.size)} onremove={() => setFiles(attached.filter((entry) => entry !== file))} />
+      {/each}
+    </div>
+  {/if}
   {#if mentions.length > 0}
     <div class="mb-2 flex flex-wrap gap-1.5" aria-label="Mentions">
       {#each mentions as mention (mention.kind + mention.id)}
@@ -503,10 +639,10 @@
 
   <div class="flex min-w-0 items-center justify-between gap-2">
     <div class="flex min-w-0 items-center gap-1">
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Attach image" title="Attach image (or paste / drop)" onclick={() => fileInput?.click()}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Attach files" title="Attach files (or paste / drop)" onclick={() => fileInput?.click()}>
         <ZIcon zType="lucidePaperclip" class="size-3.5" />
       </ZButton>
-      <input bind:this={fileInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onchange={(event) => { void addFiles([...(event.currentTarget.files ?? [])]); event.currentTarget.value = ''; }} />
+      <input bind:this={fileInput} type="file" multiple hidden onchange={(event) => { void addFiles([...(event.currentTarget.files ?? [])]); event.currentTarget.value = ''; }} />
       <ZButton zWave={false} zType="ghost" zSize="sm" class="hidden size-6! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary min-[720px]:inline-flex" aria-label="Mention a session, project or AI" title="Mention (@)" onclick={() => (paletteOpen = true)}>
         <ZIcon zType="lucideAtSign" class="size-3.5" />
       </ZButton>
@@ -524,6 +660,7 @@
     {/if}
   </div>
 </form>
+<ProjectBar />
 
 <ZCommand
   bind:open={slashOpen}

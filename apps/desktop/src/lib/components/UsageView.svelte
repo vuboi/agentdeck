@@ -153,7 +153,7 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-1 flex-col text-xs" role="tabpanel" aria-label="Usage">
-  <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+  <div class="flex min-h-9 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-1">
     <div class="flex rounded-md bg-muted p-0.5" role="group" aria-label="Range">
       {#each RANGES as item (item.value)}
         <button type="button" class="rounded px-2 py-0.5 {range === item.value ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}" aria-pressed={range === item.value} onclick={() => (range = item.value)}>{item.label}</button>
@@ -263,23 +263,23 @@
 
 <ZPopover anchor={projectTrigger} bind:open={projectOpen} zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth={220}>
   {#snippet children()}
-    <div class="flex w-full flex-col gap-1 p-1.5 text-xs" role="listbox" aria-label="Project">
+    <div class="flex w-full flex-col text-xs" role="listbox" aria-label="Project">
       {#if projectIds.length >= SEARCH_FROM}
-        <div class="relative">
-          <ZIcon zType={'lucideSearch' as ZIconName} class="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-muted-foreground" />
-          <input class="h-7 w-full rounded-sm border border-border bg-background pr-2 pl-7 text-xs outline-none placeholder:text-muted-foreground" placeholder="Search projects…" aria-label="Search projects" bind:this={projectSearch} bind:value={projectQuery} />
-        </div>
+        <div class="flex h-9 items-center gap-2 border-b border-border px-3">
+            <ZIcon zType={'lucideSearch' as ZIconName} class="size-3.5 shrink-0 text-muted-foreground" />
+            <input class="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground" placeholder="Search projects…" aria-label="Search projects" bind:this={projectSearch} bind:value={projectQuery} />
+          </div>
       {/if}
       <!-- A fixed minimum, so the popover does not shrink and jump as the search narrows the list. -->
-      <div class="flex max-h-60 min-h-44 flex-col gap-0.5 overflow-y-auto">
+      <div class="flex max-h-44 min-h-32 flex-col gap-0.5 overflow-y-auto p-1">
         {#if !projectQuery.trim()}
-          <button type="button" role="option" aria-selected={chosen === null} class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left outline-none hover:bg-accent {chosen === null ? 'text-primary' : ''}" onclick={() => pickProject(null)}>
+          <button type="button" role="option" aria-selected={chosen === null} class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left outline-none hover:bg-accent {chosen === null ? 'bg-primary/15 text-primary' : ''}" onclick={() => pickProject(null)}>
             <span class="min-w-0 flex-1 truncate">All projects</span>
             {#if chosen === null}<ZIcon zType={'lucideCheck' as ZIconName} class="size-3.5 shrink-0" />{/if}
           </button>
         {/if}
         {#each shownProjects as id (id)}
-          <button type="button" role="option" aria-selected={chosen === id} class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left outline-none hover:bg-accent {chosen === id ? 'text-primary' : ''}" onclick={() => pickProject(id)}>
+          <button type="button" role="option" aria-selected={chosen === id} class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left outline-none hover:bg-accent {chosen === id ? 'bg-primary/15 text-primary' : ''}" onclick={() => pickProject(id)}>
             <span class="min-w-0 flex-1 truncate">{projectName(id)}</span>
             {#if chosen === id}<ZIcon zType={'lucideCheck' as ZIconName} class="size-3.5 shrink-0" />{/if}
           </button>

@@ -14,7 +14,7 @@ async function call(command: string, args?: Record<string, unknown>) {
 }
 
 /** What the app opens above everything: modal and drawer panes, menus, tooltips, dialogs, toasts. */
-const OVER = '.z-overlay-pane, [data-z-popover], [role="dialog"], [role="alertdialog"], [role="tooltip"], [role="region"][aria-live] > * > *';
+const OVER = '.z-overlay-pane, [data-z-popover], [role="dialog"], [role="alertdialog"], [role="tooltip"], [data-page-over], [role="region"][aria-live] > * > *';
 
 /** Whether something of the app lies over `page` (window coordinates). `stage` holds the page itself. */
 export function overPage(stage: HTMLElement, page: DOMRect): boolean {

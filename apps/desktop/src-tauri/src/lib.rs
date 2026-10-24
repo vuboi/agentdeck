@@ -14,6 +14,7 @@ mod pty;
 mod changes;
 mod custom_chat;
 mod mcp_client;
+mod fs_ops;
 
 use ag_adapters::agent::antigravity::Antigravity;
 use ag_adapters::agent::claude::Claude;
@@ -63,6 +64,115 @@ async fn attachment_save(mime: String, data: String) -> Result<String, String> {
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Saves a picked file (any type: document, spreadsheet, code) under `~/.agentdeck/attachments` so the agent CLI can
+/// open it by path. `data` is the base64 of the file. Keeps the file's own name (made safe) and returns the path.
+#[tauri::command]
+async fn attachment_save_file(name: String, data: String) -> Result<String, String> {
+    use base64::Engine;
+    const MAX_BYTES: usize = 25 * 1024 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .map_err(|error| error.to_string())?;
+        if bytes.len() > MAX_BYTES {
+            return Err("the file is larger than 25 MB".to_string());
+        }
+        let safe: String = name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ') { c } else { '_' })
+            .collect();
+        let safe = safe.trim_matches(|c: char| c == '.' || c == ' ');
+        let safe = if safe.is_empty() { "file" } else { safe };
+        let folder = home_folder()?.join(".agentdeck").join("attachments");
+        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let path = folder.join(format!("{stamp:x}-{safe}"));
+        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Size of a file dropped onto the window (its path comes from the system's drop event), `None` for a folder.
+#[tauri::command]
+fn attachment_stat(path: String) -> Result<Option<u64>, String> {
+    let meta = std::fs::metadata(&path).map_err(|error| error.to_string())?;
+    Ok(if meta.is_file() { Some(meta.len()) } else { None })
+}
+
+/// A picture a tool saved on disk (a screenshot), as a data URL for the chat to show. Image files only, at most 8 MB.
+#[tauri::command]
+async fn read_image_data_url(path: String) -> Result<String, String> {
+    use base64::Engine;
+    const MAX_BYTES: u64 = 8 * 1024 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mime = match Path::new(&path)
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_lowercase())
+            .as_deref()
+        {
+            Some("png") => "image/png",
+            Some("jpg" | "jpeg") => "image/jpeg",
+            Some("gif") => "image/gif",
+            Some("webp") => "image/webp",
+            _ => return Err("not an image file".to_string()),
+        };
+        let meta = std::fs::metadata(&path).map_err(|error| error.to_string())?;
+        if !meta.is_file() || meta.len() > MAX_BYTES {
+            return Err("not a file, or larger than 8 MB".to_string());
+        }
+        let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+        Ok(format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// The raw bytes of an attached file, for the document preview (sent as binary, not JSON). At most 50 MB.
+#[tauri::command]
+async fn read_file_bytes(path: String) -> Result<tauri::ipc::Response, String> {
+    const MAX_BYTES: u64 = 50 * 1024 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        let meta = std::fs::metadata(&path).map_err(|error| error.to_string())?;
+        if !meta.is_file() || meta.len() > MAX_BYTES {
+            return Err("not a file, or larger than 50 MB".to_string());
+        }
+        std::fs::read(&path)
+            .map(tauri::ipc::Response::new)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Shows an attached file in the system file manager, selected.
+#[tauri::command]
+fn attachment_reveal(path: String) -> Result<(), String> {
+    if !Path::new(&path).is_file() {
+        return Err(format!("{path} is not a file"));
+    }
+    let mut command = if cfg!(windows) {
+        let mut command = std::process::Command::new("explorer");
+        command.arg(format!("/select,{path}"));
+        command
+    } else if cfg!(target_os = "macos") {
+        let mut command = std::process::Command::new("open");
+        command.arg("-R").arg(&path);
+        command
+    } else {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(Path::new(&path).parent().unwrap_or_else(|| Path::new("/")));
+        command
+    };
+    command.spawn().map(|_| ()).map_err(|error| error.to_string())
 }
 
 /// The models an agent CLI offers, from its own cache on this machine.
@@ -773,6 +883,8 @@ pub fn run() {
             changes::change_revert,
             changes::change_revert_all,
             changes::change_stage,
+            changes::git_branches,
+            changes::git_switch,
             connectors::connectors_detect,
             connectors::connector_install,
             connectors::connector_login,
@@ -805,6 +917,9 @@ pub fn run() {
             path_rename,
             path_trash,
             path_restore,
+            fs_ops::path_create,
+            fs_ops::project_files,
+            fs_ops::file_write,
             models_list,
             history_load,
             history_load_page,
@@ -818,6 +933,11 @@ pub fn run() {
             custom_send,
             agent_stop,
             attachment_save,
+            attachment_save_file,
+            attachment_stat,
+            attachment_reveal,
+            read_image_data_url,
+            read_file_bytes,
             detect::detect_run_targets,
             servers::servers_list,
             servers::server_stop,
@@ -836,6 +956,8 @@ pub fn run() {
             browser::browser_capture,
             browser::browser_press,
             browser::open_external,
+            browser::browser_favicon,
+            browser::browser_suggest,
             pty::pty_open,
             pty::pty_write,
             pty::pty_resize,

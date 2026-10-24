@@ -9,7 +9,7 @@
   import { parseQuestions, withoutOpenBlock } from '../questions';
 
   // `fade` is the surface behind the block; ZShowMore fades its clipped edge into that colour.
-  let { block, fade, onanswer, onquestions, answered = false }: { block: Block; fade?: string; onanswer?: (answer: 'once' | 'always' | 'deny') => void; /** Sends the answers to questions the agent asked in this block. */ onquestions?: (text: string) => void; /** Something came after this block: its questions were answered (or passed). */ answered?: boolean } = $props();
+  let { block, fade, agent, onanswer, onquestions, answered = false }: { block: Block; fade?: string; agent?: import('../sessions.svelte').Agent; onanswer?: (answer: 'once' | 'always' | 'deny') => void; /** Sends the answers to questions the agent asked in this block. */ onquestions?: (text: string) => void; /** Something came after this block: its questions were answered (or passed). */ answered?: boolean } = $props();
 
   // An agent's answer can end in questions for the user (a ```questions block): shown as cards, not as JSON.
   const asked = $derived(block.kind === 'response' && fade === undefined && !block.streaming ? parseQuestions(block.text) : { questions: [], rest: '' });
@@ -91,7 +91,7 @@
   </div>
 {:else if block.kind === 'permission'}
   <!-- Pending requests are shown above the input; the conversation keeps only the answered ones. -->
-  {#if block.state !== 'pending'}<PermissionCard {block} {onanswer} />{/if}
+  {#if block.state !== 'pending'}<PermissionCard {block} {agent} {onanswer} />{/if}
 {:else if block.kind === 'element'}
   <!-- Click for what was sent with the message, in a card (the native tooltip ran off the window with the long selector). -->
   <button type="button" bind:this={chip} class="block-in inline-flex max-w-full cursor-pointer items-center gap-1.5 self-start rounded-md border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground outline-none hover:bg-muted {cardOpen ? 'bg-muted' : ''}" aria-label="Details of {block.selector}" aria-expanded={cardOpen} onclick={() => (cardOpen = !cardOpen)}>

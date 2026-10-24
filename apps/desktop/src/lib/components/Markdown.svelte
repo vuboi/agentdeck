@@ -1,10 +1,11 @@
 <script module lang="ts">
   // shiki is the heaviest import of the chat: load it once the app has settled, not in the middle of opening a chat.
-  if (typeof window !== 'undefined') setTimeout(() => void import('shiki'), 4000);
+  if (typeof window !== 'undefined') setTimeout(preloadHighlighter, 4000);
 </script>
 
 <script lang="ts">
   import { untrack } from 'svelte';
+  import { highlightHtml, preloadHighlighter } from '../highlight';
   import { isLocalUrl, linkMenu, openExternal, openInPreview } from '../browser.svelte';
   import { inTauri } from '../history';
   import { colourFinished, colourStarted, eagerColour, renderMarkdown } from '../markdown';
@@ -157,7 +158,6 @@
   }
 
   async function colourBlocks(container: HTMLElement, dark: boolean, blocks: HTMLElement[]) {
-    let shiki: typeof import('shiki') | undefined;
     for (const block of blocks) {
       const code = block.querySelector('code');
       const pre = block.querySelector('pre');
@@ -173,14 +173,11 @@
         continue;
       }
       try {
-        shiki ??= await import('shiki');
-        const out = document.createElement('div');
-        out.innerHTML = await shiki.codeToHtml(source, { lang: language, theme: dark ? 'github-dark' : 'github-light' });
-        const inner = out.querySelector('code');
-        if (!inner) continue;
-        coloured.set(key, inner.innerHTML);
+        const inner = await highlightHtml(source, language, dark);
+        if (inner === null) continue;
+        coloured.set(key, inner);
         if (coloured.size > COLOURED_MAX) coloured.delete(coloured.keys().next().value as string);
-        if (container.contains(block)) code.innerHTML = inner.innerHTML;
+        if (container.contains(block)) code.innerHTML = inner;
       } catch {
         // An unknown language stays plain.
       }

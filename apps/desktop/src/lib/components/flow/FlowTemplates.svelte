@@ -13,12 +13,12 @@
 </script>
 
 <section class="flex max-h-[48%] min-h-0 shrink-0 flex-col border-b border-border" aria-label="Flows">
-  <div class="flex items-center gap-2 px-3 pt-2.5 pb-2">
+  <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
     <ZIcon zType={icon('lucideWorkflow')} class="size-3.5 text-muted-foreground" />
     <h2 class="m-0 flex-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Flows</h2>
     <ZButton zWave={false} zType="outline" zSize="sm" class="h-7! gap-1 px-2.5! text-xs" onclick={createFlow}><ZIcon zType={icon('lucidePlus')} class="size-3.5" />New flow</ZButton>
   </div>
-  <div class="min-h-0 overflow-y-auto px-2.5 pb-2.5">
+  <div class="min-h-0 overflow-y-auto p-2.5">
     <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr))">
       {#each allPresets() as preset (preset.id)}
         {@const used = workflows.assigned[active] === preset.id}

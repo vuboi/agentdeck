@@ -1,3 +1,18 @@
+<script lang="ts" module>
+  import { getPref, setPref } from '../../prefs';
+  import type { FlowDir } from './flow-graph';
+
+  /** Which way a run reads, shared by every run canvas and remembered: top to bottom, or left to right. */
+  export const runLayout = $state<{ dir: FlowDir }>({ dir: 'down' });
+  void getPref<FlowDir>('workflow.runDirection').then((saved) => {
+    if (saved === 'down' || saved === 'right') runLayout.dir = saved;
+  });
+  const turnLayout = () => {
+    runLayout.dir = runLayout.dir === 'down' ? 'right' : 'down';
+    setPref('workflow.runDirection', runLayout.dir);
+  };
+</script>
+
 <script lang="ts">
   import '@xyflow/svelte/dist/style.css';
   import './flow.css';
@@ -81,7 +96,7 @@
 
   // The canvas follows the flow (and, in a run, the state of every step); a card being dragged is left alone.
   $effect(() => {
-    const built = buildFlow(graph, mode, run, cut);
+    const built = buildFlow(graph, mode, run, cut, runLayout.dir);
     let cancelled = false;
     untrack(() => {
       nodes = built.nodes.map((node) => ({ ...node, selected: node.id === selected }));
@@ -116,6 +131,16 @@
     };
     void tick().then(() => requestAnimationFrame(settle));
     return () => (cancelled = true);
+  });
+
+  // Turning a run the other way: the cards move to their new places, then the view is fitted again.
+  let shownDir = runLayout.dir;
+  $effect(() => {
+    const dir = runLayout.dir;
+    if (dir === shownDir) return;
+    shownDir = dir;
+    const timer = setTimeout(() => void flow.fitView({ padding: 0.2, maxZoom: 1, duration: 300 }), 450);
+    return () => clearTimeout(timer);
   });
 
   // The app's theme, for the canvas's own colours.
@@ -274,6 +299,9 @@
         <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! p-0!" aria-label="Zoom out" onclick={() => zoomAt(zoom / 1.2)}><ZIcon zType={icon('lucideMinus')} class="size-4" /></ZButton>
         <span class="my-0.5 h-px w-6 bg-border" aria-hidden="true"></span>
         <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! p-0!" aria-label="Fit the flow in view" onclick={() => void flow.fitView({ padding: 0.2, duration: 300 })}><ZIcon zType={icon('lucideMaximize2')} class="size-4" /></ZButton>
+        {#if mode === 'run'}
+          <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! p-0!" aria-label={runLayout.dir === 'down' ? 'Lay the flow out left to right' : 'Lay the flow out top to bottom'} title={runLayout.dir === 'down' ? 'Horizontal layout' : 'Vertical layout'} onclick={turnLayout}><ZIcon zType={icon(runLayout.dir === 'down' ? 'lucideArrowRight' : 'lucideArrowDown')} class="size-4" /></ZButton>
+        {/if}
       </div>
     </Panel>
     {#if minimap}

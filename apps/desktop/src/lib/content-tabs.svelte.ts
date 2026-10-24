@@ -1,12 +1,17 @@
 import { untrack } from 'svelte';
 import { history, pendingProject, watchDroppedDrafts, workspace } from './sessions.svelte';
 import { getPref, setPref } from './prefs';
+import { fileWrites } from './activity.svelte';
+import { drafts } from './file-buffers';
+import { joinFileText, splitFileText } from './file-edit';
+import { inTauri } from './history';
+import { toast } from './toast';
 
 // Browser-style tabs over the conversation area. A tab is either a chat (one session) or a file.
 // Chats and files share one list; `active` is a tab id, or '' when every tab is closed.
 export type ContentTab =
   | { id: string; kind: 'chat'; sessionId: string }
-  | { id: string; kind: 'file'; name: string; path: string; root: string; /** The file as it is, or what changed in it. */ view?: 'file' | 'changes' };
+  | { id: string; kind: 'file'; name: string; path: string; root: string; /** The file as it is, or what changed in it. */ view?: 'file' | 'changes'; /** Edited in the viewer and not saved yet. Never persisted. */ dirty?: boolean };
 
 export const contentTabs = $state({
   active: '' as string,
@@ -18,7 +23,7 @@ const ready = $state({ tabs: false });
 let tabsHydrated = false;
 getPref<{ active: string; tabs: ContentTab[] }>('content.tabs').then((saved) => {
   if (saved) {
-    contentTabs.tabs = saved.tabs ?? [];
+    contentTabs.tabs = (saved.tabs ?? []).map((tab) => (tab.kind === 'file' ? { ...tab, dirty: undefined } : tab));
     contentTabs.active = saved.active ?? '';
   }
   tabsHydrated = true;
@@ -26,7 +31,7 @@ getPref<{ active: string; tabs: ContentTab[] }>('content.tabs').then((saved) => 
 });
 $effect.root(() => {
   $effect(() => {
-    const snapshot = { active: contentTabs.active, tabs: contentTabs.tabs.map((tab) => ({ ...tab })) };
+    const snapshot = { active: contentTabs.active, tabs: contentTabs.tabs.map((tab) => (tab.kind === 'file' ? { ...tab, dirty: undefined } : { ...tab })) };
     if (tabsHydrated) setPref('content.tabs', snapshot);
   });
 });
@@ -150,9 +155,54 @@ export function reopenTab(): boolean {
   return false;
 }
 
+// Closing tabs with unsaved edits asks twice instead of with a modal: the first try warns in a toast, the same
+// try again within a few seconds closes and drops the edits.
+let armedClose = '';
+let armedAt = 0;
+function confirmDiscard(tabs: ContentTab[]): boolean {
+  const dirty = tabs.filter((tab) => tab.kind === 'file' && tab.dirty);
+  if (dirty.length === 0) return true;
+  const key = dirty.map((tab) => tab.id).join('|');
+  if (armedClose === key && Date.now() - armedAt < 6000) {
+    armedClose = '';
+    for (const tab of dirty) drafts.delete(tab.id);
+    return true;
+  }
+  armedClose = key;
+  armedAt = Date.now();
+  const names = dirty.length === 1 && dirty[0].kind === 'file' ? dirty[0].name : `${dirty.length} files`;
+  toast.info(`Unsaved changes in ${names}. Close again to discard them.`);
+  return false;
+}
+
+/** Writes the unsaved edits of a file tab to disk (Ctrl+S, or Save in the tab menu). Answers whether it saved. */
+export async function saveTab(id: string): Promise<boolean> {
+  const tab = contentTabs.tabs.find((item) => item.id === id);
+  const draft = drafts.get(id);
+  if (!tab || tab.kind !== 'file' || !draft || !inTauri()) return false;
+  const raw = joinFileText(draft.read?.() ?? draft.text, splitFileText(draft.disk).format);
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('file_write', { root: tab.root, path: tab.path, text: raw });
+  } catch (failure) {
+    toast.error(`Could not save ${tab.name}: ${String(failure).replace(/^(Error:\s*)+/i, '')}`);
+    return false;
+  }
+  draft.disk = raw;
+  if (draft.saved) draft.saved(raw);
+  else {
+    drafts.delete(id);
+    tab.dirty = false;
+  }
+  fileWrites.tick++;
+  toast.success('Saved');
+  return true;
+}
+
 export function closeTab(id: string) {
   const index = contentTabs.tabs.findIndex((tab) => tab.id === id);
   if (index === -1) return;
+  if (!confirmDiscard([contentTabs.tabs[index]])) return;
   remember([contentTabs.tabs[index]]);
   contentTabs.tabs.splice(index, 1);
   if (contentTabs.active === id) {
@@ -171,6 +221,7 @@ export function fileRootOf(path: string, projectRoot: string): string {
 
 /** Closes every open tab. The chats themselves stay in the sidebar. */
 export function closeAllTabs() {
+  if (!confirmDiscard(contentTabs.tabs)) return;
   remember(contentTabs.tabs);
   contentTabs.tabs.splice(0, contentTabs.tabs.length);
   contentTabs.active = '';
@@ -180,6 +231,7 @@ export function closeAllTabs() {
 export function closeOtherTabs(id: string) {
   const keep = contentTabs.tabs.find((tab) => tab.id === id);
   if (!keep) return;
+  if (!confirmDiscard(contentTabs.tabs.filter((tab) => tab.id !== id))) return;
   remember(contentTabs.tabs.filter((tab) => tab.id !== id));
   contentTabs.tabs.splice(0, contentTabs.tabs.length, keep);
   activateTab(id);

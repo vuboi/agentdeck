@@ -821,3 +821,82 @@ mod fallback {
         }
     }
 }
+
+/// The icon of a page as a data URL, for the tab: the page's own `<link rel=icon>` when it named one, else the site's
+/// `/favicon.ico`. The app's content policy does not let it show images straight from a site, so it is fetched here.
+#[tauri::command]
+pub async fn browser_favicon(page: String, icon: Option<String>) -> Result<String, String> {
+    use base64::Engine;
+    let base = reqwest::Url::parse(&page).map_err(|error| error.to_string())?;
+    if !matches!(base.scheme(), "http" | "https") {
+        return Err("not a web page".into());
+    }
+    let mut candidates: Vec<reqwest::Url> = Vec::new();
+    if let Some(href) = icon.filter(|href| !href.is_empty()) {
+        if let Ok(url) = base.join(&href) {
+            candidates.push(url);
+        }
+    }
+    if let Ok(url) = base.join("/favicon.ico") {
+        if !candidates.contains(&url) {
+            candidates.push(url);
+        }
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .user_agent("Mozilla/5.0 AgentDeck")
+        .build()
+        .map_err(|error| error.to_string())?;
+    for url in candidates {
+        if !matches!(url.scheme(), "http" | "https") {
+            continue;
+        }
+        let Ok(response) = client.get(url).send().await else { continue };
+        if !response.status().is_success() {
+            continue;
+        }
+        let kind = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if kind.starts_with("text/") || kind.contains("json") {
+            continue;
+        }
+        let Ok(bytes) = response.bytes().await else { continue };
+        if bytes.is_empty() || bytes.len() > 262_144 {
+            continue;
+        }
+        let mime = if kind.starts_with("image/") { kind } else { "image/x-icon".to_string() };
+        return Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)));
+    }
+    Err("no icon".into())
+}
+
+/// What Google suggests for a search being typed in the address bar (the first few phrases; none when offline).
+#[tauri::command]
+pub async fn browser_suggest(query: String) -> Vec<String> {
+    let query = query.trim();
+    if query.is_empty() || query.len() > 200 {
+        return Vec::new();
+    }
+    let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(3)).build() else {
+        return Vec::new();
+    };
+    let Ok(mut url) = reqwest::Url::parse("https://suggestqueries.google.com/complete/search?client=firefox") else {
+        return Vec::new();
+    };
+    url.query_pairs_mut().append_pair("q", query);
+    let Ok(response) = client.get(url).send().await else { return Vec::new() };
+    let Ok(value) = response.json::<serde_json::Value>().await else { return Vec::new() };
+    value
+        .get(1)
+        .and_then(|list| list.as_array())
+        .map(|list| list.iter().filter_map(|item| item.as_str().map(str::to_string)).take(5).collect())
+        .unwrap_or_default()
+}

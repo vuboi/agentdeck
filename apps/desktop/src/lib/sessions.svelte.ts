@@ -17,6 +17,7 @@ import { openInPreview } from './browser.svelte';
 import { trackActivity } from './activity.svelte';
 import { logTalk } from './activity.svelte';
 import { parseQuestions, QUESTION_RULE } from './questions';
+import { attachmentBlocks, splitAttachments } from './attachments';
 import { listenAgentEvents, saveAttachment, sendAgentTurn, sendCustomTurn, stopAgentTurn, type AgentEvent } from './agent';
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
@@ -132,6 +133,10 @@ export const draftMentions = $state<Record<string, Mention[]>>({});
 /** An image waiting to be sent: a data URL, already scaled down. */
 export type Attachment = { id: string; name: string; mime: string; src: string };
 export const draftImages = $state<Record<string, Attachment[]>>({});
+
+/** A document waiting to be sent (docx, pdf, xlsx, text, code...): it lives on disk and the agent is given its path. */
+export type FileAttachment = { id: string; name: string; path: string; size: number };
+export const draftFiles = $state<Record<string, FileAttachment[]>>({});
 
 /** A part of a web page picked in the AgentDeck browser, waiting to go with the next message. */
 export type PageElement = { id: string; tag: string; text: string; selector: string; html: string; /** Its place among its neighbours. */ around?: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string>; url: string; title: string; /** What was written about it while marking up the page. */ note?: string };
@@ -356,7 +361,29 @@ function dropEmptyDrafts() {
   if (dropped.length) onDraftsDropped?.(dropped);
 }
 
-export function newSession(projectId =activeSession()?.projectId ?? workspace.projects[0]?.id ?? NO_PROJECT, { reuseDraft = true } = {}) {
+/** Whether the chat is a new one nobody wrote in yet: only such a chat can still be moved to another project. */
+export const isUnstarted = (item: SessionItem | undefined) => Boolean(item && isEmptyDraft(item));
+
+/** Moves a new, unsent chat to another project (or "This computer"). A chat that has started keeps its folder. */
+export function moveDraftToProject(sessionId: string, projectId: string) {
+  const item = workspace.sessions.find((entry) => entry.id === sessionId);
+  if (!item || !isEmptyDraft(item) || item.projectId === projectId) return;
+  if (projectId === NO_PROJECT) ensureNoProject();
+  // One unsent chat per project: the one already there is dropped in favour of this one (its text is lost only if empty).
+  for (let index = workspace.sessions.length - 1; index >= 0; index--) {
+    const other = workspace.sessions[index];
+    if (other.id !== sessionId && other.projectId === projectId && isEmptyDraft(other) && !drafts[other.id]?.trim()) {
+      workspace.sessions.splice(index, 1);
+      onDraftsDropped?.([other.id]);
+    }
+  }
+  item.projectId = projectId;
+  item.gitBranch = undefined;
+  persistLocal();
+}
+
+// A new chat starts on "This computer" unless a project is named: the project is picked under the message box.
+export function newSession(projectId = NO_PROJECT, { reuseDraft = true } = {}) {
   if (projectId === NO_PROJECT) ensureNoProject();
   // One unsent new session per project (or "This computer"): pressing "New session" there again returns to it,
   // typed text included; another project gets its own.
@@ -437,12 +464,18 @@ function previewUrl(text: string, prompt: string): string | undefined {
 /** After a turn: if you asked to open or run something and a local address came out of it, show it in the AgentDeck browser. */
 function openServedPage(sessionId: string, reply: Message) {
   if (!inTauri()) return;
+  // A flow's steps and the turn that writes its final answer only report: an address they mention (an API a search
+  // found, a URL in a README) is not a page the user asked to see, and opening it showed a refused connection.
+  if (workspace.sessions.find((item) => item.id === sessionId)?.parentId || delegateRuns.some((run) => run.main === sessionId && !run.endedAt)) return;
   const text = reply.blocks
     .map((block) => (block.kind === 'response' ? block.text : block.kind === 'command' ? `${block.command}\n${block.output}` : ''))
     .join('\n');
+  const asked = OPEN_WORDS.test(lastPrompt[sessionId] ?? '');
   // You asked for it, or the answer says the page is open or running.
-  if (!OPEN_WORDS.test(lastPrompt[sessionId] ?? '') && !OPEN_WORDS.test(text)) return;
-  const found = previewUrl(text, lastPrompt[sessionId] ?? '');
+  if (!asked && !OPEN_WORDS.test(text)) return;
+  // Without that ask, only an address a command printed (a server that was started) counts, not one the prose mentions.
+  const source = asked ? text : reply.blocks.map((block) => (block.kind === 'command' ? `${block.command}\n${block.output}` : '')).join('\n');
+  const found = previewUrl(source, lastPrompt[sessionId] ?? '');
   // An agent that opened the page itself (browser_open, browser_serve) has put it where it wanted: nothing to add.
   const opened = reply.blocks.some((block) => block.kind === 'command' && /browser_(open|serve)/.test(block.command));
   if (found && !opened) openInPreview(found);
@@ -516,7 +549,7 @@ export const turnOptions = $state<{ permission: Permission; effort: Effort }>({
 const turns: Record<string, string> = {};
 
 /** Messages typed while the agent was still busy, waiting their turn. */
-export type Queued = { text: string; images: Attachment[]; elements: PageElement[]; mentions?: Mention[] };
+export type Queued = { text: string; images: Attachment[]; elements: PageElement[]; mentions?: Mention[]; files?: FileAttachment[] };
 export const queued = $state<Record<string, Queued[]>>({});
 
 /** Whether a chat has a reply in progress (for the send / stop button). */
@@ -598,7 +631,7 @@ function missedTurns(session: SessionItem, list: Message[]): string {
 }
 
 /** One CLI run (`claude -p`, `codex exec`) in `session`, with a fresh live reply. Images go to disk first so the CLI can open them. */
-function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = [], preface = '') {
+function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = [], preface = '', files: FileAttachment[] = []) {
   if (images.length || !allow.length) lastPrompt[session.id] = text;
   // The CLI's own id for the conversation. Claude takes one we choose; Codex names its thread on the first turn
   // and reports it, so a new Codex chat starts without one.
@@ -672,7 +705,7 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey || null,
         model: target.model,
-        messages: [...history, { role: 'user', content: body }],
+        messages: [...history, { role: 'user', content: body, images: images.map((image) => image.src), files: files.map((file) => file.path) }],
         permissionMode: PERMISSION_MODE[turnOptions.permission],
         allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
         cwd,
@@ -680,13 +713,16 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       });
       return;
     }
-    const hint = OPEN_WORDS.test(body) ? AGENTDECK_HINT : '';
+    // A flow's step is not told it may open pages: it reports back, the user did not ask to see anything.
+    const hint = !session.parentId && OPEN_WORDS.test(body) ? AGENTDECK_HINT : '';
+    // Pictures and documents are on disk: the prompt names their paths, which the agent opens with its own tools.
+    const attached =
+      (paths.length ? `Attached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}` : '') +
+      (files.length ? `${paths.length ? '\n\n' : ''}Attached file${files.length > 1 ? 's' : ''} (open with the Read tool or a shell command):\n${files.map((file) => `- ${file.path}`).join('\n')}` : '');
     const prompt =
       hint +
       context +
-      (paths.length
-        ? `${body || 'Look at the attached image.'}\n\nAttached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
-        : body);
+      (attached ? `${body || (files.length && !paths.length ? 'Look at the attached file.' : 'Look at the attached image.')}\n\n${attached}` : body);
     await sendAgentTurn({
       session: session.id,
       turn,
@@ -867,7 +903,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     if (!session.path) void importHistory({ refresh: true });
     // Messages typed while it worked go next, one at a time.
     const next = dequeue(queued, sessionId);
-    if (next) setTimeout(() => send(sessionId, next.text, next.images, next.elements, next.mentions), 0);
+    if (next) setTimeout(() => send(sessionId, next.text, next.images, next.elements, next.mentions, { files: next.files }), 0);
   }
 }
 
@@ -962,6 +998,11 @@ export const liveStats = (sessionId: string, startedAt: number) => statsOf(liveR
 
 /** Whether the chat `childId` is still working on something it was handed. */
 export const isDelegating = (childId: string) => delegations.has(childId) || stepWaiters.has(childId);
+/** Whether the chat `childId` stopped on an approval card that waits for the user (a flow step that needs a yes). Not reactive: read it with a ticker. */
+export const needsApproval = (childId: string) => {
+  const list = childId === workspace.activeId ? chat.messages : (localMessages[childId] ?? []);
+  return list.slice(-3).some((message) => message.blocks.some((block) => block.kind === 'permission' && block.state === 'pending'));
+};
 /** Whether a run that started some of these chats is still going (a step waiting in its queue is waiting for it). */
 export const isRunActive = (childIds: string[]) => delegateRuns.some((run) => !run.endedAt && run.nodes.some((node) => childIds.includes(node.childId)));
 
@@ -1001,7 +1042,7 @@ function mentionContext(mentions: Mention[]): string {
   return parts.length ? `The user attached this context:\n\n${parts.join('\n\n')}\n\n---\n` : '';
 }
 
-function delegate(main: SessionItem, asked: Message, task: string, targets: Mention[], preface: string, images: Attachment[], elements: PageElement[]) {
+function delegate(main: SessionItem, asked: Message, task: string, targets: Mention[], preface: string, images: Attachment[], elements: PageElement[], files: FileAttachment[] = []) {
   delegateRuns.push({ id: crypto.randomUUID(), main: main.id, task, startedAt: Date.now(), nodes: [], handback: 'waiting' });
   if (delegateRuns.length > RUN_LIMIT) delegateRuns.splice(0, delegateRuns.length - RUN_LIMIT);
   const run = delegateRuns[delegateRuns.length - 1];
@@ -1036,7 +1077,7 @@ function delegate(main: SessionItem, asked: Message, task: string, targets: Ment
     // The child has not spoken in this chat, so every earlier turn of it is background for the child.
     const background = missedTurns({ ...child, agent: '' as Agent }, history);
     const brief = `${preface}${background}You were asked from another chat, whose own agent is ${agentLabel(main.agent)}, to do this part of the work: ${task}\n\nFinish with a complete answer that agent can use without seeing your work. ${LANGUAGE_RULE}`;
-    send(id, task, images, elements, [], { preface: brief });
+    send(id, task, images, elements, [], { preface: brief, files });
   }
   if (batch.pending.size === 0) {
     main.status = 'idle';
@@ -1183,7 +1224,7 @@ function boardText(task: string, preset: WorkflowPreset, ctx: FlowRunContext, gr
   return [`# Run board — ${preset.name}`, '', `Goal: ${firstLineOf(task, 300)}`, '', '## Plan (one line per stage; steps of a stage run at the same time)', plan, '', '## Handoffs', ...(ctx.board.length ? ctx.board : ['(none yet)']), ''].join('\n');
 }
 
-function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: WorkflowStep, brief: string, task: string, previous: string, images: Attachment[], elements: PageElement[], queued?: { uuid: string; card: DelegateCard }) {
+function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: WorkflowStep, brief: string, task: string, previous: string, images: Attachment[], elements: PageElement[], files: FileAttachment[], queued?: { uuid: string; card: DelegateCard }) {
   const agent = step.agent;
   const model = step.model || MODELS[agent]?.[0]?.value || '';
   const uuid = queued?.uuid ?? crypto.randomUUID();
@@ -1266,11 +1307,11 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
       resolve({ step, label, text: ok ? text : `(it did not answer: ${error ?? 'no text'})`, ok });
     };
     stepWaiters.set(id, settle);
-    send(id, task, images, elements, [], { preface: brief });
+    send(id, task, images, elements, [], { preface: brief, files });
   });
 }
 
-async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPreset, task: string, preface: string, images: Attachment[], elements: PageElement[]) {
+async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPreset, task: string, preface: string, images: Attachment[], elements: PageElement[], files: FileAttachment[] = []) {
   const runId = crypto.randomUUID();
   const graph = normalizeGraph(preset.steps);
   const links = inputsOf(graph);
@@ -1347,7 +1388,7 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
         ]
           .filter((line, index, all) => line !== '' || all[index - 1] !== '')
           .join('\n');
-        return runStep(main, asked, run, step, brief, task, previous, first ? images : [], first ? elements : [], cards.get(step.id));
+        return runStep(main, asked, run, step, brief, task, previous, first ? images : [], first ? elements : [], first ? files : [], cards.get(step.id));
       }),
     );
     first = false;
@@ -1452,19 +1493,19 @@ function handBack(batch: DelegateBatch) {
 }
 
 /** Send from the message box. While the agent is busy: wait in line (Enter), or stop it and go first (Ctrl+Enter). */
-export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = [], mentions: Mention[] = [], whileRunning: 'queue' | 'interrupt' = 'queue') {
+export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = [], mentions: Mention[] = [], whileRunning: 'queue' | 'interrupt' = 'queue', files: FileAttachment[] = []) {
   const session = activeSession();
-  if (!session || (!text.trim() && images.length === 0 && elements.length === 0)) return;
+  if (!session || (!text.trim() && images.length === 0 && elements.length === 0 && files.length === 0)) return;
   // A task for another agent needs words to say what the task is.
   if (mentions.some((mention) => mention.kind === 'ai') && !text.trim()) return;
   if (replies[session.id]) {
     if (whileRunning === 'queue') {
-      enqueue(queued, session.id, { text, images, elements, mentions });
+      enqueue(queued, session.id, { text, images, elements, mentions, files });
       return;
     }
     stopTurn(session.id);
   }
-  send(session.id, text, images, elements, mentions);
+  send(session.id, text, images, elements, mentions, { files });
 }
 
 /** Sends a queued message now: the reply running in the chat is stopped (what it wrote stays), and this one goes out. */
@@ -1473,7 +1514,7 @@ export function steerQueued(sessionId: string, item: Queued) {
   if (rest.length) queued[sessionId] = rest;
   else delete queued[sessionId];
   if (replies[sessionId]) stopTurn(sessionId);
-  send(sessionId, item.text, item.images, item.elements, item.mentions);
+  send(sessionId, item.text, item.images, item.elements, item.mentions, { files: item.files });
 }
 
 /** A message as it is recognised again in the chat's file (where it has another id than the one it got here). */
@@ -1498,15 +1539,8 @@ export function editMessage(messageId: string, text: string) {
   if (index === -1) return;
   if (replies[session.id]) stopTurn(session.id);
   delete queued[session.id];
-  const images: Attachment[] = list[index].blocks.flatMap((block) =>
-    block.kind === 'image' ? [{ id: nextId(), name: block.name, mime: block.src.slice(5, block.src.indexOf(';')) || 'image/png', src: block.src }] : [],
-  );
-  // The page elements sent with it go again too: an edit changes the words, not what was attached.
-  const elements: PageElement[] = list[index].blocks.flatMap((block) =>
-    block.kind === 'element'
-      ? [{ id: nextId(), tag: block.tag, text: block.text, selector: block.selector, html: block.html ?? '', around: block.around, box: { x: block.box?.x ?? 0, y: block.box?.y ?? 0, w: block.box?.w ?? 0, h: block.box?.h ?? 0 }, style: block.style ?? {}, url: block.url ?? '', title: block.title ?? '', note: block.note }]
-      : [],
-  );
+  // The pictures, page elements and files sent with it go again too: an edit changes the words, not what was attached.
+  const { images, elements, files } = attachmentsOf(list[index]);
   const removed = list.splice(index);
   if (session.path) {
     hidden[session.id] = [...new Set([...(hidden[session.id] ?? []), ...removed.flatMap((message) => [message.id, signature(message)])])];
@@ -1518,16 +1552,31 @@ export function editMessage(messageId: string, text: string) {
     localMessages[session.id] = list;
     persistLocal();
   }
-  send(session.id, text, images, elements);
+  send(session.id, text, images, elements, [], { files });
+}
+
+/** What a message of yours carried besides its words, as composer attachments again (edit, copy all). */
+export function attachmentsOf(message: Message): { images: Attachment[]; elements: PageElement[]; files: FileAttachment[] } {
+  const images: Attachment[] = message.blocks.flatMap((block) =>
+    block.kind === 'image' ? [{ id: nextId(), name: block.name, mime: block.src.slice(5, block.src.indexOf(';')) || 'image/png', src: block.src }] : [],
+  );
+  const elements: PageElement[] = message.blocks.flatMap((block) =>
+    block.kind === 'element'
+      ? [{ id: nextId(), tag: block.tag, text: block.text, selector: block.selector, html: block.html ?? '', around: block.around, box: { x: block.box?.x ?? 0, y: block.box?.y ?? 0, w: block.box?.w ?? 0, h: block.box?.h ?? 0 }, style: block.style ?? {}, url: block.url ?? '', title: block.title ?? '', note: block.note }]
+      : [],
+  );
+  const files: FileAttachment[] = message.blocks.flatMap((block) => (block.kind === 'file' ? [{ id: nextId(), name: block.name, path: block.path, size: block.size ?? 0 }] : []));
+  return { images, elements, files };
 }
 
 /**
  * `extra.prompt` is what the agent is sent when it differs from the text shown in the chat, and `extra.preface` goes in
  * front of the prompt without being shown (context of a delegated task).
  */
-function send(sessionId: string, text: string, images: Attachment[], elements: PageElement[], mentions: Mention[] = [], extra: { prompt?: string; preface?: string } = {}) {
+function send(sessionId: string, text: string, images: Attachment[], elements: PageElement[], mentions: Mention[] = [], extra: { prompt?: string; preface?: string; files?: FileAttachment[] } = {}) {
   const session = workspace.sessions.find((item) => item.id === sessionId);
   const body = text.trim();
+  const files = extra.files ?? [];
   if (!session || replies[sessionId]) return;
   const messages = messagesOf(sessionId);
   messages.push({
@@ -1536,6 +1585,7 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
     time: clock(new Date().toISOString()),
     blocks: [
       ...images.map((image) => ({ kind: 'image' as const, src: image.src, name: image.name })),
+      ...files.map((file) => ({ kind: 'file' as const, name: file.name, path: file.path, size: file.size })),
       ...elements.map((item) => ({ kind: 'element' as const, tag: item.tag, text: item.text, selector: item.selector, url: item.url, title: item.title, note: item.note, html: item.html, around: item.around, box: { ...item.box }, style: { ...item.style } })),
       ...(body ? [{ kind: 'response' as const, text: body }] : []),
     ],
@@ -1544,9 +1594,9 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
   const preface = (extra.preface ?? '') + mentionContext(mentions);
   const targets = mentions.filter((mention) => mention.kind === 'ai');
   const preset = presetOf(sessionId);
-  if (inTauri() && targets.length > 0 && body) delegate(session, messages[messages.length - 1], body, targets, preface, images, elements);
-  else if (inTauri() && preset && preset.steps.length > 0 && body && !extra.prompt && !extra.preface) void runWorkflow(session, messages[messages.length - 1], preset, body, preface, images, elements);
-  else if (inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'custom')) startTurn(session, withElements(extra.prompt ?? body, elements), images, [], preface);
+  if (inTauri() && targets.length > 0 && body) delegate(session, messages[messages.length - 1], body, targets, preface, images, elements, files);
+  else if (inTauri() && preset && preset.steps.length > 0 && body && !extra.prompt && !extra.preface) void runWorkflow(session, messages[messages.length - 1], preset, body, preface, images, elements, files);
+  else if (inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'custom')) startTurn(session, withElements(extra.prompt ?? body, elements), images, [], preface, files);
   else if (inTauri()) {
     messages.push({
       id: nextId(),
@@ -1914,21 +1964,35 @@ function keepHandout(mainId: string, asked: Message) {
 /** Messages shown per read of the chat's file: the newest ones on open, the ones before them when scrolling up. */
 const PAGE_LIMIT = 80;
 
-function toMessages(session: SessionItem, loaded: HistoryMessage[]): Message[] {
-  return loaded.map((message) => ({
+/** Pictures and files a saved prompt named by path (see `splitAttachments`), as blocks; the words lose those lists. */
+async function userAttachments(message: HistoryMessage): Promise<Block[]> {
+  const found: { images: string[]; files: string[] } = { images: [], files: [] };
+  for (const block of message.blocks) {
+    if (block.kind !== 'response' || !block.text.includes('Attached ')) continue;
+    const split = splitAttachments(block.text);
+    block.text = split.text;
+    found.images.push(...split.images);
+    found.files.push(...split.files);
+  }
+  return found.images.length || found.files.length ? attachmentBlocks(found.images, found.files) : [];
+}
+
+async function toMessages(session: SessionItem, loaded: HistoryMessage[]): Promise<Message[]> {
+  const restored = await Promise.all(loaded.map((message) => (message.role === 'user' ? userAttachments(message) : Promise.resolve([] as Block[]))));
+  return loaded.map((message, at) => ({
     ...(message.role === 'assistant' ? { agent: session.source } : {}),
     id: message.id,
     role: message.role,
     time: clock(message.time),
     at: message.time || undefined,
     // A prompt sent with the turns this agent missed shows only what the user typed.
-    blocks: toBlocks(message.blocks).map((block) =>
+    blocks: [...restored[at], ...toBlocks(message.blocks).map((block) =>
       message.role === 'user' && block.kind === 'response' && block.text.startsWith('Earlier in this chat, other agents answered')
         ? { ...block, text: block.text.slice(block.text.indexOf('Now the user says:\n') + 'Now the user says:\n'.length) }
         : message.role === 'user' && block.kind === 'response' && block.text.startsWith(HANDBACK_HEAD)
           ? { ...block, text: '↩ The steps answered' }
           : block,
-    ),
+    ).flatMap((block) => (block.kind === 'response' && !block.text ? [] : [block]))],
     // Tokens come from the transcript itself, so every reply shows them again when the chat is reopened.
     ...(message.usage
       ? { tokens: { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cache_read, cacheWrite: message.usage.cache_write }, model: message.model }
@@ -1948,7 +2012,7 @@ function assemble(session: SessionItem, own: Message[], lower?: string, upper?: 
 
 async function fetchTranscript(session: SessionItem): Promise<{ messages: Message[]; start: number }> {
   const page = await loadHistoryPage(session.source!, session.path!, null, PAGE_LIMIT);
-  const own = toMessages(session, page.messages);
+  const own = await toMessages(session, page.messages);
   return { messages: assemble(session, own, page.start > 0 ? own[0]?.at : undefined), start: page.start };
 }
 
@@ -1959,7 +2023,7 @@ export async function loadOlder(session: SessionItem | undefined): Promise<numbe
   try {
     const page = await loadHistoryPage(session.source, session.path, chat.older, PAGE_LIMIT);
     if (workspace.activeId !== session.id) return 0;
-    const own = toMessages(session, page.messages);
+    const own = await toMessages(session, page.messages);
     const added = assemble(session, own, page.start > 0 ? own[0]?.at : undefined, chat.messages[0]?.at);
     chat.messages = [...added, ...chat.messages];
     chat.older = page.start;
@@ -2087,6 +2151,7 @@ export async function deleteSession(id: string) {
   delete drafts[id];
   delete draftMentions[id];
   delete draftImages[id];
+  delete draftFiles[id];
   delete draftElements[id];
   delete localMessages[id];
   patchCache((list) => list.filter((item) => item.id !== id));

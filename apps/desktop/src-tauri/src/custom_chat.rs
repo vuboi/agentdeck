@@ -37,6 +37,44 @@ const MCP_PREFIX: &str = "mcp__agentdeck__";
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// Pictures that go with the message, as data URLs.
+    #[serde(default)]
+    pub images: Vec<String>,
+    /// Documents that go with the message, as paths: text is put into the message, anything else is named.
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
+/// Characters of one attached text file that go into the message.
+const FILE_INLINE_MAX: usize = 40_000;
+const TEXT_EXTENSIONS: &[&str] = &[
+    "txt", "md", "mdx", "log", "csv", "tsv", "json", "yaml", "yml", "toml", "xml", "html", "css", "scss", "js", "ts", "tsx", "jsx", "svelte", "vue", "py", "rs", "go", "java", "c", "cpp", "h", "cs", "rb", "php", "sh", "ps1", "sql", "ini", "env",
+];
+
+/// A message as the provider takes it: the text with the attached documents after it, and the pictures in the
+/// OpenAI image format when there are any.
+fn wire_message(message: &ChatMessage) -> Value {
+    let mut text = message.content.clone();
+    for path in &message.files {
+        let file = std::path::Path::new(path);
+        let name = file.file_name().map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
+        let extension = file.extension().map(|ext| ext.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let inline = if TEXT_EXTENSIONS.contains(&extension.as_str()) { std::fs::read_to_string(file).ok() } else { None };
+        match inline {
+            Some(body) => {
+                let cut: String = body.chars().take(FILE_INLINE_MAX).collect();
+                let more = if cut.len() < body.len() { "\n[...cut: the file is longer]" } else { "" };
+                text.push_str(&format!("\n\nAttached file {name} ({path}):\n```\n{cut}{more}\n```"));
+            }
+            None => text.push_str(&format!("\n\nAttached file {name}, at {path} (open it with a tool if you need it).")),
+        }
+    }
+    if message.images.is_empty() {
+        return json!({ "role": message.role, "content": text });
+    }
+    let mut parts = vec![json!({ "type": "text", "text": text })];
+    parts.extend(message.images.iter().map(|url| json!({ "type": "image_url", "image_url": { "url": url } })));
+    json!({ "role": message.role, "content": parts })
 }
 
 /// Everything about one turn that is not the conversation.
@@ -889,7 +927,7 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
     }
 
     let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": system_prompt(turn.cwd.as_deref(), &skills) })];
-    messages.extend(history.iter().map(|m| json!({ "role": m.role, "content": m.content })));
+    messages.extend(history.iter().map(wire_message));
 
     let mut answer = String::new();
     let mut retries = 0;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree, zModalService } from '@shival99/z-ui-svelte';
+  import { ZDropdownMenu, ZIcon, ZTree } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import { tick, untrack } from 'svelte';
   import { activeSession, workspace } from '../sessions.svelte';
@@ -7,6 +7,7 @@
   import { inTauri } from '../history';
   import { toast } from '../toast';
   import { fileWrites } from '../activity.svelte';
+  import FileSearchPalette from './FileSearchPalette.svelte';
 
   // Files of the active session's project, read from disk one folder at a time as folders are opened.
   // Right click renames or deletes; a delete goes to ~/.agentdeck/trash/files, so Ctrl+Z can put it back.
@@ -95,8 +96,11 @@
   });
 
   const PLACEHOLDER = '/…';
+  const DRAFT = '/::new-entry::';
   function fromDisk(dir: string): ZTreeNode<null>[] {
-    return (listing[dir] ?? []).map((entry) => {
+    const draft: ZTreeNode<null>[] =
+      creating && creating.dir === dir && listing[dir] ? [{ id: `${dir}${DRAFT}`, label: '', icon: (creating.folder ? 'lucideFolder' : 'lucideFile') as ZIconName }] : [];
+    return draft.concat((listing[dir] ?? []).map((entry) => {
       const id = `${dir}/${entry.name}`;
       return {
         id,
@@ -105,7 +109,7 @@
         // A folder not read yet shows one "Loading…" row, so it still has an arrow to open it.
         children: entry.dir ? (listing[id] ? fromDisk(id) : [{ id: `${id}${PLACEHOLDER}`, label: 'Loading…', icon: 'lucideLoaderCircle' as ZIconName }]) : undefined,
       };
-    });
+    }));
   }
 
   // Same shape as the sidebar tree: folders expand, files are leaves.
@@ -122,7 +126,7 @@
 
   // A file opens as a tab over the conversation; folders only expand.
   function onSelect(node: ZTreeNode<null>) {
-    if (node.children || node.id.endsWith(PLACEHOLDER)) return;
+    if (node.children || node.id.endsWith(PLACEHOLDER) || node.id.endsWith(DRAFT)) return;
     if (root) openFileTab(`${root}${node.id}`, root);
   }
 
@@ -133,12 +137,16 @@
   let menu = $state<{ x: number; y: number; id: string } | null>(null);
   let menuOpen = $state(false);
   let menuKey = $state(0);
+  let selected = $state<string[]>([]);
 
   function onContextMenu(event: MouseEvent) {
     event.preventDefault();
     if (!inTauri()) return;
-    const id = (event.target as HTMLElement).closest('[role="treeitem"]')?.querySelector<HTMLElement>('[data-path]')?.dataset.path;
-    if (!id || id.endsWith(PLACEHOLDER)) return;
+    // Right click on the empty part of the list works on the project folder itself ('').
+    const id = (event.target as HTMLElement).closest('[role="treeitem"]')?.querySelector<HTMLElement>('[data-path]')?.dataset.path ?? '';
+    if (id.endsWith(PLACEHOLDER) || id.endsWith(DRAFT)) return;
+    // The row under the pointer becomes the active one, so the menu is plainly about it.
+    if (id) selected = [id];
     menuKey++;
     menu = { x: event.clientX, y: event.clientY, id };
     menuOpen = true;
@@ -154,8 +162,21 @@
     }
   }
 
-  const menuItems = $derived<ZDropdownMenuItem[]>([
-    { label: 'Rename', icon: 'lucidePencil', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && askRename(menu.id) },
+  /** The folder a new file goes in: the folder itself, or the folder that holds the file ('' is the project folder). */
+  function folderFor(id: string) {
+    if (id === '') return '';
+    const entry = listing[parentOf(id)]?.find((item) => item.name === nameOf(id));
+    return entry?.dir ? id : parentOf(id);
+  }
+
+  const menuItems = $derived<ZDropdownMenuItem[]>(menu?.id === '' ? [
+    { label: 'New file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => askCreate('', false) },
+    { label: 'New folder', icon: 'lucideFolderPlus', iconSize: 12, class: 'text-xs! py-1', onClick: () => askCreate('', true) },
+    { label: 'Reveal in File Explorer', icon: 'lucideFolder', iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => void reveal('/.') },
+  ] : [
+    { label: 'New file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && askCreate(folderFor(menu.id), false) },
+    { label: 'New folder', icon: 'lucideFolderPlus', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && askCreate(folderFor(menu.id), true) },
+    { label: 'Rename', icon: 'lucidePencil', iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => menu && askRename(menu.id) },
     { label: 'Reveal in File Explorer', icon: 'lucideFolder', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && void reveal(menu.id) },
     {
       label: 'Copy path',
@@ -208,74 +229,184 @@
     armed = !!box && box.contains(event.target as Node);
   }
   function onWindowKey(event: KeyboardEvent) {
-    if (!armed || renaming || !(event.ctrlKey || event.metaKey) || event.shiftKey || event.key.toLowerCase() !== 'z') return;
+    if (!armed || renaming !== null || creating || !(event.ctrlKey || event.metaKey) || event.shiftKey || event.key.toLowerCase() !== 'z') return;
     event.preventDefault();
     void undoLast();
   }
 
+  // ---------- new file / new folder ----------
+  // An input row opens at the top of the folder, as in VS Code: Enter makes it, Esc (or an empty name) drops it.
+  let creating = $state<{ dir: string; folder: boolean } | null>(null);
+  let createName = $state('');
+  let createError = $state('');
+  let committing = false;
+
+  async function askCreate(dir: string, folder: boolean) {
+    if (!root || !inTauri()) return;
+    if (dir && !expanded.includes(dir)) expanded = [...expanded, dir];
+    await load(dir);
+    createName = '';
+    createError = '';
+    creating = { dir, folder };
+  }
+
+  function cancelCreate() {
+    creating = null;
+    createName = '';
+    createError = '';
+  }
+
+  async function doCreate() {
+    if (!creating || committing) return;
+    const { dir, folder } = creating;
+    const name = createName.trim();
+    if (!name) return cancelCreate();
+    committing = true;
+    try {
+      await call<string>('path_create', { root, dir: `${root}${dir}`, name, folder });
+      cancelCreate();
+      refresh(dir);
+      if (!folder) openFileTab(`${root}${dir}/${name}`, root);
+    } catch (error) {
+      createError = String(error).replace(/^(Error:\s*)+/i, '');
+    } finally {
+      committing = false;
+    }
+  }
+
+  function onCreateKey(event: KeyboardEvent) {
+    event.stopPropagation();
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void doCreate();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelCreate();
+    }
+  }
+  // The menu that opened the row and the tree itself both take focus back while it settles: until then a blur
+  // only puts focus on the input again, it does not drop the row.
+  let armed_at = 0;
+  function onCreateBlur(event: FocusEvent) {
+    if (committing) return;
+    if (Date.now() < armed_at) {
+      const input = event.currentTarget as HTMLInputElement;
+      setTimeout(() => input.isConnected && input.focus(), 0);
+      return;
+    }
+    if (createName.trim() && !createError) void doCreate();
+    else cancelCreate();
+  }
+  function focusNow(node: HTMLInputElement) {
+    armed_at = Date.now() + 400;
+    node.focus();
+    for (const delay of [60, 150, 300]) setTimeout(() => node.isConnected && document.activeElement !== node && node.focus(), delay);
+  }
+
+  // ---------- find a file by name ----------
+  let findOpen = $state(false);
+  const openFound = (relative: string) => openFileTab(`${root}/${relative}`, root);
+
   // ---------- rename ----------
-  let renaming = $state(false);
-  let target = $state('');
+  // The row's name turns into an input: Enter renames, Esc leaves it as it was.
+  let renaming = $state<string | null>(null);
   let newName = $state('');
-  let busy = $state(false);
   let renameError = $state('');
-  let nameInput: { focus?: () => void } | undefined = $state();
+  let renameBusy = false;
 
   async function askRename(id: string) {
-    target = id;
     newName = nameOf(id);
     renameError = '';
-    renaming = true;
-    await tick();
-    nameInput?.focus?.();
+    renaming = id;
+  }
+
+  function cancelRename() {
+    renaming = null;
+    renameError = '';
   }
 
   async function doRename() {
+    if (!renaming || renameBusy) return;
+    const target = renaming;
     const from = nameOf(target);
     const to = newName.trim();
-    if (!to || to === from) return void (renaming = false);
-    busy = true;
+    if (!to || to === from) return cancelRename();
+    renameBusy = true;
     try {
       await call('path_rename', { root, path: `${root}${target}`, name: to });
       const dir = parentOf(target);
       undo.push({ kind: 'rename', dir, from, to });
+      cancelRename();
       refresh(dir, target);
-      renaming = false;
       say(`Renamed to ${to}`, true);
     } catch (error) {
-      renameError = String(error);
+      renameError = String(error).replace(/^(Error:\s*)+/i, '');
     } finally {
-      busy = false;
+      renameBusy = false;
     }
   }
 
+  function onRenameKey(event: KeyboardEvent) {
+    event.stopPropagation();
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void doRename();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelRename();
+    }
+  }
+  function onRenameBlur(event: FocusEvent) {
+    if (renameBusy) return;
+    if (Date.now() < armed_at) {
+      const input = event.currentTarget as HTMLInputElement;
+      setTimeout(() => input.isConnected && input.focus(), 0);
+      return;
+    }
+    if (newName.trim() && newName.trim() !== nameOf(renaming ?? '') && !renameError) void doRename();
+    else cancelRename();
+  }
+  // Focus the input with the name selected, without its extension (as VS Code does).
+  function focusRename(node: HTMLInputElement) {
+    armed_at = Date.now() + 400;
+    node.focus();
+    const dot = node.value.lastIndexOf('.');
+    node.setSelectionRange(0, dot > 0 ? dot : node.value.length);
+    for (const delay of [60, 150, 300]) setTimeout(() => node.isConnected && document.activeElement !== node && node.focus(), delay);
+  }
+
   // ---------- delete ----------
-  function askDelete(id: string) {
+  // No question: the file goes to the trash and the toast offers Undo (Ctrl+Z works too).
+  async function askDelete(id: string) {
     const name = nameOf(id);
-    zModalService.danger({
-      zTitle: `Delete ${name}?`,
-      zContent: `It moves to ~/.agentdeck/trash/files. Ctrl+Z in Explore puts it back.`,
-      zConfirmStyle: 'dialog',
-      zOkText: 'Delete',
-      zOkIcon: 'lucideTrash2',
-      zCancelText: 'Cancel',
-      zWidth: '400px',
-      onOk: async () => {
-        try {
-          const trashed = await call<string>('path_trash', { root, path: `${root}${id}` });
-          const dir = parentOf(id);
-          undo.push({ kind: 'delete', dir, name, trashed });
-          refresh(dir, id);
-          say(`Deleted ${name}`, true);
-        } catch (error) {
-          zModalService.warning({ zTitle: 'Could not delete', zContent: String(error), zConfirmStyle: 'dialog', zCancelText: null, zOkText: 'OK' });
-        }
-      },
-    });
+    try {
+      const trashed = await call<string>('path_trash', { root, path: `${root}${id}` });
+      const dir = parentOf(id);
+      undo.push({ kind: 'delete', dir, name, trashed });
+      refresh(dir, id);
+      say(`Deleted ${name}`, true);
+    } catch (error) {
+      toast.error(String(error));
+    }
   }
 </script>
 
 <svelte:window onpointerdown={onWindowPointer} onkeydown={onWindowKey} />
+
+{#if root && inTauri()}
+  <!-- Find a file by name, or make a new file or folder in the project folder. -->
+  <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border p-1 text-xs">
+    <button type="button" class="inline-flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-2 text-left text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" title="Find a file by name" onclick={() => (findOpen = true)}>
+      <ZIcon zType={'lucideSearch' as ZIconName} zSize="15" /> <span class="truncate">Search files</span>
+    </button>
+    <button type="button" class="inline-flex size-7 cursor-pointer items-center justify-center rounded text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" title="New file" aria-label="New file" onclick={() => askCreate('', false)}>
+      <ZIcon zType={'lucidePlus' as ZIconName} zSize="15" />
+    </button>
+    <button type="button" class="inline-flex size-7 cursor-pointer items-center justify-center rounded text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" title="New folder" aria-label="New folder" onclick={() => askCreate('', true)}>
+      <ZIcon zType={'lucideFolderPlus' as ZIconName} zSize="15" />
+    </button>
+  </div>
+{/if}
 
 {#if nodes.length === 0}
   <div class="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground" role="tabpanel" aria-label="Explore">
@@ -300,10 +431,46 @@
     oncontextmenu={onContextMenu}
   >
     <!-- The list stops 12px above the panel's edge, so the last file never touches it. -->
-    <ZTree {nodes} zSize="sm" zShowLine zExpandOnClick zMaxHeight={Math.max(0, treeHeight - 18)} zLabel="Project files" bind:expanded {onSelect}>
+    <ZTree {nodes} zSize="sm" zShowLine zExpandOnClick zMaxHeight={Math.max(0, treeHeight - 18)} zLabel="Project files" bind:expanded bind:selected {onSelect}>
       {#snippet node(ctx)}
+        {#if ctx.node.id.endsWith(DRAFT)}
+          <ZIcon zType={(ctx.node.icon ?? 'lucideFile') as ZIconName} class="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            use:focusNow
+            bind:value={createName}
+            class="h-5 min-w-0 flex-1 bg-transparent p-0 text-xs outline-none {createError ? 'text-destructive' : 'text-foreground'}"
+            spellcheck="false"
+            autocomplete="off"
+            aria-label={creating?.folder ? 'Folder name' : 'File name'}
+            aria-invalid={createError ? 'true' : undefined}
+            title={createError}
+            oninput={() => (createError = '')}
+            onkeydown={onCreateKey}
+            onblur={onCreateBlur}
+            onclick={(event) => event.stopPropagation()}
+            onpointerdown={(event) => event.stopPropagation()}
+          />
+        {:else if renaming === ctx.node.id}
+          <ZIcon zType={(ctx.node.icon ?? 'lucideFile') as ZIconName} class="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            use:focusRename
+            bind:value={newName}
+            class="h-5 min-w-0 flex-1 bg-transparent p-0 text-xs outline-none {renameError ? 'text-destructive' : 'text-foreground'}"
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="New name"
+            aria-invalid={renameError ? 'true' : undefined}
+            title={renameError}
+            oninput={() => (renameError = '')}
+            onkeydown={onRenameKey}
+            onblur={onRenameBlur}
+            onclick={(event) => event.stopPropagation()}
+            onpointerdown={(event) => event.stopPropagation()}
+          />
+        {:else}
         <ZIcon zType={(ctx.node.icon ?? 'lucideFile') as ZIconName} class="size-3.5 shrink-0 text-muted-foreground {ctx.node.id.endsWith(PLACEHOLDER) ? 'animate-spin' : ''}" />
         <span data-path={ctx.node.id} class="min-w-0 flex-1 truncate {ctx.node.id.endsWith(PLACEHOLDER) ? 'text-muted-foreground' : ''}">{ctx.node.label}</span>
+        {/if}
       {/snippet}
     </ZTree>
   </div>
@@ -319,9 +486,4 @@
   {/key}
 {/if}
 
-<ZModal bind:open={renaming} zTitle="Rename" zWidth="480px" zBodyClass="min-h-0! py-3" zOkText="Rename" zCancelText="Cancel" zLoading={busy} onOk={doRename}>
-  <div class="flex flex-col gap-2">
-    <ZInput bind:this={nameInput} bind:value={newName} zPlaceholder="New name" onEnter={doRename} />
-    {#if renameError}<span class="text-xs text-destructive" role="alert">{renameError}</span>{/if}
-  </div>
-</ZModal>
+<FileSearchPalette bind:open={findOpen} {root} onpick={openFound} />

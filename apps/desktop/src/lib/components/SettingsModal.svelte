@@ -605,7 +605,7 @@
 
                         {#if provider === 'codex' && list.auto_switch}
                           {@const auto = list.auto_switch}
-                          <div class="mt-3 flex items-center gap-3 rounded-lg bg-muted/50 p-3">
+                          <div class="mt-3 mb-3 flex items-center gap-3 rounded-lg bg-muted/50 p-3">
                             <div class="min-w-0 flex-1 text-xs">
                               <div class="font-medium">Switch automatically</div>
                               <div class="text-muted-foreground">When the account in use has under {auto.five_hour}% (5h) or {auto.weekly}% (weekly) left, codex-auth moves to the next one in the background.</div>

@@ -10,6 +10,7 @@ const escapeHtml = (text: string) =>
 const svg = (cls: string, body: string) =>
   `<svg class="${cls}" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 const RUN_ICON = svg('ic-run', '<polygon points="6 3 20 12 6 21 6 3"/>');
+const LONG_BLOCK = 15;
 const SHELLS = new Set(['bash', 'sh', 'shell', 'zsh', 'powershell', 'pwsh', 'ps1', 'cmd', 'bat', 'console']);
 const COPY_ICON =
   svg('ic-copy', '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>') +
@@ -39,7 +40,10 @@ marked.use({
         `<div class="md-code-head"><span>${escapeHtml(language || 'text')}</span><span class="md-code-actions">` +
         (SHELLS.has(language.toLowerCase()) ? `<button type="button" data-run title="Run in terminal" aria-label="Run in terminal">${RUN_ICON}</button>` : '') +
         `<button type="button" data-copy title="Copy" aria-label="Copy code">${COPY_ICON}</button></span></div>` +
-        `<pre><code>${escapeHtml(text)}</code></pre></div>`
+        `<pre><code>${escapeHtml(text)}</code></pre>` +
+        // A long block gets a copy button at its foot too (sticky), so nobody scrolls back up to copy it.
+        (text.split('\n').length > LONG_BLOCK ? `<div class="md-code-foot"><button type="button" data-copy title="Copy" aria-label="Copy code">${COPY_ICON}</button></div>` : '') +
+        '</div>'
       );
     },
   },

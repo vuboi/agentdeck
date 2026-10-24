@@ -1,0 +1,374 @@
+/* ===================================================================
+   ng2-pdfjs-viewer Customization Stylesheet
+   
+   CSP-Compliant styling for ng2-pdfjs-viewer
+   All customizations consolidated in this single file
+   =================================================================== */
+
+/* ===================================================================
+   TOOLBAR POSITIONING
+   =================================================================== */
+body #outerContainer.toolbar-bottom #toolbarContainer {
+  position: absolute;
+  bottom: 0;
+  top: auto;
+}
+
+body #outerContainer.toolbar-bottom #viewerContainer {
+  top: 0;
+  bottom: var(--toolbar-height, 40px);
+}
+
+/* Fix dropdown menus to open upward when toolbar is at bottom */
+body #outerContainer.toolbar-bottom .doorHangerRight,
+body #outerContainer.toolbar-bottom .doorHanger {
+  bottom: 100% !important;
+  top: auto !important;
+  transform-origin: bottom center !important;
+}
+
+/* ===================================================================
+   SIDEBAR POSITIONING
+   =================================================================== */
+
+/* Sidebar width - controlled via CSS variable. PDF.js 5.4+ renders the sidebar
+   as the #viewsManager panel, which defines --sidebar-width locally; re-map it
+   from the inherited ng2 variable so set-sidebar-width still applies. */
+#viewsManager {
+  --sidebar-width: var(--ng2-sidebar-width, 230px);
+}
+
+/* Sidebar right positioning - the panel floats (visibility-toggled), so only
+   the open state needs mirroring */
+body #outerContainer.sidebar-right.viewsManagerOpen #viewsManager {
+  inset-inline-start: auto;
+  inset-inline-end: 8px;
+}
+
+body #outerContainer.sidebar-right #viewsManagerResizer {
+  inset-inline-start: 0;
+  inset-inline-end: auto;
+}
+
+body #outerContainer.sidebar-right.viewsManagerOpen #viewerContainer:not(.pdfPresentationMode) {
+  inset-inline-start: 0;
+  inset-inline-end: var(--viewsManager-width, 0);
+}
+
+body #outerContainer.sidebar-right.viewsManagerOpen #loadingBar {
+  inset-inline-start: 0;
+  inset-inline-end: var(--viewsManager-width, 0);
+}
+
+/* ===================================================================
+   RESPONSIVE BREAKPOINT
+   =================================================================== */
+@media (max-width: var(--ng2-responsive-breakpoint, 840px)) {
+  #viewsManager {
+    background-color: var(--sidebar-narrow-bg-color);
+  }
+  #outerContainer.viewsManagerOpen #viewerContainer {
+    inset-inline-start: 0 !important;
+  }
+}
+
+/* ===================================================================
+   TOOLBAR DENSITY
+   =================================================================== */
+#toolbarContainer.density-compact .toolbarButton,
+#toolbarContainer.density-compact .toolbarField,
+#toolbarContainer.density-compact select {
+  height: 28px;
+  font-size: 12px;
+}
+
+#toolbarContainer.density-compact #scaleSelect {
+  height: 28px;
+}
+
+#toolbarContainer.density-compact {
+  --toolbar-height: 32px;
+}
+
+#toolbarContainer.density-comfortable .toolbarButton,
+#toolbarContainer.density-comfortable .toolbarField,
+#toolbarContainer.density-comfortable select {
+  height: 32px;
+}
+
+#toolbarContainer.density-comfortable {
+  --toolbar-height: 40px;
+}
+
+/* ===================================================================
+   VISIBILITY CONTROL
+   =================================================================== */
+
+/* Hidden toolbar sections (preserves layout) */
+.ng2-hidden-section {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* A toolbar button forced hidden by [controlVisibility]. Uses our own class,
+   not PDF.js's `hidden`, so that PDF.js re-asserting `hidden` on document load
+   (the print button via its `printingallowed` handler - Issue #373, seen with
+   fast Blob loads) can't bring a hidden button back. */
+.ng2-btn-hidden {
+  display: none !important;
+}
+
+/* Whole toolbar hidden (custom host toolbars) - viewer reclaims the height */
+#outerContainer.ng2-toolbar-hidden #toolbarContainer {
+  display: none !important;
+}
+
+#outerContainer.ng2-toolbar-hidden #viewerContainer {
+  top: 0 !important;
+}
+
+/* ===================================================================
+   CONTENT PROTECTION
+   =================================================================== */
+
+/* Text selection disabled (content-protection option) */
+#viewerContainer.ng2-no-text-select .textLayer {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* Host-app per-page overlay templates (pageOverlayTpl) */
+.ng2-page-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 5;
+}
+
+/* Per-page watermark overlay */
+.ng2-watermark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 4;
+}
+
+.ng2-watermark span {
+  transform: rotate(var(--ng2-watermark-rotation, -35deg));
+  color: var(--ng2-watermark-color, #888888);
+  opacity: var(--ng2-watermark-opacity, 0.25);
+  font-size: var(--ng2-watermark-font-size, 48px);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ===================================================================
+   THEME SYSTEM - Base Variables
+   =================================================================== */
+
+/* Light theme defaults */
+.ng2-theme-light,
+.ng2-theme-light-active {
+  /* Pin the UA color-scheme so PDF.js's light-dark() colours (toolbar/menu
+     icons, form controls, scrollbars) resolve to the SELECTED theme instead of
+     the OS preference. Without this, when the app theme differs from the OS
+     theme the icons inherit :root's `color-scheme: light dark` and become
+     invisible (e.g. light icons on a light toolbar). */
+  color-scheme: light;
+  --ng2-default-bg: #d4d4d7; /* PDF.js original grey background */
+  --ng2-default-text: #000000;
+  --ng2-default-toolbar: #f9f9f9;
+  --ng2-default-border: #cccccc;
+}
+
+/* Dark theme defaults */
+.ng2-theme-dark,
+.ng2-theme-dark-active {
+  color-scheme: dark;
+  --ng2-default-bg: #1e1e1e;
+  --ng2-default-text: #ffffff;
+  --ng2-default-toolbar: #333333;
+  --ng2-default-border: #555555;
+}
+
+/* ===================================================================
+   THEME SYSTEM - Viewer Styling
+   =================================================================== */
+
+/* Apply theme variables to PDF.js viewer */
+#viewerContainer {
+  background-color: var(--ng2-background-color, var(--ng2-default-bg)) !important;
+  color: var(--ng2-text-color, var(--ng2-default-text)) !important;
+}
+
+#outerContainer {
+  background-color: var(--ng2-background-color, var(--ng2-default-bg)) !important;
+}
+
+#mainContainer {
+  background-color: var(--ng2-background-color, var(--ng2-default-bg)) !important;
+}
+
+/* ===================================================================
+   THEME SYSTEM - Toolbar Styling
+   =================================================================== */
+#toolbarContainer,
+.toolbar,
+.findbar,
+.secondaryToolbar {
+  background-color: var(--ng2-toolbar-color, var(--ng2-default-toolbar)) !important;
+  color: var(--ng2-text-color, var(--ng2-default-text)) !important;
+  border-color: var(--ng2-default-border) !important;
+}
+
+/* ===================================================================
+   THEME SYSTEM - PDF Page Styling
+   =================================================================== */
+
+/* PDF page styling - Clean appearance with proper spacing */
+.page,
+.pdfViewer .page {
+  background-color: var(--ng2-page-border-color, #ffffff) !important;
+  border-radius: var(--ng2-border-radius, 0) !important;
+  border: var(--page-border, 9px solid transparent) !important;
+  box-shadow: none !important;
+}
+
+/* Canvas within pages */
+.page canvas {
+  border-radius: var(--ng2-border-radius, 0) !important;
+}
+
+/* Text layer styling */
+.textLayer {
+  color: var(--ng2-text-color, var(--ng2-default-text)) !important;
+}
+
+/* ===================================================================
+   THEME SYSTEM - Button Styling
+   =================================================================== */
+
+/* All toolbar buttons */
+.toolbarButton,
+.secondaryToolbarButton,
+.dropdownToolbarButton > select,
+.toolbarButton::before,
+.secondaryToolbarButton::before {
+  color: var(--ng2-text-color, var(--ng2-default-text)) !important;
+  border-radius: var(--ng2-border-radius, 3px) !important;
+}
+
+/* Hover state with primary color */
+.toolbarButton:hover,
+.secondaryToolbarButton:hover,
+.toolbarButton:focus,
+.secondaryToolbarButton:focus {
+  background-color: var(--ng2-primary-color, rgba(0, 0, 0, 0.1)) !important;
+  color: #ffffff !important;
+}
+
+/* Active/checked state */
+.toolbarButton.toggled,
+.secondaryToolbarButton.toggled {
+  background-color: var(--ng2-primary-color, rgba(0, 0, 0, 0.2)) !important;
+  color: #ffffff !important;
+}
+
+/* Split and dropdown buttons */
+.splitToolbarButton,
+.splitToolbarButtonSeparator {
+  border-radius: var(--ng2-border-radius, 3px) !important;
+}
+
+.dropdownToolbarButton {
+  border-radius: var(--ng2-border-radius, 3px) !important;
+  background-color: var(--ng2-toolbar-color, var(--ng2-default-toolbar)) !important;
+  color: var(--ng2-text-color, var(--ng2-default-text)) !important;
+}
+
+/* ===================================================================
+   THEME SYSTEM - Sidebar Styling
+   =================================================================== */
+#viewsManager,
+#viewsManagerContent {
+  background-color: var(--ng2-toolbar-color, var(--ng2-default-toolbar)) !important;
+  color: var(--ng2-text-color, var(--ng2-default-text)) !important;
+}
+
+/* ===================================================================
+   THEME SYSTEM - Input Fields
+   =================================================================== */
+.toolbarField {
+  background-color: var(--ng2-background-color, #ffffff) !important;
+  color: var(--ng2-text-color, #000000) !important;
+  border-color: var(--ng2-default-border) !important;
+  border-radius: var(--ng2-border-radius, 3px) !important;
+}
+
+/* ===================================================================
+   THEME SYSTEM - Dark Theme Specific
+   =================================================================== */
+.ng2-theme-dark #viewer,
+.ng2-theme-dark-active #viewer {
+  background-color: var(--ng2-background-color, #1e1e1e) !important;
+}
+
+.ng2-theme-dark .page,
+.ng2-theme-dark-active .page {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+.ng2-theme-dark .page canvas,
+.ng2-theme-dark-active .page canvas {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* ===================================================================
+   THEME SYSTEM - Force Override PDF.js Defaults
+   =================================================================== */
+body {
+  --toolbar-bg-color: var(--ng2-toolbar-color, var(--ng2-default-toolbar)) !important;
+  --body-bg-color: var(--ng2-background-color, var(--ng2-default-bg)) !important;
+  --page-bg-color: var(--ng2-page-border-color, #ffffff) !important;
+  --main-color: var(--ng2-text-color, var(--ng2-default-text)) !important;
+  --field-bg-color: var(--ng2-background-color, #ffffff) !important;
+  --field-color: var(--ng2-text-color, #000000) !important;
+  --button-hover-color: var(--ng2-primary-color, rgba(0, 0, 0, 0.1)) !important;
+  
+  /* Preserve PDF.js original page spacing variables - Invisible borders for spacing */
+  --page-margin: 1px auto -8px !important;
+  --spreadHorizontalWrapped-margin-LR: -3.5px !important;
+}
+
+/* Additional specificity for stubborn elements */
+body #outerContainer #mainContainer #viewerContainer {
+  background-color: var(--ng2-background-color, var(--ng2-default-bg)) !important;
+}
+
+/* Ensure clean appearance with proper spacing */
+.pdfViewer .page {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+body #toolbarViewer #toolbarContainer {
+  background-color: var(--ng2-toolbar-color, var(--ng2-default-toolbar)) !important;
+}
+
+body .pdfViewer .page {
+  background-color: var(--ng2-page-border-color, #ffffff) !important;
+  border-radius: var(--ng2-border-radius, 0) !important;
+}
+
+
+/* Read-aloud: sentence currently being spoken (ng2 TTS karaoke highlight).
+   Spans keep their transparent text; only the backdrop tints. */
+.textLayer span.ng2-tts-current {
+  background-color: rgba(255, 200, 0, 0.4);
+  border-radius: 2px;
+}

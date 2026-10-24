@@ -11,8 +11,9 @@ export const START_GAP = 160;
 export const COL = 296;
 
 export type FlowState = 'idle' | 'running' | 'done' | 'failed' | 'skipped';
-export type StepData = { step: WorkflowStep; index: number; state: FlowState; mode: 'edit' | 'run'; node?: RunNode };
-export type EndData = { kind: 'start' | 'end'; state: FlowState; mode: 'edit' | 'run'; run?: DelegateRun };
+export type FlowDir = 'down' | 'right';
+export type StepData = { step: WorkflowStep; index: number; state: FlowState; mode: 'edit' | 'run'; node?: RunNode; dir?: FlowDir };
+export type EndData = { kind: 'start' | 'end'; state: FlowState; mode: 'edit' | 'run'; run?: DelegateRun; dir?: FlowDir };
 export type EdgeData = { state: 'idle' | 'active' | 'done' | 'skipped' | 'failed' | 'stopped' | 'talking' | 'talk'; mode: 'edit' | 'run'; cuttable: boolean; label: string; oncut?: () => void };
 
 const size = (text: string | undefined) => (!text ? '' : text.length > 999 ? `${(text.length / 1000).toFixed(1)}k chars` : `${text.length} chars`);
@@ -26,11 +27,26 @@ export function autoLayout(graph: WorkflowStep[]): Map<string, { x: number; y: n
   return at;
 }
 
-export function buildFlow(graph: WorkflowStep[], mode: 'edit' | 'run', run: DelegateRun | undefined, cut: (from: string, to: string) => void): { nodes: Node[]; edges: Edge[] } {
+/** The same layout left to right (a run only): a stage is a column, the steps of a stage are stacked. */
+export const STAGE_W = 330;
+export const STACK_H = 200;
+function autoLayoutH(graph: WorkflowStep[]): Map<string, { x: number; y: number }> {
+  const at = new Map<string, { x: number; y: number }>();
+  stepGroups(graph).forEach((group, col) => {
+    group.forEach((step, row) => at.set(step.id, { x: (col + 1) * STAGE_W, y: (row - (group.length - 1) / 2) * STACK_H - 75 }));
+  });
+  return at;
+}
+
+export function buildFlow(graph: WorkflowStep[], mode: 'edit' | 'run', run: DelegateRun | undefined, cut: (from: string, to: string) => void, dir: FlowDir = 'down'): { nodes: Node[]; edges: Edge[] } {
   const links = inputsOf(graph);
-  const auto = autoLayout(graph);
-  // A run always reads top to bottom: the places the user gave in the editor are not used there.
-  const place = (step: WorkflowStep) => (mode === 'edit' && step.x !== undefined && step.y !== undefined ? { x: step.x, y: step.y } : (auto.get(step.id) ?? { x: 0, y: ROW }));
+  // The editor always reads top to bottom; only a run can be turned to read left to right.
+  const across = mode === 'run' && dir === 'right';
+  const auto = across ? autoLayoutH(graph) : autoLayout(graph);
+  const outPos = across ? Position.Right : Position.Bottom;
+  const inPos = across ? Position.Left : Position.Top;
+  // A run's places are the automatic ones: the places the user gave in the editor are not used there.
+  const place = (step: WorkflowStep) => (mode === 'edit' && step.x !== undefined && step.y !== undefined ? { x: step.x, y: step.y } : (auto.get(step.id) ?? (across ? { x: STAGE_W, y: -75 } : { x: 0, y: ROW })));
 
   // A step run again (its plan was sent back) shows its latest run.
   const nodeOf = (id: string) => run?.nodes.findLast((node) => node.stepId === id);
@@ -45,13 +61,16 @@ export function buildFlow(graph: WorkflowStep[], mode: 'edit' | 'run', run: Dele
   const sinks = graph.filter((step) => !graph.some((other) => links[other.id]?.includes(step.id)));
   const starters = graph.filter((step) => links[step.id]?.includes('start'));
   const centre = (list: WorkflowStep[]) => (list.length ? list.reduce((sum, step) => sum + place(step).x, 0) / list.length : -NODE_W / 2);
+  const centreY = (list: WorkflowStep[]) => (list.length ? list.reduce((sum, step) => sum + place(step).y, 0) / list.length : -75);
   const top = Math.min(ROW, ...graph.map((step) => place(step).y));
   const bottom = Math.max(ROW, ...graph.map((step) => place(step).y));
+  const last = Math.max(STAGE_W, ...graph.map((step) => place(step).x));
+  const side: FlowDir = across ? 'right' : 'down';
 
   const nodes: Node[] = [
-    { id: 'start', type: 'end', position: { x: centre(starters) + 16, y: top - START_GAP }, sourcePosition: Position.Bottom, data: { kind: 'start', state: stateOf('start'), mode, run } satisfies EndData, deletable: false },
-    ...graph.map((step, index) => ({ id: step.id, type: 'step', position: place(step), sourcePosition: Position.Bottom, targetPosition: Position.Top, data: { step, index, state: stateOf(step.id), mode, node: nodeOf(step.id) } satisfies StepData })),
-    { id: 'end', type: 'end', position: { x: centre(sinks) + 16, y: bottom + ROW }, targetPosition: Position.Top, data: { kind: 'end', state: stateOf('end'), mode, run } satisfies EndData, deletable: false },
+    { id: 'start', type: 'end', position: across ? { x: 0, y: centreY(starters) + 45 } : { x: centre(starters) + 16, y: top - START_GAP }, sourcePosition: outPos, data: { kind: 'start', state: stateOf('start'), mode, run, dir: side } satisfies EndData, deletable: false },
+    ...graph.map((step, index) => ({ id: step.id, type: 'step', position: place(step), sourcePosition: outPos, targetPosition: inPos, data: { step, index, state: stateOf(step.id), mode, node: nodeOf(step.id), dir: side } satisfies StepData })),
+    { id: 'end', type: 'end', position: across ? { x: last + STAGE_W, y: centreY(sinks) + 45 } : { x: centre(sinks) + 16, y: bottom + ROW }, targetPosition: inPos, data: { kind: 'end', state: stateOf('end'), mode, run, dir: side } satisfies EndData, deletable: false },
   ];
 
   const edges: Edge[] = [];

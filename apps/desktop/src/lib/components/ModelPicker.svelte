@@ -294,7 +294,7 @@
   zTrigger="manual"
   zPosition="right-top"
   zOffset={6}
-  zWidth={220}
+  zWidth={168}
 >
   {#snippet children()}
     {#if subProvider === FLOW}
