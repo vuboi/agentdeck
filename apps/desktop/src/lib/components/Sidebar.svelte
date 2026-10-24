@@ -770,11 +770,7 @@
   {/if}
 
   <div class="flex h-11 shrink-0 items-center gap-2 px-3 text-xs">
-    <Logo class="size-6 shrink-0" />
-    <span class="flex min-w-0 flex-col leading-tight">
-      <span class="truncate font-medium">AgentDeck</span>
-      {#if appInfo.version}<span class="truncate text-[10px] text-muted-foreground tabular-nums">v{appInfo.version}</span>{/if}
-    </span>
+    {#if appInfo.version}<span class="truncate text-muted-foreground tabular-nums">Version {appInfo.version}</span>{/if}
     <ZButton zWave={false} zType="ghost" zSize="sm" class="relative ml-auto h-6 w-6" aria-label={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} title={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} onclick={onUpdateClick}>
       <ZIcon zType={(turning ? 'lucideLoaderCircle' : 'lucideArrowDownToLine') as ZIconName} class="size-3.5 {turning ? 'animate-spin' : ''}" />
       {#if updater.status === 'available' || updater.status === 'downloading'}<span class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"></span>{/if}
