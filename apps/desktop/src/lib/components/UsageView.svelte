@@ -163,7 +163,7 @@
       <button
         bind:this={projectTrigger}
         type="button"
-        class="ml-auto inline-flex h-6 max-w-44 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs outline-none hover:bg-accent {projectOpen ? 'bg-accent' : ''}"
+        class="ml-auto inline-flex h-6 min-w-36 max-w-44 cursor-pointer items-center justify-between gap-1.5 rounded-md border border-border bg-background px-2 text-xs outline-none hover:bg-accent {projectOpen ? 'bg-accent' : ''}"
         aria-label="Project"
         aria-haspopup="listbox"
         aria-expanded={projectOpen}
