@@ -179,7 +179,7 @@
     <FlowCanvas bind:steps={draft.steps} bind:selected mode="edit" minimap onlayout={keepLayout} class="flex-1" />
   </div>
 
-  <ZDrawer bind:open={drawer} zPlacement="right" zWidth="420px" zClosable={false} zMaskClosable={false} zTitle={drawerTitle} footer={drawerFooter}>
+  <ZDrawer bind:open={drawer} zPlacement="right" zWidth="420px" zFloating zClosable={false} zMaskClosable={false} zTitle={drawerTitle} footer={drawerFooter}>
     {#if edit}
       {@const step = edit}
       <div class="flex flex-col gap-4">
