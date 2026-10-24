@@ -338,12 +338,22 @@ export function addProject(path: string) {
 function isEmptyDraft(item: SessionItem) {
   return item.draft && !(localMessages[item.id]?.length);
 }
+/** Told which sessions went when empty drafts are dropped, so a tab left open on one can go too. */
+let onDraftsDropped: ((ids: string[]) => void) | undefined;
+export function watchDroppedDrafts(listener: (ids: string[]) => void) {
+  onDraftsDropped = listener;
+}
 function dropEmptyDrafts() {
+  const dropped: string[] = [];
   for (let index = workspace.sessions.length - 1; index >= 0; index--) {
     const item = workspace.sessions[index];
     // A new session with words typed in it is kept: its project's "New session" brings it back.
-    if (item.id !== workspace.activeId && isEmptyDraft(item) && !drafts[item.id]?.trim()) workspace.sessions.splice(index, 1);
+    if (item.id !== workspace.activeId && isEmptyDraft(item) && !drafts[item.id]?.trim()) {
+      workspace.sessions.splice(index, 1);
+      dropped.push(item.id);
+    }
   }
+  if (dropped.length) onDraftsDropped?.(dropped);
 }
 
 export function newSession(projectId =activeSession()?.projectId ?? workspace.projects[0]?.id ?? NO_PROJECT, { reuseDraft = true } = {}) {

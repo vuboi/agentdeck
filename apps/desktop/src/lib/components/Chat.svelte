@@ -370,7 +370,7 @@
           aria-label="New tab"
           title="New tab"
           onclick={() => {
-            newSession(undefined, { reuseDraft: false });
+            newSession();
             openChatTab(workspace.activeId);
           }}
         >

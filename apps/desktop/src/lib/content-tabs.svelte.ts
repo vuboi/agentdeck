@@ -1,5 +1,5 @@
 import { untrack } from 'svelte';
-import { history, pendingProject, workspace } from './sessions.svelte';
+import { history, pendingProject, watchDroppedDrafts, workspace } from './sessions.svelte';
 import { getPref, setPref } from './prefs';
 
 // Browser-style tabs over the conversation area. A tab is either a chat (one session) or a file.
@@ -75,6 +75,15 @@ $effect.root(() => {
 });
 
 /** Open (or focus) the chat tab of a session and make it the session on screen. */
+// An unsent new session that is dropped (another one took its place) leaves no tab behind.
+watchDroppedDrafts((ids) => {
+  const gone = new Set(ids.map(chatId));
+  const keep = contentTabs.tabs.filter((tab) => !gone.has(tab.id));
+  if (keep.length === contentTabs.tabs.length) return;
+  contentTabs.tabs = keep;
+  if (gone.has(contentTabs.active)) contentTabs.active = keep.find((tab) => tab.kind === 'chat' && tab.sessionId === workspace.activeId)?.id ?? keep[0]?.id ?? '';
+});
+
 export function openChatTab(sessionId: string) {
   if (!contentTabs.tabs.some((tab) => tab.id === chatId(sessionId))) {
     contentTabs.tabs.push({ id: chatId(sessionId), kind: 'chat', sessionId });

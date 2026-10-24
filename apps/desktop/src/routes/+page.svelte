@@ -126,7 +126,7 @@
     // Ctrl+T (Cmd+T on macOS): a new chat tab, the same as the + button.
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 't') {
       event.preventDefault();
-      newSession(undefined, { reuseDraft: false });
+      newSession();
       openChatTab(workspace.activeId);
     }
   }
