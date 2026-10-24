@@ -2,6 +2,7 @@
   import { ZCommand } from '@shival99/z-ui-svelte';
   import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
   import { projectOf, workspace } from '../sessions.svelte';
+  import { showSession } from '../content-tabs.svelte';
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
 
@@ -72,7 +73,8 @@
   });
 
   function select(item: ZCommandItem<string>) {
-    if (item.data) workspace.activeId = item.data;
+    // Opens its tab too: picking the chat that was open before its tab was closed brings it back.
+    if (item.data) showSession(item.data);
   }
 </script>
 

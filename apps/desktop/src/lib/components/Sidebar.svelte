@@ -6,7 +6,7 @@
   import Logo from './Logo.svelte';
   import { toast } from '../toast';
   import AgentStack from './AgentStack.svelte';
-  import { showSession } from '../content-tabs.svelte';
+  import { contentTabs, showSession } from '../content-tabs.svelte';
   import SearchPalette from './SearchPalette.svelte';
   import DockZone from './DockZone.svelte';
   import Splitter from './Splitter.svelte';
@@ -201,6 +201,8 @@
     const pending = pendingProject();
     if (pending) return [pendingRow(pending)];
     const id = workspace.activeId;
+    // A chat whose tab was closed is not open any more: nothing is highlighted until it is opened again.
+    if (!contentTabs.tabs.some((tab) => tab.kind === 'chat' && tab.sessionId === id)) return [];
     return [mainRow(id)];
   };
   /** The one row that stands for a chat listed more than once: highlighted when open, spinning when it runs. */
