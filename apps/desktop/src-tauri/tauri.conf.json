@@ -25,7 +25,7 @@
     "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico", "icons/icon.png"],
     "windows": {
-      "nsis": { "installerIcon": "icons/icon.ico" }
+      "nsis": { "installerIcon": "icons/icon.ico", "template": "windows/installer.nsi" }
     }
   },
   "plugins": {
