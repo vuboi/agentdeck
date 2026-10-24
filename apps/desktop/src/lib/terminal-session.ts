@@ -10,6 +10,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { inTauri } from './history';
+import { stripLocationPrefix } from './inflight';
 
 export type SessionStatus = 'starting' | 'running' | 'exited';
 
@@ -29,13 +30,18 @@ type Live = {
   hooks: SessionHooks;
   exited: boolean;
   /** The foreground command being watched (see `evaluate`), the address it printed, and the timer of the next look. */
-  run?: { command: string; startedAt: number; line: number };
+  run?: { runId: number; command: string; cwd?: string; startedAt: number; line: number };
   url: string | null;
   timer: number;
+  /** The shell is being adopted after a reload: its kept output is written first, what arrives meanwhile waits. */
+  replaying: boolean;
+  held: { bytes: Uint8Array; end: number }[];
+  /** The start (or adoption) in progress or done. */
+  ready?: Promise<unknown>;
 };
 
 /** A command a tab is still running (a dev server, a watcher…): what the "running in the background" list shows. */
-export type RunInfo = { command: string; cwd?: string; startedAt: number; url: string | null };
+export type RunInfo = { runId: number; command: string; cwd?: string; startedAt: number; url: string | null };
 let runWatcher: ((id: string, run: RunInfo | null) => void) | null = null;
 /** Tells `watch` every time a tab starts, updates or ends a long-running command. */
 export const watchRuns = (watch: (id: string, run: RunInfo | null) => void) => {
@@ -127,12 +133,14 @@ let listening: Promise<void> | null = null;
 function listenToShells(): Promise<void> {
   listening ??= (async () => {
     const { listen } = await import('@tauri-apps/api/event');
-    await listen<{ id: string; data: string }>('pty-data', ({ payload }) => {
+    await listen<{ id: string; data: string; end?: number }>('pty-data', ({ payload }) => {
       const session = live.get(payload.id);
       if (!session) return;
-      const text = atob(payload.data);
-      const bytes = new Uint8Array(text.length);
-      for (let index = 0; index < text.length; index++) bytes[index] = text.charCodeAt(index);
+      const bytes = decode(payload.data);
+      if (session.replaying) {
+        session.held.push({ bytes, end: payload.end ?? 0 });
+        return;
+      }
       session.term.write(bytes);
       if (session.run) schedule(payload.id, session, 800);
     });
@@ -147,6 +155,13 @@ function listenToShells(): Promise<void> {
     });
   })();
   return listening;
+}
+
+function decode(data: string) {
+  const text = atob(data);
+  const bytes = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index++) bytes[index] = text.charCodeAt(index);
+  return bytes;
 }
 
 /** Text sent to a tab whose shell is not up yet; it goes in as soon as the shell starts. */
@@ -210,7 +225,7 @@ function localUrlSince(term: Terminal, from: number) {
 }
 
 function report(id: string, session: Live) {
-  if (session.run) runWatcher?.(id, { command: session.run.command, cwd: session.cwd, startedAt: session.run.startedAt, url: session.url });
+  if (session.run) runWatcher?.(id, { runId: session.run.runId, command: session.run.command, cwd: session.run.cwd ?? session.cwd, startedAt: session.run.startedAt, url: session.url });
 }
 
 function endRun(id: string, session: Live) {
@@ -241,12 +256,17 @@ function evaluate(id: string, session: Live) {
   report(id, session);
 }
 
+let runCounter = 0;
 function beginRun(id: string, session: Live, command: string) {
-  const first = command.split(/\r?\n/).find((line) => line.trim())?.trim();
+  const sent = command.split(/\r?\n/).find((line) => line.trim())?.trim();
+  if (!sent) return;
+  // The Run button moves into the project's folder first: the entry shows the user's command and that folder.
+  const { command: first, cwd } = stripLocationPrefix(sent);
   if (!first) return;
   endRun(id, session);
   const buffer = session.term.buffer.active;
-  session.run = { command: first, startedAt: Date.now(), line: buffer.baseY + buffer.cursorY };
+  // Every run has its own id, so the same command run again in the same tab is a new entry.
+  session.run = { runId: ++runCounter, command: first, cwd, startedAt: Date.now(), line: buffer.baseY + buffer.cursorY };
   schedule(id, session, SETTLE);
 }
 
@@ -257,12 +277,40 @@ export function noteCommand(id: string, command: string) {
   else queuedRuns.set(id, command);
 }
 
-async function start(id: string, session: Live) {
+/**
+ * Takes over a shell the Rust side kept running while the page was away (a reload): its kept output is written into
+ * the terminal and the output that arrived meanwhile follows. False when there is no such shell.
+ * While the replay is written, the terminal's answers to what a program asked of it back then are not typed into the shell.
+ */
+async function adopt(id: string, session: Live): Promise<boolean> {
+  session.replaying = true;
+  session.held = [];
+  try {
+    const attached = await call<{ name: string; replay: string; total: number } | null>('pty_attach', { id, cols: session.term.cols, rows: session.term.rows });
+    if (!attached) return false;
+    await new Promise<void>((done) => session.term.write(decode(attached.replay), done));
+    for (const chunk of session.held) if (chunk.end > attached.total) session.term.write(chunk.bytes);
+    session.hooks.title(attached.name);
+    return true;
+  } finally {
+    session.held = [];
+    session.replaying = false;
+  }
+}
+
+function start(id: string, session: Live) {
+  const done = begin(id, session);
+  session.ready = done;
+  return done;
+}
+
+async function begin(id: string, session: Live) {
   session.exited = false;
   session.hooks.status('starting');
   try {
-    const name = await call<string>('pty_open', { id, cwd: session.cwd ?? null, cols: session.term.cols, rows: session.term.rows });
-    session.hooks.title(name);
+    let name: string | null = null;
+    if (!(await adopt(id, session))) name = await call<string>('pty_open', { id, cwd: session.cwd ?? null, cols: session.term.cols, rows: session.term.rows });
+    if (name !== null) session.hooks.title(name);
     session.hooks.status('running');
     const queued = waiting.get(id);
     waiting.delete(id);
@@ -298,9 +346,10 @@ function create(id: string, cwd: string | undefined, hooks: SessionHooks): Live 
       void call('open_external', { url: uri }).catch(() => {});
     }),
   );
-  const session: Live = { term, fit, search, cwd, hooks, exited: false, url: null, timer: 0 };
+  const session: Live = { term, fit, search, cwd, hooks, exited: false, url: null, timer: 0, replaying: false, held: [] };
 
   term.onData((data) => {
+    if (session.replaying) return;
     if (session.exited) {
       if (data === '\r') void start(id, session);
       return;
@@ -372,6 +421,40 @@ export function attachSession(id: string, container: HTMLElement, cwd: string | 
   }
   session.fit.fit();
   void start(id, session);
+}
+
+/**
+ * After a reload: finds again the command a tab was running. The tab's shell is taken over (without showing the
+ * tab), and when its cursor line is not a prompt the command counts as running again, from its original start; the
+ * run watcher is told as for any run. Returns what became of it: 'running', 'ok' (back at the prompt) or 'stopped'
+ * (the shell is gone).
+ */
+export async function resumeRun(id: string, hooks: SessionHooks, saved: { command: string; cwd?: string; startedAt: number }): Promise<'running' | 'ok' | 'stopped'> {
+  if (!terminalAvailable()) return 'stopped';
+  await listenToShells();
+  let session = live.get(id);
+  if (!session) {
+    session = create(id, saved.cwd, hooks);
+    session.ready = adopt(id, session);
+    if (!(await session.ready.catch(() => false))) {
+      live.delete(id);
+      session.term.dispose();
+      return 'stopped';
+    }
+    hooks.status('running');
+  } else {
+    await session.ready?.catch(() => {});
+    if (live.get(id) !== session || session.exited) return 'stopped';
+  }
+  if (session.run) return 'running';
+  const line = cursorLine(session.term);
+  if (line !== null && PROMPT.test(line)) return 'ok';
+  // The replay is old output, not a command that was just typed: it is watched from the original start.
+  session.run = { runId: ++runCounter, command: saved.command, cwd: saved.cwd, startedAt: saved.startedAt, line: 0 };
+  session.url = localUrlSince(session.term, 0);
+  report(id, session);
+  schedule(id, session, 800);
+  return 'running';
 }
 
 /** Fits the terminal to its container (when it is on screen) and tells the shell the new size. */

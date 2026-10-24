@@ -979,6 +979,7 @@ pub fn run() {
             browser::browser_favicon,
             browser::browser_suggest,
             pty::pty_open,
+            pty::pty_attach,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_close,

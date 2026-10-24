@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, LazyLock, Mutex};
+use std::sync::{mpsc, Arc, LazyLock, Mutex};
 
 use base64::Engine;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -19,6 +19,9 @@ struct Session {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
+    /// The shell's name, and the last output it printed: a page that reloads asks for both (`pty_attach`).
+    name: String,
+    scrollback: Arc<Mutex<Kept>>,
 }
 
 /// The open shells, by the tab id the UI gave them.
@@ -28,6 +31,8 @@ static SESSIONS: LazyLock<Mutex<HashMap<String, Session>>> = LazyLock::new(Defau
 struct Data {
     id: String,
     data: String,
+    /// How many bytes the shell had printed once this chunk was in: a page that adopts a shell drops what its replay holds.
+    end: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -38,6 +43,50 @@ struct Exit {
 
 /// Most bytes sent in one event.
 const BATCH: usize = 64 * 1024;
+/// Most output kept per shell for a page that reloads.
+const SCROLLBACK: usize = 256 * 1024;
+
+/// The output a shell printed that is still kept, and how many bytes it printed in all.
+#[derive(Default)]
+struct Kept {
+    bytes: Vec<u8>,
+    total: u64,
+}
+
+/// Adds `bytes` to the kept output, dropping the oldest (up to a line break, so a cut does not start mid-line).
+/// Returns how many bytes the shell has printed in all.
+fn keep(scrollback: &Mutex<Kept>, bytes: &[u8]) -> u64 {
+    let Ok(mut guard) = scrollback.lock() else { return 0 };
+    guard.total += bytes.len() as u64;
+    let kept = &mut guard.bytes;
+    kept.extend_from_slice(bytes);
+    if kept.len() > SCROLLBACK {
+        let cut = kept.len() - SCROLLBACK;
+        let end = kept[cut..].iter().position(|byte| *byte == b'\n').map_or(cut, |at| cut + at + 1);
+        kept.drain(..end);
+    }
+    guard.total
+}
+
+#[derive(Serialize)]
+pub struct Attached {
+    name: String,
+    /// The kept output, base64.
+    replay: String,
+    /// How many bytes the shell had printed when the replay was taken.
+    total: u64,
+}
+
+/// A shell that is already running for tab `id` (the page was reloaded): resized, with what it printed so far.
+/// `None` when there is none, and the page opens a new one.
+#[tauri::command]
+pub fn pty_attach(id: String, cols: u16, rows: u16) -> Result<Option<Attached>, String> {
+    let sessions = SESSIONS.lock().map_err(|_| "terminal state is locked")?;
+    let Some(session) = sessions.get(&id) else { return Ok(None) };
+    let _ = session.master.resize(size(cols, rows));
+    let kept = session.scrollback.lock().map_err(|_| "terminal state is locked")?;
+    Ok(Some(Attached { name: session.name.clone(), replay: base64::engine::general_purpose::STANDARD.encode(&kept.bytes), total: kept.total }))
+}
 
 /// The first of `names` found in a PATH-like list of folders.
 fn find_in(path: &std::ffi::OsStr, names: &[&str]) -> Option<PathBuf> {
@@ -84,7 +133,9 @@ pub fn pty_open(app: AppHandle, id: String, cwd: Option<String>, cols: u16, rows
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().map_err(|error| error.to_string())?;
     let writer = pair.master.take_writer().map_err(|error| error.to_string())?;
-    SESSIONS.lock().map_err(|_| "terminal state is locked")?.insert(id.clone(), Session { master: pair.master, writer, child });
+    let name = program.file_stem().and_then(|name| name.to_str()).unwrap_or("shell").to_string();
+    let scrollback = Arc::new(Mutex::new(Kept::default()));
+    SESSIONS.lock().map_err(|_| "terminal state is locked")?.insert(id.clone(), Session { master: pair.master, writer, child, name: name.clone(), scrollback: Arc::clone(&scrollback) });
 
     // One thread reads the shell (it blocks), one batches what it read and sends it on.
     let (sender, receiver) = mpsc::channel::<Vec<u8>>();
@@ -106,7 +157,8 @@ pub fn pty_open(app: AppHandle, id: String, cwd: Option<String>, cols: u16, rows
                     Err(_) => break,
                 }
             }
-            let _ = app.emit("pty-data", Data { id: tab.clone(), data: engine.encode(&bytes) });
+            let end = keep(&scrollback, &bytes);
+            let _ = app.emit("pty-data", Data { id: tab.clone(), data: engine.encode(&bytes), end });
         }
         // The shell closed its end: report how it ended (unless the tab was closed and the session is gone).
         let session = SESSIONS.lock().ok().and_then(|mut sessions| sessions.remove(&tab));
@@ -115,7 +167,7 @@ pub fn pty_open(app: AppHandle, id: String, cwd: Option<String>, cols: u16, rows
             let _ = app.emit("pty-exit", Exit { id: tab, code });
         }
     });
-    Ok(program.file_stem().and_then(|name| name.to_str()).unwrap_or("shell").to_string())
+    Ok(name)
 }
 
 /// Keystrokes and pastes for the shell of tab `id`.
@@ -215,5 +267,23 @@ mod tests {
         assert!(output.contains("pty-works"), "{output:?}");
         pair.master.resize(size(100, 30)).expect("resize");
         let _ = child.kill();
+    }
+}
+
+#[cfg(test)]
+mod scrollback_tests {
+    use super::*;
+
+    #[test]
+    fn the_kept_output_is_capped_and_starts_on_a_line() {
+        let kept = Mutex::new(Kept::default());
+        let line = [b'x'; 99].iter().copied().chain([b'\n']).collect::<Vec<u8>>();
+        for _ in 0..(SCROLLBACK / 100 + 50) {
+            keep(&kept, &line);
+        }
+        let kept = kept.lock().expect("lock");
+        assert!(kept.bytes.len() <= SCROLLBACK);
+        assert_eq!(kept.bytes.len() % 100, 0);
+        assert_eq!(kept.total, ((SCROLLBACK / 100 + 50) * 100) as u64);
     }
 }

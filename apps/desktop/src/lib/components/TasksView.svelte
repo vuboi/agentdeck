@@ -262,7 +262,8 @@
         <div class="flex items-center gap-2 text-muted-foreground">
           <button type="button" class="min-w-0 cursor-pointer truncate text-primary hover:underline" onclick={() => openChat(item.sessionId)}>{item.title}</button>
           <span aria-hidden="true">·</span>
-          <span class="tabular-nums">{STATUS[item.status].label}, {took(item)}</span>
+          <!-- A running entry already counts its time in the row above: it is shown once. -->
+          <span class="tabular-nums">{live(item) ? STATUS[item.status].label : `${STATUS[item.status].label}, ${took(item)}`}</span>
         </div>
         {#if item.input && /^(Run project|Terminal|Bash)$/.test(item.name)}
           <LiveCommand {item} oncopy={(text) => copy(text, 'Output')} />

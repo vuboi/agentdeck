@@ -1,6 +1,8 @@
-import { trackTerminal } from './activity.svelte';
+import { finishSavedTerminal, trackTerminal } from './activity.svelte';
+import { loadInflight, terminalVerdict } from './inflight';
 import { getPref, setPref } from './prefs';
-import { disposeSession, noteCommand, watchRuns, writeToSession, type SessionStatus } from './terminal-session';
+import { disposeSession, noteCommand, resumeRun, watchRuns, writeToSession, type SessionHooks, type SessionStatus } from './terminal-session';
+import { inTauri } from './history';
 
 export type TerminalTab = { id: string; name: string; status: SessionStatus };
 
@@ -28,7 +30,41 @@ Promise.all([getPref<SavedTerminal>('terminal.state'), getPref<boolean>('termina
     terminal.open = legacyOpen;
   }
   terminalHydrated = true;
+  void restoreTerminalRuns();
 });
+
+/** The tab list and its hooks for a shell that is taken over before the panel shows it. */
+const headlessHooks = (id: string): SessionHooks => ({
+  title: (name) => {
+    const tab = terminal.tabs.find((item) => item.id === id);
+    if (tab) tab.name = name;
+  },
+  status: (status) => {
+    const tab = terminal.tabs.find((item) => item.id === id);
+    if (tab) tab.status = status;
+  },
+  find: () => {},
+});
+
+/**
+ * After a reload (F5 or a hot update): the shells live in the Rust side and keep their commands. For each command a
+ * tab was running, the shell is taken over again; a command that is still running gets its entry back with its
+ * original start, one that ended (the prompt is back, or the tab is gone) goes to the Audit log.
+ */
+async function restoreTerminalRuns() {
+  if (!inTauri()) return;
+  for (const saved of loadInflight().terminals) {
+    let verdict: 'running' | 'ok' | 'stopped' = 'stopped';
+    if (terminal.tabs.some((tab) => tab.id === saved.tabId)) {
+      try {
+        verdict = await resumeRun(saved.tabId, headlessHooks(saved.tabId), saved);
+      } catch {
+        verdict = terminalVerdict(false, false);
+      }
+    }
+    if (verdict !== 'running') finishSavedTerminal(saved, verdict);
+  }
+}
 $effect.root(() => {
   $effect(() => {
     const snapshot: SavedTerminal = {
@@ -53,7 +89,7 @@ export function runInTerminal(command: string) {
 }
 
 // ---- What the tabs are running: long commands (dev servers, watchers) listed with the background servers.
-export type TerminalRun = { id: string; command: string; cwd?: string; startedAt: number; url: string | null; interruptedAt: number | null };
+export type TerminalRun = { id: string; runId: number; command: string; cwd?: string; startedAt: number; url: string | null; interruptedAt: number | null };
 export const terminalRuns = $state<{ list: TerminalRun[] }>({ list: [] });
 
 watchRuns((id, run) => {
@@ -65,7 +101,7 @@ watchRuns((id, run) => {
     terminalRuns.list.push({ id, ...run, interruptedAt: null });
   } else {
     const item = terminalRuns.list[index];
-    if (item.command !== run.command || item.startedAt !== run.startedAt) item.interruptedAt = null;
+    if (item.runId !== run.runId) item.interruptedAt = null;
     Object.assign(item, run);
   }
 });

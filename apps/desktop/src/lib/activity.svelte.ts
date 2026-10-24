@@ -4,6 +4,7 @@
 
 import type { AgentEvent } from './agent';
 import { inTauri } from './history';
+import { planRunRestore, terminalStep, updateInflight, loadInflight, withTerminal, withoutTerminal, type InflightRun, type ServerLike } from './inflight';
 import { sessionTail } from './terminal-session';
 
 export type ActivityStatus = 'running' | 'background' | 'ok' | 'fail' | 'stopped';
@@ -209,8 +210,12 @@ export async function refreshOutput(item: Activity): Promise<boolean> {
     if (item.name === 'Run project' && inTauri()) {
       const row = await serverFor(item);
       // A server that is not in the list any more (stopped, or from an earlier session) keeps the text it has.
-      if (!row) return false;
+      if (!row) {
+        endRestored(item);
+        return false;
+      }
       item.output = String(await tauriCall('server_log', { port: item.port, lines: 200 })).slice(-OUTPUT_CAP);
+      if (!row.running) endRestored(item);
       return row.running;
     }
     if (item.name === 'Terminal' && item.terminalId) {
@@ -229,10 +234,17 @@ export async function refreshOutput(item: Activity): Promise<boolean> {
  * answers or fails. Returns the function that ends it.
  */
 export function trackRun(sessionId: string, title: string, project: string, input: string, port?: number) {
+  // Every start is an entry of its own (new key, own start), also the same project started again.
   activity.push({ key: `${sessionId}:run:${++calls}`, sessionId, title, project, name: 'Run project', input, background: false, status: 'running', startedAt: Date.now(), port });
   // The entry as the list holds it (reactive), so the panel sees it end.
   const item = activity[activity.length - 1];
+  // Kept for a reload: the page may go away while the server is still starting or running.
+  const saved: InflightRun = { sessionId, title, project, input, port, startedAt: item.startedAt, settled: false };
+  updateInflight((state) => void state.runs.push(saved));
+  const forget = () => updateInflight((state) => void (state.runs = state.runs.filter((entry) => entry !== saved && !(entry.startedAt === saved.startedAt && entry.input === saved.input))));
   return (ok: boolean, output: string) => {
+    if (ok) updateInflight((state) => void state.runs.forEach((entry) => entry.startedAt === saved.startedAt && entry.input === saved.input && (entry.settled = true)));
+    else forget();
     item.status = ok ? 'ok' : 'fail';
     item.output = output.length > OUTPUT_CAP ? `${output.slice(0, OUTPUT_CAP)}…` : output;
     item.endedAt = Date.now();
@@ -245,12 +257,17 @@ export function trackRun(sessionId: string, title: string, project: string, inpu
 }
 
 /** Terminal tabs: the entry of the command each one runs now. */
-const terminalRuns = new Map<string, { item: Activity; startedAt: number; command: string }>();
+const terminalRuns = new Map<string, { item: Activity; runId: number }>();
 
-/** A command a Terminal tab runs (reported when it starts or changes, and with `null` when the prompt is back). */
-export function trackTerminal(id: string, run: { command: string; cwd?: string; startedAt: number } | null) {
+/**
+ * A command a Terminal tab runs (reported when it starts or changes, and with `null` when the prompt is back). A run
+ * is told apart by its id, not by its command: the same command run again after the first one ended is a new entry.
+ */
+export function trackTerminal(id: string, run: { runId: number; command: string; cwd?: string; startedAt: number } | null) {
   const current = terminalRuns.get(id);
-  if (current && (!run || current.startedAt !== run.startedAt || current.command !== run.command)) {
+  const step = terminalStep(current?.runId, run);
+  if (step === 'none') return;
+  if (current && (step === 'finish' || step === 'restart')) {
     terminalRuns.delete(id);
     const item = current.item;
     item.status = 'ok';
@@ -258,10 +275,58 @@ export function trackTerminal(id: string, run: { command: string; cwd?: string; 
     const text = sessionTail(id, 200);
     if (text !== null) item.output = text.slice(-OUTPUT_CAP);
     record(item);
+    if (step === 'finish') updateInflight((state) => void Object.assign(state, withoutTerminal(state, id)));
   }
-  if (!run || terminalRuns.has(id)) return;
+  if (!run) return;
   activity.push({ key: `terminal:${id}:${++calls}`, sessionId: '', title: 'Terminal', project: '', name: 'Terminal', input: run.command, background: false, status: 'running', startedAt: run.startedAt, terminalId: id });
-  terminalRuns.set(id, { item: activity[activity.length - 1], startedAt: run.startedAt, command: run.command });
+  terminalRuns.set(id, { item: activity[activity.length - 1], runId: run.runId });
+  updateInflight((state) => void Object.assign(state, withTerminal(state, { tabId: id, command: run.command, cwd: run.cwd, startedAt: run.startedAt })));
+}
+
+/** A run from before a reload that ended meanwhile (its tab is gone, or its shell is at the prompt): into the Audit log. */
+export function finishSavedTerminal(saved: { tabId: string; command: string; cwd?: string; startedAt: number }, status: 'ok' | 'stopped') {
+  const text = status === 'ok' ? sessionTail(saved.tabId, 200) : null;
+  record({ key: `terminal:${saved.tabId}:${++calls}`, sessionId: '', title: 'Terminal', project: '', name: 'Terminal', input: saved.command, background: false, status, startedAt: saved.startedAt, endedAt: Date.now(), output: text?.slice(-OUTPUT_CAP) });
+  updateInflight((state) => void Object.assign(state, withoutTerminal(state, saved.tabId)));
+}
+
+// ---- Run project entries found again after a reload: they end when their server does.
+const restoredRuns = new Set<Activity>();
+function endRestored(item: Activity) {
+  if (!restoredRuns.delete(item) || item.status !== 'running') return;
+  item.status = 'stopped';
+  item.endedAt = Date.now();
+  record(item);
+  updateInflight((state) => void (state.runs = state.runs.filter((entry) => !(entry.startedAt === item.startedAt && entry.input === item.input))));
+}
+
+/** Gives the servers of the Rust side that outlived a reload their running entry again, and ends those that are gone. */
+export function restoreRunProjects(servers: ServerLike[]) {
+  const state = loadInflight();
+  const known = { ports: new Set<number>(), inputs: [] as string[] };
+  for (const item of activity) {
+    if (item.name !== 'Run project' || item.status !== 'running') continue;
+    if (item.port !== undefined) known.ports.add(item.port);
+    known.inputs.push(item.input);
+  }
+  const plan = planRunRestore(state.runs, servers, known, Date.now());
+  for (const { server, record: saved, startedAt } of plan.resume) {
+    activity.push({ key: `${saved?.sessionId ?? ''}:run:${++calls}`, sessionId: saved?.sessionId ?? '', title: saved?.title ?? '', project: saved?.project ?? '', name: 'Run project', input: `${server.command}\n${server.cwd}`, background: false, status: 'running', startedAt, port: server.key });
+    restoredRuns.add(activity[activity.length - 1]);
+    if (!saved) state.runs.push({ sessionId: '', title: '', project: '', input: `${server.command}\n${server.cwd}`, port: server.key, startedAt, settled: true });
+    else saved.port = server.key;
+  }
+  for (const saved of plan.stopped) {
+    record({ key: `${saved.sessionId}:run:${++calls}`, sessionId: saved.sessionId, title: saved.title, project: saved.project, name: 'Run project', input: saved.input, background: false, status: 'stopped', startedAt: saved.startedAt, endedAt: Date.now(), port: saved.port });
+  }
+  const gone = new Set([...plan.stopped, ...plan.forget]);
+  state.runs = state.runs.filter((entry) => !gone.has(entry));
+  updateInflight((fresh) => void (fresh.runs = state.runs));
+}
+
+if (inTauri()) {
+  // After a reload: the servers the Rust side still runs. Read once here; the list is not polled for this.
+  void tauriCall('servers_list').then((list) => restoreRunProjects(list as ServerLike[])).catch(() => {});
 }
 
 export const clearActivity =() => activity.splice(0, activity.length);

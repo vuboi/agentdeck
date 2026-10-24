@@ -6,7 +6,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { highlightHtml, preloadHighlighter } from '../highlight';
-  import { isLocalUrl, linkMenu, openExternal, openInPreview } from '../browser.svelte';
+  import { isLocalUrl, linkMenu, openExternal, openInPreview, terminalCommand } from '../browser.svelte';
   import { inTauri } from '../history';
   import { colourFinished, colourStarted, eagerColour, renderMarkdown } from '../markdown';
   import { runInTerminal } from '../terminal.svelte';
@@ -260,7 +260,9 @@
     const run = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-run]');
     if (run) {
       const command = run.closest('.md-code')?.querySelector('code')?.textContent;
-      if (command?.trim()) runInTerminal(command);
+      // Run in the folder of the chat's project, not wherever that shell happens to be (often the home folder).
+      const folder = workspace.projects.find((project) => project.id === activeSession()?.projectId)?.path ?? '';
+      if (command?.trim()) runInTerminal(terminalCommand(command, folder));
       return;
     }
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-copy]');
