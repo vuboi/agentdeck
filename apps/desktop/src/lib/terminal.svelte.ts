@@ -1,5 +1,5 @@
 import { getPref, setPref } from './prefs';
-import { disposeSession, type SessionStatus } from './terminal-session';
+import { disposeSession, writeToSession, type SessionStatus } from './terminal-session';
 
 export type TerminalTab = { id: string; name: string; status: SessionStatus };
 
@@ -41,6 +41,13 @@ $effect.root(() => {
 
 export function toggleTerminal() {
   terminal.open = !terminal.open;
+}
+
+/** Runs a command from a chat's code block in the active terminal tab, opening the panel if it is closed. */
+export function runInTerminal(command: string) {
+  terminal.open = true;
+  const lines = command.trimEnd().split(/\r?\n/);
+  writeToSession(terminal.active, lines.join('\r') + '\r');
 }
 
 export function newTerminal() {

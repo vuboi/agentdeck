@@ -3,6 +3,7 @@
   import { isLocalUrl, linkMenu, openExternal, openInPreview } from '../browser.svelte';
   import { inTauri } from '../history';
   import { renderMarkdown } from '../markdown';
+  import { runInTerminal } from '../terminal.svelte';
   import { theme } from '../theme.svelte';
   import { fileRootOf, openFileTab } from '../content-tabs.svelte';
   import { activeSession, workspace } from '../sessions.svelte';
@@ -211,6 +212,12 @@
       if (file) openFile(file, projectRoot);
       else if (isLocalUrl(link.href)) openInPreview(link.href);
       else void openExternal(link.href);
+      return;
+    }
+    const run = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-run]');
+    if (run) {
+      const command = run.closest('.md-code')?.querySelector('code')?.textContent;
+      if (command?.trim()) runInTerminal(command);
       return;
     }
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-copy]');

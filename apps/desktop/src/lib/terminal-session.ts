@@ -132,6 +132,16 @@ function listenToShells(): Promise<void> {
   return listening;
 }
 
+/** Text sent to a tab whose shell is not up yet; it goes in as soon as the shell starts. */
+const waiting = new Map<string, string>();
+
+/** Types `data` into the shell of tab `id` (held back until the shell is up). */
+export function writeToSession(id: string, data: string) {
+  const session = live.get(id);
+  if (session && !session.exited && session.term.element) void call('pty_write', { id, data }).catch(() => {});
+  else waiting.set(id, (waiting.get(id) ?? '') + data);
+}
+
 async function start(id: string, session: Live) {
   session.exited = false;
   session.hooks.status('starting');
@@ -139,6 +149,9 @@ async function start(id: string, session: Live) {
     const name = await call<string>('pty_open', { id, cwd: session.cwd ?? null, cols: session.term.cols, rows: session.term.rows });
     session.hooks.title(name);
     session.hooks.status('running');
+    const queued = waiting.get(id);
+    waiting.delete(id);
+    if (queued) void call('pty_write', { id, data: queued }).catch(() => {});
   } catch (error) {
     session.exited = true;
     session.hooks.status('exited');

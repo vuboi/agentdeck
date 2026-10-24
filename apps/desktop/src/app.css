@@ -168,6 +168,7 @@ html[data-warming] [data-z-popover] {
 .md-code { margin: 0 0 0.75rem; overflow: hidden; border: 1px solid var(--border); border-radius: 0.6rem; background: var(--muted); }
 .md-code-head { display: flex; align-items: center; justify-content: space-between; padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 0.6875rem; }
 .md-code-head button { cursor: pointer; padding: 0.1rem 0.4rem; border-radius: 0.3rem; font: inherit; }
+.md-code-actions { display: flex; align-items: center; gap: 0.1rem; }
 .md-code-head button:hover { background: var(--accent); color: var(--foreground); }
 .md-code-head button { position: relative; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; padding: 0; }
 .md-code-head button svg { grid-area: 1 / 1; transition: opacity 0.18s, transform 0.18s; }
