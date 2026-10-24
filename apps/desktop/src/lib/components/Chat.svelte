@@ -174,16 +174,26 @@
 
   /** One scroll is not enough on a cold list: sizes move as rows are measured, so re-assert per frame. */
   let pinToken = 0;
-  function pinToNewest() {
+  function pinToNewest(): Promise<void> {
     const token = ++pinToken;
     let attemptsLeft = 12;
-    const step = () => {
-      if (token !== pinToken || attemptsLeft-- <= 0 || !viewportEl || chat.messages.length === 0) return;
-      if ($virtualizer.isAtEnd(1)) return;
-      $virtualizer.scrollToEnd();
-      requestAnimationFrame(step);
-    };
-    void tick().then(() => requestAnimationFrame(step));
+    return new Promise((resolve) => {
+      const step = () => {
+        if (token !== pinToken || attemptsLeft-- <= 0 || !viewportEl || chat.messages.length === 0 || $virtualizer.isAtEnd(1)) return resolve();
+        $virtualizer.scrollToEnd();
+        requestAnimationFrame(step);
+      };
+      void tick().then(() => requestAnimationFrame(step));
+    });
+  }
+
+  // A chat is shown only once it sits at its end: it fades in there, instead of appearing at the top and then jumping
+  // (which looked like two flashes).
+  let revealed = $state(true);
+  async function revealAtEnd() {
+    await pinToNewest();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    revealed = true;
   }
 
   $effect(() => {
@@ -213,9 +223,10 @@
     void openKey;
     untrack(() => {
       windowSize = INITIAL;
+      revealed = false;
       stickToEnd(6000);
       void openTranscript(workspace.sessions.find((item) => item.id === workspace.activeId)).then(() => {
-        pinToNewest();
+        void revealAtEnd();
         stickToEnd();
         const grow = () => (windowSize = Math.max(windowSize, PAGE));
         if (typeof requestIdleCallback === 'function') requestIdleCallback(grow, { timeout: 1000 });
@@ -505,7 +516,7 @@
     {/if}
 
     <!-- svelte-ignore a11y_no_static_element_interactions (the events only tell that the reader took over the scrolling) -->
-    <div bind:this={viewportEl} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={stopSticking} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 transition-opacity duration-200 ease-out [scrollbar-gutter:stable]" style:opacity={chat.loading ? 0 : 1}>
+    <div bind:this={viewportEl} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={stopSticking} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 transition-opacity duration-200 ease-out [scrollbar-gutter:stable]" style:opacity={chat.loading || !revealed ? 0 : 1}>
       <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" {@attach watchListHeight} role="log" aria-live="polite" aria-label="Conversation">
         {#each $virtualizer.getVirtualItems() as row (row.key)}
           {@const message = chat.messages[row.index + from]}
