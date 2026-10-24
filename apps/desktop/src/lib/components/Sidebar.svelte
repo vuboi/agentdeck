@@ -1,6 +1,6 @@
 <script lang="ts">
   import { customProviderName } from '../models.svelte';
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree, zModalService, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import Logo from './Logo.svelte';
@@ -54,9 +54,59 @@
     Object.assign(view, change);
     setPref('sidebar.view', { ...view });
   }
+  // A heading folds its rows, and "Show more" adds some, by changing which nodes the tree is given, which the tree
+  // cannot animate on its own. The classes it uses for a folder do it here: rows that go fade out first, rows that
+  // arrive fade in, and the ones below glide to their new place (`z-tree-exit`, `z-tree-enter`, and `z-tree-moving`
+  // on an ancestor). Rows are found by their position in the visible list (`data-index`).
+  let treeWrap: HTMLDivElement | undefined = $state();
+  const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let glideTimer: ReturnType<typeof setTimeout> | undefined;
+  function glide() {
+    treeWrap?.classList.add('z-tree-moving');
+    clearTimeout(glideTimer);
+    glideTimer = setTimeout(() => treeWrap?.classList.remove('z-tree-moving'), 320);
+  }
+  const visibleIds = (list: ZTreeNode<TreeData>[]): string[] =>
+    list.flatMap((node) => [node.id, ...(node.children?.length && expanded.includes(node.id) ? visibleIds(node.children) : [])]);
+  const rowAt = (index: number) => treeWrap?.querySelector<HTMLElement>(`[role="treeitem"][data-index="${index}"]`);
+  const MOVING_ROWS = 30;
+
+  /** Applies a change to what the tree shows, with the rows that leave or arrive animated. */
+  function animateChange(next: { collapsed?: string[]; showAll?: string[] }, apply: () => void) {
+    if (reduced || !treeWrap) return apply();
+    const before = visibleIds(nodes);
+    const after = visibleIds(buildTree({ view, collapsed: next.collapsed ?? collapsed, showAll: next.showAll ?? showAll }));
+    const stays = new Set(after);
+    const leaving = before.flatMap((id, index) => (stays.has(id) ? [] : [index])).slice(0, MOVING_ROWS);
+    if (leaving.length) {
+      for (const index of leaving) rowAt(index)?.classList.add('z-tree-exit');
+      setTimeout(() => {
+        glide();
+        apply();
+      }, 140);
+      return;
+    }
+    const known = new Set(before);
+    const arriving = after.flatMap((id, index) => (known.has(id) ? [] : [index])).slice(0, MOVING_ROWS);
+    glide();
+    apply();
+    void tick().then(() => {
+      const rows = arriving.flatMap((index, order) => {
+        const row = rowAt(index);
+        if (!row) return [];
+        row.style.setProperty('--z-tree-delay', `${Math.min(order, 4) * 25}ms`);
+        row.classList.add('z-tree-enter');
+        return [row];
+      });
+      setTimeout(() => rows.forEach((row) => row.classList.remove('z-tree-enter')), 420);
+    });
+  }
   function toggleSection(key: string) {
-    collapsed = collapsed.includes(key) ? collapsed.filter((item) => item !== key) : [...collapsed, key];
-    setPref('sidebar.collapsed', collapsed);
+    const next = collapsed.includes(key) ? collapsed.filter((item) => item !== key) : [...collapsed, key];
+    animateChange({ collapsed: next }, () => {
+      collapsed = next;
+      setPref('sidebar.collapsed', collapsed);
+    });
   }
   // App updates: checked in the background; the button next to Settings shows a dot when one is waiting.
   let updateOpen = $state(false);
@@ -75,7 +125,10 @@
       else toast.success('AgentDeck is up to date');
     } else updateOpen = true;
   }
-  const toggleMore = (key: string) => (showAll = showAll.includes(key) ? showAll.filter((item) => item !== key) : [...showAll, key]);
+  function toggleMore(key: string) {
+    const next = showAll.includes(key) ? showAll.filter((item) => item !== key) : [...showAll, key];
+    animateChange({ showAll: next }, () => (showAll = next));
+  }
   const sectionKey = (nodeId: string) => nodeId.replace(/^section:/, '');
 
   const nodes = $derived(buildTree({ view, collapsed, showAll }));
@@ -549,6 +602,7 @@
         <span>Scanning AI agents on this machine…</span>
       </div>
     {/if}
+    <div bind:this={treeWrap} class="contents">
     <ZTree
       {nodes}
       zSize="sm"
@@ -668,6 +722,7 @@
         </span>
       {/snippet}
     </ZTree>
+    </div>
   </div>
 
   {#if layout.docked.sidebar.length > 0}
