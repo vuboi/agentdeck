@@ -24,7 +24,13 @@
 /* No focus outline or ring anywhere (the open row, a focused button, an input): state is shown by colour only. */
 :focus,
 :focus-visible,
-:focus-within {
+:focus-within,
+:focus::before,
+:focus::after,
+:focus-visible::before,
+:focus-visible::after,
+:focus-within::before,
+:focus-within::after {
   outline: none !important;
   --tw-ring-shadow: 0 0 #0000 !important;
   --tw-ring-offset-shadow: 0 0 #0000 !important;

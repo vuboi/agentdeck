@@ -220,9 +220,6 @@
     if (node.data?.kind === 'session' && node.data.session) {
       clickedRow = node.id;
       showSession(node.data.session.id);
-      // The tree keeps the mouse from taking focus, so the row clicked before (a folder, say) would stay focused and
-      // keep showing its hover buttons: focus moves to the row that is now open.
-      requestAnimationFrame(() => treeWrap?.querySelector<HTMLElement>('[role="treeitem"][data-selected="true"]')?.focus({ preventScroll: true }));
     }
     else if (node.data?.kind === 'section' && node.data.count) toggleSection(sectionKey(node.id));
     else if (node.data?.kind === 'more' && node.data.group) toggleMore(node.data.group);
@@ -264,6 +261,15 @@
   }
 
   // A chat folds and unfolds only by its arrow; a project row also does it when clicked.
+  // A click leaves its row focused, and a focused row shows its hover buttons although the mouse has gone: let go of it.
+  // (Keys keep their focus: only a real mouse click, which has a detail, lets go.)
+  function blurAfterClick(event: MouseEvent) {
+    if (event.detail === 0) return;
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.getAttribute('role') === 'treeitem') active.blur();
+    });
+  }
   function toggleNode(id: string) {
     const next = expanded.includes(id) ? expanded.filter((item) => item !== id) : [...expanded, id];
     animateChange({ expanded: next }, () => (expanded = next));
@@ -632,7 +638,8 @@
         <span>Scanning AI agents on this machine…</span>
       </div>
     {/if}
-    <div bind:this={treeWrap} class="contents">
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div bind:this={treeWrap} class="contents" onclick={blurAfterClick}>
     <ZTree
       {nodes}
       zSize="sm"

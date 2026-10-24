@@ -190,6 +190,20 @@
     if (viewportEl) untrack(pinToNewest);
   });
 
+  // Just after a chat opens (or a message is sent) the list is still settling: rows get their real height as they are
+  // measured, code is coloured, images load. For a moment the view stays glued to the end whatever changes the height,
+  // until the reader scrolls themselves. Without it the view is left somewhere in the middle of the chat.
+  let stickUntil = 0;
+  const stickToEnd = (ms = 3000) => (stickUntil = performance.now() + ms);
+  const stopSticking = () => (stickUntil = 0);
+  function watchListHeight(node: HTMLElement) {
+    const observer = new ResizeObserver(() => {
+      if (performance.now() < stickUntil && viewportEl) viewportEl.scrollTop = viewportEl.scrollHeight;
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }
+
   // Switching session loads its transcript (from disk for imported Claude/Codex history).
   // Re-runs when the open chat changes, and when it first appears in the list (after F5 the id is restored
   // before the history index is in).
@@ -199,8 +213,10 @@
     void openKey;
     untrack(() => {
       windowSize = INITIAL;
+      stickToEnd(6000);
       void openTranscript(workspace.sessions.find((item) => item.id === workspace.activeId)).then(() => {
         pinToNewest();
+        stickToEnd();
         const grow = () => (windowSize = Math.max(windowSize, PAGE));
         if (typeof requestIdleCallback === 'function') requestIdleCallback(grow, { timeout: 1000 });
         else setTimeout(grow, 300);
@@ -280,7 +296,7 @@
   });
   // Your own message always brings you back to the bottom.
   $effect(() => {
-    if (chat.messages.at(-1)?.role === 'user') untrack(() => ((following = true), pinToNewest()));
+    if (chat.messages.at(-1)?.role === 'user') untrack(() => ((following = true), stickToEnd(1500), pinToNewest()));
   });
 
   async function jumpToTurn(turn: number) {
@@ -488,8 +504,9 @@
       </div>
     {/if}
 
-    <div bind:this={viewportEl} onscroll={onViewportScroll} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 transition-opacity duration-200 ease-out [scrollbar-gutter:stable]" style:opacity={chat.loading ? 0 : 1}>
-      <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" role="log" aria-live="polite" aria-label="Conversation">
+    <!-- svelte-ignore a11y_no_static_element_interactions (the events only tell that the reader took over the scrolling) -->
+    <div bind:this={viewportEl} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={stopSticking} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 transition-opacity duration-200 ease-out [scrollbar-gutter:stable]" style:opacity={chat.loading ? 0 : 1}>
+      <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" {@attach watchListHeight} role="log" aria-live="polite" aria-label="Conversation">
         {#each $virtualizer.getVirtualItems() as row (row.key)}
           {@const message = chat.messages[row.index + from]}
           {@const mine = message?.role === 'user'}
