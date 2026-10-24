@@ -673,7 +673,7 @@
       {#if !started}
         <div class="absolute inset-0 grid place-items-center p-6 text-center text-xs text-muted-foreground">
           <div class="flex flex-col items-center gap-2">
-            <ZIcon zType="lucideGlobe" class="size-8 opacity-60" />
+            <ZIcon zType="lucideGlobe" zSize="36" class="size-9 opacity-60" />
             <p class="m-0">{targets.length ? 'Run the project, or enter an address above.' : 'Search or enter an address above.'}</p>
             {#if targets.length}
               <div class="mt-1 flex w-72 max-w-full flex-col gap-1 text-left" role="list" aria-label="Ways to run the project">

@@ -284,7 +284,7 @@
       <ZIcon zType={'lucideLoaderCircle' as ZIconName} class="size-5 animate-spin text-primary" />
       <p class="m-0 max-w-56 text-xs leading-normal" role="status">Reading the {project?.name} folder…</p>
     {:else}
-      <ZIcon zType="lucideFolder" class="size-8 opacity-60" />
+      <ZIcon zType="lucideFolder" zSize="36" class="size-9 opacity-60" />
       <h2 class="text-sm font-medium text-foreground">Explore</h2>
       <p class="m-0 max-w-56 text-xs leading-normal">
         {#if failure}{failure}{:else if !root}Open a chat in a project to see its files.{:else}This folder is empty.{/if}
