@@ -424,8 +424,10 @@
   }
 
   const ACTION = 'grid size-5 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-foreground/10 hover:text-foreground';
-  // A label cut short shows in full on hover, to its right, wrapping instead of running wide.
-  const clipTip = (content: string) => zTooltip({ content, position: 'right', autoDetect: true, maxWidth: '200px', class: 'max-w-[200px]! whitespace-normal break-words', offset: 96 });
+  // A label cut short shows in full on hover, wrapping instead of running wide. It is placed against the whole row (the
+  // sidebar's width), so it always sits just past the sidebar's edge, clear of the row's buttons, whatever the name's length.
+  const clipTip = (content: string) => (node: HTMLElement) =>
+    zTooltip({ content, position: 'right', autoDetect: true, maxWidth: '200px', class: 'max-w-[200px]! whitespace-normal break-words', offset: 6, anchor: node.closest<HTMLElement>('.z-tree-row') })(node);
 
   const statusColor = { working: 'bg-success', waiting: 'bg-warning', idle: 'bg-muted-foreground/40' } as const;
   const agentLabel = (agent: string) => agent[0].toUpperCase() + agent.slice(1);
