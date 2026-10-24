@@ -111,23 +111,13 @@
   // ---------- virtual list (same approach as ZChat) ----------
   // Pinned to the bottom, follows new rows only when already there, so a reader scrolled into
   // history is never yanked down by an incoming reply.
-  // Only the newest rows are mounted; scrolling up reveals more, a few at a time (STEP). A long chat then opens
-  // with a handful of rows to measure instead of all of them.
-  const PAGE = 40;
-  // A chat opens with INITIAL rows mounted (enough to fill the screen). Nothing more is mounted until the reader
-  // scrolls up: rows added after the chat is shown would move it.
-  const INITIAL = 14;
-  let windowSize = $state(INITIAL);
-  const from = $derived(Math.max(0, chat.messages.length - windowSize));
-  // Older rows are mounted a few at a time and well before the top is reached: one big batch is one long frame, felt
-  // as a jolt while scrolling.
-  const STEP = 6;
+  // Every loaded message is in the list: the virtualizer itself mounts only the rows in view. (A second window of
+  // mounted rows on top of it changed the list under the virtualizer at every step: that was the stutter.) Near the
+  // top, the page before is read from the chat's file and put in front.
+  const from = 0;
   function revealOlder() {
-    if (from > 0) windowSize += STEP;
-    // Everything loaded is mounted: read the next page from the chat's file.
-    else if (chat.older > 0) {
+    if (chat.older > 0 && !chat.loadingOlder) {
       void loadOlder(activeSession()).then((added) => {
-        windowSize += Math.min(added, STEP);
         if (added > 0) toast.info(`Loaded ${added} earlier messages${chat.older > 0 ? '' : ' · start of the conversation'}`);
       });
     }
@@ -149,13 +139,6 @@
     paddingEnd: 56,
   });
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>(virtualOptions());
-  // A row above the view that changes height (measured for the first time, code coloured, a picture loaded) moves the
-  // view by as much, so what is on screen stays put. The library skips this while scrolling up, which is exactly when
-  // older rows are mounted and measured: rows jumped. The last row is left alone: it may be a reply being written.
-  $effect(() => {
-    $virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) =>
-      item.index < chat.messages.length - from - 1 && item.start < (viewportEl?.scrollTop ?? 0);
-  });
 
   $effect(() => {
     void viewportEl;
@@ -247,7 +230,6 @@
   $effect(() => {
     void openKey;
     untrack(() => {
-      windowSize = INITIAL;
       revealed = false;
       setEagerColour(true);
       stickToEnd(6000);
@@ -343,10 +325,6 @@
     const row = turnRows[turn];
     if (row === undefined) return;
     // A turn above the mounted window is mounted first.
-    if (row < from) {
-      windowSize = chat.messages.length - row + PAGE;
-      await tick();
-    }
     // Instant, not smooth: rows between here and the target are measured on the way, the target moves under a smooth
     // scroll and it stops short. Jump, then put it right again once the rows around it have their real height.
     const target = row - from;
