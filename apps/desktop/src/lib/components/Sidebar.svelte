@@ -66,6 +66,7 @@
       const found = await checkForUpdate();
       if (found) updateOpen = true;
       else if (updater.status === 'error') toast.error(`Could not check for updates: ${updater.error}`);
+      else if (updater.error === 'none') toast.info('No update has been published yet');
       else toast.success('AgentDeck is up to date');
     } else updateOpen = true;
   }

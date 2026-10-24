@@ -36,8 +36,10 @@ export async function checkForUpdate(quiet = false): Promise<boolean> {
     updater.status = 'available';
     return true;
   } catch (error) {
-    updater.status = quiet ? 'idle' : 'error';
-    updater.error = String(error);
+    // No release feed yet (nothing published, or the repository is private): not a failure worth a red toast.
+    const none = /valid release|404|not found/i.test(String(error));
+    updater.status = quiet || none ? 'idle' : 'error';
+    updater.error = none ? 'none' : String(error);
     return false;
   }
 }
