@@ -91,6 +91,11 @@ pub fn result_text(content: &Value) -> String {
 
 /// One-line summary of a tool call: `Name  argument`.
 pub fn describe_tool(name: &str, input: &Value) -> String {
+    if matches!(name, "TodoWrite" | "update_plan") {
+        if let Some(plan) = crate::agent::plan_json(input) {
+            return format!("{name}  {plan}");
+        }
+    }
     // A field is a string or an array of strings (Codex shell calls: ["bash", "-lc", "ls"]).
     let pick = |keys: &[&str]| {
         keys.iter().find_map(|key| match input.get(*key)? {

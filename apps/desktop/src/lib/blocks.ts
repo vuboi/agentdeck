@@ -5,12 +5,28 @@ import type { Block } from './mock';
 
 export type CommandBlock = Extract<Block, { kind: 'command' }>;
 export type ThinkingBlock = Extract<Block, { kind: 'thinking' }>;
-export type Segment = { kind: 'block'; block: Block } | { kind: 'commands'; items: CommandBlock[]; /** Reasoning between the steps, folded into the group. */ thoughts: ThinkingBlock[] };
+export type PlanItem = { content: string; status: 'pending' | 'in_progress' | 'completed' };
+export type Segment = { kind: 'plan'; items: PlanItem[] } | { kind: 'block'; block: Block } | { kind: 'commands'; items: CommandBlock[]; /** Reasoning between the steps, folded into the group. */ thoughts: ThinkingBlock[] };
 
 /** Consecutive commands become one group; everything else stays as it is. Reasoning with no text draws nothing,
  *  so it does not split a group either: the steps then count up on one line, as in Claude and Codex. Reasoning that
  *  has text and sits between steps (a local model thinks before nearly every one) joins the group too, as one
  *  "Thinking" entry inside it, instead of a box of its own between every two steps. */
+/** The checklist of a TodoWrite / update_plan call, or null when the line is something else (or an old, cut-off one). */
+export function planOf(command: string): PlanItem[] | null {
+  if (!/^(TodoWrite|update_plan)\s/.test(command)) return null;
+  try {
+    const list: unknown = JSON.parse(argOf(command));
+    if (!Array.isArray(list)) return null;
+    return list.map((item: { content?: unknown; status?: unknown }) => ({
+      content: String(item.content ?? ''),
+      status: item.status === 'completed' || item.status === 'in_progress' ? item.status : 'pending',
+    }));
+  } catch {
+    return null;
+  }
+}
+
 export function segments(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
   // Reasoning seen before its first step: it goes into the group that step starts.
@@ -31,6 +47,17 @@ export function segments(blocks: Block[]): Segment[] {
     if (block.kind !== 'command') {
       flush();
       out.push({ kind: 'block', block });
+      continue;
+    }
+    const plan = planOf(block.command);
+    if (plan) {
+      // One checklist per reply: a later call updates it where it first appeared.
+      const shown = out.find((part) => part.kind === 'plan');
+      if (shown?.kind === 'plan') shown.items = plan;
+      else {
+        flush();
+        out.push({ kind: 'plan', items: plan });
+      }
       continue;
     }
     const last = out.at(-1);

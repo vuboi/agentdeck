@@ -12,6 +12,7 @@
   import ChatBlock from './ChatBlock.svelte';
   import DelegateList from './DelegateList.svelte';
   import CommandGroup from './CommandGroup.svelte';
+  import PlanCard from './PlanCard.svelte';
   import LiveStatus from './LiveStatus.svelte';
   import MessageFooter from './MessageFooter.svelte';
   import type { Segment } from '../blocks';
@@ -35,6 +36,7 @@
     for (let index = position - 1; index >= 0; index--) {
       const part = parts[index];
       if (part.kind === 'commands') return true;
+      if (part.kind === 'plan') return false;
       if (part.block.kind === 'thinking' && !part.block.text.trim()) continue;
       return false;
     }
@@ -560,6 +562,8 @@
                         <div class="{afterSteps(parts, position) ? '-mt-1.5' : ''} {parts[position + 1]?.kind === 'block' ? '-mb-0.5' : ''}">
                           <CommandGroup items={segment.items} thoughts={segment.thoughts} live={false} startedAt={message.startedAt} />
                         </div>
+                      {:else if segment.kind === 'plan'}
+                        <PlanCard items={segment.items} />
                       {:else}
                         <ChatBlock block={segment.block} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} answered={chat.messages.at(-1)?.id !== message.id} />
                       {/if}

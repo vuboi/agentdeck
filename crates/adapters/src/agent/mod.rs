@@ -125,8 +125,28 @@ pub trait Provider: Send + Sync {
     }
 }
 
+/// A plan tool's list (Claude `TodoWrite` `todos`, Codex `update_plan` `plan`) as `[{"content","status"}]` JSON, whole:
+/// the chat draws it as a checklist, so it must not be cut like other inputs.
+pub fn plan_json(input: &serde_json::Value) -> Option<String> {
+    let list = input.get("todos").or_else(|| input.get("plan"))?.as_array()?;
+    let items: Vec<serde_json::Value> = list
+        .iter()
+        .filter_map(|item| {
+            let content = item.get("content").or_else(|| item.get("step"))?.as_str()?;
+            let status = item.get("status").and_then(serde_json::Value::as_str).unwrap_or("pending");
+            Some(serde_json::json!({ "content": content, "status": status }))
+        })
+        .collect();
+    Some(serde_json::Value::Array(items).to_string())
+}
+
 /// One line describing a tool call's input: the part a person would look at.
 pub fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {
+    if matches!(name, "TodoWrite" | "update_plan") {
+        if let Some(plan) = plan_json(input) {
+            return plan;
+        }
+    }
     let field = |keys: &[&str]| {
         keys.iter()
             .find_map(|key| input.get(*key)?.as_str().map(str::to_owned))
