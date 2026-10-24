@@ -33,6 +33,11 @@
   let projectTrigger = $state<HTMLElement>();
   let projectOpen = $state(false);
   let projectQuery = $state('');
+  let projectSearch = $state<HTMLInputElement>();
+  // The search is ready to type in as soon as the popover opens.
+  $effect(() => {
+    if (projectOpen) requestAnimationFrame(() => projectSearch?.focus());
+  });
 
   async function reload() {
     log = await usageLog();
@@ -262,10 +267,11 @@
       {#if projectIds.length >= SEARCH_FROM}
         <div class="relative">
           <ZIcon zType={'lucideSearch' as ZIconName} class="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-muted-foreground" />
-          <input class="h-7 w-full rounded-sm border border-border bg-background pr-2 pl-7 text-xs outline-none placeholder:text-muted-foreground" placeholder="Search projects…" aria-label="Search projects" bind:value={projectQuery} />
+          <input class="h-7 w-full rounded-sm border border-border bg-background pr-2 pl-7 text-xs outline-none placeholder:text-muted-foreground" placeholder="Search projects…" aria-label="Search projects" bind:this={projectSearch} bind:value={projectQuery} />
         </div>
       {/if}
-      <div class="flex max-h-60 flex-col gap-0.5 overflow-y-auto">
+      <!-- A fixed minimum, so the popover does not shrink and jump as the search narrows the list. -->
+      <div class="flex max-h-60 min-h-44 flex-col gap-0.5 overflow-y-auto">
         {#if !projectQuery.trim()}
           <button type="button" role="option" aria-selected={chosen === null} class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left outline-none hover:bg-accent {chosen === null ? 'text-primary' : ''}" onclick={() => pickProject(null)}>
             <span class="min-w-0 flex-1 truncate">All projects</span>
