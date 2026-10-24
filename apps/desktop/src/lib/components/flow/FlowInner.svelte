@@ -1,8 +1,8 @@
 <script lang="ts">
   import '@xyflow/svelte/dist/style.css';
   import './flow.css';
-  import { onMount, untrack } from 'svelte';
-  import { Background, BackgroundVariant, MiniMap, Panel, SvelteFlow, useSvelteFlow, type Connection, type Edge, type Node, type NodeTypes, type EdgeTypes } from '@xyflow/svelte';
+  import { onMount, tick, untrack } from 'svelte';
+  import { Background, BackgroundVariant, MiniMap, Panel, SvelteFlow, useSvelteFlow, useUpdateNodeInternals, type Connection, type Edge, type Node, type NodeTypes, type EdgeTypes } from '@xyflow/svelte';
   import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import type { DelegateRun } from '../../sessions.svelte';
@@ -19,12 +19,14 @@
     mode,
     run,
     minimap = false,
-  }: { steps: WorkflowStep[]; selected?: string | null; mode: 'edit' | 'run'; run?: DelegateRun; minimap?: boolean } = $props();
+    onlayout,
+  }: { steps: WorkflowStep[]; selected?: string | null; mode: 'edit' | 'run'; run?: DelegateRun; minimap?: boolean; onlayout?: () => void } = $props();
 
   const icon = (name: string) => name as ZIconName;
   const nodeTypes: NodeTypes = { step: StepNode, end: EndNode } as unknown as NodeTypes;
   const edgeTypes: EdgeTypes = { flow: FlowEdge } as unknown as EdgeTypes;
   const flow = useSvelteFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
 
   const graph = $derived(normalizeGraph(steps));
   let nodes = $state.raw<Node[]>([]);
@@ -33,9 +35,27 @@
   let zoom = $state(1);
   /** The cards and lines ease in only while the canvas opens, never again when the flow is rebuilt after an edit. */
   let entering = $state(true);
+  /** The canvas stays invisible until the cards are measured, the lines laid and the view fitted, then fades in once. */
+  let shown = $state(false);
   onMount(() => {
-    const timer = setTimeout(() => (entering = false), 1600);
+    const cover = setTimeout(() => (shown = true), 1500);
+    return () => clearTimeout(cover);
+  });
+  $effect(() => {
+    if (!shown) return;
+    const timer = setTimeout(() => {
+      entering = false;
+      // Measure the handles again once the opening animation is over, so the lines meet the dots.
+      updateNodeInternals(nodes.map((node) => node.id));
+    }, 1600);
     return () => clearTimeout(timer);
+  });
+  /** The two small dots a picked link ends on are hidden: its grab circles sit exactly there and must not show them. */
+  const pickedEnds = $derived.by(() => {
+    const picked = edges.find((edge) => edge.selected);
+    if (!picked || mode !== 'edit') return '';
+    const one = (value: string) => value.replace(/[^\w-]/g, '');
+    return `.flow-canvas .svelte-flow__handle[data-nodeid="${one(picked.source)}"].source,.flow-canvas .svelte-flow__handle[data-nodeid="${one(picked.target)}"].target{opacity:0;pointer-events:none}`;
   });
   /** An end of a link is being moved: letting go on empty space must not add a card. */
   let moving = false;
@@ -46,13 +66,56 @@
 
   const cut = (from: string, to: string) => (steps = removeLink(normalizeGraph(steps), from, to));
 
+  /** Whether a container of the canvas is scaled right now (a panel opening with a zoom). The dots are measured on
+   *  screen, so a scale would put the lines off them; the lines wait until it is over. */
+  function scaledAncestor(element: HTMLElement | null): boolean {
+    for (let at = element?.parentElement; at; at = at.parentElement) {
+      const transform = getComputedStyle(at).transform;
+      if (transform && transform !== 'none') {
+        const matrix = new DOMMatrixReadOnly(transform);
+        if (Math.abs(matrix.a - 1) > 0.001 || Math.abs(matrix.d - 1) > 0.001) return true;
+      }
+    }
+    return false;
+  }
+
   // The canvas follows the flow (and, in a run, the state of every step); a card being dragged is left alone.
   $effect(() => {
     const built = buildFlow(graph, mode, run, cut);
+    let cancelled = false;
     untrack(() => {
       nodes = built.nodes.map((node) => ({ ...node, selected: node.id === selected }));
-      edges = built.edges;
+      // Let node wrappers/handles mount and settle before creating edges. If both
+      // mount in the same flush, the first marker can be created without a valid
+      // handle geometry and only appear after the user drags a node.
+      edges = [];
     });
+    // The lines are added only once every card has its measured size (and handles), so they are born in the
+    // right place and never jump when the measuring lands. Gives up after ~1s so a stuck card cannot hide them.
+    const ids = built.nodes.map((node) => node.id);
+    const started = performance.now();
+    const settle = () => {
+      if (cancelled) return;
+      const ready =
+        !scaledAncestor(box) &&
+        ids.every((id) => {
+          const node = flow.getNode(id);
+          return node?.measured?.width && node.measured.height;
+        });
+      if (!ready && performance.now() - started < 1000) {
+        requestAnimationFrame(settle);
+        return;
+      }
+      updateNodeInternals(ids);
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        edges = built.edges;
+        // Two more frames: the lines take their geometry and the view is fitted while still hidden.
+        requestAnimationFrame(() => requestAnimationFrame(() => (shown = true)));
+      });
+    };
+    void tick().then(() => requestAnimationFrame(settle));
+    return () => (cancelled = true);
   });
 
   // The app's theme, for the canvas's own colours.
@@ -110,6 +173,7 @@
 
   function tidy() {
     steps = graph.map((step) => ({ ...step, x: undefined, y: undefined }));
+    setTimeout(() => onlayout?.(), 0);
     setTimeout(() => void flow.fitView({ padding: 0.2, duration: 300 }), 30);
   }
 
@@ -129,7 +193,8 @@
     !inputsOf(graph)[connection.target]?.includes(connection.source);
 </script>
 
-<div bind:this={box} class="flow-canvas relative h-full w-full" class:flow-run={mode === 'run'} class:entering>
+{#if pickedEnds}{@html `<style>${pickedEnds}</style>`}{/if}
+<div bind:this={box} class="flow-canvas relative h-full w-full" class:flow-run={mode === 'run'} class:entering={entering && shown} class:flow-hidden={!shown}>
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -141,6 +206,7 @@
     minZoom={0.25}
     maxZoom={1.75}
     nodesConnectable={mode === 'edit'}
+    nodesDraggable={mode === 'edit'}
     deleteKey={mode === 'edit' ? ['Delete', 'Backspace'] : null}
     connectionRadius={36}
     proOptions={{ hideAttribution: true }}
@@ -183,7 +249,9 @@
     }}
     onmovestart={() => (menu = null)}
     onnodedragstop={() => {
-      if (mode === 'edit') steps = pinned();
+      if (mode !== 'edit') return;
+      steps = pinned();
+      setTimeout(() => onlayout?.(), 0);
     }}
     onbeforedelete={async ({ nodes: going }) => {
       const names = going.filter((node) => node.type === 'step').map((node) => graph.find((step) => step.id === node.id)?.name || 'Untitled step');
@@ -216,7 +284,7 @@
         <div class="flex items-center gap-1 rounded-xl border border-border bg-card/95 p-1 shadow-lg backdrop-blur" role="toolbar" aria-label="Flow tools">
           <ZButton zWave={false} zType="ghost" onclick={addCentre}><ZIcon zType={icon('lucidePlus')} class="size-4" />Add step</ZButton>
           <span class="h-5 w-px bg-border" aria-hidden="true"></span>
-          <ZButton zWave={false} zType="ghost" onclick={tidy}><ZIcon zType={icon('lucideListChecks')} class="size-4" />Tidy</ZButton>
+          <ZButton zWave={false} zType="ghost" onclick={tidy}><ZIcon zType={icon('lucideRotateCcw')} class="size-4" />Reset layout</ZButton>
         </div>
       </Panel>
     {/if}

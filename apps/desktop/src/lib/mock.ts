@@ -10,7 +10,7 @@ export type Block =
   | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string }
   | { kind: 'loading'; label: string }
   /** Part of the user's message handed to another agent in a chat of its own; `state` follows that chat. */
-  | { kind: 'delegate'; childId: string; agent: Agent; model: string; state: 'queued' | 'running' | 'done' | 'failed' | 'skipped'; note?: string; /** The workflow step it runs, when it comes from a flow. */ step?: string }
+  | { kind: 'delegate'; childId: string; agent: Agent; model: string; state: 'queued' | 'running' | 'asking' | 'done' | 'failed' | 'skipped'; note?: string; /** The workflow step it runs, when it comes from a flow. */ step?: string; /** Questions the step asked the user (state 'asking'). */ questions?: import('./questions').Question[]; /** The earlier step it is asking something right now, and what. */ talking?: string; talkText?: string }
   | { kind: 'image'; src: string; name: string }
   | { kind: 'element'; tag: string; text: string; selector: string; /** What the chat keeps of the element: for its card, and to send it again when the message is edited. */ url?: string; title?: string; note?: string; html?: string; around?: string; box?: { x?: number; y?: number; w: number; h: number }; style?: Record<string, string> }
   | { kind: 'permission'; requests: { id: string; tool: string; summary: string; allow: string }[]; state: 'pending' | 'allowed' | 'denied' };

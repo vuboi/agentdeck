@@ -322,7 +322,9 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
             }
             events
         }
-        "tool" => {
+        // Some of agy's steps (a command left running, its status, input sent to it) carry another `step_type`
+        // but still have a tool: they are shown like any other tool step instead of being dropped.
+        kind if kind == "tool" || (kind != "agent_response" && (update["tool_name"].is_string() || update["tool_info"].is_object())) => {
             let index = update["step_index"].as_u64().unwrap_or_default();
             let info = &update["tool_info"];
             let raw_name = update["tool_name"].as_str().or_else(|| info["name"].as_str()).unwrap_or("tool");
@@ -365,6 +367,10 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
             }
             events
         }
+        // Any other step: kept for the Audit log once it has ended, so a step the chat misses can be looked at.
+        // (The prompt and system steps carry nothing to see.)
+        "user_input" | "system_message" => Vec::new(),
+        kind if matches!(state, "DONE" | "ERROR") => vec![AgentEvent::Raw { source: "agy".into(), label: if kind.is_empty() { "step".into() } else { kind.to_string() }, line: update.to_string() }],
         _ => Vec::new(),
     }
 }
@@ -601,6 +607,10 @@ mod tests {
         assert!(provider.parse_line("not json").is_empty());
         assert!(provider.parse_line(r#"{"event":"something_new"}"#).is_empty());
         assert!(provider.parse_line(r#"{"event":"step_update","step_update":{"step_type":"system_message","state":"DONE"}}"#).is_empty());
+        // A step of a kind it does not know is only kept, as written, for the Audit log, once it has ended.
+        let line = r#"{"event":"step_update","step_update":{"step_type":"something_new","state":"DONE"}}"#;
+        assert!(matches!(provider.parse_line(line).as_slice(), [AgentEvent::Raw { label, .. }] if label == "something_new"));
+        assert!(provider.parse_line(r#"{"event":"step_update","step_update":{"step_type":"something_new","state":"ACTIVE"}}"#).is_empty());
     }
 
     #[test]

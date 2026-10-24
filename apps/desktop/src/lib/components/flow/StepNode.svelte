@@ -1,17 +1,20 @@
 <script lang="ts">
-  import { Handle, Position, type NodeProps } from '@xyflow/svelte';
+  import { Handle, Position, type NodeProps, useUpdateNodeInternals } from '@xyflow/svelte';
+  import { onMount, tick } from 'svelte';
   import { ZIcon } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { ticker } from '../../clock.svelte';
-  import { showSession } from '../../content-tabs.svelte';
+  import { closeTab, showSession } from '../../content-tabs.svelte';
   import { modelLabel } from '../../models.svelte';
   import { AGENT_ICON, AGENT_TEXT, AGENTS, liveStats } from '../../sessions.svelte';
   import { shortCount, totalTokens, usd } from '../../usage';
   import type { StepData } from './flow-graph';
 
   // One step of a flow: who runs it, its role, and, in a run, what it is doing right now.
-  let { data, selected }: NodeProps & { data: StepData } = $props();
+  let { id, data, selected }: NodeProps & { data: StepData } = $props();
   const icon = (name: string) => name as ZIconName;
+  const updateNodeInternals = useUpdateNodeInternals();
+  let card: HTMLElement;
 
   const TINT: Record<string, string> = {
     claude: 'bg-orange-500/12',
@@ -42,9 +45,37 @@
     skipped: { label: 'Skipped', tone: 'text-muted-foreground bg-muted' },
   } as const;
   const condition = $derived(step.condition.mode === 'contains' ? `if it has “${step.condition.text}”` : step.condition.mode === 'missing' ? `if it lacks “${step.condition.text}”` : '');
+
+  onMount(() => {
+    const refresh = () => updateNodeInternals(id);
+    const observer = new ResizeObserver(refresh);
+    observer.observe(card);
+    requestAnimationFrame(refresh);
+    return () => observer.disconnect();
+  });
+
+  // The card can change height when a run starts or stats arrive. Re-measure this
+  // node after its own DOM has committed so edges use the same handle geometry.
+  $effect(() => {
+    const node = data.node;
+    void data.mode;
+    void data.state;
+    void node?.note;
+    void node?.stats;
+    void step.prompt;
+    let cancelled = false;
+    void tick().then(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!cancelled) updateNodeInternals(id);
+        });
+      });
+    });
+    return () => (cancelled = true);
+  });
 </script>
 
-<div class="flow-node flow-step state-{data.state} {selected ? 'is-selected' : ''}" style="width:256px">
+<div bind:this={card} class="flow-node flow-step state-{data.state} {selected ? 'is-selected' : ''}" style="width:256px">
   <Handle type="target" position={Position.Top} class="flow-handle" />
   <div class="flex items-center gap-2.5 px-3 pt-3">
     <span class="grid size-9 shrink-0 place-items-center rounded-xl {TINT[step.agent] ?? 'bg-muted'}">
@@ -78,12 +109,18 @@
           {#if stats?.tokens}<span class="inline-flex items-center gap-1 whitespace-nowrap"><ZIcon zType={icon('lucideDatabase')} class="size-3 shrink-0" />{shortCount(totalTokens(stats.tokens))}</span>{/if}
           {#if stats?.cost != null}<span class="inline-flex items-center gap-1 whitespace-nowrap"><ZIcon zType={icon('lucideCoins')} class="size-3 shrink-0" />{usd(stats.cost)}</span>{/if}
           {#if stats && stats.tools > 0}<span class="inline-flex items-center gap-1 whitespace-nowrap"><ZIcon zType={icon('lucideTerminal')} class="size-3 shrink-0" />{stats.tools}</span>{/if}
-          <button type="button" class="nodrag ml-auto inline-flex shrink-0 cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 whitespace-nowrap text-primary hover:bg-primary/10" onclick={(event) => { event.stopPropagation(); if (data.node) showSession(data.node.childId); }}>
-            Open<ZIcon zType={icon('lucideArrowRight')} class="size-3" />
+          <button type="button" class="nodrag ml-auto inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-primary hover:bg-primary/10" aria-label="Open this step's chat" title="Open this step's chat in a tab" onclick={(event) => { event.stopPropagation(); if (data.node) showSession(data.node.childId); }}>
+            <ZIcon zType={icon('lucideMessageSquare')} class="size-3" />
+          </button>
+          <button type="button" class="nodrag inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Close this step's chat tab" title="Close its chat tab" onclick={(event) => { event.stopPropagation(); if (data.node) closeTab(`chat:${data.node.childId}`); }}>
+            <ZIcon zType={icon('lucideX')} class="size-3" />
           </button>
         </div>
       {/if}
     {/if}
   </div>
   <Handle type="source" position={Position.Bottom} class="flow-handle" />
+  <!-- Where a question between two steps is drawn from and to (a run only): on the side, out of the way of the flow. -->
+  <Handle id="talk-out" type="source" position={Position.Right} class="flow-talk-handle" isConnectable={false} />
+  <Handle id="talk-in" type="target" position={Position.Right} class="flow-talk-handle" isConnectable={false} />
 </div>

@@ -87,5 +87,8 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
       // Stopping a run yourself is not a failure.
       if (event.message !== 'stopped') blocks.push({ kind: 'response', text: `⚠ ${event.message}` });
       return { blocks, finished: true };
+    case 'raw':
+      // Only for the Audit log: the chat shows nothing of it.
+      return { blocks: current, finished: false };
   }
 }

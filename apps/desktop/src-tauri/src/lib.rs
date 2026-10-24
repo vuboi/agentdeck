@@ -157,6 +157,54 @@ fn audit_read() -> Result<String, String> {
     }
 }
 
+/// Keeps only the Audit log lines that started at or after `cutoff` (ms since the epoch; the app passes the start of
+/// yesterday, so two days are kept), and deletes the pictures no kept line points to. Returns how many lines went.
+#[tauri::command]
+async fn audit_prune(cutoff: f64) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = audit_file()?;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.to_string()),
+        };
+        let mut kept = Vec::new();
+        let mut pictures = std::collections::HashSet::new();
+        let mut dropped = 0;
+        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            let value: serde_json::Value = serde_json::from_str(line).unwrap_or(serde_json::Value::Null);
+            // A line it cannot read, or without a time, is kept: only what is known to be old goes.
+            let started = value.get("startedAt").and_then(serde_json::Value::as_f64);
+            if started.is_some_and(|started| started < cutoff) {
+                dropped += 1;
+                continue;
+            }
+            if let Some(image) = value.get("image").and_then(serde_json::Value::as_str) {
+                pictures.insert(image.to_string());
+            }
+            kept.push(line);
+        }
+        if dropped > 0 {
+            let mut body = kept.join("\n");
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            std::fs::write(&path, body).map_err(|error| error.to_string())?;
+        }
+        if let Ok(entries) = std::fs::read_dir(audit_images()?) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !pictures.contains(&name) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        Ok(dropped)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 fn audit_clear() -> Result<(), String> {
     match std::fs::remove_dir_all(audit_images()?) {
@@ -466,6 +514,19 @@ async fn path_restore(root: String, trashed: String, to: String) -> Result<(), S
     .map_err(|error| error.to_string())?
 }
 
+/// Asks for a folder with the system's own picker, for a new project. `None` when the picker is cancelled.
+#[tauri::command]
+async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tauri::async_runtime::spawn_blocking(move || app.dialog().file().set_title("Add a project folder").blocking_pick_folder())
+        .await
+        .map_err(|error| error.to_string())?;
+    match picked {
+        Some(path) => path.into_path().map(|path| Some(path.display().to_string())).map_err(|error| error.to_string()),
+        None => Ok(None),
+    }
+}
+
 /// Opens a folder in the system file manager (Explorer, Finder, or the desktop's own).
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
@@ -644,6 +705,7 @@ fn agent_stop(session: String) {
 /// Starts the AgentDeck desktop window.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("agentdeck", |context, request| {
             // The Preview's own page for an address that did not answer.
             if request.uri().path() == "/error" {
@@ -719,6 +781,8 @@ pub fn run() {
             audit_image_read,
             folder_list,
             reveal_path,
+            audit_prune,
+            pick_folder,
             path_rename,
             path_trash,
             path_restore,

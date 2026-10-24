@@ -22,6 +22,7 @@
     projectOf,
     queued,
     steerQueued,
+    type Queued,
     sendMessage,
     stopTurn,
     turnOptions,
@@ -39,7 +40,13 @@
   const sessionId = $derived(workspace.activeId);
   const draft = $derived(drafts[sessionId] ?? '');
   const mentions = $derived(draftMentions[sessionId] ?? []);
-  const setDraft = (value: string) => {
+  // Text wiped by accident (select all + delete, cut) comes back with Ctrl+Z, even after switching chats, which
+  // drops the textarea's own undo history. A send clears the field on purpose and keeps nothing.
+  const cleared: Record<string, string> = {};
+  const setDraft = (value: string, { sent = false } = {}) => {
+    const before = drafts[sessionId] ?? '';
+    if (!sent && !value.trim() && before.trim()) cleared[sessionId] = before;
+    if (value.trim()) delete cleared[sessionId];
     drafts[sessionId] = value;
   };
   const setMentions = (value: Mention[]) => {
@@ -57,6 +64,26 @@
     const [item] = list.splice(from, 1);
     list.splice(to, 0, item);
     queued[sessionId] = list;
+  }
+  // A queued message not sent yet goes back into the field to be changed; sending it again queues it as before. What
+  // was in the field takes its place in the queue, so nothing typed is lost.
+  function editQueued(item: Queued) {
+    const list = [...waiting];
+    const at = list.indexOf(item);
+    if (at === -1) return;
+    if (hasInput) list[at] = { text: draft, images: [...images], elements: [...elements], mentions: [...mentions] };
+    else list.splice(at, 1);
+    if (list.length) queued[sessionId] = list;
+    else delete queued[sessionId];
+    setDraft(item.text);
+    setImages(item.images);
+    draftElements[sessionId] = item.elements;
+    setMentions(item.mentions ?? []);
+    requestAnimationFrame(() => {
+      area?.focus();
+      area?.setSelectionRange(item.text.length, item.text.length);
+      resize();
+    });
   }
   const hasInput = $derived(draft.trim().length > 0 || images.length > 0 || elements.length > 0);
   let detail = $state<string | null>(null);
@@ -321,13 +348,21 @@
     sendMessage(draft, images, elements, mentions);
     draftElements[sessionId] = [];
     detail = null;
-    setDraft('');
+    setDraft('', { sent: true });
     setMentions([]);
     setImages([]);
   }
 
   function onKeydown(event: KeyboardEvent) {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z' && !draft.trim() && cleared[sessionId]) {
+      event.preventDefault();
+      const text = cleared[sessionId];
+      setDraft(text);
+      requestAnimationFrame(() => {
+        area?.setSelectionRange(text.length, text.length);
+        resize();
+      });
+    } else if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       submit();
     } else if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && /(^|\s)$/.test(draft.slice(0, area?.selectionStart ?? draft.length))) {
@@ -359,9 +394,14 @@
           <ZIcon zType={'lucideArrowRight' as ZIconName} class="size-3" />
           <span>Steer</span>
         </button>
-        <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-accent hover:text-destructive" aria-label="Remove from the queue" onclick={() => (queued[sessionId] = waiting.filter((entry) => entry !== item))}>
-          <ZIcon zType={'lucideTrash2' as ZIconName} class="size-3.5" />
+        <span class="flex shrink-0 items-center">
+        <button type="button" class="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Edit in the message box" {@attach zTooltip({ content: 'Edit', position: 'top' })} onclick={() => editQueued(item)}>
+          <ZIcon zType={'lucideSquarePen' as ZIconName} zSize="13" class="size-[13px]" />
         </button>
+        <button type="button" class="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-accent hover:text-destructive" aria-label="Remove from the queue" onclick={() => (queued[sessionId] = waiting.filter((entry) => entry !== item))}>
+          <ZIcon zType={'lucideTrash2' as ZIconName} zSize="13" class="size-[13px]" />
+        </button>
+        </span>
       </div>
     {/each}
   </div>

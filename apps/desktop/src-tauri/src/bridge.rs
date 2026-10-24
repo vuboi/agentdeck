@@ -631,7 +631,9 @@ pub(crate) async fn answer(
                 None => None,
             };
             // Through DevTools first: it works in frames of any origin and on pages whose policy forbids eval.
-            match crate::cdp::evaluate(&view, &script, session.clone()).await {
+            // A script that waits or polls (an animation, a page settling) may ask for more time, up to a minute.
+            let seconds = params.get("timeout").and_then(|value| value.parse::<f64>().ok()).map_or(20, |value| value.clamp(1.0, 60.0).ceil() as u64);
+            match crate::cdp::evaluate_for(&view, &script, session.clone(), seconds).await {
                 Ok(value) => Ok(json!({ "result": value })),
                 Err(error) if session.is_some() => Err(error),
                 Err(_) => {

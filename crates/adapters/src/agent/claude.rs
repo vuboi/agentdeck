@@ -15,6 +15,9 @@ use super::{
 pub struct Claude;
 
 /// Added to the CLI's system prompt on every turn.
+/// How an agent asks the user multiple-choice questions in AgentDeck (rendered as a question card).
+pub const ASK_CONTEXT: &str = r#" To ask the user before you plan (only when a wrong guess would waste work), end your reply with one fenced block ```agentdeck-ask holding {"questions":[{"id","header","question","multi":false,"options":[{"label","description"}]}]} (1-3 questions, 2-4 options, recommended first, no "Other") and stop: the app shows it as a question card. Your own question tool does not reach the user here."#;
+
 const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app that has its own built-in browser (the Preview panel). When the user asks you to open, preview, run or show a web page or a local dev server, do not open it with an external browser or any browser-automation tool. Find the start script that matches the framework the user asked for (package.json scripts, .claude/launch.json), then start it with the browser_serve tool (the command, the absolute project folder, the address it answers at): AgentDeck runs the server itself, so it keeps running after your turn, and opens the page in Preview. Never run a dev server in your own shell: it dies when your command or turn ends and Preview is left on a refused connection. If browser_serve reports a failed start, read the log it returns, fix the cause (config, missing install, port) and call it again; do not stop at the first error. If the page is already served, browser_open opens it. Both open the page in the current Preview tab. Pass new_tab: true to open it in a tab of its own instead, so the current tab stays as it is: when another chat is driving the current tab, when you compare or debug two pages side by side, or when you look something up. Then keep going in this same turn: screenshot, act on the page, screenshot again. Name the script you used in your reply. A code index of the project is built in. To find your way, prefer the agentdeck tools code_search (a symbol by name), code_outline (the structure of a file), code_definition (a symbol with its source), code_references (where a name is used), code_imports and code_importers (what breaks if you change a file) over reading files or grepping the whole tree, then Read only what matters. Before you use a library API, check the version the project has (package.json, Cargo.toml) and look up the current documentation when you are not sure it exists in that version.";
 
 /// Text of a tool result: a plain string, or an array of `{ "type": "text", "text": … }`.
@@ -109,6 +112,7 @@ impl Provider for Claude {
         // AgentDeck has its own browser; the agent is told to hand pages over to it instead of opening one itself.
         args.push("--append-system-prompt".to_string());
         let mut context = APP_CONTEXT.to_string();
+        context.push_str(ASK_CONTEXT);
         let bridge = std::env::var("AGENTDECK_BRIDGE").ok();
         // In the z-ui workspace the two apps have their own start scripts (the bare `pnpm start` asks interactively).
         context.push_str(" In the z-ui workspace, start the app the user asked for with its own script: `pnpm start:svelte` for the Svelte 5 app (default http://localhost:4301) and `pnpm start:angular` for the Angular app (default http://localhost:4200). Never open the Angular server when the user asks for Svelte, Svelte 5 or z-ui-svelte.");

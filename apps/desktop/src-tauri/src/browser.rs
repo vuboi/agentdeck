@@ -630,5 +630,9 @@ pub async fn devtools_cdp(app: AppHandle, tab: String, method: String, params: O
         return Err(format!("{method} is not available to the developer tools"));
     }
     let view = webview(&app, &tab)?;
+    if method == "Network.clearBrowserCache" {
+        crate::cdp::clear_cache(&view).await?;
+        return Ok(serde_json::json!({}));
+    }
     crate::cdp::call(&view, &method, params.unwrap_or_else(|| serde_json::json!({})), None).await
 }

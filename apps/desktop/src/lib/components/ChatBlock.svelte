@@ -5,9 +5,15 @@
   import type { Block } from '../mock';
   import Markdown from './Markdown.svelte';
   import PermissionCard from './PermissionCard.svelte';
+  import QuestionCard from './QuestionCard.svelte';
+  import { parseQuestions, withoutOpenBlock } from '../questions';
 
   // `fade` is the surface behind the block; ZShowMore fades its clipped edge into that colour.
-  let { block, fade, onanswer }: { block: Block; fade?: string; onanswer?: (answer: 'once' | 'always' | 'deny') => void } = $props();
+  let { block, fade, onanswer, onquestions, answered = false }: { block: Block; fade?: string; onanswer?: (answer: 'once' | 'always' | 'deny') => void; /** Sends the answers to questions the agent asked in this block. */ onquestions?: (text: string) => void; /** Something came after this block: its questions were answered (or passed). */ answered?: boolean } = $props();
+
+  // An agent's answer can end in questions for the user (a ```questions block): shown as cards, not as JSON.
+  const asked = $derived(block.kind === 'response' && fade === undefined && !block.streaming ? parseQuestions(block.text) : { questions: [], rest: '' });
+  const answerText = $derived(block.kind !== 'response' ? '' : block.streaming ? withoutOpenBlock(block.text) : asked.questions.length ? asked.rest : block.text);
 
   // Thinking starts folded. The body animates by growing its grid row from 0fr to 1fr.
   let thinkingOpen = $state(false);
@@ -52,7 +58,8 @@
   </div>
 {:else if block.kind === 'response' && fade === undefined}
   <!-- An agent's answer: rendered as markdown, full length. -->
-  <div class="block-in text-sm leading-relaxed text-foreground"><Markdown text={block.text} streaming={block.streaming} /></div>
+  {#if answerText}<div class="block-in text-sm leading-relaxed text-foreground"><Markdown text={answerText} streaming={block.streaming} /></div>{/if}
+  {#if asked.questions.length && onquestions}<QuestionCard questions={asked.questions} {answered} onsubmit={onquestions} />{/if}
 {:else if block.kind === 'response'}
   <!-- Your own message: plain text, folded when long. -->
   <div class="block-in text-sm leading-relaxed text-foreground">

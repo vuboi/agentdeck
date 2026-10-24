@@ -19,8 +19,9 @@ const OVER = '.z-overlay-pane, [data-z-popover], [role="dialog"], [role="alertdi
 /** Whether something of the app lies over `page` (window coordinates). `stage` holds the page itself. */
 export function overPage(stage: HTMLElement, page: DOMRect): boolean {
   for (const element of document.querySelectorAll<HTMLElement>(OVER)) {
-    // The window that holds the Preview, and anything inside the Preview itself, are not over it.
-    if (element.contains(stage) || stage.parentElement?.contains(element)) continue;
+    // The window that holds the Preview, and anything inside the page's own box, are not over it. A popover opened
+    // from the Preview's toolbar sits in the Preview's DOM but is drawn over the page: the overlap check decides.
+    if (element.contains(stage) || stage.contains(element)) continue;
     // A modal or drawer pane covers the whole app with its backdrop.
     if (element.classList.contains('z-overlay-pane')) {
       if (element.childElementCount > 0) return true;

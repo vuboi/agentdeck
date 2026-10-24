@@ -57,6 +57,9 @@ pub enum AgentEvent {
     },
     /// The turn failed.
     Error { message: String },
+    /// A line of the CLI's output that the app does not understand (a new kind of step). Not shown in the chat;
+    /// kept in the Audit log as written, so it can be copied to teach the adapter about it.
+    Raw { source: String, label: String, line: String },
 }
 
 /// The address of the browser's MCP server for one chat: `/mcp?chat=<id>&root=<folder>`. The bridge reads both from it.

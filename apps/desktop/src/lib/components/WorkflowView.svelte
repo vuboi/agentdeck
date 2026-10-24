@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
   import { fade } from 'svelte/transition';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { modelLabel } from '../models.svelte';
-  import { AGENT_ICON, AGENT_TEXT, delegateRuns, liveStats, workspace, type DelegateRun, type RunNode, type RunStats } from '../sessions.svelte';
+  import { AGENT_ICON, AGENT_TEXT, AGENTS, delegateRuns, liveStats, workspace, type DelegateRun, type RunNode, type RunStats } from '../sessions.svelte';
   import FlowCanvas from './flow/FlowCanvas.svelte';
   import FlowTemplates from './flow/FlowTemplates.svelte';
   import { shortCount, totalTokens, usd } from '../usage';
@@ -23,7 +23,14 @@
   /** The run shown full screen. */
   let fullRun = $state<string | null>(null);
   const full = $derived(delegateRuns.find((item) => item.id === fullRun));
-  const pickedNode = (run: DelegateRun) => run.nodes.find((node) => node.stepId === picked[run.id]);
+  /** The questions this step put to others, and those others put to it, oldest first (the Discussion of the run). */
+  const talksOf = (run: DelegateRun, name: string) =>
+    run.nodes
+      .flatMap((item) => (item.talks ?? []).map((talk) => ({ ...talk, from: item.label.split(' · ')[0] })))
+      .filter((talk) => talk.from.toLowerCase() === name.toLowerCase() || talk.to.toLowerCase() === name.toLowerCase())
+      .map((talk) => ({ ...talk, asked: talk.to.toLowerCase() === name.toLowerCase(), other: talk.to.toLowerCase() === name.toLowerCase() ? talk.from : talk.to }))
+      .sort((a, b) => a.at - b.at);
+  const pickedNode = (run: DelegateRun) => run.nodes.findLast((node) => node.stepId === picked[run.id]);
   const pickedStep = (run: DelegateRun) => run.plan?.find((step) => step.id === picked[run.id]);
 
   const sessionOf = (id: string) => workspace.sessions.find((item) => item.id === id);
@@ -65,6 +72,26 @@
       time: span((run.endedAt ?? ticker.sec) - run.startedAt),
     };
   }
+
+  // How each flow has done over the kept history: how often it ran, how often every step and the main agent finished,
+  // and what a run costs in time and money on average. `@agent` hand-offs count together.
+  const flowStats = $derived.by(() => {
+    const groups = new Map<string, DelegateRun[]>();
+    for (const run of delegateRuns) {
+      if (!run.endedAt || run.cancelled) continue;
+      const key = run.preset ?? '@agent';
+      groups.set(key, [...(groups.get(key) ?? []), run]);
+    }
+    return [...groups.entries()]
+      .map(([name, list]) => {
+        const ok = list.filter((run) => run.handback === 'done' && run.nodes.every((node) => node.state === 'done')).length;
+        const cost = list.reduce((sum, run) => sum + [...run.nodes.map((node) => node.stats), run.handbackStats].reduce((part, item) => part + (item?.cost ?? 0), 0), 0);
+        const ms = list.reduce((sum, run) => sum + ((run.endedAt ?? run.startedAt) - run.startedAt), 0);
+        return { name, runs: list.length, rate: Math.round((ok / list.length) * 100), time: span(ms / list.length), cost: cost / list.length, last: Math.max(...list.map((run) => run.endedAt ?? 0)) };
+      })
+      .sort((a, b) => b.last - a.last);
+  });
+  let historyOpen = $state(true);
 
   function runState(run: DelegateRun): { label: string; tone: string } {
     if (run.handback === 'done') return { label: run.nodes.some((node) => node.state === 'failed') ? 'Done, some failed' : 'Done', tone: 'text-emerald-600 dark:text-emerald-400' };
@@ -124,35 +151,76 @@
   </button>
 {/snippet}
 
+{#snippet badge(tone: 'working' | 'done' | 'failed' | 'idle', text: string)}
+  <span
+    class="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium {tone === 'working' ? 'bg-primary/12 text-primary' : tone === 'done' ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400' : tone === 'failed' ? 'bg-destructive/12 text-destructive' : 'bg-muted text-muted-foreground'}"
+  >
+    <ZIcon zType={icon(tone === 'working' ? 'lucideLoaderCircle' : tone === 'done' ? 'lucideCircleCheck' : tone === 'failed' ? 'lucideCircleX' : 'lucideClock')} class="size-3 {tone === 'working' ? 'animate-spin' : ''}" />{text}
+  </span>
+{/snippet}
+
+{#snippet panelHead(tile: ZIconName, tint: string, title: string, sub: string, tag: { tone: "working" | "done" | "failed" | "idle"; text: string }, chat?: () => void)}
+  <div class="flex items-center gap-2.5">
+    <span class="grid size-9 shrink-0 place-items-center rounded-xl {tint}"><ZIcon zType={tile} class="size-[18px]" /></span>
+    <div class="min-w-0 flex-1">
+      <div class="truncate text-sm font-semibold text-foreground">{title}</div>
+      {#if sub}<div class="truncate text-[11px] text-muted-foreground">{sub}</div>{/if}
+    </div>
+    {@render badge(tag.tone, tag.text)}
+    {#if chat}
+      <!-- Next to the state, as an icon: the panel's own content starts right under the title. -->
+      <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring" aria-label="Open the chat" {@attach zTooltip({ content: 'Open the chat', position: 'top' })} onclick={chat}>
+        <ZIcon zType={icon('lucideExternalLink')} class="size-4" />
+      </button>
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet section(label: string, size: string, body: string)}
+  <div class="mt-3">
+    <div class="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+      <span>{label}</span>
+      {#if size}<span class="rounded bg-muted px-1.5 py-px font-normal tabular-nums">{size}</span>{/if}
+    </div>
+    {#if body.trim()}
+      <pre class="audit">{body}</pre>
+    {:else}
+      <p class="m-0 rounded-md border border-dashed border-border px-2.5 py-2 text-[11px] text-muted-foreground/70 italic">No information yet</p>
+    {/if}
+  </div>
+{/snippet}
+
 {#snippet audit(run: DelegateRun)}
   {@const node = pickedNode(run)}
   {@const step = pickedStep(run)}
   {@const stats = node ? statsOf(node) : undefined}
-  <div class="rounded-lg border border-border p-2.5 text-xs" aria-label="Audit">
+  <div class="rounded-xl border border-border bg-card/50 p-3 text-xs" aria-label="Audit">
     {#if picked[run.id] === 'start'}
-      <div class="mb-1 font-medium">Task</div>
-      <pre class="audit">{run.task}</pre>
+      {@render panelHead(icon('lucideMessageSquare'), 'bg-primary/12 text-primary', 'Task', 'The message you sent', { tone: 'done', text: 'Sent' })}
+      {@render section('Task', `${run.task.length} chars`, run.task)}
     {:else if picked[run.id] === 'end'}
-      <div class="mb-1 font-medium">Orchestrator · {run.handback === 'done' ? 'answered' : run.handback === 'failed' ? 'failed' : run.handback === 'running' ? 'writing the answer' : 'waiting for the steps'}</div>
-      {@render numbers(mainStats(run), run.handbackAt ? span((run.endedAt ?? ticker.sec) - run.handbackAt) : '0s')}
-      <pre class="audit">{mainStats(run)?.last ?? ''}</pre>
-      <button type="button" class="mt-1 text-[11px] text-primary hover:underline" onclick={() => showSession(run.main)}>Open the chat</button>
+      {@const tag = run.handback === 'done' ? { tone: 'done' as const, text: 'Answered' } : run.handback === 'failed' ? { tone: 'failed' as const, text: 'Failed' } : run.handback === 'running' ? { tone: 'working' as const, text: 'Writing' } : { tone: 'idle' as const, text: 'Waiting' }}
+      {@render panelHead(icon('lucideBot'), 'bg-violet-500/12 text-violet-500', 'Orchestrator', 'Writes the final answer', tag, () => showSession(run.main))}
+      <div class="mt-2.5">{@render numbers(mainStats(run), run.handbackAt ? span((run.endedAt ?? ticker.sec) - run.handbackAt) : '0s')}</div>
+      {#if mainStats(run)?.last}{@render section('Latest', '', mainStats(run)?.last ?? '')}{/if}
     {:else if step}
-      <div class="mb-1 flex items-center gap-2">
-        <span class="font-medium">{step.name}</span>
-        <span class="text-[11px] text-muted-foreground">{node ? (node.state === 'running' ? 'working' : node.state) : run.skipped?.includes(step.id) ? 'skipped (condition not met)' : 'not started'}</span>
-        <span class="flex-1"></span>
-        {#if node}<button type="button" class="text-[11px] text-primary hover:underline" onclick={() => showSession(node.childId)}>Open the chat</button>{/if}
-      </div>
+      {@const tag = node ? (node.state === 'running' ? { tone: 'working' as const, text: 'Working' } : node.state === 'done' ? { tone: 'done' as const, text: 'Done' } : { tone: 'failed' as const, text: 'Failed' }) : run.skipped?.includes(step.id) ? { tone: 'idle' as const, text: 'Skipped' } : { tone: 'idle' as const, text: 'Not started' }}
+      {@render panelHead(AGENT_ICON[step.agent], 'bg-muted ' + AGENT_TEXT[step.agent], step.name, `${AGENTS.find((item) => item.value === step.agent)?.label ?? step.agent}${step.model ? ` · ${modelLabel(step.model)}` : ''}`, tag, node ? () => showSession(node.childId) : undefined)}
       {#if node}
-        {@render numbers(stats, elapsed(node))}
-        <div class="mt-2 text-[11px] font-medium text-muted-foreground">Handed to it · {node.input ? `${node.input.length} chars` : 'the task only'}</div>
-        <pre class="audit">{node.input || run.task}</pre>
-        <div class="mt-2 text-[11px] font-medium text-muted-foreground">Its answer{node.output ? ` · ${node.output.length} chars` : ''}</div>
-        <pre class="audit">{node.output ?? node.note ?? stats?.last ?? 'Working, no answer yet…'}</pre>
+        <div class="mt-2.5">{@render numbers(stats, elapsed(node))}</div>
+        {@render section('Handed to it', node.input ? `${node.input.length} chars` : run.task ? 'the task only' : '', node.input || run.task || '')}
+        {@render section('Its answer', node.output ? `${node.output.length} chars` : '', node.output || node.note || stats?.last || '')}
+        {#each talksOf(run, step.name) as talk (talk.at)}
+          {@render section(talk.asked ? `Asked by ${talk.other}` : `Asked ${talk.other}`, '', `Q: ${talk.question}\nA: ${talk.answer ?? 'waiting…'}`)}
+        {/each}
+      {:else if run.skipped?.includes(step.id)}
+        <p class="mt-2.5 mb-0 text-[11px] text-muted-foreground">Its condition was not met, so it did not run.</p>
       {/if}
     {:else}
-      <span class="text-muted-foreground">Select a card to see what it was given and what it answered.</span>
+      <div class="flex flex-col items-center gap-2 py-6 text-center text-muted-foreground">
+        <ZIcon zType={icon('lucideMousePointerClick')} class="size-6 opacity-60" />
+        <span>Select a card to see what it was given and what it answered.</span>
+      </div>
     {/if}
   </div>
 {/snippet}
@@ -172,6 +240,33 @@
   {:else}
     <div class="min-h-0 flex-1 overflow-y-auto p-2.5">
       <div class="flex flex-col gap-3">
+        {#if flowStats.length}
+          <section class="rounded-xl border border-border bg-background" aria-label="Flow history">
+            <button type="button" class="flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs font-medium text-foreground hover:bg-accent/40 focus-visible:outline-none" aria-expanded={historyOpen} onclick={() => (historyOpen = !historyOpen)}>
+              <ZIcon zType={icon('lucideChevronRight')} class="size-3.5 shrink-0 text-muted-foreground transition-transform {historyOpen ? 'rotate-90' : ''}" />
+              History
+              <span class="ml-auto text-[11px] font-normal text-muted-foreground">{flowStats.reduce((sum, item) => sum + item.runs, 0)} runs</span>
+            </button>
+            {#if historyOpen}
+              <table class="w-full border-t border-border/60 text-[11px] tabular-nums">
+                <thead class="text-muted-foreground">
+                  <tr><th class="px-2.5 py-1 text-left font-normal">Flow</th><th class="px-1 py-1 text-right font-normal">Runs</th><th class="px-1 py-1 text-right font-normal">Success</th><th class="px-1 py-1 text-right font-normal">Avg time</th><th class="px-2.5 py-1 text-right font-normal">Avg cost</th></tr>
+                </thead>
+                <tbody>
+                  {#each flowStats as item (item.name)}
+                    <tr class="border-t border-border/40">
+                      <td class="max-w-0 truncate px-2.5 py-1 text-foreground" title={item.name}>{item.name}</td>
+                      <td class="px-1 py-1 text-right">{item.runs}</td>
+                      <td class="px-1 py-1 text-right {item.rate >= 80 ? 'text-emerald-500' : item.rate >= 50 ? 'text-warning' : 'text-destructive'}">{item.rate}%</td>
+                      <td class="px-1 py-1 text-right">{item.time}</td>
+                      <td class="px-2.5 py-1 text-right">{usd(item.cost)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            {/if}
+          </section>
+        {/if}
         {#each runs as run, index (run.id)}
           {@const total = totals(run)}
           {@const state = runState(run)}
@@ -179,7 +274,7 @@
           <section class="rounded-xl border border-border bg-background" aria-label={firstLine(run.task)}>
             <button
               type="button"
-              class="flex w-full min-w-0 items-center gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              class="flex w-full min-w-0 items-center gap-2 rounded-t-xl rounded-b-none px-2.5 py-2 text-left hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               aria-expanded={isOpen(run, index)}
               onclick={() => (folded[run.id] = !isOpen(run, index))}
             >
@@ -244,7 +339,6 @@
   {@const state = runState(full)}
   <div class="fixed inset-0 z-[60] flex flex-col bg-background" role="dialog" aria-modal="true" aria-label="Run" transition:fade={{ duration: 120 }}>
     <header class="flex h-14 shrink-0 items-center gap-3 border-b border-border px-3 sm:px-4">
-      <ZButton zWave={false} zType="ghost" class="size-9! p-0!" aria-label="Close" title="Close" onclick={() => (fullRun = null)}><ZIcon zType={icon('lucideArrowLeft')} class="size-4" /></ZButton>
       <span class="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/12 text-primary"><ZIcon zType={icon('lucideWorkflow')} class="size-[18px]" /></span>
       <div class="min-w-0 flex-1">
         <div class="truncate text-sm font-semibold">{firstLine(full.task)}</div>
@@ -254,7 +348,7 @@
           {#if full.folder}<span class="hidden truncate sm:inline">· notes in {full.folder}</span>{/if}
         </div>
       </div>
-      <ZButton zWave={false} zType="outline" onclick={() => showSession(full.main)}>Open the chat</ZButton>
+      <ZButton zWave={false} zType="outline" class="size-9! bg-muted/60! p-0!" aria-label="Close" title="Close" onclick={() => (fullRun = null)}><ZIcon zType={icon('lucideX')} class="size-4" /></ZButton>
     </header>
     <div class="flex min-h-0 flex-1">
       <FlowCanvas steps={full.plan} mode="run" run={full} bind:selected={picked[full.id]} minimap class="min-w-0 flex-1" />

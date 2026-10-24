@@ -31,7 +31,9 @@ const TOOLS: &[Tool] = &[
     Tool { name: "browser_open", route: "/open", description: "Opens an address in AgentDeck's Preview panel (a tab of its own when another page is open) and waits until the page is ready. Use it right after starting a dev server, then screenshot and act in the same turn.", args: &[("url", "string", "full address, for example http://localhost:4301/", true), ("new_tab", "boolean", "true: open it in a tab of its own, leaving the current tab as it is (use it when another chat is driving the current tab, to compare, to debug side by side, or to look something up). false: use the current tab. Left out: the current tab, unless another chat is driving it.", false)] },
     Tool { name: "browser_drag", route: "/drag", description: "Drags one element onto another, as HTML5 drag and drop (dragstart, dragover, drop). Both are CSS selectors.", args: &[("from", "string", "CSS selector of the element to drag", true), ("to", "string", "CSS selector of the element to drop on", true)] },
     Tool { name: "browser_upload", route: "/upload", description: "Uploads a file from disk: sets it on an <input type=file>, or drops it on a drop zone. Give the absolute file path.", args: &[("selector", "string", "CSS selector of the file input or drop zone", true), ("path", "string", "absolute path of the file", true)] },
-    Tool { name: "browser_eval", route: "/eval", description: "Runs JavaScript in the page (or in a frame, see browser_frames) and returns its value. Use it to read state or find an element's position with getBoundingClientRect().", args: &[("script", "string", "an expression; promises are awaited", true), ("frame", "string", "frame index or part of its address", false)] },
+    Tool { name: "browser_eval", route: "/eval", description: "Runs JavaScript in the page (or in a frame, see browser_frames) as in the DevTools console and returns its value as JSON. Several statements are fine, top-level await works, and the value of the last expression is returned (write the expression, not `return`). Use it to read state, find an element's position with getBoundingClientRect(), or run a short scripted interaction and measure it (click, then sample the page over time with setTimeout and collect the numbers). Return small values: JSON.stringify a summary rather than whole objects or DOM nodes.", args: &[("script", "string", "JavaScript; statements and top-level await allowed, the last expression is the answer", true), ("frame", "string", "frame index or part of its address", false), ("timeout", "number", "seconds the script may run (default 20, at most 60)", false)] },
+    Tool { name: "browser_text", route: "/eval", description: "The visible text of the page (its main or article part first, else the whole body), to read what it says without a screenshot.", args: &[("max_chars", "number", "characters kept (default 20000)", false)] },
+    Tool { name: "browser_find", route: "/eval", description: "Finds elements of the page whose text, label, placeholder, title or role contains a query (case does not matter), anywhere on the page, not only in view. Each comes with a number, what it is and its position; use the number with browser_click_element.", args: &[("query", "string", "text to look for, for example Sign in or search", true)] },
     Tool { name: "browser_dom", route: "/dom", description: "HTML of the page, or of the elements matching a CSS selector.", args: &[("selector", "string", "", false), ("frame", "string", "", false)] },
     Tool { name: "browser_console", route: "/console", description: "Console lines and uncaught JavaScript errors of the page.", args: &[("level", "string", "error, warn or info", false), ("limit", "number", "", false)] },
     Tool { name: "browser_network", route: "/network", description: "Requests of the page; failed ones carry the start of the response body. With bodies, every request carries what was sent and the response (JSON, text), to write a DTO or an interface from a real response, or to see why a call failed.", args: &[("failed", "boolean", "only failed requests (status 0 or >= 400)", false), ("ok", "boolean", "only successful requests", false), ("url", "string", "only requests whose address contains this text, for example /api/users", false), ("bodies", "boolean", "include the request body and the response body", false), ("max_body", "number", "characters kept per body (default 2000, at most 20000)", false), ("limit", "number", "", false)] },
@@ -123,6 +125,48 @@ fn locate_js(args: &Value) -> String {
     )
 }
 
+/// Runs in the page: its visible text, main part first, cut at `max` characters.
+fn text_js(max: u64) -> String {
+    format!(
+        r#"(() => {{
+  const root = document.querySelector('main, article, [role=main]') || document.body;
+  const text = (root?.innerText || '').replace(/\n{{3,}}/g, '\n\n').trim();
+  const max = {max};
+  return text.length > max ? text.slice(0, max) + '\n… (' + (text.length - max) + ' more characters)' : text || '(the page has no text)';
+}})()"#
+    )
+}
+
+/// Runs in the page: the elements matching `query`, numbered into `window.__adEls` like browser_elements.
+fn find_js(query: &str) -> String {
+    format!(
+        r#"((query) => {{
+  __HELPERS__
+  const want = String(query).trim().toLowerCase();
+  if (!want) return 'give a query';
+  const line = (e) => [e.getAttribute('aria-label'), e.getAttribute('role'), e.placeholder, e.title, e.alt, e.value, e.innerText].filter(Boolean).join(' ').replace(/\s+/g, ' ').toLowerCase();
+  const sel = 'a[href],button,input,select,textarea,summary,label,[role],[aria-label],[placeholder],[title],[onclick],[tabindex],h1,h2,h3,h4,h5,h6,p,li,td,th,span,div';
+  const hits = [...document.querySelectorAll(sel)].filter((e) => {{
+    const r = e.getBoundingClientRect(); const cs = getComputedStyle(e);
+    return r.width > 1 && r.height > 1 && cs.visibility !== 'hidden' && cs.display !== 'none' && line(e).includes(want);
+  }});
+  // The innermost match: a wrapper whose child also matches says nothing more.
+  const tight = hits.filter((e) => !hits.some((o) => o !== e && e.contains(o)));
+  window.__adEls = [];
+  const out = tight.slice(0, 20).map((el) => {{
+    const r = el.getBoundingClientRect();
+    const kind = el.tagName.toLowerCase() + (el.tagName === 'INPUT' ? '[' + (el.type || 'text') + ']' : '') + (el.getAttribute('role') ? '(' + el.getAttribute('role') + ')' : '');
+    const where = r.bottom < 0 || r.top > innerHeight ? ' (out of view)' : '';
+    window.__adEls.push(el);
+    return '[' + (window.__adEls.length - 1) + '] ' + kind + ' "' + adName(el) + '" at (' + Math.round(r.left + r.width / 2) + ',' + Math.round(r.top + r.height / 2) + ')' + where;
+  }});
+  return out.length ? out.join('\n') + (tight.length > 20 ? '\n… ' + (tight.length - 20) + ' more: use a longer query' : '') : 'nothing matches "' + query + '"';
+}})({})"#,
+        Value::String(query.to_string())
+    )
+    .replace("__HELPERS__", PAGE_HELPERS)
+}
+
 fn text_reply(text: String) -> Value {
     json!({ "content": [{ "type": "text", "text": text }] })
 }
@@ -142,8 +186,14 @@ async fn element_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> 
         Value::String(text) => serde_json::from_str::<Value>(text).unwrap_or_else(|_| Value::String(text.clone())),
         other => other.clone(),
     };
-    if name == "browser_elements" {
-        return match crate::bridge::answer(app, "/eval", &params, &ELEMENTS_JS.replace("__HELPERS__", PAGE_HELPERS)).await {
+    let script = match name {
+        "browser_elements" => Some(ELEMENTS_JS.replace("__HELPERS__", PAGE_HELPERS)),
+        "browser_text" => Some(text_js(args["max_chars"].as_u64().unwrap_or(20_000).clamp(500, 200_000))),
+        "browser_find" => Some(find_js(args["query"].as_str().unwrap_or_default())),
+        _ => None,
+    };
+    if let Some(script) = script {
+        return match crate::bridge::answer(app, "/eval", &params, &script).await {
             Ok(answer) => match value_of(answer) {
                 Value::String(text) => text_reply(text),
                 other => text_reply(other.to_string()),
@@ -204,7 +254,7 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Val
             Err(error) => error_reply(error),
         };
     }
-    if matches!(name, "browser_elements" | "browser_click_element") {
+    if matches!(name, "browser_elements" | "browser_click_element" | "browser_text" | "browser_find") {
         return element_tool(app, name, args, chat).await;
     }
     let Some(tool) = TOOLS.iter().find(|tool| tool.name == name) else {

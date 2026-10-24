@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { AGENT_ICON, AGENT_TEXT, workspace } from '../../sessions.svelte';
   import { allPresets, assignPreset, createFlow, deletePreset, duplicatePreset, editFlow, flowKind, normalizeGraph, stepGroups, workflows, type WorkflowPreset } from '../../workflows.svelte';
@@ -41,16 +41,23 @@
               </span>
             {/each}
           </div>
-          <div class="flex items-center gap-1">
-            <ZButton zWave={false} zType={used ? 'default' : 'outline'} zSize="sm" class="h-7! px-2.5! text-xs" disabled={!active} onclick={() => assignPreset(active, used ? null : preset.id)}>
-              {#if used}<ZIcon zType={icon('lucideCheck')} class="size-3.5" />In use{:else}Use in this chat{/if}
-            </ZButton>
+          <!-- One grouped control: use it in this chat (filled while it is in use), edit, copy, delete. -->
+          <div class="flex items-center gap-2">
+            {#if used}<span class="flex items-center gap-1 text-[11px] font-medium text-primary"><span class="size-1.5 rounded-full bg-primary"></span>In use</span>{/if}
             <span class="flex-1"></span>
-            <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0!" aria-label="Edit {preset.name}" title={preset.builtin ? 'Edit a copy' : 'Edit'} onclick={() => editFlow(preset)}><ZIcon zType={icon('lucidePencil')} class="size-3.5" /></ZButton>
-            <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0!" aria-label="Duplicate {preset.name}" title="Duplicate" onclick={() => duplicatePreset(preset.id)}><ZIcon zType={icon('lucideCopy')} class="size-3.5" /></ZButton>
-            {#if !preset.builtin}
-              <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0! text-destructive! hover:bg-destructive/15!" aria-label="Delete {preset.name}" title="Delete" onclick={() => deletePreset(preset.id)}><ZIcon zType={icon('lucideTrash2')} class="size-3.5" /></ZButton>
-            {/if}
+            <div class="inline-flex overflow-hidden rounded-lg border border-border bg-background" role="group" aria-label="{preset.name} actions">
+              {#snippet action(label: string, glyph: string, run: () => void, tone: string, disabled = false)}
+                <button type="button" class="grid size-7 cursor-pointer place-items-center border-l border-border outline-none first:border-l-0 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 {tone}" aria-label={label} {disabled} {@attach zTooltip({ content: label, position: 'top' })} onclick={run}>
+                  <ZIcon zType={icon(glyph)} class="size-3.5" />
+                </button>
+              {/snippet}
+              {@render action(used ? 'Stop using in this chat' : 'Use in this chat', used ? 'lucideCircleCheck' : 'lucidePlay', () => assignPreset(active, used ? null : preset.id), used ? 'bg-primary text-primary-foreground hover:bg-primary/85' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary', !active)}
+              {@render action(preset.builtin ? 'Edit a copy' : 'Edit', 'lucideSquarePen', () => editFlow(preset), 'text-muted-foreground hover:bg-primary/10 hover:text-primary')}
+              {@render action('Duplicate', 'lucideCopyPlus', () => duplicatePreset(preset.id), 'text-muted-foreground hover:bg-primary/10 hover:text-primary')}
+              {#if !preset.builtin}
+                {@render action('Delete', 'lucideTrash2', () => deletePreset(preset.id), 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive')}
+              {/if}
+            </div>
           </div>
         </article>
       {/each}

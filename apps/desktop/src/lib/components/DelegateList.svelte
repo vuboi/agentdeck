@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { ZIcon, ZLoading } from '@shival99/z-ui-svelte';
+  import { ZIcon, ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
+  import type { ZIconName } from '@shival99/z-ui-svelte';
   import { LOADER } from '../loaders';
   import { OPENAI_SVG } from '../brand-icons';
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
-  import { modelLabel } from '../models.svelte';
-  import { isDelegating, isRunActive, liveStats, workspace } from '../sessions.svelte';
+  import { customProviderName, modelLabel } from '../models.svelte';
+  import { answerQuestions, isDelegating, isRunActive, liveStats, workspace } from '../sessions.svelte';
+  import QuestionCard from './QuestionCard.svelte';
   import type { Block } from '../mock';
 
   // The work a message handed to other agents (`@agent` or a flow's steps), in one card like a run command: a header,
@@ -14,15 +16,16 @@
 
   // A card still "running" with nothing running behind it: the run was cut off (the page was reloaded while it ran). The
   // chat itself tells how far it got: one that has its answer is shown as answered, not as stopped.
-  const settledOf = (block: Extract<Block, { kind: 'delegate' }>): 'queued' | 'running' | 'done' | 'failed' | 'skipped' => {
+  const settledOf = (block: Extract<Block, { kind: 'delegate' }>): 'queued' | 'running' | 'asking' | 'done' | 'failed' | 'skipped' => {
     // A step waiting its turn is queued while its run is going; once the run is gone it will never start.
     if (block.state === 'queued') return isRunActive(blocks.map((item) => item.childId)) ? 'queued' : 'skipped';
-    if (block.state !== 'running' || isDelegating(block.childId)) return block.state;
+    if ((block.state !== 'running' && block.state !== 'asking') || isDelegating(block.childId)) return block.state;
     const child = workspace.sessions.find((item) => item.id === block.childId);
     return child && (child.messageCount ?? 0) >= 2 ? 'done' : 'failed';
   };
   const done = $derived(blocks.filter((block) => settledOf(block) === 'done').length);
   const working = $derived(blocks.some((block) => settledOf(block) === 'running'));
+  const asking = $derived(blocks.some((block) => settledOf(block) === 'asking'));
   const flow = $derived(blocks.some((block) => block.step));
 
   /** What a delegated chat is doing right now (its last line), read again each second while it works. */
@@ -31,14 +34,17 @@
     void ticker.sec;
     return liveStats(childId, Date.now())?.last ?? '';
   }
-  const tone = { queued: 'text-muted-foreground', running: 'text-warning', done: 'text-success', failed: 'text-destructive', skipped: 'text-muted-foreground' } as const;
+  /** A step asking an earlier step something right now: what it asks, in the row's middle line. */
+  const talkLine = (block: Extract<Block, { kind: 'delegate' }>) => (block.talking ? `Asking ${block.talking}: ${block.talkText ?? ''}` : '');
+  const tone = { queued: 'text-muted-foreground', running: 'text-primary', asking: 'text-primary', done: 'text-emerald-500', failed: 'text-destructive', skipped: 'text-muted-foreground' } as const;
 </script>
 
 <div class="block-in w-full max-w-[85%] overflow-hidden rounded-lg border border-border bg-background">
   <div class="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 text-xs">
     <ZIcon zType={flow ? 'lucideWorkflow' : 'lucideAtSign'} class="size-3.5 text-muted-foreground" />
     <span class="truncate font-medium">{flow ? 'Flow steps' : blocks.length === 1 ? 'Handed to an agent' : `Handed to ${blocks.length} agents`}</span>
-    <span class="ml-auto flex shrink-0 items-center gap-1 {working ? 'text-warning' : 'text-muted-foreground'}">
+    {#if asking}<span class="ml-auto shrink-0 rounded-full bg-primary/12 px-2 py-px text-[11px] font-medium text-primary">Needs your answer</span>{/if}
+    <span class="{asking ? '' : 'ml-auto'} flex shrink-0 items-center gap-1 {working ? 'text-warning' : 'text-muted-foreground'}">
       {#if working}<ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="current" />{/if}
       {done}/{blocks.length} done
     </span>
@@ -49,15 +55,21 @@
       <button type="button" class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs outline-none {settled === 'queued' || settled === 'skipped' ? 'cursor-default opacity-70' : 'cursor-pointer hover:bg-muted/40 focus-visible:bg-muted/60'}" onclick={() => settled !== 'queued' && settled !== 'skipped' && showSession(block.childId)}>
         {#if block.agent === 'codex'}
           <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
+        {:else if block.agent === 'custom'}
+          <ZIcon zType={'lucideServer' as ZIconName} class="size-3.5 shrink-0 text-violet-500" />
         {:else}
           <ZIcon zType={block.agent === 'claude' ? 'brandClaude' : 'brandGemini'} class="size-3.5 shrink-0" />
         {/if}
         {#if block.step}<span class="shrink-0 rounded bg-primary/10 px-1.5 py-px text-[10px] font-medium text-primary">{block.step}</span>{/if}
-        <span class="shrink-0 font-medium">{block.agent === 'codex' ? 'Codex' : block.agent === 'claude' ? 'Claude' : 'Antigravity'}</span>
-        <span class="min-w-0 flex-1 truncate text-muted-foreground">{lineOf(block.childId, settled) || modelLabel(block.model)}</span>
+        <span class="shrink-0 font-medium">{block.agent === 'codex' ? 'Codex' : block.agent === 'claude' ? 'Claude' : block.agent === 'custom' ? (customProviderName(block.model) ?? 'Custom') : 'Antigravity'}</span>
+        <span class="min-w-0 flex-1 truncate text-muted-foreground">{talkLine(block) || lineOf(block.childId, settled) || modelLabel(block.model)}</span>
         <span class="inline-flex shrink-0 items-center gap-1 {tone[settled]}">
-          {#if settled === 'running'}
-            <ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="current" /> Working
+          {#if settled === 'running' && block.talking}
+            <ZIcon zType={'lucideMessagesSquare' as ZIconName} class="size-3.5" /> <ZShimmerText zBase="rgb(168 85 247)" zPeak="var(--foreground)" zText="Discussing with {block.talking}" />
+          {:else if settled === 'running'}
+            <ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="current" /> <ZShimmerText zBase="var(--primary)" zPeak="var(--foreground)" zText="Working" />
+          {:else if settled === 'asking'}
+            <ZIcon zType={'lucideMessageCircleQuestion' as ZIconName} class="size-3.5" /> Asking you
           {:else if settled === 'done'}
             <ZIcon zType="lucideCircleCheck" class="size-3.5" /> Answered
           {:else if settled === 'queued'}
@@ -70,6 +82,12 @@
         </span>
         <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
       </button>
+      <!-- A step that asked the user first: its questions are answered right here, and the run goes on. -->
+      {#if settled === 'asking' && block.questions?.length}
+        <div class="border-t border-border bg-muted/20 p-2.5">
+          <QuestionCard questions={block.questions} from={block.step ?? 'This step'} onsubmit={(text) => answerQuestions(block.childId, text)} />
+        </div>
+      {/if}
     {/each}
   </div>
 </div>

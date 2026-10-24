@@ -9,7 +9,8 @@ export type AgentEvent =
   | { kind: 'permission_denied'; requests: PermissionRequest[] }
   | { kind: 'done'; session_id: string | null; text: string; cost_usd: number | null }
   | { kind: 'usage'; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number; new_call: boolean }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+  | { kind: 'raw'; source: string; label: string; line: string };
 
 /** A tool the CLI would not run without approval. `allow` is what approves exactly this call. */
 export type PermissionRequest = { id: string; tool: string; summary: string; allow: string };

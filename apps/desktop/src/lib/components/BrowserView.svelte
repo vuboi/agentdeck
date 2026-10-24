@@ -615,12 +615,13 @@
         </button>
         <ZPopover anchor={processButton} bind:open={processOpen} zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth={300}>
           {#snippet children({ close })}
-            <div class="grid gap-0.5 p-1">
+            <div class="grid min-h-40 grid-cols-[minmax(0,1fr)] content-start p-1">
               {#if servers.list.length === 0}
-                <p class="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="12" /> Nothing is running in the background</p>
+                <div class="col-start-1 row-start-1 flex min-h-38 flex-col items-center justify-center gap-2 self-center text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="24" /> Nothing is running in the background</div>
               {/if}
-              {#each servers.list as item (item.key)}
-                <div class="flex items-center gap-1">
+              {#each servers.list as item, index (item.key)}
+                <!-- One line each, cut short when long; a line between rows. -->
+                <div class="flex min-w-0 items-center gap-1 py-0.5 {index > 0 ? 'border-t border-border' : ''}">
                   <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 disabled:pointer-events-none disabled:opacity-50" disabled={!item.running || !item.url} onclick={() => { if (item.url) openInPreview(item.url, 'auto'); close(); }}>
                     <ZIcon zType={(item.running ? 'lucideExternalLink' : 'lucideCircleOff') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground" />
                     <span class="min-w-0 flex-1 truncate">{item.running ? '' : 'Exited · '}{processName(item)}</span>
@@ -632,7 +633,7 @@
                 </div>
               {/each}
               {#if servers.list.length > 1}
-                <button type="button" class="mt-0.5 flex cursor-pointer items-center gap-2 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive outline-none hover:bg-destructive/20" onclick={() => { void stopServers(null); close(); }}>
+                <button type="button" class="mt-1 flex cursor-pointer items-center gap-2 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive outline-none hover:bg-destructive/20" onclick={() => { void stopServers(null); close(); }}>
                   <svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg> Stop all
                 </button>
               {/if}

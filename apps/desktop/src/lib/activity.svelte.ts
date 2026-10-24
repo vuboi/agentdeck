@@ -53,8 +53,24 @@ async function tauriCall(command: string, args?: Record<string, unknown>) {
   return invoke(command, args);
 }
 
+/** The log keeps two days: today and yesterday. At midnight yesterday's day before goes, by itself. */
+const startOfYesterday = () => {
+  const day = new Date();
+  day.setHours(0, 0, 0, 0);
+  day.setDate(day.getDate() - 1);
+  return day.getTime();
+};
+function pruneAudit() {
+  const cutoff = startOfYesterday();
+  for (let index = audit.length - 1; index >= 0; index--) if (audit[index].startedAt < cutoff) audit.splice(index, 1);
+  return tauriCall('audit_prune', { cutoff }).catch(() => 0);
+}
+
 if (inTauri()) {
-  void tauriCall('audit_read')
+  // Checked every hour too, so an app left open over midnight drops the old day as well.
+  setInterval(() => void pruneAudit(), 3_600_000);
+  void pruneAudit()
+    .then(() => tauriCall('audit_read'))
     .then((text) => {
       const loaded: Activity[] = [];
       for (const line of String(text).split('\n')) {
@@ -95,9 +111,19 @@ function record(item: Activity) {
     .catch(() => void tauriCall('audit_append', { line: JSON.stringify({ ...entry, image: undefined }) }).catch(() => {}));
 }
 
+/** What two steps of a flow said to each other: one entry, so the Audit log shows how they worked it out. */
+export function logTalk(sessionId: string, title: string, project: string, from: string, to: string, question: string, answer: string) {
+  const now = Date.now();
+  record({ key: `${sessionId}:talk:${++calls}`, sessionId, title, project, name: 'Discussion', input: `${from} → ${to}: ${question}`.slice(0, 200), background: false, status: 'ok', startedAt: now, endedAt: now, output: `${from} asked ${to}:\n${question}\n\n${to} answered:\n${answer}` });
+}
+
 /** Keeps the log in step with one event of a chat's run. */
 export function trackActivity(sessionId: string, title: string, project: string, event: AgentEvent) {
-  if (event.kind === 'tool_call') {
+  if (event.kind === 'raw') {
+    // A step of the CLI the app does not turn into anything: its line as the CLI wrote it, to copy when debugging.
+    const now = Date.now();
+    record({ key: `${sessionId}:raw:${++calls}`, sessionId, title, project, name: `${event.source} · ${event.label}`, input: event.line.slice(0, 200), background: false, status: 'ok', startedAt: now, endedAt: now, output: event.line });
+  } else if (event.kind === 'tool_call') {
     activity.push({
       key: `${sessionId}:${event.id}:${++calls}`,
       callId: event.id,

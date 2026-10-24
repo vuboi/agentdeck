@@ -143,7 +143,7 @@ impl Provider for Codex {
                 config("approval_policy", toml_string("never"));
             }
         }
-        config("developer_instructions", toml_string(APP_CONTEXT));
+        config("developer_instructions", toml_string(&format!("{APP_CONTEXT}{}", super::claude::ASK_CONTEXT)));
         if let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") {
             config("mcp_servers.agentdeck.url", toml_string(&super::mcp_url(&bridge, req.owner.as_deref(), req.cwd.as_deref())));
         }

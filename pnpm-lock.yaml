@@ -40,8 +40,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui
       '@shival99/z-ui-svelte':
-        specifier: 0.1.8
-        version: 0.1.8(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(svelte@5.57.2)(tailwindcss@4.3.3)
+        specifier: 0.1.10
+        version: 0.1.10(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(svelte@5.57.2)(tailwindcss@4.3.3)
       '@tauri-apps/api':
         specifier: ^2.0.0
         version: 2.12.4
@@ -749,8 +749,8 @@ packages:
   '@shikijs/vscode-textmate@10.1.0':
     resolution: {integrity: sha512-cVBuhDQjBZaNMTwBquYfPydrUP+E3hE6oYGasx8h6ZrODIM7/r+gxLDXdd66oszbrggZHEntdE6j+5gYIVyMWQ==}
 
-  '@shival99/z-ui-svelte@0.1.8':
-    resolution: {integrity: sha512-WTKon2iD3w/OxQcF2QkwfE4TIiUgRdtKmM5HNQE/byOFlOMRK2+QPeejsbgqlPtfxk/jfozRa5W46HVcGXh3Lw==}
+  '@shival99/z-ui-svelte@0.1.10':
+    resolution: {integrity: sha512-9XNH3ApBqbgtRU7QvoThZwLMWaAF2TB9t7nnG4htuCiOdc7uGjYRNI3oSiCG3D9AX4F/LhSehmTFq/IvamiOQA==}
     peerDependencies:
       '@aiden0z/pptx-renderer': '>=1.2.4'
       '@ng-icons/lucide': '>=33.0.0'
@@ -3289,7 +3289,7 @@ snapshots:
 
   '@shikijs/vscode-textmate@10.1.0': {}
 
-  '@shival99/z-ui-svelte@0.1.8(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(svelte@5.57.2)(tailwindcss@4.3.3)':
+  '@shival99/z-ui-svelte@0.1.10(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(svelte@5.57.2)(tailwindcss@4.3.3)':
     dependencies:
       '@dayflow/blossom-color-picker-svelte': 1.3.0(svelte@5.57.2)
       '@floating-ui/dom': 1.8.0

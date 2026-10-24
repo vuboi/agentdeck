@@ -20,8 +20,13 @@ use tokio::process::Command;
 
 /// Model calls in one turn before it is stopped, so a model that keeps calling tools cannot run forever.
 const MAX_STEPS: usize = 40;
+/// A local model that repeats the same tool call is not making progress. Stop the turn early instead of
+/// spending the remaining requests until `MAX_STEPS`.
+const REPEATED_CALL_LIMIT: usize = 3;
+/// Give a tool-heavy model a chance to hand back its result before the hard stop.
+const FINAL_NUDGE_AT: usize = 30;
 /// Characters of a tool's output kept for the model.
-const OUTPUT_MAX: usize = 20_000;
+const OUTPUT_MAX: usize = 12_000;
 /// How long the model may be silent in the middle of an answer. A big local model can take a while to start.
 const STALL: Duration = Duration::from_secs(240);
 /// How long one browser or MCP tool call may take.
@@ -895,10 +900,13 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
     let mut edited = false;
     let mut checked = true;
     let mut nudged = false;
+    let mut finish_nudged = false;
+    let mut last_call_signature = String::new();
+    let mut repeated_calls = 0;
     // A model that spends its whole answer on thinking (some local ones do, with big prompts): it is asked again, then asked
     // again with thinking off, before the turn is called a failure.
     let mut silent = 0;
-    for _ in 0..MAX_STEPS {
+    for step_number in 0..MAX_STEPS {
         let step = match model_call(&client, &turn, &messages, &tools, &mut emit).await {
             Ok(step) => step,
             Err(message) => return emit(AgentEvent::Error { message }),
@@ -936,6 +944,18 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
                 return emit(AgentEvent::Error { message: "the model gave no answer (it only thought), even with thinking off. Pick another model, or try a smaller step".into() });
             }
             return emit(AgentEvent::Done { session_id: None, text: answer, cost_usd: None });
+        }
+
+        let signature = calls
+            .iter()
+            .map(|call| format!("{}:{}", call.name, call.arguments))
+            .collect::<Vec<_>>()
+            .join("|");
+        if signature == last_call_signature {
+            repeated_calls += 1;
+        } else {
+            last_call_signature = signature;
+            repeated_calls = 1;
         }
 
         let ids: Vec<String> = calls.iter().enumerate().map(|(i, call)| if call.id.is_empty() { format!("call_{}_{i}", messages.len()) } else { call.id.clone() }).collect();
@@ -1044,6 +1064,14 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
         if !denied.is_empty() {
             emit(AgentEvent::PermissionDenied { requests: denied });
             return emit(AgentEvent::Done { session_id: None, text: answer, cost_usd: None });
+        }
+
+        if repeated_calls >= REPEATED_CALL_LIMIT {
+            return emit(AgentEvent::Error { message: "the model repeated the same tool call without making progress; shorten the task or turn thinking off for this local model".into() });
+        }
+        if step_number + 1 >= FINAL_NUDGE_AT && !finish_nudged {
+            finish_nudged = true;
+            messages.push(json!({ "role": "user", "content": "Stop using tools now. Finish this step with a concise final answer and a `## Handoff` section. Do not call another tool unless it is strictly required to report the result." }));
         }
     }
     emit(AgentEvent::Error { message: format!("stopped after {MAX_STEPS} steps without a final answer") });

@@ -14,14 +14,28 @@
   // Text arrives in bursts. It is revealed at a steady, time-based pace instead (faster when more is waiting),
   // whole words at a time, and each new word fades in, as in Claude and ChatGPT. A finished answer that was
   // never streamed shows at once.
-  const MIN_CPS = 40;
-  const DRAIN_SECONDS = 0.6;
-  const FADE_MS = 320;
+  // A long backlog is drained over a longer time and never faster than MAX_CPS (about one word per frame), so
+  // words keep appearing one after another instead of a whole paragraph popping in at once.
+  // While the agent still writes, a calm, even pace like Claude and Codex (a backlog only nudges it up). Some agents
+  // (Codex) hand over the whole answer at once, already complete: it is still typed out at an even pace, a little
+  // faster only for a long answer (about 8 s for what is left), so it never runs ahead in bursts.
+  const MIN_CPS = 30;
+  const MAX_CPS = 120;
+  const DRAIN_SECONDS = 4;
+  const DONE_MIN_CPS = 90;
+  const DONE_MAX_CPS = 400;
+  const DONE_DRAIN_SECONDS = 8;
+  const FADE_MS = 220;
   const STAGGER_MS = 18;
+  // Past FADE_LIMIT words in flight, new ones simply appear: fading dozens at once costs frames.
+  const FADE_LIMIT = 80;
 
   let live = untrack(() => streaming);
   let shown = $state(untrack(() => (streaming ? 0 : text.length)));
   const catching = $derived(shown < text.length);
+  // Where the even reveal really is (may sit inside a word): kept across text updates, so each new burst does not
+  // restart it from the end of the last shown word.
+  let pace = untrack(() => shown);
   const reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   /** The end of the word that `at` falls in, so a word never shows half typed. */
@@ -36,11 +50,11 @@
     const target = source.length;
     if (streaming) live = true;
     if (!live || reducedMotion) {
-      shown = target;
+      shown = pace = target;
       return;
     }
-    let progress = untrack(() => shown);
-    if (progress > target) shown = progress = target;
+    let progress = Math.min(pace, target);
+    if (untrack(() => shown) > target) shown = target;
     let last = performance.now();
     let frame = 0;
     const step = (now: number) => {
@@ -48,10 +62,11 @@
       last = now;
       const backlog = target - progress;
       if (backlog <= 0) return;
-      progress = Math.min(target, progress + Math.max(MIN_CPS, backlog / DRAIN_SECONDS) * dt);
+      const rate = streaming ? Math.min(MAX_CPS, Math.max(MIN_CPS, backlog / DRAIN_SECONDS)) : Math.min(DONE_MAX_CPS, Math.max(DONE_MIN_CPS, backlog / DONE_DRAIN_SECONDS));
+      progress = pace = Math.min(target, progress + rate * dt);
       const next = wordEnd(source, Math.floor(progress), target);
+      // `progress` keeps its own pace: pulling it to the end of each shown word would double the real speed.
       if (next > shown) shown = next;
-      progress = Math.max(progress, shown);
       frame = requestAnimationFrame(step);
     };
     frame = requestAnimationFrame(step);
@@ -85,11 +100,19 @@
       let at = base;
       for (const piece of node.data.split(/(\s+)/)) {
         if (!piece) continue;
-        if (at + piece.length <= from || /^\s+$/.test(piece)) {
+        const known = fadeStarts.get(at);
+        // A word before `seen` with no fade in progress was already shown: it stays plain. (When the markdown of the
+        // earlier text changes, offsets shift by a character or two; without this check those words would fade in again.)
+        if (at + piece.length <= from || /^\s+$/.test(piece) || (known === undefined && at < seen)) {
           out.append(piece);
         } else {
-          let start = fadeStarts.get(at);
-          if (start === undefined) fadeStarts.set(at, (start = now + Math.min(fresh++, 12) * STAGGER_MS));
+          let start = known;
+          if (start === undefined && fadeStarts.size >= FADE_LIMIT) {
+            out.append(piece);
+            at += piece.length;
+            continue;
+          }
+          if (start === undefined) fadeStarts.set(at, (start = now + Math.min(fresh++, 6) * STAGGER_MS));
           const word = document.createElement('span');
           word.className = 'md-fade';
           word.style.animationDelay = `${Math.round(start - now)}ms`;
@@ -205,18 +228,16 @@
 <div bind:this={root} class="md" {onclick} {oncontextmenu}>{@html html}</div>
 
 <style>
-  /* A word that has just arrived: fades and sharpens into place. */
+  /* A word that has just arrived fades in, quickly and without blur, as in Claude Code: fast text never smears. */
   .md :global(.md-fade) {
-    animation: md-fade 320ms cubic-bezier(0.25, 0.1, 0.25, 1) both;
+    animation: md-appear 220ms ease-out both;
   }
-  @keyframes md-fade {
+  @keyframes md-appear {
     from {
       opacity: 0;
-      filter: blur(3px);
     }
     to {
       opacity: 1;
-      filter: blur(0);
     }
   }
 </style>

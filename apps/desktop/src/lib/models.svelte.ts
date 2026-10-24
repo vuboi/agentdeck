@@ -63,7 +63,7 @@ $effect.root(() => {
   $effect(() => {
     catalog.custom = chattable().flatMap((provider) => {
       const names = provider.models.length ? provider.models : provider.defaultModel ? [provider.defaultModel] : [];
-      return names.map((name) => ({ value: customModelId(provider.id, name), label: name, description: provider.name, efforts: THINKING, defaultEffort: 'medium' }));
+      return names.map((name) => ({ value: customModelId(provider.id, name), label: name, description: provider.name, efforts: THINKING, defaultEffort: 'off' }));
     });
   });
 });

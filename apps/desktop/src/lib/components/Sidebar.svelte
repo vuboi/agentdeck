@@ -1,7 +1,7 @@
 <script lang="ts">
   import { customProviderName } from '../models.svelte';
   import { untrack } from 'svelte';
-  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree, zModalService } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree, zModalService, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import Logo from './Logo.svelte';
   import { toast } from '../toast';
@@ -11,8 +11,18 @@
   import DockZone from './DockZone.svelte';
   import Splitter from './Splitter.svelte';
   import { layout } from '../layout.svelte';
+  import { getPref, setPref } from '../prefs';
   import {
+    addProject,
     buildTree,
+    isTrusted,
+    pendingProject,
+    isPinnedProject,
+    isPinnedSession,
+    togglePinProject,
+    togglePinSession,
+    samePath,
+    trustFolder,
     deleteSession,
     forkSession,
     history,
@@ -23,10 +33,34 @@
     prefetchTranscript,
     renameSession,
     workspace,
+    DEFAULT_VIEW,
+    type SessionItem,
+    type SidebarView,
     type TreeData,
   } from '../sessions.svelte';
 
-  const nodes = $derived(buildTree());
+  // How chats are grouped and sorted, and which headings are folded: both kept. "Show more" lasts until reload.
+  const view = $state<SidebarView>({ ...DEFAULT_VIEW });
+  let collapsed = $state<string[]>([]);
+  let showAll = $state<string[]>([]);
+  void getPref<SidebarView>('sidebar.view').then((saved) => {
+    if (saved && typeof saved === 'object') Object.assign(view, saved);
+  });
+  void getPref<string[]>('sidebar.collapsed').then((saved) => {
+    if (Array.isArray(saved)) collapsed = saved;
+  });
+  function setView(change: Partial<SidebarView>) {
+    Object.assign(view, change);
+    setPref('sidebar.view', { ...view });
+  }
+  function toggleSection(key: string) {
+    collapsed = collapsed.includes(key) ? collapsed.filter((item) => item !== key) : [...collapsed, key];
+    setPref('sidebar.collapsed', collapsed);
+  }
+  const toggleMore = (key: string) => (showAll = showAll.includes(key) ? showAll.filter((item) => item !== key) : [...showAll, key]);
+  const sectionKey = (nodeId: string) => nodeId.replace(/^section:/, '');
+
+  const nodes = $derived(buildTree({ view, collapsed, showAll }));
 
   // The tree is the only scroller (wheel, keyboard and virtualisation all work on it), sized to the space left.
   let treeHeight = $state(400);
@@ -64,16 +98,79 @@
     });
   });
 
+  // The open chat is highlighted (in its project and in Recents). A new session nobody wrote in yet is not in the
+  // list: its project row is highlighted instead, until the first message puts the chat there.
+  const pendingRow = (id: string) => (id === NO_PROJECT ? 'section:computer' : `project:${id}`);
+  // One row only, even when the chat is listed twice (Pinned, Recents, its project): the row that was clicked, else
+  // its row in the project, else Pinned, else Recents.
+  let clickedRow = $state('');
+  const rowIds = $derived.by(() => {
+    const ids = new Set<string>();
+    const walk = (list: ZTreeNode<TreeData>[]) => list.forEach((node) => (ids.add(node.id), walk(node.children ?? [])));
+    walk(nodes);
+    return ids;
+  });
+  const selection = () => {
+    const pending = pendingProject();
+    if (pending) return [pendingRow(pending)];
+    const id = workspace.activeId;
+    return [mainRow(id)];
+  };
+  /** The one row that stands for a chat listed more than once: highlighted when open, spinning when it runs. */
+  function mainRow(id: string) {
+    if (clickedRow.endsWith(`:${id}`) && rowIds.has(clickedRow)) return clickedRow;
+    return ['session', 'list', 'pin', 'recent'].map((key) => `${key}:${id}`).find((row) => rowIds.has(row)) ?? `session:${id}`;
+  }
+  const pending = $derived(pendingProject());
   let selected = $state<string[]>([]);
   $effect(() => {
-    selected = [`session:${workspace.activeId}`];
+    selected = selection();
   });
 
   function onSelect(node: ZTreeNode<TreeData>) {
     // Projects only expand; only sessions switch the chat.
     // Opens the session's chat tab even when it is already the active session (its tab may have been closed).
-    if (node.data?.kind === 'session' && node.data.session) showSession(node.data.session.id);
-    else selected = [`session:${workspace.activeId}`];
+    if (node.data?.kind === 'session' && node.data.session) {
+      clickedRow = node.id;
+      showSession(node.data.session.id);
+    }
+    else if (node.data?.kind === 'section' && node.data.count) toggleSection(sectionKey(node.id));
+    else if (node.data?.kind === 'more' && node.data.group) toggleMore(node.data.group);
+    if (node.data?.kind !== 'session') selected = selection();
+  }
+
+  // ---------- add a project: pick a folder, trust it, then a new session opens in it ----------
+  let trustPath = $state('');
+  let trustOpen = $state(false);
+
+  async function pickProject() {
+    let path: string | null = null;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      path = await invoke<string | null>('pick_folder');
+    } catch {
+      // Plain-browser dev: no native picker.
+      path = window.prompt('Project folder path');
+    }
+    if (!path) return;
+    const known = workspace.projects.some((project) => project.path && samePath(project.path, path!));
+    if (known || isTrusted(path)) {
+      openProject(path);
+      return;
+    }
+    trustPath = path;
+    trustOpen = true;
+  }
+
+  function openProject(path: string) {
+    const project = addProject(path);
+    expanded = [...new Set([...expanded, `project:${project.id}`])];
+  }
+
+  function trustAndAdd() {
+    trustFolder(trustPath);
+    trustOpen = false;
+    openProject(trustPath);
   }
 
   // A chat folds and unfolds only by its arrow; a project row also does it when clicked.
@@ -85,7 +182,7 @@
   }
 
   // ---------- row menu: right click, or the three dots that replace the agent tag on hover ----------
-  let menu = $state<{ x: number; y: number; id: string; align: 'bottom-left' | 'bottom-right'; kind: 'session' | 'project' } | null>(null);
+  let menu = $state<{ x: number; y: number; id: string; align: 'bottom-left' | 'bottom-right'; kind: 'session' | 'project' | 'view' } | null>(null);
   let menuOpen = $state(false);
   let menuKey = $state(0);
   let treeBox: HTMLDivElement | undefined = $state();
@@ -106,15 +203,18 @@
     const id = menuOpen ? menu?.id : undefined;
     untrack(() => {
       for (const row of treeBox?.querySelectorAll('[data-menu-row]') ?? []) row.removeAttribute('data-menu-row');
-      if (id) treeBox?.querySelector(`[data-session="${CSS.escape(id)}"]`)?.closest('[role="treeitem"]')?.setAttribute('data-menu-row', '');
+      if (id) (menuRow ?? treeBox?.querySelector(`[data-session="${CSS.escape(id)}"]`)?.closest('[role="treeitem"]'))?.setAttribute('data-menu-row', '');
     });
   });
+  let menuRow: Element | null = null;
   let searchOpen = $state(false);
   const menuSession = $derived(menu ? workspace.sessions.find((item) => item.id === menu!.id) : undefined);
 
-  async function openMenu(event: MouseEvent, id: string, anchor?: HTMLElement, kind: 'session' | 'project' = 'session') {
+  async function openMenu(event: MouseEvent, id: string, anchor?: HTMLElement, kind: 'session' | 'project' | 'view' = 'session') {
     event.preventDefault();
     event.stopPropagation();
+    // The row it was opened from (a chat can be listed twice) stays lit.
+    menuRow = (event.target as HTMLElement).closest('[role="treeitem"]');
     menuKey++; // a fresh menu at the new spot: no close-then-open flicker
     if (anchor) {
       const rect = anchor.getBoundingClientRect();
@@ -157,6 +257,14 @@
   const ITEM = 'text-xs! py-1';
   const projectItems = $derived<ZDropdownMenuItem[]>([
     { label: 'New session', icon: 'lucidePlus', iconSize: '12', class: ITEM, onClick: () => menu && addSession(menu.id) },
+    {
+      label: menuProject?.path && isPinnedProject(menuProject.path) ? 'Unpin' : 'Pin',
+      icon: (menuProject?.path && isPinnedProject(menuProject.path) ? 'lucidePinOff' : 'lucidePin') as ZIconName,
+      iconSize: '12',
+      class: `${ITEM} [&_svg:first-child]:rotate-45`,
+      disabled: !menuProject?.path,
+      onClick: () => menu && togglePinProject(menu.id),
+    },
     { label: 'Reveal in File Explorer', icon: 'lucideFolder', iconSize: '12', class: ITEM, disabled: !menuProject?.path, onClick: () => void revealProject() },
     {
       label: 'Copy path',
@@ -182,16 +290,62 @@
   ]);
 
   const sessionItems = $derived<ZDropdownMenuItem[]>([
-    { label: 'Rename', icon: 'lucidePencil', iconSize: '12', shortcut: 'R', class: 'text-xs! py-1', onClick: () => askRename() },
+    {
+      label: menu && isPinnedSession(menu.id) ? 'Unpin' : 'Pin',
+      icon: (menu && isPinnedSession(menu.id) ? 'lucidePinOff' : 'lucidePin') as ZIconName,
+      iconSize: '12',
+      shortcut: 'P',
+      class: 'text-xs! py-1 [&_svg:first-child]:rotate-45',
+      onClick: () => menu && togglePinSession(menu.id),
+    },
+    { label: 'Rename', icon: 'lucideSquarePen' as ZIconName, iconSize: '12', shortcut: 'R', class: 'text-xs! py-1', onClick: () => askRename() },
     { label: 'Fork', icon: 'lucideGitFork', iconSize: '12', shortcut: 'F', class: 'text-xs! py-1', onClick: () => menu && fork(menu.id) },
     { label: 'Delete', icon: 'lucideTrash2', iconSize: '12', shortcut: 'D', divide: 'before', class: 'text-xs! py-1 text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive! [&_.ml-auto]:text-destructive!', onClick: () => askDelete() },
   ]);
-  const menuItems = $derived(menu?.kind === 'project' ? projectItems : sessionItems);
+  // The view menu of the headings: like the list options of Claude's own sidebar.
+  const viewItems = $derived<ZDropdownMenuItem[]>([
+    {
+      label: 'Group by',
+      icon: 'lucideLayers' as ZIconName,
+      iconSize: '12',
+      class: ITEM,
+      shortcut: { folder: 'Folder', date: 'Date', none: 'None' }[view.groupBy],
+      submenu: [
+        { label: 'Folder', class: ITEM, checked: view.groupBy === 'folder', onClick: () => setView({ groupBy: 'folder' }) },
+        { label: 'Date', class: ITEM, checked: view.groupBy === 'date', onClick: () => setView({ groupBy: 'date' }) },
+        { label: 'None', class: ITEM, checked: view.groupBy === 'none', divide: 'before', onClick: () => setView({ groupBy: 'none' }) },
+      ],
+    },
+    {
+      label: 'Sort by',
+      icon: 'lucideArrowUpDown' as ZIconName,
+      iconSize: '12',
+      class: ITEM,
+      shortcut: view.sortBy === 'name' ? 'Name' : 'Last updated',
+      submenu: [
+        { label: 'Last updated', class: ITEM, checked: view.sortBy === 'updated', onClick: () => setView({ sortBy: 'updated' }) },
+        { label: 'Name', class: ITEM, checked: view.sortBy === 'name', onClick: () => setView({ sortBy: 'name' }) },
+        { label: 'Descending', class: ITEM, checked: view.order === 'desc', divide: 'before', onClick: () => setView({ order: 'desc' }) },
+        { label: 'Ascending', class: ITEM, checked: view.order === 'asc', onClick: () => setView({ order: 'asc' }) },
+      ],
+    },
+    {
+      label: 'Reset to defaults',
+      icon: 'lucideRotateCcw' as ZIconName,
+      iconSize: '12',
+      class: ITEM,
+      divide: 'before',
+      disabled: view.groupBy === DEFAULT_VIEW.groupBy && view.sortBy === DEFAULT_VIEW.sortBy && view.order === DEFAULT_VIEW.order,
+      onClick: () => setView({ ...DEFAULT_VIEW }),
+    },
+  ]);
+  const menuItems = $derived(menu?.kind === 'project' ? projectItems : menu?.kind === 'view' ? viewItems : sessionItems);
 
   // The letters on the right are real shortcuts while a chat's menu is open.
   $effect(() => {
     if (!menuOpen || menu?.kind !== 'session') return;
     const keys: Record<string, () => void> = {
+      p: () => menu && togglePinSession(menu.id),
       r: () => askRename(),
       f: () => menu && fork(menu.id),
       d: () => askDelete(),
@@ -207,39 +361,34 @@
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  // ---------- rename / delete (also written into the original tool's own storage) ----------
-  let renaming = $state(false);
-  let nameInput: { focus: () => void } | undefined = $state();
-  // Type straight away: focus the field once the modal is on screen.
-  $effect(() => {
-    if (!renaming) return;
-    const timer = setTimeout(() => {
-      nameInput?.focus();
-      // Caret at the end of the old name, nothing selected.
-      const field = document.activeElement as HTMLInputElement | null;
-      field?.setSelectionRange?.(field.value.length, field.value.length);
-    }, 80);
-    return () => clearTimeout(timer);
-  });
-  let target = $state('');
+  // ---------- rename in place / delete (both also written into the original tool's own storage) ----------
+  // The row's label turns into a field: Enter or leaving it saves, Escape keeps the old name.
+  let editing = $state('');
   let title = $state('');
-  let busy = $state(false);
-  let failure = $state('');
-  const targetSession = $derived(workspace.sessions.find((item) => item.id === target));
   const TITLE_MAX = 100;
-  const titleError = $derived(
-    !title.trim() ? 'The name cannot be empty.' : title.trim().length > TITLE_MAX ? `Keep it under ${TITLE_MAX} characters.` : '',
-  );
-  const synced = $derived(Boolean(targetSession?.path));
-  const toolName = $derived(targetSession?.source === 'codex' ? 'Codex' : 'Claude');
 
-  function askRename() {
-    if (!menu) return;
-    target = menu.id;
-    title = menuSession?.title ?? '';
-    failure = '';
-    renaming = true;
+  function askRename(id = menu?.id, row?: string) {
+    if (!id) return;
+    editing = row ?? ['session', 'list', 'pin', 'recent'].map((key) => `${key}:${id}`).find((item) => rowIds.has(item)) ?? `session:${id}`;
+    title = workspace.sessions.find((item) => item.id === id)?.title ?? '';
   }
+
+  async function saveRename(id: string) {
+    if (!editing) return;
+    editing = '';
+    const name = title.trim().slice(0, TITLE_MAX);
+    if (!name || name === workspace.sessions.find((item) => item.id === id)?.title) return;
+    try {
+      await renameSession(id, name);
+    } catch (error) {
+      zModalService.warning({ zTitle: 'Could not rename', zContent: String(error), zConfirmStyle: 'dialog', zCancelText: null, zOkText: 'OK' });
+    }
+  }
+
+  const focusField = (field: HTMLInputElement) => {
+    field.focus();
+    field.select();
+  };
 
   /** Confirmation dialog (z-modal "dialog" style); the OK button stays loading until the files are moved. */
   function askDelete() {
@@ -268,34 +417,15 @@
     });
   }
 
-  async function run(action: () => Promise<void>, close: () => void) {
-    busy = true;
-    failure = '';
-    try {
-      await action();
-      close();
-    } catch (error) {
-      failure = String(error);
-    } finally {
-      busy = false;
-    }
-  }
-
-  const doRename = () =>
-    !titleError &&
-    run(
-      () => renameSession(target, title),
-      () => {
-        renaming = false;
-        toast.success('Renamed');
-      },
-    );
-
   const projectId = (nodeId: string) => nodeId.replace(/^project:/, '');
   function addSession(id: string) {
     if (id === NO_PROJECT) newChat();
     else newSession(id);
   }
+
+  const ACTION = 'grid size-5 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-foreground/10 hover:text-foreground';
+  // A label cut short shows in full on hover, to its right, wrapping instead of running wide.
+  const clipTip = (content: string) => zTooltip({ content, position: 'right', autoDetect: true, maxWidth: '200px', class: 'max-w-[200px]! whitespace-normal break-words', offset: 96 });
 
   const statusColor = { working: 'bg-success', waiting: 'bg-warning', idle: 'bg-muted-foreground/40' } as const;
   const agentLabel = (agent: string) => agent[0].toUpperCase() + agent.slice(1);
@@ -310,6 +440,62 @@
   import { ticker } from '../clock.svelte';
   const limitWarnings = $derived(warnings(ticker.min));
 </script>
+
+{#snippet sessionStatus(session: SessionItem, row: string)}
+  {#if session.status === 'working' && mainRow(session.id) === row}
+    <span class="grid size-3 shrink-0 place-items-center text-success" role="status" aria-label="Running">
+      <ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="current" />
+    </span>
+  {:else}
+    <span class="size-1.5 shrink-0 rounded-full {statusColor[session.status]}" aria-label={session.status}></span>
+  {/if}
+{/snippet}
+
+{#snippet renameField(id: string)}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (keys handled on the field) -->
+  <input
+    class="h-5 min-w-0 flex-1 bg-transparent p-0 text-xs text-foreground outline-none"
+    data-rename
+    maxlength={TITLE_MAX}
+    aria-label="Chat name"
+    bind:value={title}
+    {@attach focusField}
+    onclick={(event) => event.stopPropagation()}
+    onmousedown={(event) => event.stopPropagation()}
+    onkeydown={(event) => {
+      event.stopPropagation();
+      if (event.key === 'Enter') void saveRename(id);
+      else if (event.key === 'Escape') editing = '';
+    }}
+    onblur={() => void saveRename(id)}
+  />
+{/snippet}
+
+{#snippet agentBadge(session: SessionItem, row: string)}
+  <!-- The agent tag; on hover the quick actions take its place (pin, rename, the full menu). -->
+  <!-- The buttons float over the tag (and the end of the name) instead of reserving their width on every row. -->
+  <span class="relative flex shrink-0 items-center self-stretch">
+    <!-- Same box as the row's hover pill (full height, its right edge and corners), so the fade blends into it. -->
+    <span class="invisible absolute top-0 -right-1 bottom-(--z-tree-row-gap) z-10 flex items-center gap-1 rounded-r-(--radius-lg) bg-[linear-gradient(to_right,transparent,var(--row-bg,var(--color-muted))_20px)] pr-1 pl-6 group-data-menu-row/tree-row:visible group-hover/tree-row:visible group-focus-within/tree-row:visible">
+      <button type="button" class={ACTION} aria-label={isPinnedSession(session.id) ? 'Unpin' : 'Pin'} onclick={(event) => { event.stopPropagation(); togglePinSession(session.id); }}>
+        <ZIcon zType={(isPinnedSession(session.id) ? 'lucidePinOff' : 'lucidePin') as ZIconName} zSize="14" class="size-3.5 rotate-45" />
+      </button>
+      <button type="button" class={ACTION} aria-label="Rename" onclick={(event) => { event.stopPropagation(); askRename(session.id, row); }}>
+        <ZIcon zType={'lucideSquarePen' as ZIconName} zSize="14" class="size-3.5" />
+      </button>
+      <button type="button" class={ACTION} aria-label="More" onclick={(event) => void openMenu(event, session.id, event.currentTarget as HTMLElement)}>
+        <ZIcon zType="lucideEllipsis" zSize="14" class="size-3.5" />
+      </button>
+    </span>
+    <span class="group-hover/tree-row:invisible group-focus-within/tree-row:invisible group-data-menu-row/tree-row:invisible">
+      {#if (session.agents?.length ?? 1) > 1}
+        <AgentStack agents={session.agents!} models={{ [session.agent]: session.model, ...session.agentModels }} />
+      {:else}
+        <span class="block rounded px-1.5 py-px text-[10px] font-medium {agentTag[session.agent]}">{(session.agent === 'custom' && customProviderName(session.model)) || agentLabel(session.agent)}</span>
+      {/if}
+    </span>
+  </span>
+{/snippet}
 
 <aside class="flex h-full min-w-0 flex-col bg-sidebar" aria-label="Sessions">
   <!-- Header row shared with the other panes: same height, one continuous bottom line. -->
@@ -327,8 +513,8 @@
       <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Search chats (Ctrl+P)" title="Search chats (Ctrl+P)" onclick={() => (searchOpen = true)}>
         <ZIcon zType="lucideSearch" class="size-3.5" />
       </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="New chat without a project" title="New chat without a project" onclick={() => newChat()}>
-        <ZIcon zType="lucideMessageSquarePlus" class="size-3.5" />
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Add project folder" title="Add project folder" onclick={() => void pickProject()}>
+        <ZIcon zType={'lucideFolderPlus' as ZIconName} class="size-3.5" />
       </ZButton>
     </div>
   </div>
@@ -360,10 +546,68 @@
           class="relative flex min-w-0 flex-1 items-center gap-2 self-stretch"
           data-session={data?.kind === 'session' ? data.session?.id : undefined}
           data-project={data?.kind === 'project' ? projectId(ctx.node.id) : undefined}
+          data-pending={data?.kind === 'project' && pending === projectId(ctx.node.id) ? '' : undefined}
           onclick={() => data?.kind === 'project' && toggleNode(ctx.node.id)}
           onpointerenter={() => data?.kind === 'session' && prefetchTranscript(data.session)}
         >
-          {#if data?.kind === 'session' && data.session}
+          {#if data?.kind === 'section'}
+            {@const key = sectionKey(ctx.node.id)}
+            <!-- A heading, not a folder: it starts where the arrows are; the chevron after it folds the whole group. -->
+            <span
+              class="-ml-5 flex min-w-0 flex-1 items-center gap-1 text-[13px] font-medium text-muted-foreground group-hover/tree-row:text-foreground"
+              data-section
+              data-pending={key === 'computer' && pending === NO_PROJECT ? '' : undefined}
+            >
+              <span class="truncate">{ctx.node.label}</span>
+              {#if data.count}
+                <ZIcon zType="lucideChevronDown" class="size-3.5 shrink-0 transition-transform {collapsed.includes(key) ? '-rotate-90' : ''}" />
+              {/if}
+            </span>
+            <button
+              type="button"
+              class="inline-flex shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground opacity-0 outline-none group-hover/tree-row:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100"
+              aria-label="List options"
+              title="List options"
+              onclick={(event) => void openMenu(event, key, event.currentTarget as HTMLElement, 'view')}
+            >
+              <ZIcon zType={'lucideSlidersHorizontal' as ZIconName} class="size-3.5" />
+            </button>
+            {#if key === 'projects' || key === 'computer' || key === 'chats'}
+              <button
+                type="button"
+                class="inline-flex shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground outline-none hover:bg-accent hover:text-foreground"
+                aria-label={key === 'projects' ? 'Add project folder' : 'New chat on this computer'}
+                title={key === 'projects' ? 'Add project folder' : 'New chat (no project)'}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  if (key === 'projects') void pickProject();
+                  else if (key === 'chats') newSession();
+                  else newChat();
+                }}
+              >
+                <ZIcon zType={key === 'projects' ? ('lucideFolderPlus' as ZIconName) : 'lucidePlus'} class="size-3.5" />
+              </button>
+            {/if}
+          {:else if data?.kind === 'more'}
+            <!-- The end of a long list: inside a project it keeps the project's line, under a heading it is flat. -->
+            {#if ctx.level > 1}
+              <span class="pointer-events-none absolute top-0 bottom-0 -left-[29px] w-px bg-[var(--z-tree-guide)]" aria-hidden="true"></span>
+            {/if}
+            <span class="{ctx.level > 1 ? '' : '-ml-5'} flex min-w-0 flex-1 items-center gap-1.5 text-[11px] font-medium text-primary/75 group-hover/tree-row:text-primary">
+              <ZIcon zType={data.open ? 'lucideChevronDown' : 'lucideEllipsis'} class="size-3.5 shrink-0 {data.open ? 'rotate-180' : ''}" />
+              <span class="truncate">{ctx.node.label}</span>
+            </span>
+          {:else if data?.kind === 'session' && data.session && data.flat}
+            <!-- Right under a heading: a flat list, so no branch lines. Status dot (spinner while running) and agent tag
+                 as in the project rows. -->
+            <span class="-ml-5 grid w-3 shrink-0 place-items-center">{@render sessionStatus(data.session, ctx.node.id)}</span>
+            {#if editing === ctx.node.id}
+              {@render renameField(data.session.id)}
+            {:else}
+              <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}" {@attach clipTip(ctx.node.label)}>{ctx.node.label}</span>
+            {/if}
+            {#if editing !== ctx.node.id}{@render agentBadge(data.session, ctx.node.id)}{/if}
+          {:else if data?.kind === 'session' && data.session}
             <!-- Branch lines (the tree's own guides are off): the project's line, and for a fork the line of its chat,
                  with a tick into the fork's dot. The last fork's line turns the corner and stops. -->
             {#if data.session.parentId}
@@ -373,39 +617,32 @@
             {:else}
               <span class="pointer-events-none absolute top-0 bottom-0 -left-[29px] w-px bg-[var(--z-tree-guide)]" aria-hidden="true"></span>
             {/if}
-            {#if data.session.status === 'working'}
-              <span class="grid size-3 shrink-0 place-items-center text-success" role="status" aria-label="Running">
-                <ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="current" />
-              </span>
+            {@render sessionStatus(data.session, ctx.node.id)}
+            {#if editing === ctx.node.id}
+              {@render renameField(data.session.id)}
             {:else}
-              <span class="size-1.5 shrink-0 rounded-full {statusColor[data.session.status]}" aria-label={data.session.status}></span>
+              <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}" {@attach clipTip(ctx.node.label)}>{ctx.node.label}</span>
             {/if}
-            <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}">{ctx.node.label}</span>
-            <span class="grid shrink-0 place-items-center">
-              <span class="col-start-1 row-start-1">
-                {#if (data.session.agents?.length ?? 1) > 1}
-                  <AgentStack agents={data.session.agents!} models={{ [data.session.agent]: data.session.model, ...data.session.agentModels }} />
-                {:else}
-                  <span class="block rounded px-1.5 py-px text-[10px] font-medium {agentTag[data.session.agent]}">{(data.session.agent === 'custom' && customProviderName(data.session.model)) || agentLabel(data.session.agent)}</span>
-                {/if}
-              </span>
-            </span>
+            {#if editing !== ctx.node.id}{@render agentBadge(data.session, ctx.node.id)}{/if}
           {:else}
             <ZIcon zType={ctx.node.icon ?? 'lucideFolder'} class="size-3.5 shrink-0 text-muted-foreground" />
-            <span title={data?.path} class="min-w-0 flex-1 truncate {data?.kind === 'project' ? 'font-medium' : 'text-muted-foreground'}">{ctx.node.label}</span>
+            <span class="min-w-0 flex-1 truncate {data?.kind === 'project' ? 'font-medium' : 'text-muted-foreground'}" {@attach clipTip(data?.path || ctx.node.label)}>{ctx.node.label}</span>
             {#if data?.kind === 'project'}
-              <button
-                type="button"
-                class="inline-flex shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground opacity-0 transition-opacity outline-none group-hover/tree-row:opacity-100 group-focus-within/tree-row:opacity-100 hover:bg-accent hover:text-foreground"
-                aria-label="New session in {ctx.node.label}"
-                title="New session"
-                onclick={(event) => {
-                  event.stopPropagation();
-                  addSession(projectId(ctx.node.id));
-                }}
-              >
-                <ZIcon zType="lucidePlus" class="size-3.5" />
-              </button>
+              {@const id = projectId(ctx.node.id)}
+              {@const pinnedFolder = isPinnedProject(data.path ?? '')}
+              <!-- Same floating, fading overlay as a chat row: pin, then a new session in it. -->
+              <span class="relative flex shrink-0 items-center self-stretch">
+                <span class="invisible absolute top-0 -right-1 bottom-(--z-tree-row-gap) z-10 flex items-center gap-1 rounded-r-(--radius-lg) bg-[linear-gradient(to_right,transparent,var(--row-bg,var(--color-muted))_20px)] pr-1 pl-6 group-hover/tree-row:visible group-focus-within/tree-row:visible group-data-menu-row/tree-row:visible">
+                  {#if data.path}
+                    <button type="button" class={ACTION} aria-label={pinnedFolder ? 'Unpin' : 'Pin'} onclick={(event) => { event.stopPropagation(); togglePinProject(id); }}>
+                      <ZIcon zType={(pinnedFolder ? 'lucidePinOff' : 'lucidePin') as ZIconName} zSize="14" class="size-3.5 rotate-45" />
+                    </button>
+                  {/if}
+                  <button type="button" class={ACTION} aria-label="New session in {ctx.node.label}" onclick={(event) => { event.stopPropagation(); addSession(id); }}>
+                    <ZIcon zType="lucidePlus" zSize="14" class="size-3.5" />
+                  </button>
+                </span>
+              </span>
             {/if}
           {/if}
         </span>
@@ -441,16 +678,35 @@
 
 <SearchPalette bind:open={searchOpen} />
 
-<ZModal bind:open={renaming} zTitle="Rename chat" zWidth="480px" zBodyClass="min-h-0! py-3" zOkText="Save" zCancelText="Cancel" zLoading={busy} zOkDisabled={Boolean(titleError)} onOk={doRename}>
-  <div class="flex flex-col gap-2">
-    <ZInput bind:this={nameInput} bind:value={title} zPlaceholder="Chat name" onEnter={doRename} />
-    <div class="flex items-center justify-between text-xs">
-      <span class="text-destructive" role="alert">{title.length > 0 || title !== (targetSession?.title ?? '') ? titleError : ''}</span>
-      <span class="text-muted-foreground tabular-nums">{title.trim().length}/{TITLE_MAX}</span>
+<ZModal bind:open={trustOpen} zTitle="Trust this folder?" zWidth="460px" zBodyClass="min-h-0! py-3" zOkText="Trust folder" zCancelText="Cancel" onOk={trustAndAdd}>
+  <div class="flex flex-col gap-3 text-xs">
+    <div class="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
+      <ZIcon zType="lucideFolder" class="size-3.5 shrink-0 text-muted-foreground" />
+      <span class="min-w-0 truncate font-mono" title={trustPath}>{trustPath}</span>
     </div>
-    {#if synced}
-      <p class="text-xs text-muted-foreground">The new name is also written to the original {toolName} session.</p>
-    {/if}
-    {#if failure}<p class="text-xs text-destructive" role="alert">{failure}</p>{/if}
+    <p class="text-muted-foreground">
+      Agents working in this project can read and change its files and run commands in it. Only trust folders whose
+      contents you know; a cloned repository can hold instructions that steer an agent.
+    </p>
   </div>
 </ZModal>
+
+
+<style>
+  /* Where a new session will go: its project (or "This computer") keeps a tinted row until the first message. */
+  /* Opaque (mixed with the sidebar), so the fading overlay of the row's buttons uses the very same colour. */
+  :global(.z-tree-row:has([data-pending])) {
+    --row-bg: color-mix(in oklab, var(--color-primary) 16%, var(--color-background));
+  }
+  :global(.z-tree-row:has([data-pending]))::before {
+    background: var(--row-bg);
+  }
+  /* The row being renamed, or whose menu is open, stays lit while the mouse is elsewhere. */
+  :global(.z-tree-row:has([data-rename]))::before,
+  :global(.z-tree-row[data-menu-row])::before {
+    background: var(--color-muted);
+  }
+  :global(.z-tree-row:has([data-pending])) {
+    color: var(--color-foreground);
+  }
+</style>

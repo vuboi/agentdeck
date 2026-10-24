@@ -14,6 +14,8 @@ import {
 import { messages as mockMessages, type Block, type Message } from './mock';
 import { openInPreview } from './browser.svelte';
 import { trackActivity } from './activity.svelte';
+import { logTalk } from './activity.svelte';
+import { parseQuestions, QUESTION_RULE } from './questions';
 import { listenAgentEvents, saveAttachment, sendAgentTurn, sendCustomTurn, stopAgentTurn, type AgentEvent } from './agent';
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
@@ -250,10 +252,80 @@ export function hideProject(id: string) {
 }
 const nextId = () => `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
+/** The row for chats outside any project; always first in the list. */
+const noProjectRow = (): Project => ({ id: NO_PROJECT, name: 'This computer', path: '' });
 function ensureNoProject() {
-  if (!workspace.projects.some((item) => item.id === NO_PROJECT)) {
-    workspace.projects.unshift({ id: NO_PROJECT, name: 'Chats', path: '' });
+  if (!workspace.projects.some((item) => item.id === NO_PROJECT)) workspace.projects.unshift(noProjectRow());
+}
+ensureNoProject();
+
+/** Same folder whatever the separators, the case (Windows) or a trailing slash. */
+export const samePath = (a: string, b: string) => {
+  const clean = (path: string) => path.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase();
+  return clean(a) === clean(b);
+};
+
+/** Folders added by hand (no chat history yet, or never used by an agent) and the folders the user trusts. */
+export const addedProjects = $state<string[]>([]);
+export const trustedFolders = $state<string[]>([]);
+const addedReady = Promise.all([
+  getPref<string[]>('sidebar.addedProjects').then((saved) => Array.isArray(saved) && addedProjects.push(...saved)),
+  getPref<string[]>('sidebar.trustedFolders').then((saved) => Array.isArray(saved) && trustedFolders.push(...saved)),
+]).catch(() => undefined);
+
+/** A folder agents already worked in (it has chats) counts as trusted: Claude and Codex asked about it then. */
+export const isTrusted = (path: string) =>
+  trustedFolders.some((item) => samePath(item, path)) || workspace.sessions.some((item) => item.path && samePath(projectOf(item)?.path ?? '', path));
+
+export function trustFolder(path: string) {
+  if (trustedFolders.some((item) => samePath(item, path))) return;
+  trustedFolders.push(path);
+  setPref('sidebar.trustedFolders', [...trustedFolders]);
+}
+
+/** Chats (by id) and project folders (by path) pinned to the top of the sidebar. */
+export const pinned = $state<{ sessions: string[]; projects: string[] }>({ sessions: [], projects: [] });
+void getPref<{ sessions: string[]; projects: string[] }>('sidebar.pinned').then((saved) => {
+  if (Array.isArray(saved?.sessions)) pinned.sessions = saved.sessions;
+  if (Array.isArray(saved?.projects)) pinned.projects = saved.projects;
+});
+const savePins = () => setPref('sidebar.pinned', { sessions: [...pinned.sessions], projects: [...pinned.projects] });
+export const isPinnedSession = (id: string) => pinned.sessions.includes(id);
+export const isPinnedProject = (path: string) => Boolean(path) && pinned.projects.some((item) => samePath(item, path));
+export function togglePinSession(id: string) {
+  pinned.sessions = isPinnedSession(id) ? pinned.sessions.filter((item) => item !== id) : [...pinned.sessions, id];
+  savePins();
+}
+export function togglePinProject(id: string) {
+  const path = workspace.projects.find((project) => project.id === id)?.path;
+  if (!path) return;
+  pinned.projects = isPinnedProject(path) ? pinned.projects.filter((item) => !samePath(item, path)) : [...pinned.projects, path];
+  savePins();
+}
+
+/**
+ * Puts a folder in the sidebar (or brings a removed one back) and opens a new session in it. The folder must be
+ * trusted first; see `isTrusted` / `trustFolder`.
+ */
+export function addProject(path: string) {
+  const hidden = hiddenProjects.findIndex((item) => samePath(item, path));
+  if (hidden >= 0) {
+    hiddenProjects.splice(hidden, 1);
+    setPref('sidebar.hiddenProjects', [...hiddenProjects]);
   }
+  let project = workspace.projects.find((item) => item.path && samePath(item.path, path));
+  if (!project) {
+    project = { id: `dir:${path}`, name: folderName(path), path };
+    // Right under "This computer", where it is seen.
+    const at = workspace.projects.findIndex((item) => item.id === NO_PROJECT) + 1;
+    workspace.projects.splice(at, 0, project);
+  }
+  if (!addedProjects.some((item) => samePath(item, path))) {
+    addedProjects.push(path);
+    setPref('sidebar.addedProjects', [...addedProjects]);
+  }
+  newSession(project.id);
+  return project;
 }
 
 /**
@@ -268,15 +340,17 @@ function isEmptyDraft(item: SessionItem) {
 function dropEmptyDrafts() {
   for (let index = workspace.sessions.length - 1; index >= 0; index--) {
     const item = workspace.sessions[index];
-    if (item.id !== workspace.activeId && isEmptyDraft(item)) workspace.sessions.splice(index, 1);
+    // A new session with words typed in it is kept: its project's "New session" brings it back.
+    if (item.id !== workspace.activeId && isEmptyDraft(item) && !drafts[item.id]?.trim()) workspace.sessions.splice(index, 1);
   }
 }
 
 export function newSession(projectId =activeSession()?.projectId ?? workspace.projects[0]?.id ?? NO_PROJECT, { reuseDraft = true } = {}) {
   if (projectId === NO_PROJECT) ensureNoProject();
-  const empty = reuseDraft ? workspace.sessions.find((item) => item.draft) : undefined;
+  // One unsent new session per project (or "This computer"): pressing "New session" there again returns to it,
+  // typed text included; another project gets its own.
+  const empty = reuseDraft ? workspace.sessions.find((item) => item.projectId === projectId && isEmptyDraft(item)) : undefined;
   if (empty) {
-    empty.projectId = projectId;
     workspace.activeId = empty.id;
     return;
   }
@@ -323,7 +397,7 @@ const AGENTDECK_HINT =
 
 /** The last thing asked in each chat: "open it", "run the app" decides whether a served page opens by itself. */
 const lastPrompt: Record<string, string> = {};
-const OPEN_WORDS = /(open|opened|preview|browser|run|running|start|started|serve)|mở|chạy|xem thử/i;
+const OPEN_WORDS = /\b(open|opened|preview|browser|run|running|start|started|serve)\b|mở|chạy|xem thử/i;
 
 /** Pick the requested framework's address when a turn starts more than one local dev server. */
 function previewUrl(text: string, prompt: string): string | undefined {
@@ -447,6 +521,21 @@ export const isRunning = (sessionId: string) => workspace.sessions.find((item) =
 
 /** Stops the reply of a chat now. What was written so far stays. */
 export function stopTurn(sessionId: string) {
+  // Work handed to other agents (a flow's steps, `@agent`) stops with the chat that handed it out, all at once.
+  for (const run of delegateRuns) {
+    if (run.main !== sessionId || run.endedAt || run.handback === 'running') continue;
+    run.cancelled = true;
+    for (const node of run.nodes) {
+      if (node.state !== 'running') continue;
+      const waiter = stepWaiters.get(node.childId);
+      // A step that waits for the user's answers has no reply to stop: it ends here.
+      if (!replies[node.childId] && waiter) {
+        stepWaiters.delete(node.childId);
+        askingCards.delete(node.childId);
+        waiter('', 'stopped', { id: nextId(), role: 'assistant', time: '', blocks: [] });
+      } else stopTurn(node.childId);
+    }
+  }
   if (!replies[sessionId]) {
     // Nothing is running any more but the chat still says so (a lost event): clear it.
     const stuck = workspace.sessions.find((item) => item.id === sessionId);
@@ -538,6 +627,13 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
     if (modelChanged) cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
     resume = cliId !== null && !modelChanged && Boolean(own?.started);
     (session.agentModels ??= {})[session.agent] = selectedModel ?? '';
+  }
+  // A turn still marked live is replaced by this one: its events are ignored from now on (see `turns`), so it would
+  // show "Thinking" for ever. It ends here, with what it wrote.
+  const previous = liveReplies[session.id];
+  if (previous?.live) {
+    previous.live = false;
+    if (previous.startedAt) previous.ms = Date.now() - previous.startedAt;
   }
   const turn = nextId();
   turns[session.id] = turn;
@@ -691,6 +787,8 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     session.agentSession = undefined;
   }
   trackActivity(sessionId, session.title, workspace.projects.find((project) => project.id === session.projectId)?.name ?? '', event);
+  // A line of the CLI the chat does not show: it is only kept in the Audit log.
+  if (event.kind === 'raw') return;
   if (!reply) {
     if (event.kind === 'done' || event.kind === 'error') {
       delete replies[sessionId];
@@ -789,19 +887,23 @@ if (inTauri()) {
 // answered, the answer goes back into this chat and the chat's own agent carries on with it. With several `@`s the
 // children run side by side and the agent is called once, when the last one has answered.
 
-type DelegateBatch = { main: string; task: string; pending: Set<string>; results: { label: string; text: string }[]; run: DelegateRun; /** A workflow preset's note to the agent that writes the final answer. */ orchestrator?: string; /** More for that agent: the findings the steps shared, where their notes are. */ memo?: string };
+type DelegateBatch = { main: string; task: string; /** The message whose cards show the work. */ asked: Message; pending: Set<string>; results: { label: string; text: string }[]; run: DelegateRun; /** A workflow preset's note to the agent that writes the final answer. */ orchestrator?: string; /** More for that agent: the findings the steps shared, where their notes are. */ memo?: string };
 type DelegateCard = Extract<Block, { kind: 'delegate' }>;
 const delegations = new Map<string, { batch: DelegateBatch; label: string; card: DelegateCard; node: RunNode }>();
 
 // What the Workflow tab draws: one run per delegated message (main chat -> a child per agent -> handback -> main agent).
 export type RunStats = { ms: number; tokens?: import('./usage').Tokens; cost: number | null; tools: number; last: string };
-export type RunNode = { childId: string; /** The preset step it runs, when the run comes from a workflow. */ stepId?: string; /** What it was handed (earlier answers) and what it answered, for the audit. */ input?: string; output?: string; agent: Agent; model: string; label: string; startedAt: number; endedAt?: number; state: 'running' | 'done' | 'failed'; note?: string; stats?: RunStats };
+/** One question a step put to an earlier step (its chat answers it), kept for the Workflow tab and the Audit log. */
+export type Talk = { to: string; question: string; answer?: string; at: number };
+export type RunNode = { childId: string; talks?: Talk[]; /** The preset step it runs, when the run comes from a workflow. */ stepId?: string; /** What it was handed (earlier answers) and what it answered, for the audit. */ input?: string; output?: string; agent: Agent; model: string; label: string; startedAt: number; endedAt?: number; state: 'running' | 'done' | 'failed'; note?: string; stats?: RunStats };
 export type DelegateRun = {
   id: string;
   main: string;
   task: string;
   /** Name of the workflow preset that planned this run; none for an `@agent` delegation. */
   preset?: string;
+  /** The user stopped the chat: its agents are not called back and the steps still waiting do not start. */
+  cancelled?: boolean;
   /** The steps of the preset as they were when the run started (drawn as the canvas). */
   plan?: import('./workflows.svelte').WorkflowStep[];
   /** Steps that did not run because their condition failed. */
@@ -816,8 +918,26 @@ export type DelegateRun = {
   endedAt?: number;
   handbackStats?: RunStats;
 };
-const RUN_LIMIT = 20;
+const RUN_LIMIT = 100;
 export const delegateRuns = $state<DelegateRun[]>([]);
+
+// Finished runs are kept (IndexedDB), so the Workflow tab has a history to judge the flows by after a restart. What a
+// step was handed and answered is cut short: the numbers and the outcome are what the history is for.
+const RUNS_KEY = 'workflow.runs';
+const clip = (text: string | undefined, max = 1500) => (text && text.length > max ? `${text.slice(0, max)}…` : text);
+void getPref<DelegateRun[]>(RUNS_KEY).then((saved) => {
+  if (!Array.isArray(saved)) return;
+  const known = new Set(delegateRuns.map((run) => run.id));
+  delegateRuns.unshift(...saved.filter((run) => !known.has(run.id)));
+});
+$effect.root(() => {
+  $effect(() => {
+    const ended = delegateRuns.filter((run) => run.endedAt);
+    const snapshot = JSON.parse(JSON.stringify(ended)) as DelegateRun[];
+    for (const run of snapshot) for (const node of run.nodes) Object.assign(node, { input: clip(node.input), output: clip(node.output) });
+    setPref(RUNS_KEY, snapshot.slice(-RUN_LIMIT));
+  });
+});
 
 function statsOf(reply: Message | undefined, startedAt: number): RunStats | undefined {
   if (!reply) return undefined;
@@ -882,7 +1002,7 @@ function delegate(main: SessionItem, asked: Message, task: string, targets: Ment
   delegateRuns.push({ id: crypto.randomUUID(), main: main.id, task, startedAt: Date.now(), nodes: [], handback: 'waiting' });
   if (delegateRuns.length > RUN_LIMIT) delegateRuns.splice(0, delegateRuns.length - RUN_LIMIT);
   const run = delegateRuns[delegateRuns.length - 1];
-  const batch: DelegateBatch = { main: main.id, task, pending: new Set(), results: [], run };
+  const batch: DelegateBatch = { main: main.id, task, asked, pending: new Set(), results: [], run };
   const history = [...messagesOf(main.id)];
   main.status = 'working';
   for (const target of targets) {
@@ -912,13 +1032,14 @@ function delegate(main: SessionItem, asked: Message, task: string, targets: Ment
     batch.pending.add(id);
     // The child has not spoken in this chat, so every earlier turn of it is background for the child.
     const background = missedTurns({ ...child, agent: '' as Agent }, history);
-    const brief = `${preface}${background}You were asked from another chat, whose own agent is ${agentLabel(main.agent)}, to do this part of the work: ${task}\n\nFinish with a complete answer that agent can use without seeing your work.`;
+    const brief = `${preface}${background}You were asked from another chat, whose own agent is ${agentLabel(main.agent)}, to do this part of the work: ${task}\n\nFinish with a complete answer that agent can use without seeing your work. ${LANGUAGE_RULE}`;
     send(id, task, images, elements, [], { preface: brief });
   }
   if (batch.pending.size === 0) {
     main.status = 'idle';
     delegateRuns.splice(delegateRuns.indexOf(run), 1);
   }
+  keepHandout(main.id, asked);
   persistLocal();
 }
 
@@ -943,7 +1064,19 @@ function onDelegateDone(childId: string, reply: Message, error: string | null) {
   entry.node.stats = statsOf(reply, entry.node.startedAt);
   entry.batch.results.push({ label: entry.label, text: ok ? text : `(it did not answer: ${error ?? 'no text'})` });
   entry.batch.pending.delete(childId);
-  if (entry.batch.pending.size === 0) handBack(entry.batch);
+  keepHandout(entry.batch.main, entry.batch.asked);
+  if (entry.batch.pending.size === 0) {
+    if (entry.batch.run.cancelled) endCancelled(entry.batch.main, entry.batch.run);
+    else handBack(entry.batch);
+  }
+}
+
+/** A run the user stopped: nothing is called back, the chat is free again. */
+function endCancelled(main: string, run: DelegateRun) {
+  const session = workspace.sessions.find((item) => item.id === main);
+  if (session && !replies[main]) session.status = 'idle';
+  run.handback = 'failed';
+  run.endedAt = Date.now();
 }
 
 // ---------- workflow presets: the chat's agent as orchestrator ----------
@@ -955,7 +1088,49 @@ function onDelegateDone(childId: string, reply: Message, error: string | null) {
 // and `handoff/<n>-<name>.md`, the summary a step leaves for the next. One writer per file, so no locking is needed.
 // When the last stage is done the chat's own agent is called once with the handoffs and the findings.
 
+/** A step's question to an earlier step: its last line `ASK @<step>: <question>`. */
+const MAX_ASKS = 2;
+const askOf = (text: string) => {
+  const found = /^\s*ASK @([^:\n]{1,60}):\s*(.+)$/m.exec(text);
+  return found ? { to: found[1].trim(), question: found[2].trim() } : null;
+};
+const shorten = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+/** The line a step ends with to send its input back to the step(s) before it. */
+const REPLAN_MARK = 'REPLAN:';
+const MAX_REPLANS = 1;
+const replanOf = (text: string) => {
+  const found = /^\s*REPLAN:\s*(.+)$/m.exec(text);
+  if (found) return found[1].trim();
+  // The handoff can say it too: STATUS: needs-plan-change, with what is missing in OPEN.
+  if (/^\s*STATUS:\s*needs-plan-change/im.test(text)) return /^\s*OPEN:\s*(.+)$/im.exec(text)?.[1].trim() || 'the plan needs changes';
+  return null;
+};
+
+/** The section a step ends with: short labelled lines the next agent reads at a glance, never prose. */
+const HANDOFF_RULE =
+  'End with "## Handoff" (<=120 words, only this is passed on; "-" if empty): STATUS: done|blocked|needs-plan-change / RESULT: <1 line> / FILES: <paths> / FACTS: <<=5, "; "-separated, path:line> / OPEN: <<=3> / VERIFY: <cmd> -> pass|fail|not run / NEXT: <first thing the next step does>. Telegraphic: no filler, no restating the task.';
+
+/** How the prompt that hands the answers back starts; read back from the chat's file it is shown short. */
+const HANDBACK_HEAD = 'The agents you handed work to have answered.';
+
+/** Told to every agent of a run: the user's language, not the language of these instructions. */
+const LANGUAGE_RULE = "Reply in the user's language (these notes are English); code, paths, commands unchanged.";
+
 const stepWaiters = new Map<string, (text: string, error: string | null, reply: Message) => void>();
+/** Flow steps waiting for the user's answers, by their chat. */
+const askingCards = new Map<string, DelegateCard>();
+
+/** Sends the answers to questions an agent asked (in its own chat, or a flow step's from the Flow steps card). */
+export function answerQuestions(sessionId: string, text: string) {
+  if (!text.trim() || replies[sessionId]) return;
+  const card = askingCards.get(sessionId);
+  if (card) {
+    card.state = 'running';
+    askingCards.delete(sessionId);
+  }
+  send(sessionId, text, [], []);
+}
 
 const passes = (step: WorkflowStep, previous: string) => {
   const { mode, text } = step.condition;
@@ -1028,6 +1203,9 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
   if (queued) {
     card = queued.card;
     card.state = 'running';
+    // A step run again (its plan was sent back) gets a new chat: the card follows it.
+    card.childId = id;
+    card.note = undefined;
   } else {
     asked.blocks.push({ kind: 'delegate', childId: id, agent, model, state: 'running', step: step.name });
     card = asked.blocks[asked.blocks.length - 1] as DelegateCard;
@@ -1035,8 +1213,44 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
   const label = `${step.name} · ${agentLabel(agent, model)}`;
   run.nodes.push({ childId: id, stepId: step.id, agent, model, label, startedAt: Date.now(), state: 'running', input: previous });
   const node = run.nodes[run.nodes.length - 1];
+  const asks = new Map<string, number>();
   return new Promise<{ step: WorkflowStep; label: string; text: string; ok: boolean }>((resolve) => {
-    stepWaiters.set(id, (text, error, reply) => {
+    const settle = (text: string, error: string | null, reply: Message) => {
+      // The step asked the user first: the run waits here until the answers come back as the step's next turn.
+      const questions = error ? [] : parseQuestions(text).questions;
+      if (questions.length) {
+        card.state = 'asking';
+        card.questions = questions;
+        askingCards.set(id, card);
+        stepWaiters.set(id, settle);
+        keepHandout(main.id, asked);
+        return;
+      }
+      // The step needs a fact only an earlier step knows: that step's own chat (it has the context) is asked, its short
+      // answer goes back to this step as its next turn. Capped, so two steps cannot talk for ever.
+      const ask = error ? null : askOf(text);
+      const target = ask && (asks.get(id) ?? 0) < MAX_ASKS ? run.nodes.findLast((item) => item.state === 'done' && item.childId !== id && item.label.split(' · ')[0].toLowerCase() === ask.to.toLowerCase()) : undefined;
+      if (ask && target) {
+        asks.set(id, (asks.get(id) ?? 0) + 1);
+        (node.talks ??= []).push({ to: ask.to, question: ask.question, at: Date.now() });
+        const talk = node.talks[node.talks.length - 1];
+        card.talking = ask.to;
+        card.talkText = ask.question;
+        keepHandout(main.id, asked);
+        // Registered at once: a Stop while it waits ends this step (it has no reply of its own to stop).
+        stepWaiters.set(id, settle);
+        stepWaiters.set(target.childId, (answer, failed) => {
+          talk.answer = failed ? '(no answer)' : shorten(answer, 700);
+          card.talking = undefined;
+          card.talkText = undefined;
+          logTalk(main.id, main.title, workspace.projects.find((project) => project.id === main.projectId)?.name ?? '', step.name, ask.to, ask.question, talk.answer);
+          keepHandout(main.id, asked);
+          send(id, `A from ${ask.to}: ${talk.answer}`, [], []);
+        });
+        send(target.childId, `Q from ${step.name}: ${ask.question}\nAnswer in at most 60 words, only the answer.`, [], []);
+        return;
+      }
+      card.questions = undefined;
       const ok = !error && text.length > 0;
       card.state = ok ? 'done' : 'failed';
       card.note = ok ? undefined : (error ?? 'no answer');
@@ -1045,8 +1259,10 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
       node.endedAt = Date.now();
       node.stats = statsOf(reply, node.startedAt);
       node.output = text;
+      keepHandout(main.id, asked);
       resolve({ step, label, text: ok ? text : `(it did not answer: ${error ?? 'no text'})`, ok });
-    });
+    };
+    stepWaiters.set(id, settle);
     send(id, task, images, elements, [], { preface: brief });
   });
 }
@@ -1059,7 +1275,7 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
   delegateRuns.push({ id: runId, main: main.id, task, preset: preset.name, plan: JSON.parse(JSON.stringify(graph)), skipped: [], startedAt: Date.now(), nodes: [], handback: 'waiting' });
   if (delegateRuns.length > RUN_LIMIT) delegateRuns.splice(0, delegateRuns.length - RUN_LIMIT);
   const run = delegateRuns[delegateRuns.length - 1];
-  const batch: DelegateBatch = { main: main.id, task, pending: new Set(), results: [], run, orchestrator: preset.orchestrator.trim() || undefined };
+  const batch: DelegateBatch = { main: main.id, task, asked, pending: new Set(), results: [], run, orchestrator: preset.orchestrator.trim() || undefined };
   main.status = 'working';
 
   const root = workspace.projects.find((project) => project.id === main.projectId)?.path ?? null;
@@ -1078,9 +1294,14 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
     asked.blocks.push({ kind: 'delegate', childId: `claude:${uuid}`, agent: step.agent, model: step.model || MODELS[step.agent]?.[0]?.value || '', state: 'queued', step: step.name });
     cards.set(step.id, { uuid, card: asked.blocks[asked.blocks.length - 1] as DelegateCard });
   }
+  keepHandout(main.id, asked);
 
   let first = true;
-  for (const group of groups) {
+  // A step can send its input back (REPLAN): the steps that fed it run again with the reason, at most MAX_REPLANS times.
+  const replanNotes = new Map<string, string>();
+  let replans = 0;
+  for (let stage = 0; stage < groups.length; stage++) {
+    const group = groups[stage];
     const inputText = (step: WorkflowStep) =>
       (links[step.id] ?? [])
         .filter((from) => from !== 'start' && ctx.handoffs.has(from))
@@ -1104,23 +1325,22 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
         const previous = inputText(step);
         const others = active.filter((item) => item !== step).map((item) => `"${item.name}" (notes: agents/${slugs.get(item.id)}.md)`);
         const where = ctx.folder || '.agentdeck/runs/' + runId;
+        const fed = (links[step.id] ?? []).some((from) => from !== 'start');
+        // Written for the agent, not the user: short labelled lines. What the user reads is the chat itself.
         const brief = [
           preface,
-          `You are "${step.name}", one step of an AgentDeck workflow run from another chat (whose own agent is ${agentLabel(main.agent)}). Do only your own job:`,
+          `Step "${step.name}" of an AgentDeck run (orchestrator: ${agentLabel(main.agent)}). Do only this job:`,
           step.prompt.trim() || 'Do your part of the task.',
-          '',
-          `Shared folder of this run: ${where}`,
-          `- BOARD.md: goal, plan and handoffs, written by the app (read-only for you). Its content now:`,
-          board,
-          `- Your notes file, only you write it: ${where}/agents/${slug}.md. Append, never rewrite earlier lines; one line per entry. [F] <fact others need> (path:line), [Q @name] <question>, [A @name] <answer>.`,
-          '- Never edit BOARD.md or the notes of another step.',
-          previous ? `\nHandoff from the step(s) before you (all you get from them; read their notes files only if you really need more):\n\n${previous}\n` : '',
-          others.length
-            ? `Working at the same time as you: ${others.join(', ')}. Read their notes before you start and after each major step, answer [Q @${step.name}] lines with [A] lines in your own file, and do not edit files another step says it is changing (write a [Q] instead).`
-            : '',
-          '',
-          'End your reply with a section "## Handoff" of at most 200 words: Result (1-3 sentences), Changed files (paths only), Facts the next step needs (at most 5 bullets), Open issues (at most 3 bullets). Only that section is passed on.',
-          '',
+          `Run folder: ${where}. BOARD.md = goal, plan, handoffs (app-written, read-only${ctx.folder ? '; read it first' : '; below'}). Notes: agents/${slug}.md, yours only, append one line each: [F] fact (path:line) | [Q @name] question | [A @name] answer. Never edit BOARD.md or others' notes.`,
+          ctx.folder ? '' : board,
+          previous ? `IN (from the step before; read its notes only if needed):\n${previous}` : '',
+          others.length ? `Parallel with you: ${others.join(', ')}. Read their notes at start and after each big step, answer [Q @${step.name}] with [A], do not edit files they claim.` : '',
+          LANGUAGE_RULE,
+          QUESTION_RULE,
+          fed ? `Need one fact only an earlier step knows: end with "ASK @<step name>: <question>" and stop (max ${MAX_ASKS}). Input too unclear or wrong to work from: do not guess, end with "${REPLAN_MARK} <what to fix>" and stop.` : '',
+          replanNotes.get(step.id) ? `Sent back by the next step: "${replanNotes.get(step.id)}". Fix that.` : '',
+          REVIEW_STEP.test(`${step.name} ${step.prompt}`) ? REVIEW_RULE : '',
+          HANDOFF_RULE,
         ]
           .filter((line, index, all) => line !== '' || all[index - 1] !== '')
           .join('\n');
@@ -1138,7 +1358,33 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
     }
     void runFile(root, runId, 'BOARD.md', boardText(task, preset, ctx, groups));
     // A step that failed ends the chain: the agent is told what happened so far.
-    if (done.some((item) => !item.ok)) break;
+    if (run.cancelled || done.some((item) => !item.ok)) break;
+    for (const step of active) replanNotes.delete(step.id);
+    // A step sent its input back: the steps that fed it run again (and every stage after them), with its reason.
+    const back = done.find((item) => item.ok && replanOf(item.text) !== null);
+    if (back && replans < MAX_REPLANS) {
+      const feeders = (links[back.step.id] ?? []).filter((from) => from !== 'start');
+      const from = Math.min(...feeders.map((id) => groups.findIndex((list) => list.some((item) => item.id === id))).filter((index) => index >= 0));
+      if (Number.isFinite(from)) {
+        replans++;
+        const reason = replanOf(back.text) ?? '';
+        for (const id of feeders) replanNotes.set(id, reason);
+        const again = groups.slice(from, stage + 1).flat();
+        // Their cards wait again; each gets a new chat when it starts.
+        for (const item of again) {
+          const entry = cards.get(item.id);
+          if (!entry) continue;
+          entry.card.state = 'queued';
+          entry.card.note = feeders.includes(item.id) ? 'Sent back' : undefined;
+          cards.set(item.id, { uuid: crypto.randomUUID(), card: entry.card });
+          ctx.handoffs.delete(item.id);
+        }
+        batch.results = batch.results.filter((result) => !again.some((item) => result.label.startsWith(`${item.name} ·`)));
+        ctx.board.push(`- ${back.step.name} sent its input back: ${reason}`);
+        keepHandout(main.id, asked);
+        stage = from - 1;
+      }
+    }
   }
   // A step that failed ends the chain: those that never started say so, instead of waiting for ever.
   for (const { card } of cards.values()) {
@@ -1146,6 +1392,11 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
       card.state = 'skipped';
       card.note = 'Not run';
     }
+  }
+  keepHandout(main.id, asked);
+  if (run.cancelled) {
+    endCancelled(main.id, run);
+    return;
   }
   if (batch.results.length === 0) {
     main.status = 'idle';
@@ -1171,6 +1422,11 @@ function onHandbackDone(sessionId: string, reply: Message, failed: boolean) {
 }
 
 /** Puts the answers into the chat that asked, and runs its agent on them as soon as it is free. */
+/** A step that reviews or verifies: it looks at the result itself when it can, and ends with a verdict the owner reads. */
+const REVIEW_STEP = /\b(review|verify|check|test|qa)\b/i;
+const REVIEW_RULE =
+  'Verify, do not only read: if the change shows on a page, open it with agentdeck browser_open (or browser_serve), use browser_screenshot and browser_console, and say what you saw. End with one line "VERDICT: PASS" or "VERDICT: FAIL - <blocking problems>". Risks and nice-to-haves go under "Suggestions", they are not a FAIL.';
+
 function handBack(batch: DelegateBatch) {
   const answers = batch.results.map((result) => `### ${result.label}\n${result.text}`).join('\n\n');
   const memo = batch.memo ? `\n\n${batch.memo}` : '';
@@ -1178,8 +1434,8 @@ function handBack(batch: DelegateBatch) {
   // A step that reviews can find the work wrong. The agent that gets the answers then owns the result: it fixes what is
   // wrong and cleans up after the steps, instead of only reporting it.
   const owner =
-    "You own the result. If a review or check step says the work is wrong or unfinished, or it does not match the user's request, do not just report it: fix it. See everything the steps changed (their handoffs list the files; run git status and git diff), undo the changes that are in the wrong place or wrong, delete the files, code, debug output and notes they left that no longer belong, then redo the change correctly where the request says. Run the project's checks, and end with what you fixed and removed. If everything is right, say so briefly.";
-  const prompt = `The agents you handed work to have answered.\n\n${answers}${memo}\n\n${finish}\n\n${owner}`;
+    "You own the result. Fix only what blocks the request: a step's VERDICT: FAIL, a failed check, or work that is wrong/unfinished. Then do not just report: see all changes (handoff FILES; git status, git diff), undo wrong ones, delete leftovers (debug output, stray files, notes), redo correctly, run the project's checks, end with what you fixed/removed. Suggestions and risks a step lists are not failures: do not edit for them, list them for the user in one short line each. If all is right, say so in one line.";
+  const prompt = `${HANDBACK_HEAD}\n\n${answers}${memo}\n\n${finish}\n\n${owner}\n\n${LANGUAGE_RULE}`;
   const shown = `↩ ${batch.results.map((result) => result.label.split(' · ')[0]).join(', ')} answered`;
   const go = (tries: number) => {
     if (!replies[batch.main]) {
@@ -1322,9 +1578,44 @@ export function forkSession(sourceId: string) {
 
 // ---------- tree: Project > Session > Fork ----------
 // A fork is a branch of the conversation (not a git branch): it nests under the session it came from.
-export type TreeData = { kind: 'project' | 'session'; session?: SessionItem; path?: string; /** The last fork under its chat: its branch line ends there. */ last?: boolean };
+export type TreeData = {
+  /**
+   * `section` is a heading row (Recents, This computer, Projects, or a date); a `session` with `flat` sits right under
+   * one; `more` is the "Show more / Show less" row at the end of a long list.
+   */
+  kind: 'project' | 'session' | 'section' | 'more';
+  session?: SessionItem;
+  path?: string;
+  /** The last fork under its chat: its branch line ends there. */
+  last?: boolean;
+  flat?: boolean;
+  /** Section: how many rows it holds (no fold arrow when empty). More: the list it unfolds, and whether it is open. */
+  count?: number;
+  group?: string;
+  open?: boolean;
+};
 
-export function buildTree(): ZTreeNode<TreeData>[] {
+/** How the sidebar lists chats: by folder (Recents, This computer, Projects), by date, or one plain list. */
+export type SidebarView = { groupBy: 'folder' | 'date' | 'none'; sortBy: 'updated' | 'name'; order: 'desc' | 'asc' };
+export const DEFAULT_VIEW: SidebarView = { groupBy: 'folder', sortBy: 'updated', order: 'desc' };
+export type TreeOptions = {
+  view: SidebarView;
+  /** Heading keys that are folded. */
+  collapsed: string[];
+  /** Lists showing every row instead of the first few ("Show more" pressed). */
+  showAll: string[];
+};
+/** Rows a list shows before its "Show more". */
+const LIST_LIMIT = 5;
+const PROJECT_LIMIT = 10;
+
+/** The project of the open chat while it is still an empty new session: its row shows where the chat will go. */
+export function pendingProject(): string | undefined {
+  const active = activeSession();
+  return active && isEmptyDraft(active) ? active.projectId : undefined;
+}
+
+export function buildTree({ view, collapsed, showAll }: TreeOptions = { view: DEFAULT_VIEW, collapsed: [], showAll: [] }): ZTreeNode<TreeData>[] {
   // A session with no time yet is new: it goes first.
   const newest = (a: SessionItem, b: SessionItem) => {
     if (!a.updatedAt || !b.updatedAt) return Number(!b.updatedAt) - Number(!a.updatedAt);
@@ -1356,16 +1647,92 @@ export function buildTree(): ZTreeNode<TreeData>[] {
 
   // A new chat joins the list only after its first message; an empty one stays out even while it is open.
   const shown = (item: SessionItem) => !isEmptyDraft(item);
-  return workspace.projects.filter((project) => !project.path || !hiddenProjects.includes(project.path)).map((project) => ({
+  // The chosen order; a new chat (no time yet) stays first when sorting by time.
+  const ordered = (list: SessionItem[]) => {
+    const sorted = [...list].sort(view.sortBy === 'name' ? (x, y) => x.title.localeCompare(y.title) : newest);
+    return view.order === 'asc' ? sorted.reverse() : sorted;
+  };
+  // The first rows of a long list, then "Show more" (or every row and "Show less").
+  const limited = <T>(key: string, list: T[], limit: number, row: (item: T) => ZTreeNode<TreeData>) => {
+    if (list.length <= limit) return list.map(row);
+    const open = showAll.includes(key);
+    const more: ZTreeNode<TreeData> = {
+      id: `more:${key}`,
+      label: open ? 'Show less' : `Show ${list.length - limit} more`,
+      isLeaf: true,
+      children: [],
+      data: { kind: 'more', group: key, open },
+    };
+    return [...(open ? list : list.slice(0, limit)).map(row), more];
+  };
+
+  const projectNode = (project: Project): ZTreeNode<TreeData> => ({
     id: `project:${project.id}`,
     label: project.name,
     icon: 'lucideFolder',
     data: { kind: 'project', path: project.path },
-    children: workspace.sessions
-      .filter((item) => item.projectId === project.id && !item.parentId && shown(item))
-      .sort(newest)
-      .map((item) => sessionNode(item)),
-  }));
+    children: limited(
+      `project:${project.id}`,
+      ordered(workspace.sessions.filter((item) => item.projectId === project.id && !item.parentId && shown(item))),
+      LIST_LIMIT,
+      (item) => sessionNode(item),
+    ),
+  });
+  // A chat listed right under a heading: one line, no branch lines. `key` keeps ids unique when a chat is listed twice.
+  const flatNode = (session: SessionItem, key = 'session'): ZTreeNode<TreeData> => ({
+    id: `${key}:${session.id}`,
+    label: session.title,
+    isLeaf: true,
+    children: [],
+    data: { kind: 'session', session, flat: true },
+  });
+  // A heading and, unless it is folded, its rows. An empty heading still shows (its + button), without a fold arrow.
+  const section = (key: string, label: string, rows: ZTreeNode<TreeData>[], always = false): ZTreeNode<TreeData>[] => {
+    if (!rows.length && !always) return [];
+    const head: ZTreeNode<TreeData> = { id: `section:${key}`, label, isLeaf: true, children: [], data: { kind: 'section', count: rows.length } };
+    return [head, ...(collapsed.includes(key) ? [] : rows)];
+  };
+
+  // Pinned: chats and project folders kept at the top, in the order they were pinned. A pinned folder moves there
+  // from Projects; a pinned chat leaves Recents and the date lists but stays in its project.
+  const pinnedChats = pinned.sessions.map((id) => workspace.sessions.find((item) => item.id === id)).filter((item): item is SessionItem => Boolean(item && shown(item)));
+  const visibleProjects = workspace.projects.filter((project) => project.id !== NO_PROJECT && !hiddenProjects.some((path) => samePath(path, project.path)));
+  const pinnedProjects = pinned.projects.map((path) => visibleProjects.find((project) => samePath(project.path, path))).filter((item): item is Project => Boolean(item));
+  const pins = section('pinned', 'Pinned', [...pinnedProjects.map(projectNode), ...pinnedChats.map((item) => flatNode(item, 'pin'))]);
+
+  const chats = workspace.sessions.filter((item) => shown(item) && (view.groupBy === 'folder' || !item.parentId));
+  const unpinned = chats.filter((item) => !isPinnedSession(item.id));
+  if (view.groupBy === 'date') {
+    // Today, Yesterday, Previous 7 days, Older: like the chat lists of Claude and ChatGPT.
+    const day = 86_400_000;
+    const midnight = new Date().setHours(0, 0, 0, 0);
+    const bucket = (item: SessionItem) => {
+      const time = item.updatedAt ? Date.parse(item.updatedAt) : Date.now();
+      return time >= midnight ? 'today' : time >= midnight - day ? 'yesterday' : time >= midnight - 7 * day ? 'week' : 'older';
+    };
+    const labels = { today: 'Today', yesterday: 'Yesterday', week: 'Previous 7 days', older: 'Older' } as const;
+    return [
+      ...pins,
+      ...(Object.keys(labels) as (keyof typeof labels)[]).flatMap((key) =>
+        section(key, labels[key], limited(key, ordered(unpinned.filter((item) => bucket(item) === key)), LIST_LIMIT, (item) => flatNode(item, 'list'))),
+      ),
+    ];
+  }
+  if (view.groupBy === 'none') return [...pins, ...section('chats', 'Chats', limited('chats', ordered(unpinned), LIST_LIMIT * 3, (item) => flatNode(item, 'list')), true)];
+
+  // By folder: Recents (newest chats of every project), This computer (chats outside any project), Projects.
+  const latest = unpinned.filter((item) => !item.parentId).sort(newest);
+  const computer = chats.filter((item) => item.projectId === NO_PROJECT && !item.parentId);
+  const projects = visibleProjects.filter((project) => !pinnedProjects.includes(project));
+  // Projects come most recently used first; sorting by name sorts them too.
+  if (view.sortBy === 'name') projects.sort((x, y) => x.name.localeCompare(y.name));
+  if (view.order === 'asc') projects.reverse();
+  return [
+    ...pins,
+    ...section('recents', 'Recents', limited('recents', latest.slice(0, 15), LIST_LIMIT, (item) => flatNode(item, 'recent'))),
+    ...section('computer', 'This computer', limited('computer', ordered(computer), LIST_LIMIT, (item) => flatNode(item)), true),
+    ...section('projects', 'Projects', limited('projects', projects, PROJECT_LIMIT, projectNode), true),
+  ];
 }
 
 // ---------- real history (Claude Code and Codex, read-only) ----------
@@ -1383,7 +1750,7 @@ export async function importHistory({ refresh = false } = {}) {
     history.loading = false;
     return;
   }
-  await restored;
+  await Promise.all([restored, addedReady]);
   // Show the last known index at once, then refresh it: indexing every file takes a moment.
   if (!refresh) try {
     const cached = JSON.parse(localStorage.getItem(CACHE_KEY) ?? '[]') as HistorySession[];
@@ -1466,10 +1833,16 @@ function applyHistory(all: HistorySession[]) {
 
   // Sessions that only exist here (drafts, new chats) survive the import.
   const local = localSessions().filter((item) => !ids.has(item.id));
-  const noProject = workspace.projects.find((item) => item.id === NO_PROJECT);
+  // The open empty draft keeps its project too, so its row stays highlighted.
+  const draft = workspace.sessions.find((item) => item.id === workspace.activeId && isEmptyDraft(item));
+  if (draft) local.push(draft);
   // The open chat stays open: after F5 it is an imported session, after a send it may still be a local one.
   const keepActive = ids.has(workspace.activeId) || local.some((item) => item.id === workspace.activeId) ? workspace.activeId : undefined;
-  if (noProject && local.some((item) => item.projectId === NO_PROJECT)) projects.unshift(noProject);
+  // Folders added by hand stay even with no chat in them yet, right after "This computer".
+  const added = addedProjects
+    .filter((path) => !projects.some((project) => samePath(project.path, path)))
+    .map((path) => ({ id: `dir:${path}`, name: folderName(path), path }));
+  projects.unshift(noProjectRow(), ...added);
   sessions.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 
   workspace.projects = projects;
@@ -1518,6 +1891,20 @@ function keepOtherTurn(session: SessionItem, reply: Message) {
   setPref('chat.otherTurns', $state.snapshot(otherTurns));
 }
 
+/**
+ * The message that handed work out (a flow's steps, `@agent`) is never in the chat's file: the chat's agent only
+ * speaks at the handback. Kept with the other turns, and saved again as its cards change, so the chat still shows
+ * its Flow steps card once it is read back from the file.
+ */
+function keepHandout(mainId: string, asked: Message) {
+  const kept = (otherTurns[mainId] ??= []);
+  const copy = $state.snapshot(asked) as Message;
+  const index = kept.findIndex((item) => item.id === asked.id);
+  if (index >= 0) kept[index] = copy;
+  else kept.push(copy);
+  setPref('chat.otherTurns', $state.snapshot(otherTurns));
+}
+
 async function fetchTranscript(session: SessionItem): Promise<Message[]> {
   const loaded = await loadHistory(session.source!, session.path!);
   const own: Message[] = loaded.map((message) => ({
@@ -1530,7 +1917,9 @@ async function fetchTranscript(session: SessionItem): Promise<Message[]> {
     blocks: toBlocks(message.blocks).map((block) =>
       message.role === 'user' && block.kind === 'response' && block.text.startsWith('Earlier in this chat, other agents answered')
         ? { ...block, text: block.text.slice(block.text.indexOf('Now the user says:\n') + 'Now the user says:\n'.length) }
-        : block,
+        : message.role === 'user' && block.kind === 'response' && block.text.startsWith(HANDBACK_HEAD)
+          ? { ...block, text: '↩ The steps answered' }
+          : block,
     ),
     // Tokens come from the transcript itself, so every reply shows them again when the chat is reopened.
     ...(message.usage

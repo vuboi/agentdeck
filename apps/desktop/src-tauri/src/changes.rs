@@ -162,6 +162,45 @@ fn revert_one(top: &Path, path: &str) -> Result<(), String> {
     std::fs::remove_file(canonical).map_err(|error| error.to_string())
 }
 
+/// Reverts many files with a few git calls instead of several per file: the files that are in the last commit come
+/// back with one `checkout`, the added ones leave the index with one `rm`, then the files that are not in the commit
+/// are deleted. Paths go to git in chunks so the command line stays short enough on Windows.
+fn revert_many(top: &Path, changes: &[Change]) -> Result<(), String> {
+    const CHUNK: usize = 100;
+    let head = has_head(top);
+    let (mut restore, mut unstage, mut remove) = (Vec::new(), Vec::new(), Vec::new());
+    for change in changes {
+        let path = checked(&change.path)?;
+        match change.status.as_str() {
+            "M" | "D" if head => restore.push(path),
+            "?" => remove.push(path),
+            _ => {
+                unstage.push(path);
+                remove.push(path);
+            }
+        }
+    }
+    for chunk in restore.chunks(CHUNK) {
+        let mut args = vec!["checkout", "HEAD", "--"];
+        args.extend(chunk);
+        git_ok(top, &args)?;
+    }
+    for chunk in unstage.chunks(CHUNK) {
+        let mut args = vec!["rm", "-f", "-q", "--cached", "--ignore-unmatch", "--"];
+        args.extend(chunk);
+        git_ok(top, &args)?;
+    }
+    let canonical_top = top.canonicalize().map_err(|error| error.to_string())?;
+    for path in remove {
+        let Ok(canonical) = top.join(path).canonicalize() else { continue };
+        if !canonical.starts_with(&canonical_top) {
+            return Err("path is outside the repository".to_string());
+        }
+        std::fs::remove_file(canonical).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(work).await.map_err(|error| error.to_string())?
 }
@@ -188,9 +227,7 @@ pub async fn change_revert_all(root: String) -> Result<usize, String> {
     blocking(move || {
         let top = toplevel(&root)?;
         let changes = list(&root)?;
-        for change in &changes {
-            revert_one(&top, &change.path)?;
-        }
+        revert_many(&top, &changes)?;
         Ok(changes.len())
     })
     .await

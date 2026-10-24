@@ -5,7 +5,7 @@
   import { layout } from '../layout.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { LOADER } from '../loaders';
-  import { activeSession, AGENTS, answerPermission, chat, editMessage, forkSession, newSession, openTranscript, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, answerPermission, answerQuestions, chat, editMessage, forkSession, isRunning, newSession, openTranscript, pendingProject, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
   import { openImages, preview } from '../preview.svelte';
@@ -92,7 +92,8 @@
   let lastSession = '';
   $effect(() => {
     const id = workspace.activeId;
-    if (!id || id === lastSession) return;
+    // An unsent new session gets its tab with its first message (see content-tabs), not now.
+    if (!id || id === lastSession || pendingProject()) return;
     untrack(() => {
       lastSession = id;
       openChatTab(id);
@@ -232,13 +233,17 @@
   function onViewportScroll() {
     if (viewportEl) following = viewportEl.scrollHeight - viewportEl.scrollTop - viewportEl.clientHeight < 120;
   }
-  const tailSignature = $derived(
-    (chat.messages.at(-1)?.blocks ?? []).map((block) => block.kind + ('text' in block ? block.text.length : 'output' in block ? block.output.length : 0)).join(),
-  );
+  // Follows what is on screen, not what has arrived: the answer is revealed word by word, so the list grows a little
+  // every frame. Each time its measured height changes the view is put at the bottom right away (same frame, no
+  // animation frame in between), so the text glides up instead of the view catching up in jumps.
+  const listHeight = $derived($virtualizer.getTotalSize());
   $effect(() => {
-    void tailSignature;
-    if (!following || !running) return;
-    untrack(() => requestAnimationFrame(() => $virtualizer.scrollToEnd()));
+    void listHeight;
+    if (!following || !running || !viewportEl) return;
+    const view = viewportEl;
+    untrack(() => {
+      view.scrollTop = view.scrollHeight;
+    });
   });
   // Your own message always brings you back to the bottom.
   $effect(() => {
@@ -279,7 +284,7 @@
               tabindex="0"
               aria-selected={active}
               title={tab.kind === 'file' ? tab.path : label}
-              class="flex h-7 min-w-[56px] max-w-56 shrink cursor-pointer min-[720px]:min-w-[96px] items-center gap-1 rounded-md py-0 pr-2.5 pl-2.5 text-xs outline-none focus-visible:ring-0 {active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+              class="flex h-7 max-w-56 shrink-0 cursor-pointer items-center justify-between gap-1.5 rounded-md py-0 pr-2.5 pl-2.5 text-xs outline-none focus-visible:ring-0 {active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
               onclick={() => activateTab(tab.id)}
               oncontextmenu={(event) => openTabMenu(event, tab.id)}
               onkeydown={(event) => event.key === 'Enter' && activateTab(tab.id)}
@@ -353,7 +358,7 @@
           </div>
         {/if}
       {/each}
-      {#if contentTabs.tabs.length === 0}
+      {#if contentTabs.tabs.length === 0 && !pendingProject()}
         <div class="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-background p-6 text-center text-muted-foreground">
           <ZIcon zType="lucideMessageSquare" class="size-8 opacity-60" />
           <p class="m-0 text-xs">No open tabs. Start a chat from the sidebar.</p>
@@ -556,16 +561,18 @@
                           <CommandGroup items={segment.items} thoughts={segment.thoughts} live={false} startedAt={message.startedAt} />
                         </div>
                       {:else}
-                        <ChatBlock block={segment.block} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} />
+                        <ChatBlock block={segment.block} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} answered={chat.messages.at(-1)?.id !== message.id} />
                       {/if}
                     {/each}
                     <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
                          editing…), as in Claude and Codex; the steps above stay plain, finished lines. -->
 </div>
                   <!-- The status line and the footer share one fixed-height slot, so the row does not jump when the reply ends. -->
-                  {#if message.live || message.blocks.length > 0}
+                  <!-- Live only while the chat really runs: a reply left marked live (a lost "done") shows its footer. -->
+                  {@const showLive = message.live && isRunning(workspace.activeId)}
+                  {#if showLive || message.blocks.length > 0}
                     <div class="relative h-[30px] w-full shrink-0">
-                      {#if message.live}
+                      {#if showLive}
                         <div class="absolute inset-x-0 bottom-0 flex h-5 items-center"><LiveStatus {message} /></div>
                       {:else}
                         <MessageFooter {message} onfork={() => forkSession(workspace.activeId)} />

@@ -60,7 +60,11 @@
       <span class="tabular-nums">{seconds}</span>
     {:else}
       {#if thoughts.length > 0}<ZIcon zType="lucideBrain" class="size-3 shrink-0" />{/if}
-      <span class="truncate font-medium">{summarize(items)}</span>
+      {#if items.some((item) => item.status === 'running')}
+        <ZShimmerText class="truncate font-medium" zText={summarize(items)} />
+      {:else}
+        <span class="truncate font-medium">{summarize(items)}</span>
+      {/if}
       {#if total}{@render chips(total)}{/if}
     {/if}
     <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 transition-transform duration-300 {open ? 'rotate-180' : ''}" />
@@ -94,10 +98,11 @@
               aria-expanded={rows[index] ?? false}
               onclick={() => (rows[index] = !rows[index])}
             >
-              <span class="shrink-0 {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{step.verb}</span>
               {#if item.status === 'running'}
+                <ZShimmerText class="shrink-0" zText={step.verb} />
                 <ZShimmerText class="min-w-0 truncate font-medium" zText={step.subject || '…'} />
               {:else}
+                <span class="shrink-0 {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{step.verb}</span>
                 <span class="min-w-0 truncate font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}">{step.subject}</span>
               {/if}
               {#if step.counts}{@render chips(step.counts)}{/if}

@@ -1,5 +1,5 @@
 import { untrack } from 'svelte';
-import { workspace } from './sessions.svelte';
+import { history, pendingProject, workspace } from './sessions.svelte';
 import { getPref, setPref } from './prefs';
 
 // Browser-style tabs over the conversation area. A tab is either a chat (one session) or a file.
@@ -33,13 +33,35 @@ $effect.root(() => {
 
 const chatId = (sessionId: string) => `chat:${sessionId}`;
 
+// A chat tab whose session is gone (an unsent new session that was dropped, a deleted chat) is closed, once the
+// real chat list is known: before that every saved tab would look orphaned.
+$effect.root(() => {
+  $effect(() => {
+    if (!ready.tabs || (!history.imported && history.loading)) return;
+    const ids = new Set(workspace.sessions.map((item) => item.id));
+    untrack(() => {
+      const kept = contentTabs.tabs.filter((tab) => tab.kind !== 'chat' || ids.has(tab.sessionId));
+      if (kept.length === contentTabs.tabs.length) return;
+      contentTabs.tabs = kept;
+      if (!kept.some((tab) => tab.id === contentTabs.active)) contentTabs.active = '';
+    });
+  });
+});
+
 // The open session wins: after a reload the saved tab and the saved session can disagree, and the chat you were
 // reading must be the one on screen. A file tab in front is left alone.
 $effect.root(() => {
   $effect(() => {
     const id = workspace.activeId;
+    // A new session nobody wrote in yet gets no tab: the area shows it with no tab selected. Its first message
+    // (the session stops being an empty draft) runs this again and opens its tab.
+    const unsent = Boolean(pendingProject());
     if (!ready.tabs || !id) return;
     untrack(() => {
+      if (unsent) {
+        contentTabs.active = '';
+        return;
+      }
       const current = contentTabs.tabs.find((tab) => tab.id === contentTabs.active);
       if (current?.kind === 'file' || contentTabs.active === chatId(id)) return;
       if (!contentTabs.tabs.some((tab) => tab.id === chatId(id))) {

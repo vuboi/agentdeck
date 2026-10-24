@@ -14,12 +14,14 @@
   // The full-screen flow editor: the canvas fills the window, a card opens its settings in a drawer on the right.
   const icon = (name: string) => name as ZIconName;
 
-  /** The editor rises into place: a short slide and scale with a fade, sinking back a little further on the way out. */
+  /** The editor rises into place: a short slide with a fade, sinking back and shrinking a little on the way out.
+   *  No scale on the way in: the canvas measures its dots while the editor opens, and a scaled ancestor would shrink
+   *  those offsets, so the lines would miss the dots until the next measure. A slide moves card and dot together. */
   function rise(_: Element, { out = false }: { out?: boolean } = {}): TransitionConfig {
     return {
       duration: out ? 260 : 340,
       easing: cubicOut,
-      css: (t, u) => `opacity:${t};transform:translateY(${u * (out ? 18 : 22)}px) scale(${1 - u * (out ? 0.03 : 0.015)});filter:blur(${u * (out ? 6 : 4)}px)`,
+      css: (t, u) => `opacity:${t};transform:translateY(${u * (out ? 18 : 22)}px)${out ? ` scale(${1 - u * 0.03})` : ''};filter:blur(${u * (out ? 6 : 4)}px)`,
     };
   }
   let selected = $state<string | null>(null);
@@ -74,21 +76,33 @@
     });
   });
 
-  /** Save puts the card's settings into the flow. */
+  /** Save puts the card's settings into the flow and persists the updated preset immediately. */
   function saveCard() {
     const draft = flowEditor.draft;
     if (!draft) return;
     if (edit) {
-      const step = draft.steps.find((item) => item.id === edit!.id);
-      if (step) {
-        step.name = edit.name;
-        step.agent = edit.agent;
-        step.model = edit.model;
-        step.effort = edit.effort;
-        step.prompt = edit.prompt;
-        step.condition = { ...edit.condition };
-      }
+      const edited = edit;
+      draft.steps = draft.steps.map((step) =>
+        step.id === edited.id
+          ? {
+              ...step,
+              name: edited.name,
+              agent: edited.agent,
+              model: edited.model,
+              effort: edited.effort,
+              prompt: edited.prompt,
+              condition: { ...edited.condition },
+            }
+          : step,
+      );
     } else if (selected === 'end') draft.orchestrator = endText;
+    savePreset(draft);
+  }
+
+  /** A moved or reset card is kept at once, so closing the editor with the X never loses the layout. */
+  function keepLayout() {
+    const draft = flowEditor.draft;
+    if (draft && !flowEditor.isNew && !flowProblem(draft)) savePreset(draft);
   }
 
   function closeDrawer() {
@@ -162,7 +176,7 @@
       </div>
       <ZButton zWave={false} zType="outline" class="size-9! bg-muted/60! p-0!" aria-label="Close the editor" onclick={closeFlow}><ZIcon zType={icon('lucideX')} class="size-4" /></ZButton>
     </header>
-    <FlowCanvas bind:steps={draft.steps} bind:selected mode="edit" minimap class="flex-1" />
+    <FlowCanvas bind:steps={draft.steps} bind:selected mode="edit" minimap onlayout={keepLayout} class="flex-1" />
   </div>
 
   <ZDrawer bind:open={drawer} zPlacement="right" zWidth="420px" zClosable={false} zMaskClosable={false} zTitle={drawerTitle} footer={drawerFooter}>

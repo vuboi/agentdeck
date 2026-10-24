@@ -82,7 +82,16 @@
   }
 
   const revert = (path: string) => act(() => call('change_revert', { root, path }), 'Reverted');
-  const revertAll = () => act(() => call('change_revert_all', { root }), 'Reverted all changes');
+  // Many files take a moment: the button shows a loader until git is done.
+  let reverting = $state(false);
+  const revertAll = async () => {
+    reverting = true;
+    try {
+      await act(() => call('change_revert_all', { root }), 'Reverted all changes');
+    } finally {
+      reverting = false;
+    }
+  };
   const stage = (path: string, on: boolean) => act(() => call('change_stage', { root, path, stage: on }), on ? 'Staged' : 'Unstaged');
 
   function ask(target: { all: boolean; path: string }) {
@@ -161,8 +170,8 @@
         <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 px-2 text-xs" disabled={busy} title={allStaged ? 'Unstage all' : 'Stage all'} onclick={() => void stage('', !allStaged)}>
           {allStaged ? 'Unstage all' : 'Stage all'}
         </ZButton>
-        <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 gap-1 px-2 text-xs hover:!border-destructive/60 hover:!bg-destructive/10 hover:!text-destructive" disabled={busy} onclick={() => (ask({ all: true, path: '' }))}>
-          <ZIcon zType={icon('lucideUndo2')} class="size-3" /> Revert all
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 gap-1 px-2 text-xs hover:!bg-destructive/10 hover:!text-destructive" disabled={busy} onclick={() => (ask({ all: true, path: '' }))}>
+          <ZIcon zType={icon(reverting ? 'lucideLoaderCircle' : 'lucideUndo2')} class="size-3 {reverting ? 'animate-spin' : ''}" /> {reverting ? 'Reverting…' : 'Revert all'}
         </ZButton>
       </div>
 

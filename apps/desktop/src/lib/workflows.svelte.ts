@@ -54,9 +54,9 @@ export const BUILT_IN_PRESETS: WorkflowPreset[] = [
     orchestrator: 'Summarise what was planned, what was built and what the review found. Say plainly what is left to do.',
     builtin: true,
     steps: [
-      step('Plan', 'claude', 'You are the planner. Read the code that matters and write a short, ordered plan with the files to change. Do not edit anything.'),
-      step('Implement', 'codex', 'You are the implementer. Carry out the plan you were given, with the smallest change that does the job. Say which files you changed.'),
-      step('Review', 'claude', 'You are the reviewer. Check the change for bugs, missed cases and style. List concrete problems with file and line, or say it is good.'),
+      step('Plan', 'claude', 'You are the planner. Read the code that matters and write a short, ordered plan with the files to change. Do not edit anything. End with a section "## Handoff" in exactly this form, nothing else: "Files: <one path per line, only files that exist or must be created>", then "Steps:" with one numbered step per change (file, the exact place, what to write), then "Check: <the command to verify>".'),
+      step('Implement', 'custom', 'You are the implementer. Do exactly the steps of the plan you were given, in order, and nothing else. Only edit the files listed in the plan: do not search the project for other places, do not explore, do not read files outside the list unless a step cannot be done without them. For each step: Read the file, make the Edit, then go on. When every step is done, run the Check command once. Finish with the list of files you changed and the Check result.'),
+      step('Review', 'claude', 'You are the reviewer. Look only at the files the implementer changed (git diff). Check the change for bugs, missed cases and style. List concrete problems with file and line, or say it is good. Do not change any file.'),
     ],
   },
   {

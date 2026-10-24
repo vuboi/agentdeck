@@ -533,6 +533,12 @@
                                   </span>
                                   {#if account.alias}<span class="block truncate text-[11px] text-muted-foreground">{account.email}</span>{/if}
                                 </span>
+                                {#if account.expired}
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 gap-1 px-2 text-[11px]" disabled={Boolean(working)} aria-label="Sign in again for {account.email}" onclick={() => void login(provider, card.label)}>
+                                    <ZIcon zType={icon(connectors.busy[`login:${card.id}`] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3 {connectors.busy[`login:${card.id}`] ? 'animate-spin' : ''}" />
+                                    {connectors.busy[`login:${card.id}`] ? 'Waiting…' : 'Sign in again'}
+                                  </ZButton>
+                                {/if}
                                 {#if !account.active && !account.expired}
                                   {@const switching = Boolean(connectors.busy[`switch:${provider}`]?.endsWith(account.email))}
                                   <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Use {account.email}" title="Use this account" disabled={Boolean(busyOf(`switch:${provider}`))} onclick={() => void switchAccount(provider, account)}>

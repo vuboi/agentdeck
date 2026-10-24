@@ -41,9 +41,20 @@ pub async fn call(
     params: Value,
     session: Option<String>,
 ) -> Result<Value, String> {
+    call_for(view, method, params, session, 20).await
+}
+
+/// `call`, waiting up to `seconds` for the answer (a script that polls the page for a while).
+pub async fn call_for(
+    view: &Webview,
+    method: &str,
+    params: Value,
+    session: Option<String>,
+    seconds: u64,
+) -> Result<Value, String> {
     let (sender, receiver) = tokio::sync::oneshot::channel::<Result<Value, String>>();
     start(view, method.to_string(), params.to_string(), session, sender)?;
-    match tokio::time::timeout(Duration::from_secs(20), receiver).await {
+    match tokio::time::timeout(Duration::from_secs(seconds), receiver).await {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => Err(format!("{method}: the page did not answer")),
         Err(_) => Err(format!("{method}: timed out")),
@@ -99,6 +110,61 @@ fn start(
         }
     })
     .map_err(|error| error.to_string())
+}
+
+/// Empties the browser's HTTP and Cache Storage caches. WebView2 refuses `Network.clearBrowserCache`
+/// (0x80070057), so this goes through the profile instead.
+#[cfg(windows)]
+pub async fn clear_cache(view: &Webview) -> Result<(), String> {
+    use webview2_com::ClearBrowsingDataCompletedHandler;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_13, ICoreWebView2Profile2, COREWEBVIEW2_BROWSING_DATA_KINDS_CACHE_STORAGE,
+        COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE,
+    };
+    use windows::core::Interface;
+
+    let (sender, receiver) = tokio::sync::oneshot::channel::<Result<(), String>>();
+    view.with_webview(move |platform| {
+        let reply = std::rc::Rc::new(std::cell::RefCell::new(Some(sender)));
+        let answer = reply.clone();
+        let handler = ClearBrowsingDataCompletedHandler::create(Box::new(move |result| {
+            if let Some(sender) = answer.borrow_mut().take() {
+                let _ = sender.send(result.map_err(|error| error.to_string()));
+            }
+            Ok(())
+        }));
+        // SAFETY: WebView2 calls on the thread that owns the webview, as `with_webview` runs us.
+        let started = unsafe {
+            platform
+                .controller()
+                .CoreWebView2()
+                .and_then(|core| core.cast::<ICoreWebView2_13>())
+                .and_then(|core| core.Profile())
+                .and_then(|profile| profile.cast::<ICoreWebView2Profile2>())
+                .and_then(|profile| {
+                    profile.ClearBrowsingData(
+                        COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE | COREWEBVIEW2_BROWSING_DATA_KINDS_CACHE_STORAGE,
+                        &handler,
+                    )
+                })
+        };
+        if let Err(error) = started {
+            if let Some(sender) = reply.borrow_mut().take() {
+                let _ = sender.send(Err(error.to_string()));
+            }
+        }
+    })
+    .map_err(|error| error.to_string())?;
+    match tokio::time::timeout(Duration::from_secs(20), receiver).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("clearing the cache: the page did not answer".into()),
+        Err(_) => Err("clearing the cache: timed out".into()),
+    }
+}
+
+#[cfg(not(windows))]
+pub async fn clear_cache(_view: &Webview) -> Result<(), String> {
+    Err("Clearing the cache is only wired for WebView2 (Windows)".into())
 }
 
 #[cfg(not(windows))]
@@ -254,9 +320,14 @@ fn subscribe_network(_view: &Webview) {}
 
 /// Runs a script in the page (or in a frame's session) and returns its value.
 pub async fn evaluate(view: &Webview, script: &str, session: Option<String>) -> Result<Value, String> {
+    evaluate_for(view, script, session, 20).await
+}
+
+/// `evaluate`, letting the script run up to `seconds` (statements, top-level await, the last expression is the value).
+pub async fn evaluate_for(view: &Webview, script: &str, session: Option<String>, seconds: u64) -> Result<Value, String> {
     // replMode: top-level await works, as in the DevTools console.
     let params = json!({ "expression": script, "returnByValue": true, "awaitPromise": true, "userGesture": true, "replMode": true });
-    let answer = call(view, "Runtime.evaluate", params, session).await?;
+    let answer = call_for(view, "Runtime.evaluate", params, session, seconds).await?;
     if let Some(details) = answer.get("exceptionDetails") {
         let text = details["exception"]["description"]
             .as_str()
