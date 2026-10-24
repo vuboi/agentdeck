@@ -28,6 +28,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Version from tag
         shell: bash
@@ -36,6 +38,21 @@ jobs:
           VERSION="${VERSION#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           node scripts/set-version.mjs "$VERSION"
+
+      # The notes come from docs/release-notes/v<version>.md; without it, from the commit titles since the last tag.
+      - name: Release notes
+        id: notes
+        shell: bash
+        run: |
+          FILE="docs/release-notes/v${VERSION}.md"
+          if [ -f "$FILE" ]; then
+            cp "$FILE" notes.md
+          else
+            PREV=$(git describe --tags --abbrev=0 --exclude "v${VERSION}" 2>/dev/null || true)
+            RANGE="${PREV:+$PREV..}HEAD"
+            { echo "### What's changed"; echo; git log "$RANGE" --no-merges --format='- %s' | cut -c1-200; } > notes.md
+          fi
+          { echo 'body<<NOTES_EOF'; cat notes.md; echo NOTES_EOF; } >> "$GITHUB_OUTPUT"
 
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -65,7 +82,7 @@ jobs:
           projectPath: apps/desktop
           tagName: v${{ env.VERSION }}
           releaseName: AgentDeck v${{ env.VERSION }}
-          releaseBody: See the assets below to download and install.
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
