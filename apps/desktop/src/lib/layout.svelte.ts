@@ -39,6 +39,8 @@ export const layout = $state({
   /** The tools panel is on screen (open and wide enough). Decides how much room the window controls need. */
   toolsVisible: false,
   sidebarDrawer: false,
+  /** The user folded the sidebar away (wide window). Kept between runs. */
+  sidebarCollapsed: false,
 });
 
 export type DockZone = 'sidebar' | 'left' | 'right' | 'top' | 'bottom';
@@ -59,6 +61,18 @@ getPref<{ floating: FloatingTool[]; activeTool: string; docked?: typeof layout.d
     }
   }
   floatingHydrated = true;
+});
+
+let collapsedHydrated = false;
+getPref<boolean>('layout.sidebarCollapsed').then((saved) => {
+  if (typeof saved === 'boolean') layout.sidebarCollapsed = saved;
+  collapsedHydrated = true;
+});
+$effect.root(() => {
+  $effect(() => {
+    const collapsed = layout.sidebarCollapsed;
+    if (collapsedHydrated) setPref('layout.sidebarCollapsed', collapsed);
+  });
 });
 
 let sizesHydrated = false;

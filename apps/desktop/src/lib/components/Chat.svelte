@@ -308,15 +308,15 @@
   <header class="relative z-40 flex h-10 shrink-0 items-center border-b border-border bg-background {layout.toolsVisible ? 'pr-3' : 'pr-[106px]'}" data-tauri-drag-region>
     <!-- Browser-style tabs: chats and files side by side, each with a close button; + starts a new chat.
          No scrollbar: when the tabs overflow, an arrow opens the full list. -->
-    {#if layout.sidebarHidden}
+    {#if layout.sidebarHidden || layout.sidebarCollapsed}
       <button
         type="button"
         class="ml-2 grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
-        aria-label="Open sessions"
-        title="Sessions"
-        onclick={() => (layout.sidebarDrawer = !layout.sidebarDrawer)}
+        aria-label={layout.sidebarHidden ? 'Open sessions' : 'Show sidebar (Ctrl+B)'}
+        title={layout.sidebarHidden ? 'Sessions' : 'Show sidebar (Ctrl+B)'}
+        onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = !layout.sidebarDrawer) : (layout.sidebarCollapsed = false))}
       >
-        <ZIcon zType="lucideMenu" class="size-4" />
+        <ZIcon zType={layout.sidebarHidden ? 'lucideMenu' : 'lucidePanelLeftOpen'} class="size-4" />
       </button>
     {/if}
     <div class="flex min-w-0 flex-1 items-center gap-1 pl-2">

@@ -21,6 +21,15 @@
   --radius-2xl: var(--radius-large);
   --radius-3xl: var(--radius-large);
 }
+/* No focus outline or ring anywhere (the open row, a focused button, an input): state is shown by colour only. */
+:focus,
+:focus-visible,
+:focus-within {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+}
+
 /* Rows of a tree are things you point at: a notch under small (z-ui draws them with the large radius), and a hair
    more air between them. The hover highlight, the open row and the selected row all share the one radius (the Explorer
    and the chat list are both trees). */
@@ -28,9 +37,13 @@
   --z-tree-row-gap: 2.3px;
 }
 .z-tree-row,
-.z-tree-row::before,
-.z-tree [data-z-hover-glide-highlight] {
+.z-tree-row::before {
   border-radius: var(--radius-row);
+}
+/* The hover highlight is as wide as the row, while the open and selected row's background (::before) sits 4px in from
+   both sides and stops short of the row's bottom gap: cut the highlight to the same box, or it looks shifted. */
+.z-tree [data-z-hover-glide-highlight] {
+  clip-path: inset(0 4px var(--z-tree-row-gap) 4px round var(--radius-row));
 }
 /* Surfaces that float (popover, dropdown, tooltip, dialog, drawer) are large: their items inside are small, and a
    container needs more radius than what it holds or the corners look pinched. z-ui gives some of them the small step. */

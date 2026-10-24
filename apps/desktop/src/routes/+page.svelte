@@ -68,7 +68,8 @@
     }
     return () => stop?.();
   });
-  const showSidebar = $derived(innerW >= 720);
+  const narrow = $derived(innerW < 720);
+  const showSidebar = $derived(!narrow && !layout.sidebarCollapsed);
   const showZones = $derived(innerW >= 1000);
   const showTools = $derived(layout.toolsOpen && innerW >= 1000);
 
@@ -77,7 +78,7 @@
   });
 
   $effect(() => {
-    const hidden = !showSidebar;
+    const hidden = narrow;
     layout.sidebarHidden = hidden;
     if (!hidden) layout.sidebarDrawer = false;
   });
@@ -110,6 +111,12 @@
   function onKey(event: KeyboardEvent) {
     handleTerminalShortcut(event);
     if (event.key === 'Escape') layout.sidebarDrawer = false;
+    // Ctrl+B (Cmd+B): fold the sidebar away or bring it back (the drawer, in a narrow window).
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      if (narrow) layout.sidebarDrawer = !layout.sidebarDrawer;
+      else layout.sidebarCollapsed = !layout.sidebarCollapsed;
+    }
     // Ctrl+, (Cmd+,): Settings.
     if ((event.ctrlKey || event.metaKey) && event.key === ',') {
       event.preventDefault();
@@ -130,7 +137,7 @@
 
 <div class="relative flex h-screen overflow-x-hidden overflow-y-hidden bg-background text-foreground min-[720px]:overflow-x-auto">
   {#if showSidebar}
-    <div class="flex h-full min-w-[180px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.sidebar}px" data-sidebar>
+    <div transition:slideWidth class="flex h-full min-w-[180px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.sidebar}px" data-sidebar>
       <Sidebar />
     </div>
     <Splitter axis="x" label="Resize sidebar" onDelta={grow('sidebar', 1, MIN.sidebar, maxW)} />
