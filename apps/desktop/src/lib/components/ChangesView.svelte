@@ -176,10 +176,12 @@
       </div>
 
       <!-- Virtual list: every row has the same height, so only the rows in view (plus a margin) are rendered. -->
-      <div bind:this={scroller} bind:clientHeight={viewport} class="min-h-0 flex-1 overflow-auto" onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)}>
+      <div bind:this={scroller} bind:clientHeight={viewport} class="min-h-0 flex-1 overflow-auto p-1.5" onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)}>
         <div style="padding-top: {win.start * ROW}px; padding-bottom: {(changes.length - win.end) * ROW}px">
           {#each changes.slice(win.start, win.end) as change (change.path)}
-            <div class="group flex items-center gap-1.5 rounded-(--radius-row) px-2 text-xs hover:bg-muted/50" style="height: {ROW}px">
+            <!-- The slot is ROW high (the list is virtual); the row inside leaves 1px above and below, so rows do not touch. -->
+            <div class="py-px" style="height: {ROW}px">
+            <div class="group flex h-full items-center gap-1.5 rounded-(--radius-row) px-2.5 text-xs hover:bg-muted/50">
               <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left no-underline outline-none" title="Open {change.path}" onclick={() => openChange(change)}>
                 <span class="w-3 shrink-0 text-center font-mono {STATUS[change.status]?.tone}" title={STATUS[change.status]?.label}>{change.status}</span>
                 <span class="min-w-0 truncate" title={change.path}><span class="text-muted-foreground">{dirOf(change.path)}</span>{nameOf(change.path)}</span>
@@ -195,6 +197,7 @@
                   <ZIcon zType={icon('lucideUndo2')} class="size-3.5" />
                 </ZButton>
               </span>
+            </div>
             </div>
           {/each}
         </div>
