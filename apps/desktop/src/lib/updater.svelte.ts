@@ -2,6 +2,7 @@
 // install it and restart. Only works inside the packaged desktop app; in a browser or dev it stays idle.
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { getVersion } from '@tauri-apps/api/app';
 
 export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error';
 
@@ -78,3 +79,7 @@ export function startUpdateChecks() {
     clearInterval(every);
   };
 }
+
+/** The version of the running app (tauri.conf.json, set from the release tag in CI); empty in a browser. */
+export const appInfo = $state({ version: '' });
+if (inTauri()) void getVersion().then((version) => (appInfo.version = version)).catch(() => {});

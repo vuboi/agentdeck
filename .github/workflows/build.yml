@@ -1,0 +1,52 @@
+# Builds the installers for Windows, macOS (Apple silicon + Intel) and Linux on every push to main, so a broken
+# build shows up at once. Nothing is published: the installers are kept as workflow artifacts for a week.
+# Releases (with the updater feed) come from release.yml, started by a v* tag.
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: win, name: windows }
+          - { os: macos-latest, target: mac, name: macos-arm64 }
+          - { os: macos-15-intel, target: mac, name: macos-x64 }
+          - { os: ubuntu-22.04, target: linux, name: linux }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libxdo-dev
+
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/build.mjs ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentdeck-${{ matrix.name }}
+          path: target/release/bundle/**
+          if-no-files-found: error
+          retention-days: 7

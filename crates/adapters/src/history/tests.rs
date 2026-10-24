@@ -445,3 +445,35 @@ fn codex_tokens_and_model_come_back_with_the_answer() {
     );
     assert_eq!(messages[0].usage, None);
 }
+
+#[test]
+fn load_page_windows_the_transcript_from_the_end_backwards() {
+    let home = Home::new("page");
+    // Five user lines in a chain: five messages.
+    let mut lines = Vec::new();
+    let mut parent: Option<String> = None;
+    for index in 0..5 {
+        let uuid = format!("u{index}");
+        lines.push(user(
+            &uuid,
+            parent.as_deref(),
+            json!(format!("q{index}")),
+            "2026-01-01T00:00:00Z",
+        ));
+        parent = Some(uuid);
+    }
+    let path = home.write(".claude/projects/demo/page.jsonl", &lines);
+    let roots = home.roots();
+
+    let last = load_page(&roots, Source::Claude, &path, None, 2).unwrap();
+    assert_eq!((last.total, last.start, last.messages.len()), (5, 3, 2));
+    let middle = load_page(&roots, Source::Claude, &path, Some(last.start), 2).unwrap();
+    assert_eq!((middle.start, middle.messages.len()), (1, 2));
+    let first = load_page(&roots, Source::Claude, &path, Some(middle.start), 2).unwrap();
+    assert_eq!((first.start, first.messages.len()), (0, 1));
+    let all: Vec<_> = [first, middle, last]
+        .into_iter()
+        .flat_map(|page| page.messages)
+        .collect();
+    assert_eq!(all, load(&roots, Source::Claude, &path).unwrap());
+}

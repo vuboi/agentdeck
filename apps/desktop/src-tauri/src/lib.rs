@@ -20,7 +20,7 @@ use ag_adapters::agent::claude::Claude;
 use ag_adapters::agent::codex::Codex;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
 use ag_adapters::agent::{AgentEvent, Provider, TurnRequest};
-use ag_adapters::history::{self, HistoryMessage, HistorySession, Roots, Source};
+use ag_adapters::history::{self, HistoryMessage, HistoryPage, HistorySession, Roots, Source};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -108,6 +108,23 @@ async fn history_load(source: Source, path: String) -> Result<Vec<HistoryMessage
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
+}
+
+/// A window of the transcript of one saved session: the newest `limit` messages, or the ones before `before`.
+#[tauri::command]
+async fn history_load_page(
+    source: Source,
+    path: String,
+    before: Option<usize>,
+    limit: usize,
+) -> Result<HistoryPage, String> {
+    let roots = roots()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        history::load_page(&roots, source, Path::new(&path), before, limit)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 /// Renames a saved session inside Claude's or Codex's own storage.
@@ -790,6 +807,7 @@ pub fn run() {
             path_restore,
             models_list,
             history_load,
+            history_load_page,
             history_rename,
             history_delete,
             file_read,

@@ -1,3 +1,8 @@
+<script module lang="ts">
+  // shiki is the heaviest import of the chat: load it once the app has settled, not in the middle of opening a chat.
+  if (typeof window !== 'undefined') setTimeout(() => void import('shiki'), 4000);
+</script>
+
 <script lang="ts">
   import { untrack } from 'svelte';
   import { isLocalUrl, linkMenu, openExternal, openInPreview } from '../browser.svelte';
@@ -134,21 +139,39 @@
     untrack(() => fadeTail(container));
   });
 
+  // Coloured code by language, theme and text: a row mounted again gets its colours at once, with no second pass
+  // through shiki. Very long blocks stay plain, since colouring them blocks the page for a noticeable time.
+  const COLOUR_MAX_CHARS = 20_000;
+  const coloured = new Map<string, string>();
+  const COLOURED_MAX = 300;
+
   async function colour(container: HTMLElement, dark: boolean) {
     const blocks = [...container.querySelectorAll<HTMLElement>('.md-code:not([data-coloured])')];
     if (blocks.length === 0) return;
-    const { codeToHtml } = await import('shiki');
+    let shiki: typeof import('shiki') | undefined;
     for (const block of blocks) {
       const code = block.querySelector('code');
       const pre = block.querySelector('pre');
       if (!code || !pre) continue;
       block.dataset.coloured = '';
+      const source = code.textContent ?? '';
+      if (source.length > COLOUR_MAX_CHARS) continue;
       const language = block.dataset.lang || 'text';
+      const key = `${dark ? 'd' : 'l'}|${language}|${source}`;
+      const hit = coloured.get(key);
+      if (hit !== undefined) {
+        code.innerHTML = hit;
+        continue;
+      }
       try {
+        shiki ??= await import('shiki');
         const out = document.createElement('div');
-        out.innerHTML = await codeToHtml(code.textContent ?? '', { lang: language, theme: dark ? 'github-dark' : 'github-light' });
-        const coloured = out.querySelector('code');
-        if (coloured && container.contains(block)) code.innerHTML = coloured.innerHTML;
+        out.innerHTML = await shiki.codeToHtml(source, { lang: language, theme: dark ? 'github-dark' : 'github-light' });
+        const inner = out.querySelector('code');
+        if (!inner) continue;
+        coloured.set(key, inner.innerHTML);
+        if (coloured.size > COLOURED_MAX) coloured.delete(coloured.keys().next().value as string);
+        if (container.contains(block)) code.innerHTML = inner.innerHTML;
       } catch {
         // An unknown language stays plain.
       }
@@ -160,7 +183,14 @@
     const dark = theme.dark;
     if (streaming || catching || !root) return;
     const container = root;
-    untrack(() => void colour(container, dark));
+    // Colours come once the rows are on screen, not in the middle of opening a chat.
+    const run = () => void colour(container, dark);
+    if (typeof requestIdleCallback === 'function') {
+      const id = requestIdleCallback(run, { timeout: 1500 });
+      return () => cancelIdleCallback(id);
+    }
+    const id = setTimeout(run, 50);
+    return () => clearTimeout(id);
   });
 
   const linkOf = (event: Event) => (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');

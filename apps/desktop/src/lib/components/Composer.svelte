@@ -55,6 +55,7 @@
   const images = $derived(draftImages[sessionId] ?? []);
   const elements = $derived(draftElements[sessionId] ?? []);
   const running = $derived(isRunning(sessionId));
+  const mac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
   const waiting = $derived(queued[sessionId] ?? []);
 
   // Queued messages are reordered by dragging their handle (zSortable: the rows glide, Escape cancels).
@@ -341,11 +342,11 @@
     void addFiles(files);
   }
 
-  function submit() {
+  function submit(whileRunning: 'queue' | 'interrupt' = 'queue') {
     if (!hasInput) return;
     // Handing work to an agent needs words that say what the work is.
     if (mentions.some((entry) => entry.kind === 'ai') && !draft.trim()) return;
-    sendMessage(draft, images, elements, mentions);
+    sendMessage(draft, images, elements, mentions, whileRunning);
     draftElements[sessionId] = [];
     detail = null;
     setDraft('', { sent: true });
@@ -364,7 +365,8 @@
       });
     } else if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      submit();
+      // While the agent works: Enter waits in line, Ctrl+Enter (Cmd+Enter on a Mac) stops it and goes first.
+      submit(event.ctrlKey || event.metaKey ? 'interrupt' : 'queue');
     } else if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && /(^|\s)$/.test(draft.slice(0, area?.selectionStart ?? draft.length))) {
       // A slash that starts a word opens the command list, as the @ opens mentions.
       event.preventDefault();
@@ -483,7 +485,7 @@
     rows="1"
     wrap="soft"
     aria-label="Message"
-    placeholder="Do anything…"
+    placeholder={running ? `Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt` : 'Do anything…'}
     class="max-h-45 min-h-6 w-full resize-none overflow-x-hidden break-words border-0 bg-transparent px-1 pt-0.5 pb-1.5 text-sm leading-normal outline-none placeholder:text-muted-foreground"
   ></textarea>
 
@@ -504,7 +506,7 @@
         <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
       </ZButton>
     {:else}
-      <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-7! shrink-0 rounded-full p-0" disabled={!hasInput} aria-label={running ? (turnOptions.whileRunning === 'queue' ? 'Add to the queue' : 'Stop and send') : 'Send message'} {@attach zTooltip({ content: running ? (turnOptions.whileRunning === 'queue' ? 'Add to the queue' : 'Stop and send now') : 'Send', position: 'top' })}>
+      <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-7! shrink-0 rounded-full p-0" disabled={!hasInput} aria-label={running ? 'Add to the queue' : 'Send message'} {@attach zTooltip({ content: running ? `Add to the queue · ${mac ? '⌘' : 'Ctrl'}+Enter to stop and send now` : 'Send', position: 'top' })}>
         <ZIcon zType="lucideArrowUp" class="size-3.5" />
       </ZButton>
     {/if}

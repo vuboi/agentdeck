@@ -4,7 +4,7 @@
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { OPENAI_SVG } from '../brand-icons';
   import { agyBlocks, agyModes } from '../agy-modes.svelte';
-  import { AGENT_ICON, AGENT_TEXT, setWhileRunning, turnOptions, workspace, type Agent, type Effort, type Permission } from '../sessions.svelte';
+  import { AGENT_ICON, AGENT_TEXT, turnOptions, workspace, type Agent, type Effort, type Permission } from '../sessions.svelte';
   import { allPresets, assignPreset, createFlow, presetOf } from '../workflows.svelte';
   import { findModel, modelSources } from '../models.svelte';
   import SectionTitle from './SectionTitle.svelte';
@@ -283,26 +283,6 @@
           </button>
         {/each}
         </div>
-      </section>
-
-      <section aria-label="While it works">
-        <SectionTitle label="WHILE IT WORKS" />
-        {#key settled}
-        <ZTabs
-          zTabs={[
-            { value: 'queue', label: 'Queue' },
-            { value: 'interrupt', label: 'Interrupt' },
-          ]}
-          zType="segmented"
-          zSize="xs"
-          zTabsOnly
-          zNavFullWidth
-          zCache={false}
-          class="w-full [&_.z-tab-item]:flex-1 [&_.z-tab-item-label]:text-center"
-          activeTab={turnOptions.whileRunning}
-          onTabChange={(value) => setWhileRunning(value as 'queue' | 'interrupt')}
-        />
-        {/key}
       </section>
     </div>
   {/snippet}

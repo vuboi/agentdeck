@@ -41,6 +41,13 @@ export async function loadHistory(source: HistorySource, path: string): Promise<
   return inTauri() ? invoke<HistoryMessage[]>('history_load', { source, path }) : [];
 }
 
+export type HistoryPage = { total: number; start: number; messages: HistoryMessage[] };
+
+/** At most `limit` messages ending just before index `before` (the end of the chat when omitted). */
+export async function loadHistoryPage(source: HistorySource, path: string, before: number | null, limit: number): Promise<HistoryPage> {
+  return inTauri() ? invoke<HistoryPage>('history_load_page', { source, path, before, limit }) : { total: 0, start: 0, messages: [] };
+}
+
 /** Local clock time of an ISO timestamp, or an empty string. */
 export function clock(iso: string): string {
   const date = new Date(iso);

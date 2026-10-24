@@ -12,7 +12,7 @@
   import Splitter from './Splitter.svelte';
   import { layout } from '../layout.svelte';
   import { getPref, setPref } from '../prefs';
-  import { checkForUpdate, installUpdate, startUpdateChecks, updater } from '../updater.svelte';
+  import { appInfo, checkForUpdate, installUpdate, startUpdateChecks, updater } from '../updater.svelte';
   import {
     addProject,
     buildTree,
@@ -677,9 +677,12 @@
 
   <div class="flex h-11 shrink-0 items-center gap-2 px-3 text-xs">
     <span class="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-[10px]">ZO</span>
-    <span class="truncate">ZUI Organization</span>
+    <span class="flex min-w-0 flex-col leading-tight">
+      <span class="truncate">ZUI Organization</span>
+      {#if appInfo.version}<span class="truncate text-[10px] text-muted-foreground tabular-nums">AgentDeck v{appInfo.version}</span>{/if}
+    </span>
     <ZButton zWave={false} zType="ghost" zSize="sm" class="relative ml-auto h-6 w-6" aria-label={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} title={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} onclick={onUpdateClick}>
-      <ZIcon zType={'lucideRefreshCw' as ZIconName} class="size-3.5 {turning ? 'animate-spin' : ''}" />
+      <ZIcon zType={(turning ? 'lucideLoaderCircle' : 'lucideArrowDownToLine') as ZIconName} class="size-3.5 {turning ? 'animate-spin' : ''}" />
       {#if updater.status === 'available' || updater.status === 'downloading'}<span class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"></span>{/if}
     </ZButton>
     <ZButton zWave={false} zType="ghost" zSize="sm" class="relative h-6 w-6" aria-label="Settings (Ctrl+,)" title="Settings (Ctrl+,)" onclick={() => openSettings()}>

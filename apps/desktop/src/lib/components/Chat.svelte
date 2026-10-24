@@ -5,7 +5,8 @@
   import { layout } from '../layout.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { LOADER } from '../loaders';
-  import { activeSession, AGENTS, answerPermission, answerQuestions, chat, editMessage, forkSession, isRunning, newSession, openTranscript, pendingProject, workspace } from '../sessions.svelte';
+  import { toast } from '../toast';
+  import { activeSession, AGENTS, answerPermission, answerQuestions, chat, editMessage, forkSession, isRunning, loadOlder, newSession, openTranscript, pendingProject, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
   import { openImages, preview } from '../preview.svelte';
@@ -109,15 +110,35 @@
   // ---------- virtual list (same approach as ZChat) ----------
   // Pinned to the bottom, follows new rows only when already there, so a reader scrolled into
   // history is never yanked down by an incoming reply.
+  // Only the newest PAGE messages are mounted; scrolling near the top reveals PAGE more. A long chat then opens
+  // with a handful of rows to measure instead of all of them.
+  const PAGE = 40;
+  // A chat opens with only INITIAL rows mounted (enough to fill the screen) and grows to PAGE once the page is idle.
+  const INITIAL = 14;
+  let windowSize = $state(INITIAL);
+  const from = $derived(Math.max(0, chat.messages.length - windowSize));
+  function revealOlder() {
+    if (from > 0) windowSize += PAGE;
+    // Everything loaded is mounted: read the next page from the chat's file.
+    else if (chat.older > 0) {
+      void loadOlder(activeSession()).then((added) => {
+        windowSize += added;
+        if (added > 0) toast.info(`Loaded ${added} earlier messages${chat.older > 0 ? '' : ' · start of the conversation'}`);
+      });
+    }
+  }
+  // Rows not measured yet are guessed at the average of those that were: a wrong guess makes the list re-measure and
+  // re-position over several rounds, every one a scroll event the virtualizer has to handle.
+  let averageRow = 96;
   const virtualOptions = () => ({
-    count: chat.messages.length,
+    count: chat.messages.length - from,
     getScrollElement: () => viewportEl ?? null,
-    estimateSize: () => 96,
-    getItemKey: (index: number) => chat.messages[index]?.id ?? index,
+    estimateSize: () => averageRow,
+    getItemKey: (index: number) => chat.messages[index + from]?.id ?? index + from,
     anchorTo: 'end' as const,
     followOnAppend: true,
     scrollEndThreshold: 80,
-    overscan: 8,
+    overscan: 4,
     paddingStart: 8,
     // Clears the fade above the composer (h-12) so the last message ends above it.
     paddingEnd: 56,
@@ -177,12 +198,20 @@
   $effect(() => {
     void openKey;
     untrack(() => {
-      void openTranscript(workspace.sessions.find((item) => item.id === workspace.activeId)).then(pinToNewest);
+      windowSize = INITIAL;
+      void openTranscript(workspace.sessions.find((item) => item.id === workspace.activeId)).then(() => {
+        pinToNewest();
+        const grow = () => (windowSize = Math.max(windowSize, PAGE));
+        if (typeof requestIdleCallback === 'function') requestIdleCallback(grow, { timeout: 1000 });
+        else setTimeout(grow, 300);
+      });
     });
   });
 
   function measureRow(node: HTMLDivElement) {
     $virtualizer.measureElement(node);
+    const height = node.offsetHeight;
+    if (height > 0) averageRow = Math.round(averageRow * 0.8 + height * 0.2);
   }
 
   // ---------- navigator: one tick per user question ----------
@@ -205,7 +234,7 @@
   const activeTurn = $derived.by(() => {
     if (turnRows.length === 0) return 0;
     if ($virtualizer.isAtEnd(1)) return turnRows.length - 1;
-    const first = $virtualizer.range?.startIndex ?? 0;
+    const first = ($virtualizer.range?.startIndex ?? 0) + from;
     return Math.max(0, turnRows.filter((row) => row <= first).length - 1);
   });
 
@@ -233,7 +262,9 @@
   // scrolling up to read stops the following, sending a message (or the jump button) resumes it.
   let following = true;
   function onViewportScroll() {
-    if (viewportEl) following = viewportEl.scrollHeight - viewportEl.scrollTop - viewportEl.clientHeight < 120;
+    if (!viewportEl) return;
+    following = viewportEl.scrollHeight - viewportEl.scrollTop - viewportEl.clientHeight < 120;
+    if (viewportEl.scrollTop < 600) revealOlder();
   }
   // Follows what is on screen, not what has arrived: the answer is revealed word by word, so the list grows a little
   // every frame. Each time its measured height changes the view is put at the bottom right away (same frame, no
@@ -252,9 +283,22 @@
     if (chat.messages.at(-1)?.role === 'user') untrack(() => ((following = true), pinToNewest()));
   });
 
-  function jumpToTurn(turn: number) {
+  async function jumpToTurn(turn: number) {
     const row = turnRows[turn];
-    if (row !== undefined) $virtualizer.scrollToIndex(row, { align: 'start', behavior: 'smooth' });
+    if (row === undefined) return;
+    // A turn above the mounted window is mounted first.
+    if (row < from) {
+      windowSize = chat.messages.length - row + PAGE;
+      await tick();
+    }
+    // Instant, not smooth: rows between here and the target are measured on the way, the target moves under a smooth
+    // scroll and it stops short. Jump, then put it right again once the rows around it have their real height.
+    const target = row - from;
+    $virtualizer.scrollToIndex(target, { align: 'start' });
+    for (let pass = 0; pass < 3; pass++) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      $virtualizer.scrollToIndex(target, { align: 'start' });
+    }
   }
 </script>
 
@@ -415,10 +459,24 @@
       aria-hidden="true"
     ></div>
 
+    {#if chat.loadingOlder}
+      <div class="pointer-events-none absolute top-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur" role="status">
+        <span class="size-3 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-transparent"></span>
+        Loading earlier messages…
+      </div>
+    {/if}
+
     {#if chat.messages.length === 0}
       <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center text-xs text-muted-foreground">
         {#if chat.loading}
-          Loading conversation…
+          <div class="flex w-full max-w-3xl animate-pulse flex-col gap-6 px-6" role="status" aria-label="Loading conversation">
+            {#each [60, 90, 75, 40, 85] as width, index}
+              <div class="flex flex-col gap-2 {index % 2 === 0 ? 'items-end' : ''}">
+                <div class="h-3 rounded bg-muted" style:width="{width}%"></div>
+                <div class="h-3 rounded bg-muted" style:width="{Math.max(25, width - 30)}%"></div>
+              </div>
+            {/each}
+          </div>
         {:else if chat.error}
           <span class="max-w-sm text-center text-destructive">{chat.error}</span>
         {:else}
@@ -430,10 +488,10 @@
       </div>
     {/if}
 
-    <div bind:this={viewportEl} onscroll={onViewportScroll} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+    <div bind:this={viewportEl} onscroll={onViewportScroll} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden transition-opacity duration-200 ease-out" style:opacity={chat.loading ? 0 : 1}>
       <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" role="log" aria-live="polite" aria-label="Conversation">
         {#each $virtualizer.getVirtualItems() as row (row.key)}
-          {@const message = chat.messages[row.index]}
+          {@const message = chat.messages[row.index + from]}
           {@const mine = message?.role === 'user'}
           {@const agent = message?.agent ?? activeSession()?.source ?? activeSession()?.agent ?? 'claude'}
           {#if message}

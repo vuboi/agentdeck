@@ -38,7 +38,12 @@ fn toml_string(text: &str) -> String {
 fn candidates_for(os: &str, home: Option<PathBuf>, local: Option<PathBuf>, appdata: Option<PathBuf>) -> Vec<PathBuf> {
     let mut found = Vec::new();
     if os == "windows" {
-        let triple = "x86_64-pc-windows-msvc";
+        // The native binary is built per CPU: a Windows on ARM runs the arm64 one.
+        let (triple, platform) = if std::env::consts::ARCH == "aarch64" {
+            ("aarch64-pc-windows-msvc", "-win32-arm64")
+        } else {
+            ("x86_64-pc-windows-msvc", "-win32-x64")
+        };
         if let Some(local) = &local {
             // pnpm: %LOCALAPPDATA%\pnpm\global\<n>\.pnpm\@openai+codex@<version>-win32-x64\node_modules\@openai\codex\vendor\…
             let store = local.join("pnpm").join("global");
@@ -52,7 +57,7 @@ fn candidates_for(os: &str, home: Option<PathBuf>, local: Option<PathBuf>, appda
                     .filter(|path| {
                         path.file_name()
                             .and_then(|name| name.to_str())
-                            .is_some_and(|name| name.starts_with("@openai+codex@") && name.ends_with("-win32-x64"))
+                            .is_some_and(|name| name.starts_with("@openai+codex@") && name.ends_with(platform))
                     })
                     .collect();
                 versions.sort();

@@ -6,9 +6,10 @@ import {
   deleteHistory,
   inTauri,
   listHistory,
-  loadHistory,
+  loadHistoryPage,
   renameHistory,
   toBlocks,
+  type HistoryMessage,
   type HistorySession,
 } from './history';
 import { messages as mockMessages, type Block, type Message } from './mock';
@@ -496,18 +497,10 @@ function rememberLastChat(agent: Agent, model: string | null, effort: Effort) {
 
 const PERMISSION_MODE: Record<Permission, string | null> = { ask: null, edits: 'acceptEdits', plan: 'plan', auto: 'auto', yolo: 'bypassPermissions' };
 /** The permission setting of the Composer, read when a turn starts. */
-export const turnOptions = $state<{ permission: Permission; effort: Effort; /** What Enter does while a reply is running. */ whileRunning: 'queue' | 'interrupt' }>({
+export const turnOptions = $state<{ permission: Permission; effort: Effort }>({
   permission: 'auto',
   effort: 'medium',
-  whileRunning: 'queue',
 });
-void getPref<'queue' | 'interrupt'>('composer.whileRunning').then((saved) => {
-  if (saved === 'queue' || saved === 'interrupt') turnOptions.whileRunning = saved;
-});
-export function setWhileRunning(mode: 'queue' | 'interrupt') {
-  turnOptions.whileRunning = mode;
-  setPref('composer.whileRunning', mode);
-}
 
 /** The run of each chat that is current: events of an older (stopped) run are ignored. */
 const turns: Record<string, string> = {};
@@ -1448,14 +1441,14 @@ function handBack(batch: DelegateBatch) {
   go(0);
 }
 
-/** Send from the message box. While the agent is busy: wait in line, or stop it and go first, as chosen. */
-export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = [], mentions: Mention[] = []) {
+/** Send from the message box. While the agent is busy: wait in line (Enter), or stop it and go first (Ctrl+Enter). */
+export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = [], mentions: Mention[] = [], whileRunning: 'queue' | 'interrupt' = 'queue') {
   const session = activeSession();
   if (!session || (!text.trim() && images.length === 0 && elements.length === 0)) return;
   // A task for another agent needs words to say what the task is.
   if (mentions.some((mention) => mention.kind === 'ai') && !text.trim()) return;
   if (replies[session.id]) {
-    if (turnOptions.whileRunning === 'queue') {
+    if (whileRunning === 'queue') {
       enqueue(queued, session.id, { text, images, elements, mentions });
       return;
     }
@@ -1736,7 +1729,7 @@ export function buildTree({ view, collapsed, showAll }: TreeOptions = { view: DE
 }
 
 // ---------- real history (Claude Code and Codex, read-only) ----------
-export const chat = $state({ messages: mockMessages as Message[], loading: false, error: '' });
+export const chat = $state({ messages: mockMessages as Message[], loading: false, error: '', older: 0, loadingOlder: false });
 export const history = $state({ imported: false, loading: inTauri() });
 
 const CACHE_KEY = 'agentdeck.history.index';
@@ -1854,12 +1847,15 @@ let transcriptToken = 0;
 
 // ---------- transcripts: memory + IndexedDB cache, so opening a chat is instant ----------
 // A transcript is valid while the session's index entry (last update + message count) is unchanged.
-type Transcript = { stamp: string; messages: Message[] };
+// `start` is where the first loaded message sits in the chat's file: above 0, older messages are still on disk.
+type Transcript = { stamp: string; messages: Message[]; start: number };
 const transcripts = new Map<string, Transcript>();
 // The format version leads the stamp: a cached transcript from an older app version is read again (v2: token usage,
 // v3: the file each tool call changed, so a file's +/- counts survive a reload; v4: Codex tokens and model).
 const stampOf = (session: SessionItem) => `v4|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
 const MAX_SAVED = 12;
+/** How many of the newest messages of a chat survive a reload in the saved copy. */
+const SAVED_TAIL = 200;
 
 /** Agents and per-agent ids of saved chats that switched agent (the chat files cannot hold them). */
 const mixed: Record<string, Pick<SessionItem, 'agents' | 'agentIds'>> = {};
@@ -1905,9 +1901,11 @@ function keepHandout(mainId: string, asked: Message) {
   setPref('chat.otherTurns', $state.snapshot(otherTurns));
 }
 
-async function fetchTranscript(session: SessionItem): Promise<Message[]> {
-  const loaded = await loadHistory(session.source!, session.path!);
-  const own: Message[] = loaded.map((message) => ({
+/** Messages shown per read of the chat's file: the newest ones on open, the ones before them when scrolling up. */
+const PAGE_LIMIT = 80;
+
+function toMessages(session: SessionItem, loaded: HistoryMessage[]): Message[] {
+  return loaded.map((message) => ({
     ...(message.role === 'assistant' ? { agent: session.source } : {}),
     id: message.id,
     role: message.role,
@@ -1926,7 +1924,11 @@ async function fetchTranscript(session: SessionItem): Promise<Message[]> {
       ? { tokens: { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cache_read, cacheWrite: message.usage.cache_write }, model: message.model }
       : {}),
   }));
-  const others = otherTurns[session.id] ?? [];
+}
+
+/** The file's messages minus the deleted ones, with the other agents' turns that fall in the time range `[lower, upper)`. */
+function assemble(session: SessionItem, own: Message[], lower?: string, upper?: string): Message[] {
+  const others = (otherTurns[session.id] ?? []).filter((message) => (!lower || (message.at ?? '') >= lower) && (!upper || (message.at ?? '') < upper));
   const gone = new Set(hidden[session.id] ?? []);
   const out = (message: Message) => gone.has(message.id) || gone.has(signature(message));
   const shown = gone.size ? own.filter((message) => !out(message)) : own;
@@ -1934,16 +1936,50 @@ async function fetchTranscript(session: SessionItem): Promise<Message[]> {
   return [...shown, ...others.filter((message) => !out(message))].sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
 }
 
-function remember(session: SessionItem, messages: Message[]) {
-  const entry = { stamp: stampOf(session), messages };
+async function fetchTranscript(session: SessionItem): Promise<{ messages: Message[]; start: number }> {
+  const page = await loadHistoryPage(session.source!, session.path!, null, PAGE_LIMIT);
+  const own = toMessages(session, page.messages);
+  return { messages: assemble(session, own, page.start > 0 ? own[0]?.at : undefined), start: page.start };
+}
+
+/** Reads the page of messages before the first one on screen and puts it in front. Returns how many it added. */
+export async function loadOlder(session: SessionItem | undefined): Promise<number> {
+  if (!session?.path || !session.source || chat.older <= 0 || chat.loadingOlder) return 0;
+  chat.loadingOlder = true;
+  try {
+    const page = await loadHistoryPage(session.source, session.path, chat.older, PAGE_LIMIT);
+    if (workspace.activeId !== session.id) return 0;
+    const own = toMessages(session, page.messages);
+    const added = assemble(session, own, page.start > 0 ? own[0]?.at : undefined, chat.messages[0]?.at);
+    chat.messages = [...added, ...chat.messages];
+    chat.older = page.start;
+    const cached = transcripts.get(session.id);
+    if (cached) transcripts.set(session.id, { ...cached, messages: [...added, ...cached.messages], start: page.start });
+    return added.length;
+  } catch (error) {
+    chat.error = String(error);
+    return 0;
+  } finally {
+    chat.loadingOlder = false;
+  }
+}
+
+function remember(session: SessionItem, messages: Message[], start: number) {
+  const entry = { stamp: stampOf(session), messages, start };
   transcripts.set(session.id, entry);
   // The most recently opened few also survive a reload (F5 shows the chat at once).
-  void getPref<string[]>('transcripts.keys').then((keys = []) => {
-    const next = [session.id, ...keys.filter((key) => key !== session.id)];
-    for (const old of next.slice(MAX_SAVED)) setPref(`transcript.${old}`, null);
-    setPref('transcripts.keys', next.slice(0, MAX_SAVED));
-    setPref(`transcript.${session.id}`, JSON.parse(JSON.stringify(entry)));
-  });
+  // Cloning a long chat is slow, so it waits for an idle moment and keeps only the newest messages: F5 then shows
+  // the end at once, and the full file is read again right after.
+  const persist = () =>
+    void getPref<string[]>('transcripts.keys').then((keys = []) => {
+      const next = [session.id, ...keys.filter((key) => key !== session.id)];
+      for (const old of next.slice(MAX_SAVED)) setPref(`transcript.${old}`, null);
+      setPref('transcripts.keys', next.slice(0, MAX_SAVED));
+      const tail = { stamp: '', messages: messages.slice(-SAVED_TAIL), start: start + Math.max(0, messages.length - SAVED_TAIL) };
+      setPref(`transcript.${session.id}`, JSON.parse(JSON.stringify(tail)));
+    });
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(persist, { timeout: 3000 });
+  else setTimeout(persist, 500);
 }
 
 /** Warms the cache for a chat the user is likely to open next (row hover, most recent ones). */
@@ -1952,7 +1988,8 @@ export async function prefetchTranscript(session: SessionItem | undefined) {
   if (!session?.path || !session.source || transcripts.get(session.id)?.stamp === stampOf(session) || prefetching.has(session.id)) return;
   prefetching.add(session.id);
   try {
-    remember(session, await fetchTranscript(session));
+    const fresh = await fetchTranscript(session);
+    remember(session, fresh.messages, fresh.start);
   } catch {
     // Opening the chat will report the error.
   } finally {
@@ -1964,6 +2001,7 @@ export async function prefetchTranscript(session: SessionItem | undefined) {
 export async function openTranscript(session: SessionItem | undefined) {
   const token = ++transcriptToken;
   chat.error = '';
+  chat.older = 0;
   if (!session) {
     chat.messages = [];
     return;
@@ -1972,6 +2010,12 @@ export async function openTranscript(session: SessionItem | undefined) {
     chat.messages = localMessages[session.id] ?? (mockIds.has(session.id) ? mockMessages : []);
     return;
   }
+  // Show the empty chat with its skeleton first and let it paint: reading the saved copy and mounting a long chat
+  // takes a moment on the main thread, and the window must not look frozen meanwhile.
+  chat.messages = [];
+  chat.loading = true;
+  await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+  if (token !== transcriptToken) return;
   let cached = transcripts.get(session.id);
   if (!cached) {
     const saved = await getPref<Transcript>(`transcript.${session.id}`);
@@ -1981,6 +2025,8 @@ export async function openTranscript(session: SessionItem | undefined) {
   if (cached) {
     // Show what we have right away; a stale copy is replaced as soon as the fresh one arrives.
     chat.messages = withLive(session.id, cached.messages);
+    chat.older = cached.start ?? 0;
+    chat.loading = false;
     if (cached.stamp === stampOf(session)) return;
   } else {
     chat.loading = true;
@@ -1988,8 +2034,9 @@ export async function openTranscript(session: SessionItem | undefined) {
   try {
     const fresh = await fetchTranscript(session);
     if (token !== transcriptToken) return;
-    chat.messages = withLive(session.id, fresh);
-    remember(session, fresh);
+    chat.messages = withLive(session.id, fresh.messages);
+    chat.older = fresh.start;
+    remember(session, fresh.messages, fresh.start);
   } catch (error) {
     if (token !== transcriptToken) return;
     if (!cached) chat.messages = [];

@@ -53,9 +53,23 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 });
 
+// Rows of a long chat are mounted again each time they scroll back into view: an answer that was already parsed and
+// sanitised is taken from here. Only recent texts are kept (a streaming answer adds one entry per step).
+const rendered = new Map<string, string>();
+const RENDERED_MAX = 400;
+
 export function renderMarkdown(source: string): string {
+  const known = rendered.get(source);
+  if (known !== undefined) {
+    rendered.delete(source);
+    rendered.set(source, known);
+    return known;
+  }
   const html = marked.parse(source, { async: false });
   // Tables sit in a rounded, scrollable card like the code blocks.
   const framed = html.replaceAll('<table>', '<div class="md-table"><table>').replaceAll('</table>', '</table></div>');
-  return DOMPurify.sanitize(framed, { ADD_ATTR: ['target'] });
+  const clean = DOMPurify.sanitize(framed, { ADD_ATTR: ['target'] });
+  rendered.set(source, clean);
+  if (rendered.size > RENDERED_MAX) rendered.delete(rendered.keys().next().value as string);
+  return clean;
 }

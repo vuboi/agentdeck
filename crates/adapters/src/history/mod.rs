@@ -149,6 +149,35 @@ pub fn list_all(roots: &Roots) -> Vec<HistorySession> {
     sessions
 }
 
+/// One window of a transcript: `messages` are the ones at `start..start + messages.len()` of `total`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HistoryPage {
+    pub total: usize,
+    pub start: usize,
+    pub messages: Vec<HistoryMessage>,
+}
+
+/// At most `limit` messages ending just before `before` (the end of the transcript when `None`). The file is
+/// still parsed whole here, natively, but only the window crosses to the UI, which is where the time went.
+pub fn load_page(
+    roots: &Roots,
+    source: Source,
+    path: &Path,
+    before: Option<usize>,
+    limit: usize,
+) -> Result<HistoryPage, HistoryError> {
+    let mut messages = load(roots, source, path)?;
+    let total = messages.len();
+    let end = before.map_or(total, |before| before.min(total));
+    let start = end.saturating_sub(limit.max(1));
+    messages.truncate(end);
+    Ok(HistoryPage {
+        total,
+        start,
+        messages: messages.split_off(start),
+    })
+}
+
 /// The transcript of one session. The path must live inside the history folders.
 pub fn load(
     roots: &Roots,
