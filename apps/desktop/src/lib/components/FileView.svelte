@@ -92,7 +92,7 @@
   {/if}
   {#if error}
     <div class="flex flex-1 items-center justify-center p-6">
-      <div class="flex w-full max-w-md flex-col items-center gap-3 rounded-lg border border-border bg-card px-6 py-7 text-center">
+      <div class="flex w-full max-w-md flex-col items-center gap-3 text-center">
         <span class="grid size-10 place-items-center rounded-full bg-destructive/10 text-destructive">
           <ZIcon zType={icon('lucideFileX')} class="size-5" />
         </span>
