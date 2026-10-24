@@ -497,7 +497,7 @@
     rows="1"
     wrap="soft"
     aria-label="Message"
-    placeholder={running ? `Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt` : `Do anything… (while it works: Enter queues, ${mac ? '⌘' : 'Ctrl'}+Enter interrupts)`}
+    placeholder={running ? `Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt` : 'Do anything…'}
     class="max-h-45 min-h-6 w-full resize-none overflow-x-hidden break-words border-0 bg-transparent px-1 pt-0.5 pb-1.5 text-sm leading-normal outline-none placeholder:text-muted-foreground"
   ></textarea>
 

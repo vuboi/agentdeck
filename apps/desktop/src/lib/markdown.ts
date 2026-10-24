@@ -73,3 +73,22 @@ export function renderMarkdown(source: string): string {
   if (rendered.size > RENDERED_MAX) rendered.delete(rendered.keys().next().value as string);
   return clean;
 }
+
+// Code colouring in flight. A chat that is being opened waits for it (a short while at most) before it is shown, so code
+// does not appear plain and then change colour in front of the reader.
+let colouring = 0;
+let settled: (() => void)[] = [];
+export function colourStarted() {
+  colouring++;
+}
+export function colourFinished() {
+  colouring = Math.max(0, colouring - 1);
+  if (colouring === 0) for (const done of settled.splice(0)) done();
+}
+export function whenColoured(maxMs: number): Promise<void> {
+  if (colouring === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    settled.push(resolve);
+    setTimeout(resolve, maxMs);
+  });
+}

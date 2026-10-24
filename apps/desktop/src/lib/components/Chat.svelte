@@ -6,6 +6,7 @@
   import { showSession } from '../content-tabs.svelte';
   import { LOADER } from '../loaders';
   import { toast } from '../toast';
+  import { whenColoured } from '../markdown';
   import { activeSession, AGENTS, answerPermission, answerQuestions, chat, editMessage, forkSession, isRunning, loadOlder, newSession, openTranscript, pendingProject, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
@@ -110,10 +111,11 @@
   // ---------- virtual list (same approach as ZChat) ----------
   // Pinned to the bottom, follows new rows only when already there, so a reader scrolled into
   // history is never yanked down by an incoming reply.
-  // Only the newest PAGE messages are mounted; scrolling near the top reveals PAGE more. A long chat then opens
+  // Only the newest rows are mounted; scrolling up reveals more, a few at a time (STEP). A long chat then opens
   // with a handful of rows to measure instead of all of them.
   const PAGE = 40;
-  // A chat opens with only INITIAL rows mounted (enough to fill the screen) and grows to PAGE once the page is idle.
+  // A chat opens with INITIAL rows mounted (enough to fill the screen). Nothing more is mounted until the reader
+  // scrolls up: rows added after the chat is shown would move it.
   const INITIAL = 14;
   let windowSize = $state(INITIAL);
   const from = $derived(Math.max(0, chat.messages.length - windowSize));
@@ -197,6 +199,9 @@
   async function revealAtEnd() {
     await pinToNewest();
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    // Code on screen is coloured before it is seen (a long wait is not worth it: 300ms at most).
+    await whenColoured(300);
+    await pinToNewest();
     revealed = true;
   }
   // As soon as there is something to show (the saved copy, or the file once it is read), not when the file has been
@@ -245,9 +250,6 @@
       stickToEnd(6000);
       void openTranscript(workspace.sessions.find((item) => item.id === workspace.activeId)).then(() => {
         stickToEnd();
-        const grow = () => (windowSize = Math.max(windowSize, PAGE));
-        if (typeof requestIdleCallback === 'function') requestIdleCallback(grow, { timeout: 1000 });
-        else setTimeout(grow, 300);
       });
     });
   });
