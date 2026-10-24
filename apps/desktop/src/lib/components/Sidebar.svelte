@@ -66,24 +66,41 @@
     clearTimeout(glideTimer);
     glideTimer = setTimeout(() => treeWrap?.classList.remove('z-tree-moving'), 320);
   }
-  const visibleIds = (list: ZTreeNode<TreeData>[]): string[] =>
-    list.flatMap((node) => [node.id, ...(node.children?.length && expanded.includes(node.id) ? visibleIds(node.children) : [])]);
+  const visibleIds = (list: ZTreeNode<TreeData>[], open: string[] = expanded): string[] =>
+    list.flatMap((node) => [node.id, ...(node.children?.length && open.includes(node.id) ? visibleIds(node.children, open) : [])]);
   const rowAt = (index: number) => treeWrap?.querySelector<HTMLElement>(`[role="treeitem"][data-index="${index}"]`);
   const MOVING_ROWS = 30;
 
   /** Applies a change to what the tree shows, with the rows that leave or arrive animated. */
-  function animateChange(next: { collapsed?: string[]; showAll?: string[] }, apply: () => void) {
+  function animateChange(next: { collapsed?: string[]; showAll?: string[]; expanded?: string[] }, apply: () => void) {
     if (reduced || !treeWrap) return apply();
     const before = visibleIds(nodes);
-    const after = visibleIds(buildTree({ view, collapsed: next.collapsed ?? collapsed, showAll: next.showAll ?? showAll }));
+    const after = visibleIds(buildTree({ view, collapsed: next.collapsed ?? collapsed, showAll: next.showAll ?? showAll }), next.expanded ?? expanded);
     const stays = new Set(after);
     const leaving = before.flatMap((id, index) => (stays.has(id) ? [] : [index])).slice(0, MOVING_ROWS);
     if (leaving.length) {
-      for (const index of leaving) rowAt(index)?.classList.add('z-tree-exit');
+      // As the tree itself does for a folder: the rows that go are cloned at their old place and fade out there while
+      // the tree already shows the new list (the rows below glide up), and its height holds until that is over.
+      const container = rowAt(leaving[0])?.parentElement;
+      const clones = leaving.flatMap((index) => {
+        const row = rowAt(index);
+        if (!row || !container) return [];
+        const clone = row.cloneNode(true) as HTMLElement;
+        for (const attribute of ['role', 'tabindex', 'data-index', 'data-glide-item', 'id']) clone.removeAttribute(attribute);
+        clone.setAttribute('aria-hidden', 'true');
+        clone.classList.add('z-tree-exit', 'pointer-events-none');
+        return [clone];
+      });
+      if (container) {
+        container.style.minHeight = `${container.offsetHeight}px`;
+        container.append(...clones);
+      }
+      glide();
+      apply();
       setTimeout(() => {
-        glide();
-        apply();
-      }, 140);
+        for (const clone of clones) clone.remove();
+        if (container) container.style.minHeight = '';
+      }, 320);
       return;
     }
     const known = new Set(before);
@@ -204,6 +221,9 @@
     if (node.data?.kind === 'session' && node.data.session) {
       clickedRow = node.id;
       showSession(node.data.session.id);
+      // The tree keeps the mouse from taking focus, so the row clicked before (a folder, say) would stay focused and
+      // keep showing its hover buttons: focus moves to the row that is now open.
+      requestAnimationFrame(() => treeWrap?.querySelector<HTMLElement>('[role="treeitem"][data-selected="true"]')?.focus({ preventScroll: true }));
     }
     else if (node.data?.kind === 'section' && node.data.count) toggleSection(sectionKey(node.id));
     else if (node.data?.kind === 'more' && node.data.group) toggleMore(node.data.group);
@@ -245,7 +265,15 @@
   }
 
   // A chat folds and unfolds only by its arrow; a project row also does it when clicked.
-  const toggleNode = (id: string) => (expanded = expanded.includes(id) ? expanded.filter((item) => item !== id) : [...expanded, id]);
+  function toggleNode(id: string) {
+    const next = expanded.includes(id) ? expanded.filter((item) => item !== id) : [...expanded, id];
+    animateChange({ expanded: next }, () => (expanded = next));
+    // A click leaves the row focused, and a focused row keeps its hover buttons on after the mouse has gone.
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.getAttribute('role') === 'treeitem') active.blur();
+    });
+  }
 
   function fork(sessionId: string) {
     forkSession(sessionId);
@@ -594,7 +622,7 @@
 
   <!-- Full width, so the tree's own scrollbar sits flush against the sidebar border. -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div bind:clientHeight={treeHeight} bind:this={treeBox} class="relative min-h-0 flex-1" oncontextmenu={onTreeContextMenu}>
+  <div bind:clientHeight={treeHeight} bind:this={treeBox} class="relative mt-1.5 min-h-0 flex-1" oncontextmenu={onTreeContextMenu}>
     {#if history.loading && workspace.sessions.length === 0}
       <!-- First load: centred in the list, where the chats will appear. -->
       <div class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground" role="status">
@@ -790,6 +818,10 @@
 
 
 <style>
+  /* The scrollbar has its own lane, so rows do not shift sideways when it appears or goes. */
+  aside :global(.z-tree) {
+    scrollbar-gutter: stable;
+  }
   /* Where a new session will go: its project (or "This computer") keeps a tinted row until the first message. */
   /* Opaque (mixed with the sidebar), so the fading overlay of the row's buttons uses the very same colour. */
   :global(.z-tree-row:has([data-pending])) {
