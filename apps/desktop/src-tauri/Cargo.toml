@@ -37,6 +37,7 @@ tree-sitter-java = "0.23.5"
 tree-sitter-c-sharp = "0.23.5"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+getrandom = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"

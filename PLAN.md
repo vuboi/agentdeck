@@ -278,7 +278,7 @@ phần "exact" của M6; phần estimate/fallback vẫn ở M6/M8.
 
 **Hiện trạng.** Trait `Provider` (`crates/adapters/src/agent/mod.rs`) đã đủ để thêm CLI mới: một impl = `args()` + `parse_line()`, UI chỉ thấy `AgentEvent`. `AgentKind` trong protocol đã có `antigravity`. `models.svelte.ts` đang có provider placeholder `gemini` (model giả) và `provider_for` trong `lib.rs` chỉ biết `claude`/`codex`.
 
-**CLI thật (đã chạy thử, `agy` 1.4.5, `C:\Users\boi.vn\AppData\Local\agy\bin\agy.exe`).**
+**CLI thật (đã chạy thử, `agy` 1.4.5, `%LOCALAPPDATA%\agy\bin\agy.exe`).**
 - Một lượt: `agy -p "<prompt>" --output-format stream-json --model <id>`; nhiều lượt trong một process: `--input-format stream-json` (NDJSON trên stdin).
 - Cờ dùng được: `--model`, `--effort low|medium|high|xhigh|max`, `--mode accept-edits|auto|plan`, `--dangerously-skip-permissions`, `--conversation <id>` (resume), `--continue`, `--add-dir`, `--project`, `--sandbox`, `--print-timeout`.
 - `agy models` in `<id>\t<label>`; id đã gồm mức effort (`gemini-4-argon-high`, `claude-opus-5-5-medium`, `gpt-oss-120b-medium`…), và có cả model Claude/GPT-OSS chạy qua Antigravity.

@@ -82,6 +82,7 @@ dependencies = [
  "ag-adapters",
  "base64 0.22.1",
  "enigo",
+ "getrandom 0.3.4",
  "ignore",
  "png 0.17.16",
  "portable-pty",

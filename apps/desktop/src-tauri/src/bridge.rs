@@ -1,10 +1,14 @@
 //! A small HTTP server on 127.0.0.1 that lets the agent read what the AgentDeck browser shows: the console, the
 //! network, the DOM, and run a script in the page. The address is put in `AGENTDECK_BRIDGE` (the agent process
 //! inherits it) and named in the agent system prompt. It only listens on the loopback interface.
+//!
+//! A web page in the user's browser can also reach 127.0.0.1, so the server does not answer just anyone: every
+//! address starts with a secret token (`AGENTDECK_BRIDGE` already includes it), the Host must be the loopback
+//! address, and a request that carries an `Origin` header (a browser page, never an agent) is refused.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -90,6 +94,62 @@ pub fn ingest(report: &Value) {
 
 const PREFERRED_PORT: u16 = 47821;
 
+/// The secret every address of the bridge starts with. It is kept in the app's data folder, so the address
+/// stays the same between runs (an MCP server stored in an agent's own config keeps working).
+static TOKEN: OnceLock<String> = OnceLock::new();
+static PORT: AtomicU16 = AtomicU16::new(0);
+
+fn load_token(app: &AppHandle) -> Option<String> {
+    let file = app.path().app_data_dir().ok().map(|dir| dir.join("bridge-token"));
+    if let Some(text) = file.as_ref().and_then(|file| std::fs::read_to_string(file).ok()) {
+        let text = text.trim();
+        if text.len() >= 32 && text.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(text.to_string());
+        }
+    }
+    let mut bytes = [0u8; 24];
+    getrandom::fill(&mut bytes).ok()?;
+    let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    if let Some(file) = file {
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::write(&file, &token).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+    Some(token)
+}
+
+/// The target of a request without the token, or None when the request must be refused: wrong or missing token,
+/// a Host that is not this machine's loopback address (DNS rebinding), or an Origin header (a web page).
+fn authorize(head: &str, target: &str, token: &str, port: u16) -> Option<String> {
+    let mut host = None;
+    for line in head.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else { continue };
+        match name.trim().to_ascii_lowercase().as_str() {
+            "origin" => return None,
+            "host" => host = Some(value.trim().to_ascii_lowercase()),
+            _ => {}
+        }
+    }
+    let host = host?;
+    if host != format!("127.0.0.1:{port}") && host != format!("localhost:{port}") {
+        return None;
+    }
+    let rest = target.strip_prefix('/')?.strip_prefix(token)?;
+    match rest.chars().next() {
+        None => Some("/".to_string()),
+        Some('/') => Some(rest.to_string()),
+        Some('?') => Some(format!("/{rest}")),
+        Some(_) => None,
+    }
+}
+
 /// Starts the server; its address goes to `AGENTDECK_BRIDGE`.
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -105,7 +165,12 @@ pub fn start(app: AppHandle) {
         let Ok(address) = listener.local_addr() else {
             return;
         };
-        std::env::set_var("AGENTDECK_BRIDGE", format!("http://{address}"));
+        let Some(token) = load_token(&app) else {
+            return;
+        };
+        let _ = TOKEN.set(token.clone());
+        PORT.store(address.port(), Ordering::Relaxed);
+        std::env::set_var("AGENTDECK_BRIDGE", format!("http://{address}/{token}"));
         loop {
             let Ok((stream, _)) = listener.accept().await else {
                 continue;
@@ -159,6 +224,11 @@ async fn serve(mut stream: TcpStream, app: AppHandle) -> std::io::Result<()> {
         .nth(1)
         .unwrap_or("/")
         .to_string();
+    let Some(target) = TOKEN.get().and_then(|token| authorize(&head, &target, token, PORT.load(Ordering::Relaxed))) else {
+        let refusal = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        stream.write_all(refusal.as_bytes()).await?;
+        return stream.shutdown().await;
+    };
     let (path, query) = target.split_once('?').unwrap_or((&target, ""));
     let params: HashMap<String, String> = query
         .split('&')
@@ -243,7 +313,40 @@ fn decode(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::is_post_request;
+    use super::{authorize, is_post_request};
+
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+    fn head(target: &str, extra: &str) -> String {
+        format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1:47821\r\n{extra}\r\n")
+    }
+
+    #[test]
+    fn token_in_the_path_is_stripped() {
+        let target = format!("/{TOKEN}/page?x=1");
+        assert_eq!(authorize(&head(&target, ""), &target, TOKEN, 47821).as_deref(), Some("/page?x=1"));
+        let bare = format!("/{TOKEN}");
+        assert_eq!(authorize(&head(&bare, ""), &bare, TOKEN, 47821).as_deref(), Some("/"));
+    }
+
+    #[test]
+    fn wrong_or_missing_token_is_refused() {
+        assert!(authorize(&head("/page", ""), "/page", TOKEN, 47821).is_none());
+        let wrong = format!("/{}x/page", TOKEN);
+        assert!(authorize(&head(&wrong, ""), &wrong, TOKEN, 47821).is_none());
+        assert!(authorize(&head("/mcp", ""), "/mcp", TOKEN, 47821).is_none());
+    }
+
+    #[test]
+    fn foreign_host_or_origin_is_refused() {
+        let target = format!("/{TOKEN}/page");
+        let rebound = "GET / HTTP/1.1\r\nHost: evil.example:47821\r\n\r\n";
+        assert!(authorize(rebound, &target, TOKEN, 47821).is_none());
+        assert!(authorize(&head(&target, "Origin: https://evil.example\r\n"), &target, TOKEN, 47821).is_none());
+        assert!(authorize("GET / HTTP/1.1\r\n\r\n", &target, TOKEN, 47821).is_none());
+        let local = "GET / HTTP/1.1\r\nHost: localhost:47821\r\n\r\n";
+        assert!(authorize(local, &target, TOKEN, 47821).is_some());
+    }
 
     #[test]
     fn accepts_post_method_regardless_of_case() {
