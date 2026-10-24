@@ -187,8 +187,9 @@
     });
   }
 
-  // A chat is shown only once it sits at its end: it fades in there, instead of appearing at the top and then jumping
-  // (which looked like two flashes).
+  // A chat is shown only once it sits at its end, and at once: no fade (a fade over the skeleton looked like a ghost),
+  // and not first at the top and then at the end (which looked like two flashes). Hidden, it is still laid out and
+  // measured, so the pin to the end works while nobody sees it.
   let revealed = $state(true);
   async function revealAtEnd() {
     await pinToNewest();
@@ -212,6 +213,14 @@
   let stickUntil = 0;
   const stickToEnd = (ms = 3000) => (stickUntil = performance.now() + ms);
   const stopSticking = () => (stickUntil = 0);
+  // The list is replaced as a whole when the fresh copy of a chat replaces the saved one, or older messages are added:
+  // a reader who was at the end stays there through it (rows are measured again and the height moves).
+  $effect(() => {
+    void chat.messages;
+    untrack(() => {
+      if (following) stickToEnd(1500);
+    });
+  });
   function watchListHeight(node: HTMLElement) {
     const observer = new ResizeObserver(() => {
       if (performance.now() < stickUntil && viewportEl) viewportEl.scrollTop = viewportEl.scrollHeight;
@@ -521,7 +530,7 @@
     {/if}
 
     <!-- svelte-ignore a11y_no_static_element_interactions (the events only tell that the reader took over the scrolling) -->
-    <div bind:this={viewportEl} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={stopSticking} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 transition-opacity duration-200 ease-out [scrollbar-gutter:stable]" style:opacity={chat.loading || !revealed ? 0 : 1}>
+    <div bind:this={viewportEl} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={stopSticking} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 [scrollbar-gutter:stable] {chat.loading || !revealed ? 'invisible' : ''}">
       <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" {@attach watchListHeight} role="log" aria-live="polite" aria-label="Conversation">
         {#each $virtualizer.getVirtualItems() as row (row.key)}
           {@const message = chat.messages[row.index + from]}
