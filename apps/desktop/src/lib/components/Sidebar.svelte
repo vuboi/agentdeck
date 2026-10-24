@@ -61,9 +61,14 @@
   // App updates: checked in the background; the button next to Settings shows a dot when one is waiting.
   let updateOpen = $state(false);
   $effect(() => startUpdateChecks());
+  // The icon turns while a check runs, and for at least a moment so a quick answer is still seen.
+  let spinning = $state(false);
+  const turning = $derived(spinning || updater.status === 'checking' || updater.status === 'downloading');
   async function onUpdateClick() {
     if (updater.status === 'idle' || updater.status === 'error') {
-      const found = await checkForUpdate();
+      spinning = true;
+      const [found] = await Promise.all([checkForUpdate(), new Promise((resolve) => setTimeout(resolve, 900))]);
+      spinning = false;
       if (found) updateOpen = true;
       else if (updater.status === 'error') toast.error(`Could not check for updates: ${updater.error}`);
       else if (updater.error === 'none') toast.info('No update has been published yet');
@@ -674,7 +679,7 @@
     <span class="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-[10px]">ZO</span>
     <span class="truncate">ZUI Organization</span>
     <ZButton zWave={false} zType="ghost" zSize="sm" class="relative ml-auto h-6 w-6" aria-label={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} title={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} onclick={onUpdateClick}>
-      <ZIcon zType={(updater.status === 'checking' ? 'lucideLoader' : 'lucideDownload') as ZIconName} class="size-3.5" />
+      <ZIcon zType={'lucideRefreshCw' as ZIconName} class="size-3.5 {turning ? 'animate-spin' : ''}" />
       {#if updater.status === 'available' || updater.status === 'downloading'}<span class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"></span>{/if}
     </ZButton>
     <ZButton zWave={false} zType="ghost" zSize="sm" class="relative h-6 w-6" aria-label="Settings (Ctrl+,)" title="Settings (Ctrl+,)" onclick={() => openSettings()}>
