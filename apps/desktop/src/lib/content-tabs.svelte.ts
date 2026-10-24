@@ -59,7 +59,8 @@ $effect.root(() => {
     if (!ready.tabs || !id) return;
     untrack(() => {
       if (unsent) {
-        contentTabs.active = '';
+        // Unless it was opened in a tab of its own (the + of the tab bar): then that tab is the one selected.
+        contentTabs.active = contentTabs.tabs.some((tab) => tab.id === chatId(id)) ? chatId(id) : '';
         return;
       }
       const current = contentTabs.tabs.find((tab) => tab.id === contentTabs.active);
@@ -74,7 +75,6 @@ $effect.root(() => {
   });
 });
 
-/** Open (or focus) the chat tab of a session and make it the session on screen. */
 // An unsent new session that is dropped (another one took its place) leaves no tab behind.
 watchDroppedDrafts((ids) => {
   const gone = new Set(ids.map(chatId));
@@ -84,6 +84,7 @@ watchDroppedDrafts((ids) => {
   if (gone.has(contentTabs.active)) contentTabs.active = keep.find((tab) => tab.kind === 'chat' && tab.sessionId === workspace.activeId)?.id ?? keep[0]?.id ?? '';
 });
 
+/** Open (or focus) the chat tab of a session and make it the session on screen. */
 export function openChatTab(sessionId: string) {
   if (!contentTabs.tabs.some((tab) => tab.id === chatId(sessionId))) {
     contentTabs.tabs.push({ id: chatId(sessionId), kind: 'chat', sessionId });
