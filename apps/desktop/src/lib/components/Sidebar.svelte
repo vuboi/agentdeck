@@ -599,11 +599,11 @@
 
 <aside class="flex h-full min-w-0 flex-col bg-sidebar" aria-label="Sessions">
   <!-- Header row shared with the other panes: same height, one continuous bottom line. -->
-  <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3" data-tauri-drag-region>
+  <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 pl-3" data-tauri-drag-region>
     <Logo class="size-5" />
     <span class="text-xs font-semibold" data-tauri-drag-region>AgentDeck</span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto h-6 w-6" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : (layout.sidebarCollapsed = true))}>
-      <ZIcon zType={'lucidePanelLeftClose' as ZIconName} class="size-3.5" />
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-7! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : (layout.sidebarCollapsed = true))}>
+      <ZIcon zType={'lucidePanelLeft' as ZIconName} class="size-3.5" />
     </ZButton>
   </div>
 

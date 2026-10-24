@@ -316,7 +316,7 @@
         title={layout.sidebarHidden ? 'Sessions' : 'Show sidebar (Ctrl+B)'}
         onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = !layout.sidebarDrawer) : (layout.sidebarCollapsed = false))}
       >
-        <ZIcon zType={layout.sidebarHidden ? 'lucideMenu' : 'lucidePanelLeftOpen'} class="size-4" />
+        <ZIcon zType={layout.sidebarHidden ? 'lucideMenu' : 'lucidePanelLeft'} class="size-4" />
       </button>
     {/if}
     <div class="flex min-w-0 flex-1 items-center gap-1 pl-2">
