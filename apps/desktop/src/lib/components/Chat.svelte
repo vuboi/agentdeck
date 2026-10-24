@@ -428,6 +428,7 @@
           onclick={() => {
             newSession();
             openChatTab(workspace.activeId);
+            requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('main[aria-label="Conversation"] form textarea')?.focus());
           }}
         >
           <ZIcon zType="lucidePlus" class="size-4" />

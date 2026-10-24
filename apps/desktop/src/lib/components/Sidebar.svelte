@@ -272,6 +272,9 @@
       if (active instanceof HTMLElement && active.getAttribute('role') === 'treeitem') active.blur();
     });
   }
+  function focusComposer() {
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('main[aria-label="Conversation"] form textarea')?.focus());
+  }
   function toggleNode(id: string) {
     const next = expanded.includes(id) ? expanded.filter((item) => item !== id) : [...expanded, id];
     animateChange({ expanded: next }, () => (expanded = next));
@@ -617,7 +620,8 @@
 
   <div class="border-b border-border px-2 py-2">
     <div class="flex gap-1">
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 min-w-0 flex-1 justify-start gap-2 px-2 text-xs" onclick={() => newSession()}>
+      <!-- Lit while the open chat is a new one nobody wrote in yet; the message box is focused, ready to type. -->
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 min-w-0 flex-1 justify-start gap-2 px-2 text-xs {pending ? 'bg-primary/15! text-primary!' : ''}" onclick={() => { newSession(); focusComposer(); }}>
         <ZIcon zType="lucidePlus" class="size-3.5" />
         New session
       </ZButton>

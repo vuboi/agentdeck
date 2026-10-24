@@ -733,7 +733,8 @@
                   {#if !draft}<p class="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">No custom provider yet. Add any OpenAI- or Anthropic-compatible endpoint, or a local Ollama.</p>{/if}
                 {:else}
                   <ul class="flex flex-col gap-2">
-                    {#each connectors.custom as provider (provider.id)}
+                    <!-- The provider being edited is shown by the form above, not twice. -->
+                    {#each connectors.custom.filter((item) => item.id !== draft?.id) as provider (provider.id)}
                       <li class="flex items-center gap-3 rounded-lg border border-border p-3">
                         <span class="grid size-8 shrink-0 place-items-center rounded-md bg-muted">{#if provider.logo}<img src={provider.logo} alt="" class="size-5 object-contain" />{:else}<ZIcon zType={icon('lucideServer')} class="size-4" />{/if}</span>
                         <span class="min-w-0 flex-1">
