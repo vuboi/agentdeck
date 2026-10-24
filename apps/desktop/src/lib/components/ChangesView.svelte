@@ -150,7 +150,7 @@
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Changes">
   {#if !root || failure}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
-      <ZIcon zType={icon('lucideGitCompare')} zSize="36" class="size-9 opacity-60" />
+      <ZIcon zType={icon('lucideGitCompare')} zSize="28" class="size-7 opacity-60" />
       <p class="m-0 max-w-60">{root ? failure : 'Open a project to see its changes.'}</p>
     </div>
   {:else}
@@ -158,7 +158,7 @@
       <!-- git has not answered yet: nothing to show, and no loading note for a read this short. -->
     {:else if changes.length === 0}
       <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
-        <ZIcon zType={icon('lucideGitCompare')} zSize="36" class="size-9 opacity-60" />
+        <ZIcon zType={icon('lucideGitCompare')} zSize="28" class="size-7 opacity-60" />
         <p class="m-0">No changes since the last commit.</p>
       </div>
     {:else}

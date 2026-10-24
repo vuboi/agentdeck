@@ -441,7 +441,7 @@
       {/each}
       {#if contentTabs.tabs.length === 0 && !pendingProject()}
         <div class="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-background p-6 text-center text-muted-foreground">
-          <ZIcon zType={'lucideMessagesSquare' as ZIconName} zSize="36" class="size-9 opacity-60" />
+          <ZIcon zType={'lucideMessagesSquare' as ZIconName} zSize="28" class="size-7 opacity-60" />
           <p class="m-0 text-xs">No open tabs. Start a chat from the sidebar.</p>
         </div>
       {/if}
@@ -516,7 +516,7 @@
           <span class="max-w-sm text-center text-destructive">{chat.error}</span>
         {:else}
           <div class="flex flex-col items-center gap-3">
-            <ZIcon zType={'lucideMessagesSquare' as ZIconName} zSize="36" class="size-9 opacity-60" />
+            <ZIcon zType={'lucideMessagesSquare' as ZIconName} zSize="28" class="size-7 opacity-60" />
             <p class="m-0 text-xs">No messages yet. Say something to start.</p>
           </div>
         {/if}

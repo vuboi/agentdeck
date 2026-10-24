@@ -218,7 +218,7 @@
       {/if}
     {:else}
       <div class="flex flex-col items-center gap-2 py-6 text-center text-muted-foreground">
-        <ZIcon zType={icon('lucideMousePointerClick')} zSize="28" class="size-7 opacity-60" />
+        <ZIcon zType={icon('lucideMousePointerClick')} zSize="24" class="size-6 opacity-60" />
         <span>Select a card to see what it was given and what it answered.</span>
       </div>
     {/if}
@@ -229,7 +229,7 @@
   <FlowTemplates />
   {#if runs.length === 0}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
-      <ZIcon zType={icon('lucideWorkflow')} zSize="36" class="size-9 opacity-60" />
+      <ZIcon zType={icon('lucideWorkflow')} zSize="28" class="size-7 opacity-60" />
       <h2 class="text-sm font-medium text-foreground">No run yet</h2>
       <p class="m-0 max-w-60 text-xs leading-normal">
         Put a flow on this chat (Use, above) and send a message, or hand a task to another agent from any chat. Type <code class="rounded bg-muted px-1 py-0.5 font-mono text-foreground">@claude</code>,

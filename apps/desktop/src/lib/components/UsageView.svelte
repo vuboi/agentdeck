@@ -174,7 +174,7 @@
     <div class="grid flex-1 place-items-center text-muted-foreground">Loading…</div>
   {:else if rows.length === 0}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
-      <ZIcon zType={'lucideActivity' as ZIconName} zSize="36" class="size-9 opacity-60" />
+      <ZIcon zType={'lucideActivity' as ZIconName} zSize="28" class="size-7 opacity-60" />
       <h2 class="m-0 text-sm font-medium text-foreground">No usage data yet</h2>
       <p class="m-0 max-w-64 leading-normal">
         {log.length > 0 ? 'Nothing was used in this range. Pick a longer one.' : 'Tokens and cost of every reply are counted here from now on.'}

@@ -130,7 +130,7 @@
   <div class="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]">
     {#if !inTauri()}
       <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground">
-        <ZIcon zType={icon('lucidePlug')} zSize="36" class="size-9 opacity-60" />
+        <ZIcon zType={icon('lucidePlug')} zSize="28" class="size-7 opacity-60" />
         <h3 class="m-0 text-sm font-medium text-foreground">Desktop app only</h3>
         <p class="m-0 max-w-56 text-xs leading-normal">The MCP list is read from your agents' config files.</p>
       </div>
@@ -148,7 +148,7 @@
 
       {#if mcp.error}
         <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground" role="alert">
-          <ZIcon zType={icon('lucideUnplug')} zSize="36" class="size-9 opacity-60" />
+          <ZIcon zType={icon('lucideUnplug')} zSize="28" class="size-7 opacity-60" />
           <h3 class="m-0 text-sm font-medium text-foreground">Could not read the MCP list</h3>
           <p class="m-0 max-w-64 text-xs leading-normal">{mcp.error}</p>
           <ZButton zWave={false} zType="outline" zSize="sm" class="mt-1 h-7 gap-1.5 px-3 text-xs" onclick={() => void loadMcp()}>
@@ -161,7 +161,7 @@
         </div>
       {:else if entries.length === 0}
         <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground">
-          <ZIcon zType={icon('lucidePlug')} zSize="36" class="size-9 opacity-60" />
+          <ZIcon zType={icon('lucidePlug')} zSize="28" class="size-7 opacity-60" />
           <h3 class="m-0 text-sm font-medium text-foreground">No MCP server yet</h3>
           <p class="m-0 max-w-56 text-xs leading-normal">Give your agents tools: press Add.</p>
         </div>
