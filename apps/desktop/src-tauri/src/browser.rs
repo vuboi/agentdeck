@@ -76,6 +76,12 @@ fn injected_script(tab: &str) -> String {
 pub fn handle_report(app: &AppHandle, body: &[u8]) {
     if let Ok(report) = serde_json::from_slice::<serde_json::Value>(body) {
         crate::bridge::ingest(&report);
+        #[cfg(not(windows))]
+        {
+            if report["kind"] == "network" {
+                fallback::network_events(app, &report);
+            }
+        }
         let _ = app.emit("browser-report", report);
     }
 }
@@ -235,6 +241,12 @@ pub async fn browser_show(
             if event == "started" && !ours {
                 remember(&tab, &url);
                 crate::bridge::page_started(&tab, &url);
+            }
+            #[cfg(not(windows))]
+            {
+                if !ours {
+                    fallback::page_event(view.app_handle(), view.label(), event, &url);
+                }
             }
             let shown = if ours { requested(&tab).unwrap_or_else(|| url.clone()) } else { url };
             let _ = view.app_handle().emit(
@@ -658,5 +670,154 @@ pub async fn devtools_cdp(app: AppHandle, tab: String, method: String, params: O
         crate::cdp::clear_cache(&view).await?;
         return Ok(serde_json::json!({}));
     }
-    crate::cdp::call(&view, &method, params.unwrap_or_else(|| serde_json::json!({})), None).await
+    let params = params.unwrap_or_else(|| serde_json::json!({}));
+    #[cfg(not(windows))]
+    {
+        if crate::cdp::call(&view, &method, params.clone(), None).await.is_err() {
+            return fallback::devtools(&app, &tab, &method, &params).await;
+        }
+    }
+    crate::cdp::call(&view, &method, params, None).await
+}
+
+/// The developer tools without DevTools access (macOS, Linux): the Network tab is built from what the injected
+/// script sees of fetch and XHR plus the page loads, and storage and cookies are read by the page itself.
+#[cfg(not(windows))]
+mod fallback {
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{LazyLock, Mutex};
+
+    use serde_json::{json, Value};
+    use tauri::{AppHandle, Emitter};
+
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    /// Response bodies by (tab, request id), newest last, so the Network tab can show a response afterwards.
+    static BODIES: LazyLock<Mutex<(HashMap<String, String>, VecDeque<String>)>> = LazyLock::new(Default::default);
+    /// The document request of each page that is loading, by webview label.
+    static DOCUMENTS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+
+    fn now() -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|time| time.as_secs_f64())
+            .unwrap_or_default()
+    }
+
+    fn emit(app: &AppHandle, label: &str, event: &str, params: Value) {
+        let _ = app.emit("devtools-net", json!({ "label": label, "event": event, "params": params }));
+    }
+
+    /// A page load as the Document request that starts the list again, and its end.
+    pub fn page_event(app: &AppHandle, label: &str, event: &str, url: &str) {
+        if event == "started" {
+            let id = format!("doc-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+            if let Ok(mut documents) = DOCUMENTS.lock() {
+                documents.insert(label.to_string(), id.clone());
+            }
+            emit(app, label, "Network.requestWillBeSent", json!({
+                "requestId": id, "loaderId": id, "type": "Document", "timestamp": now(), "wallTime": now(),
+                "request": { "url": url, "method": "GET", "headers": {} },
+            }));
+        } else if let Some(id) = DOCUMENTS.lock().ok().and_then(|mut documents| documents.remove(label)) {
+            emit(app, label, "Network.responseReceived", json!({
+                "requestId": id, "type": "Document", "timestamp": now(),
+                "response": { "url": url, "status": 200, "statusText": "", "mimeType": "text/html", "headers": {} },
+            }));
+            emit(app, label, "Network.loadingFinished", json!({ "requestId": id, "timestamp": now(), "encodedDataLength": 0 }));
+        }
+    }
+
+    /// A fetch or XHR the page reported, as the three events the Network tab is built from.
+    pub fn network_events(app: &AppHandle, report: &Value) {
+        let tab = report["tab"].as_str().unwrap_or_default();
+        let label = format!("browser-{tab}");
+        let id = format!("req-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+        let ended = report["at"].as_f64().map_or_else(now, |millis| millis / 1000.0);
+        let started = ended - report["ms"].as_f64().unwrap_or_default() / 1000.0;
+        let status = report["status"].as_i64().unwrap_or_default();
+        let kind = report["via"].as_str().unwrap_or("Fetch");
+        let mut request = json!({ "url": report["url"], "method": report["method"], "headers": {} });
+        if let Some(sent) = report["request"].as_str() {
+            request["postData"] = json!(sent);
+        }
+        emit(app, &label, "Network.requestWillBeSent", json!({ "requestId": id, "loaderId": "", "type": kind, "timestamp": started, "wallTime": started, "request": request }));
+        if status == 0 {
+            emit(app, &label, "Network.loadingFailed", json!({ "requestId": id, "timestamp": ended, "errorText": "failed" }));
+            return;
+        }
+        let mime = if report["body"].as_str().is_some_and(|body| body.trim_start().starts_with(['{', '['])) { "application/json" } else { "text/plain" };
+        emit(app, &label, "Network.responseReceived", json!({
+            "requestId": id, "type": kind, "timestamp": ended,
+            "response": { "url": report["url"], "status": status, "statusText": "", "mimeType": mime, "headers": {} },
+        }));
+        let body = report["body"].as_str().unwrap_or_default();
+        emit(app, &label, "Network.loadingFinished", json!({ "requestId": id, "timestamp": ended, "encodedDataLength": body.len() }));
+        if !body.is_empty() {
+            if let Ok(mut bodies) = BODIES.lock() {
+                let key = format!("{tab}|{id}");
+                bodies.0.insert(key.clone(), body.to_string());
+                bodies.1.push_back(key);
+                while bodies.1.len() > 300 {
+                    if let Some(old) = bodies.1.pop_front() {
+                        bodies.0.remove(&old);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Runs a script in the page and returns its value (the script returns JSON text).
+    async fn page_json(app: &AppHandle, tab: &str, script: &str) -> Result<Value, String> {
+        let report = crate::bridge::ask(app, tab, "eval", json!(script)).await?;
+        if let Some(error) = report["error"].as_str() {
+            return Err(error.to_string());
+        }
+        let text = report["result"].as_str().unwrap_or("null");
+        serde_json::from_str(text).map_err(|error| error.to_string())
+    }
+
+    pub async fn devtools(app: &AppHandle, tab: &str, method: &str, params: &Value) -> Result<Value, String> {
+        let local = params["storageId"]["isLocalStorage"].as_bool().unwrap_or(true);
+        let store = if local { "localStorage" } else { "sessionStorage" };
+        match method {
+            m if m.ends_with(".enable") => Ok(json!({})),
+            "Network.getResponseBody" => {
+                let key = format!("{tab}|{}", params["requestId"].as_str().unwrap_or_default());
+                let body = BODIES.lock().ok().and_then(|bodies| bodies.0.get(&key).cloned());
+                body.map(|body| json!({ "body": body, "base64Encoded": false }))
+                    .ok_or_else(|| "the body of this response was not kept".to_string())
+            }
+            "DOMStorage.getDOMStorageItems" => {
+                let entries = page_json(app, tab, &format!("JSON.stringify(Object.entries({store}))")).await?;
+                Ok(json!({ "entries": entries }))
+            }
+            "DOMStorage.removeDOMStorageItem" => {
+                let key = serde_json::to_string(&params["key"]).map_err(|error| error.to_string())?;
+                page_json(app, tab, &format!("{store}.removeItem({key}); 'null'")).await?;
+                Ok(json!({}))
+            }
+            "DOMStorage.clear" => {
+                page_json(app, tab, &format!("{store}.clear(); 'null'")).await?;
+                Ok(json!({}))
+            }
+            "Network.getCookies" => {
+                let script = "JSON.stringify(document.cookie.split('; ').filter(Boolean).map((item) => { const at = item.indexOf('='); return { name: item.slice(0, at), value: item.slice(at + 1), domain: location.hostname, path: '/', expires: -1, httpOnly: false, secure: location.protocol === 'https:' }; }))";
+                Ok(json!({ "cookies": page_json(app, tab, script).await? }))
+            }
+            "Network.deleteCookies" => {
+                let name = serde_json::to_string(&params["name"]).map_err(|error| error.to_string())?;
+                let path = serde_json::to_string(&params["path"]).map_err(|error| error.to_string())?;
+                let script = format!("document.cookie = {name} + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=' + ({path} || '/'); 'null'");
+                page_json(app, tab, &script).await?;
+                Ok(json!({}))
+            }
+            "Storage.clearDataForOrigin" => {
+                page_json(app, tab, "localStorage.clear(); sessionStorage.clear(); 'null'").await?;
+                Ok(json!({}))
+            }
+            "Network.clearBrowserCache" => Ok(json!({})),
+            _ => Err(format!("{method} is not available on this platform")),
+        }
+    }
 }

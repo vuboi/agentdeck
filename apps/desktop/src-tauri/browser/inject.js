@@ -47,7 +47,7 @@
   // ---- network ----
   // The response of every text request is kept (up to 20 000 characters), and what was sent: that is what
   // browser_network gives back to write a DTO or to see why a call failed.
-  const record = (method, url, status, started, body, request) =>
+  const record = (method, url, status, started, body, request, via) =>
     post({
       kind: 'network',
       method,
@@ -57,6 +57,7 @@
       at: Date.now(),
       body: body ? cut(String(body), 20000) : undefined,
       request: typeof request === 'string' && request ? cut(request, 4000) : undefined,
+      via,
     });
   const textual = (type) => /json|text|xml|javascript|html|x-www-form/i.test(type || '');
   const originalFetch = window.fetch.bind(window);
@@ -69,13 +70,13 @@
       (response) => {
         const sent = init && init.body;
         if (response.status >= 400 || textual(response.headers.get('content-type'))) {
-          response.clone().text().then((text) => record(method, url, response.status, started, text, sent), () => record(method, url, response.status, started, undefined, sent));
+          response.clone().text().then((text) => record(method, url, response.status, started, text, sent, 'Fetch'), () => record(method, url, response.status, started, undefined, sent, 'Fetch'));
         } else {
-          record(method, url, response.status, started, undefined, sent);
+          record(method, url, response.status, started, undefined, sent, 'Fetch');
         }
         return response;
       },
-      (error) => (record(method, url, 0, started), Promise.reject(error)),
+      (error) => (record(method, url, 0, started, undefined, undefined, 'Fetch'), Promise.reject(error)),
     );
   };
   const open = XMLHttpRequest.prototype.open;
@@ -93,7 +94,7 @@
       } catch {
         // The body is not readable.
       }
-      record(method, url, this.status, started, text, this.__sent);
+      record(method, url, this.status, started, text, this.__sent, 'XHR');
     });
     return open.call(this, method, url, ...rest);
   };
@@ -709,6 +710,92 @@
             (value) => post({ kind: 'eval', id, result: cut(show(value), 20000) }),
             (error) => post({ kind: 'eval', id, error: String((error && error.stack) || error) }),
           );
+      } else if (kind === 'hover') {
+        // The pointer moves over a point: the events a mouse makes on the way, for hover menus and tooltips.
+        try {
+          const el = document.elementFromPoint(arg.x, arg.y);
+          if (!el) throw new Error('nothing at ' + arg.x + ',' + arg.y);
+          const opts = { bubbles: true, cancelable: true, composed: true, clientX: arg.x, clientY: arg.y };
+          for (const type of ['pointerover', 'pointerenter', 'pointermove']) el.dispatchEvent(new PointerEvent(type, opts));
+          for (const type of ['mouseover', 'mouseenter', 'mousemove']) el.dispatchEvent(new MouseEvent(type, opts));
+          post({ kind: 'hover', id, result: { tag: el.tagName.toLowerCase() } });
+        } catch (error) {
+          post({ kind: 'hover', id, error: String(error.message || error) });
+        }
+      } else if (kind === 'scroll') {
+        // A wheel turn at a point: the nearest scrollable box under it moves, else the page.
+        try {
+          let el = document.elementFromPoint(arg.x, arg.y);
+          if (el) el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, composed: true, clientX: arg.x, clientY: arg.y, deltaX: arg.dx, deltaY: arg.dy }));
+          while (el && el !== document.body && el !== document.documentElement) {
+            const style = getComputedStyle(el);
+            const y = /auto|scroll/.test(style.overflowY) && el.scrollHeight > el.clientHeight;
+            const x = /auto|scroll/.test(style.overflowX) && el.scrollWidth > el.clientWidth;
+            if ((y && arg.dy) || (x && arg.dx)) break;
+            el = el.parentElement;
+          }
+          const box = el && el !== document.body && el !== document.documentElement ? el : window;
+          box.scrollBy({ left: arg.dx, top: arg.dy, behavior: 'instant' });
+          post({ kind: 'scroll', id, result: { x: scrollX, y: scrollY } });
+        } catch (error) {
+          post({ kind: 'scroll', id, error: String(error.message || error) });
+        }
+      } else if (kind === 'type') {
+        // Text into whatever has focus, as typing would put it.
+        try {
+          const el = document.activeElement;
+          if (!el || el === document.body) throw new Error('nothing has focus: click a field first');
+          if (!document.execCommand('insertText', false, String(arg))) {
+            const proto = Object.getPrototypeOf(el);
+            const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+            if (!setter) throw new Error('the focused element takes no text');
+            setter.call(el, el.value + String(arg));
+            el.dispatchEvent(new InputEvent('input', { bubbles: true, data: String(arg), inputType: 'insertText' }));
+          }
+          post({ kind: 'type', id, result: { typed: String(arg) } });
+        } catch (error) {
+          post({ kind: 'type', id, error: String(error.message || error) });
+        }
+      } else if (kind === 'key') {
+        // A named key: the key events, then what the browser does for it when the page did not stop it.
+        try {
+          const codes = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34, Space: 32 };
+          const name = arg === ' ' ? 'Space' : String(arg);
+          if (!codes[name]) throw new Error('unknown key ' + name);
+          const key = name === 'Space' ? ' ' : name;
+          const el = document.activeElement || document.body;
+          const init = { key, code: name, keyCode: codes[name], which: codes[name], bubbles: true, cancelable: true, composed: true };
+          const down = new KeyboardEvent('keydown', init);
+          el.dispatchEvent(down);
+          if (!down.defaultPrevented) {
+            if (name === 'Enter' || name === 'Space') el.dispatchEvent(new KeyboardEvent('keypress', init));
+            const field = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+            if (name === 'Enter') {
+              if (el.tagName === 'TEXTAREA' || el.isContentEditable) document.execCommand('insertText', false, String.fromCharCode(10));
+              else if (el.tagName === 'INPUT' && el.form) el.form.requestSubmit();
+              else if (el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'SUMMARY') el.click();
+            } else if (name === 'Space') {
+              if (field) document.execCommand('insertText', false, ' ');
+              else if (el.tagName === 'BUTTON') el.click();
+            } else if (name === 'Backspace') document.execCommand('delete');
+            else if (name === 'Delete') document.execCommand('forwardDelete');
+            else if (name === 'Tab') {
+              const items = [...document.querySelectorAll('a[href],button,input,select,textarea,summary,[tabindex]')].filter((item) => !item.disabled && item.tabIndex >= 0 && item.offsetParent !== null);
+              const at = items.indexOf(el);
+              (items[(at + 1) % items.length] || el).focus();
+            } else if (name === 'PageDown' || name === 'PageUp') scrollBy({ top: (name === 'PageDown' ? 1 : -1) * innerHeight * 0.9, behavior: 'instant' });
+            else if (name === 'Home' && !field) scrollTo({ top: 0, behavior: 'instant' });
+            else if (name === 'End' && !field) scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' });
+            else if (name.startsWith('Arrow') && field && el.setSelectionRange && el.selectionStart !== null) {
+              const to = Math.max(0, Math.min(el.value.length, el.selectionStart + (name === 'ArrowLeft' ? -1 : name === 'ArrowRight' ? 1 : 0)));
+              el.setSelectionRange(to, to);
+            } else if (name.startsWith('Arrow') && !field) scrollBy({ top: name === 'ArrowDown' ? 40 : name === 'ArrowUp' ? -40 : 0, left: name === 'ArrowRight' ? 40 : name === 'ArrowLeft' ? -40 : 0, behavior: 'instant' });
+          }
+          el.dispatchEvent(new KeyboardEvent('keyup', init));
+          post({ kind: 'key', id, result: { pressed: key } });
+        } catch (error) {
+          post({ kind: 'key', id, error: String(error.message || error) });
+        }
       } else if (kind === 'shot') {
         const lib = window.htmlToImage;
         if (!lib) return post({ kind: 'shot', id, error: 'screenshot library missing' });

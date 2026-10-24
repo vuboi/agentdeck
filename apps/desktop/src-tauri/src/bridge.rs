@@ -459,7 +459,11 @@ pub(crate) async fn answer(
         "/shot" => {
             // The picture the page shows now; the file path is the answer.
             let view = page(app, &active)?;
-            let bytes = crate::cdp::screenshot(&view).await?;
+            let bytes = match crate::cdp::screenshot(&view).await {
+                Ok(bytes) => bytes,
+                // No DevTools access (macOS, Linux): the page draws itself.
+                Err(_) => shot_via_page(app, &active).await?,
+            };
             let path = std::env::temp_dir().join(format!("agentdeck-shot-{}.png", NEXT.fetch_add(1, Ordering::Relaxed)));
             std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
             Ok(json!({ "png": path.display().to_string() }))
@@ -479,24 +483,32 @@ pub(crate) async fn answer(
         }
         "/hover" => {
             let (x, y) = point(params)?;
-            crate::cdp::hover(&page(app, &active)?, x, y).await?;
+            if crate::cdp::hover(&page(app, &active)?, x, y).await.is_err() {
+                act_via_page(app, &active, "hover", json!({ "x": x, "y": y })).await?;
+            }
             Ok(json!({ "hovered": true, "x": x, "y": y }))
         }
         "/scroll" => {
             let (x, y) = point(params)?;
             let dy = params.get("dy").and_then(|v| v.parse::<f64>().ok()).unwrap_or(400.0);
             let dx = params.get("dx").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
-            crate::cdp::scroll(&page(app, &active)?, x, y, dx, dy).await?;
+            if crate::cdp::scroll(&page(app, &active)?, x, y, dx, dy).await.is_err() {
+                act_via_page(app, &active, "scroll", json!({ "x": x, "y": y, "dx": dx, "dy": dy })).await?;
+            }
             Ok(json!({ "scrolled": true, "dx": dx, "dy": dy }))
         }
         "/type" => {
             let text = params.get("text").cloned().ok_or("send ?text=")?;
-            crate::cdp::type_text(&page(app, &active)?, &text).await?;
+            if crate::cdp::type_text(&page(app, &active)?, &text).await.is_err() {
+                act_via_page(app, &active, "type", json!(text)).await?;
+            }
             Ok(json!({ "typed": text }))
         }
         "/key" => {
             let key = params.get("key").cloned().ok_or("send ?key=")?;
-            crate::cdp::key(&page(app, &active)?, &key).await?;
+            if crate::cdp::key(&page(app, &active)?, &key).await.is_err() {
+                act_via_page(app, &active, "key", json!(key)).await?;
+            }
             Ok(json!({ "pressed": key }))
         }
         "/press" => {
@@ -681,8 +693,31 @@ fn frame_session(view: &tauri::Webview, frame: &str) -> Result<String, String> {
         .ok_or_else(|| format!("no frame matches {frame}; GET /frames lists them"))
 }
 
+/// The page drawing itself, PNG bytes: for platforms where DevTools cannot take the picture.
+async fn shot_via_page(app: &AppHandle, tab: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    let report = ask(app, tab, "shot", Value::Null).await?;
+    if let Some(error) = report["error"].as_str() {
+        return Err(error.to_string());
+    }
+    let data = report["data"].as_str().ok_or("no screenshot data")?;
+    let encoded = data.split_once(',').map_or(data, |(_, rest)| rest);
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| error.to_string())
+}
+
+/// An action done by the page itself (its own events), for platforms where DevTools cannot do it.
+async fn act_via_page(app: &AppHandle, tab: &str, kind: &str, arg: Value) -> Result<Value, String> {
+    let report = ask(app, tab, kind, arg).await?;
+    match report["error"].as_str() {
+        Some(error) => Err(error.to_string()),
+        None => Ok(report["result"].clone()),
+    }
+}
+
 /// Asks the page of a tab for something and waits for its answer.
-async fn ask(app: &AppHandle, tab: &str, kind: &str, arg: Value) -> Result<Value, String> {
+pub(crate) async fn ask(app: &AppHandle, tab: &str, kind: &str, arg: Value) -> Result<Value, String> {
     if tab.is_empty() {
         return Err("no page is open in the AgentDeck browser: call browser_open (or browser_serve to start the server) with the page address first".into());
     }

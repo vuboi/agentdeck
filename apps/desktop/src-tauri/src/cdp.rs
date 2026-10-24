@@ -385,7 +385,8 @@ const CURSOR: &str = r##"((x, y, kind) => {
 /// Shows the agent's pointer moving to a point; returns once it has arrived.
 async fn show_pointer(view: &Webview, x: f64, y: f64, kind: &str) {
     let script = format!("{CURSOR}({x}, {y}, {kind:?})");
-    if evaluate(view, &script, None).await.is_ok() {
+    // Without DevTools access the page runs it as an ordinary script; nothing to wait for but the glide.
+    if evaluate(view, &script, None).await.is_ok() || view.eval(script.as_str()).is_ok() {
         tokio::time::sleep(std::time::Duration::from_millis(520)).await;
     }
 }
