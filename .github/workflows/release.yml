@@ -23,7 +23,7 @@ jobs:
         include:
           - { os: windows-latest, args: '' }
           - { os: macos-latest, args: '--target aarch64-apple-darwin' }
-          - { os: macos-13, args: '--target x86_64-apple-darwin' }
+          - { os: macos-15-intel, args: '--target x86_64-apple-darwin' }
           - { os: ubuntu-22.04, args: '' }
     runs-on: ${{ matrix.os }}
     steps:
@@ -85,5 +85,6 @@ jobs:
           releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
-          uploadUpdaterJson: true
+          includeUpdaterJson: true
+          tauriScript: pnpm tauri
           args: ${{ matrix.args }}
