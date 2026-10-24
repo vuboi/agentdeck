@@ -92,3 +92,9 @@ export function whenColoured(maxMs: number): Promise<void> {
     setTimeout(resolve, maxMs);
   });
 }
+
+// While a chat is being opened (still hidden) code is coloured at once, so it is never seen plain. Afterwards rows that
+// mount as the reader scrolls are coloured when the page is idle: shiki is heavy and would stall the scrolling.
+let eager = false;
+export const setEagerColour = (on: boolean) => (eager = on);
+export const eagerColour = () => eager;

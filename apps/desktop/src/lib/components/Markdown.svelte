@@ -7,7 +7,7 @@
   import { untrack } from 'svelte';
   import { isLocalUrl, linkMenu, openExternal, openInPreview } from '../browser.svelte';
   import { inTauri } from '../history';
-  import { colourFinished, colourStarted, renderMarkdown } from '../markdown';
+  import { colourFinished, colourStarted, eagerColour, renderMarkdown } from '../markdown';
   import { runInTerminal } from '../terminal.svelte';
   import { theme } from '../theme.svelte';
   import { fileRootOf, openFileTab } from '../content-tabs.svelte';
@@ -195,7 +195,17 @@
     // Right away, not when the page is idle: a chat is kept hidden until it sits at its end, and colouring in that
     // window means code never shows plain first and then changes colour in front of the reader (a visible blink).
     // Colours already worked out come from the cache synchronously; shiki itself is loaded ahead (see above).
-    untrack(() => void colour(container, dark));
+    if (eagerColour()) {
+      untrack(() => void colour(container, dark));
+      return;
+    }
+    const run = () => void colour(container, dark);
+    if (typeof requestIdleCallback === 'function') {
+      const id = requestIdleCallback(run, { timeout: 800 });
+      return () => cancelIdleCallback(id);
+    }
+    const id = setTimeout(run, 50);
+    return () => clearTimeout(id);
   });
 
   const linkOf = (event: Event) => (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');

@@ -6,7 +6,7 @@
   import { showSession } from '../content-tabs.svelte';
   import { LOADER } from '../loaders';
   import { toast } from '../toast';
-  import { whenColoured } from '../markdown';
+  import { setEagerColour, whenColoured } from '../markdown';
   import { activeSession, AGENTS, answerPermission, answerQuestions, chat, editMessage, forkSession, isRunning, loadOlder, newSession, openTranscript, pendingProject, workspace } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
@@ -121,7 +121,7 @@
   const from = $derived(Math.max(0, chat.messages.length - windowSize));
   // Older rows are mounted a few at a time and well before the top is reached: one big batch is one long frame, felt
   // as a jolt while scrolling.
-  const STEP = 10;
+  const STEP = 6;
   function revealOlder() {
     if (from > 0) windowSize += STEP;
     // Everything loaded is mounted: read the next page from the chat's file.
@@ -149,6 +149,13 @@
     paddingEnd: 56,
   });
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>(virtualOptions());
+  // A row above the view that changes height (measured for the first time, code coloured, a picture loaded) moves the
+  // view by as much, so what is on screen stays put. The library skips this while scrolling up, which is exactly when
+  // older rows are mounted and measured: rows jumped. The last row is left alone: it may be a reply being written.
+  $effect(() => {
+    $virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) =>
+      item.index < chat.messages.length - from - 1 && item.start < (viewportEl?.scrollTop ?? 0);
+  });
 
   $effect(() => {
     void viewportEl;
@@ -201,6 +208,7 @@
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     // Code on screen is coloured before it is seen (a long wait is not worth it: 300ms at most).
     await whenColoured(300);
+    setEagerColour(false);
     await pinToNewest();
     revealed = true;
   }
@@ -221,14 +229,6 @@
   let stickUntil = 0;
   const stickToEnd = (ms = 3000) => (stickUntil = performance.now() + ms);
   const stopSticking = () => (stickUntil = 0);
-  // The list is replaced as a whole when the fresh copy of a chat replaces the saved one, or older messages are added:
-  // a reader who was at the end stays there through it (rows are measured again and the height moves).
-  $effect(() => {
-    void chat.messages;
-    untrack(() => {
-      if (following) stickToEnd(1500);
-    });
-  });
   function watchListHeight(node: HTMLElement) {
     const observer = new ResizeObserver(() => {
       if (performance.now() < stickUntil && viewportEl) viewportEl.scrollTop = viewportEl.scrollHeight;
@@ -241,12 +241,15 @@
   // Re-runs when the open chat changes, and when it first appears in the list (after F5 the id is restored
   // before the history index is in).
   // Gaining its file after the first answer must not reload the chat: the live messages are already right.
-  const openKey = $derived(`${workspace.activeId}|${workspace.sessions.some((item) => item.id === workspace.activeId) ? 'found' : 'missing'}`);
+  // A chat whose tab was closed and is opened again starts over too: at its end, with only its newest rows.
+  const tabOpen = $derived(contentTabs.tabs.some((tab) => tab.kind === 'chat' && tab.sessionId === workspace.activeId));
+  const openKey = $derived(`${workspace.activeId}|${workspace.sessions.some((item) => item.id === workspace.activeId) ? 'found' : 'missing'}|${tabOpen ? 'tab' : 'no tab'}`);
   $effect(() => {
     void openKey;
     untrack(() => {
       windowSize = INITIAL;
       revealed = false;
+      setEagerColour(true);
       stickToEnd(6000);
       void openTranscript(workspace.sessions.find((item) => item.id === workspace.activeId)).then(() => {
         stickToEnd();
@@ -257,7 +260,9 @@
   function measureRow(node: HTMLDivElement) {
     $virtualizer.measureElement(node);
     const height = node.offsetHeight;
-    if (height > 0) averageRow = Math.round(averageRow * 0.8 + height * 0.2);
+    // Only while the chat is still hidden: a guess that changes while the reader scrolls moves every row not measured
+    // yet, the ones on screen included.
+    if (height > 0 && !revealed) averageRow = Math.round(averageRow * 0.8 + height * 0.2);
   }
 
   // ---------- navigator: one tick per user question ----------
@@ -324,9 +329,14 @@
       view.scrollTop = view.scrollHeight;
     });
   });
-  // Your own message always brings you back to the bottom.
+  // Your own message always brings you back to the bottom: only when one is added at the end. The list is also
+  // replaced when older messages are loaded above, and a chat whose last message is yours would then jump to the end.
+  let lastMessageId: string | undefined;
   $effect(() => {
-    if (chat.messages.at(-1)?.role === 'user') untrack(() => ((following = true), stickToEnd(1500), pinToNewest()));
+    const last = chat.messages.at(-1);
+    const added = last?.id !== lastMessageId;
+    lastMessageId = last?.id;
+    if (added && last?.role === 'user') untrack(() => ((following = true), stickToEnd(1500), pinToNewest()));
   });
 
   async function jumpToTurn(turn: number) {
