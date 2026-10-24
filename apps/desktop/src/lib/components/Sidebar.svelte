@@ -774,7 +774,7 @@
   {/if}
 
   <div class="flex h-11 shrink-0 items-center gap-2 px-3 text-xs">
-    {#if appInfo.version}<span class="truncate text-muted-foreground tabular-nums">Version {appInfo.version}</span>{/if}
+    {#if appInfo.version}<span class="truncate rounded-sm bg-primary/15 px-1.5 py-0.5 text-[11px] font-medium text-primary tabular-nums">Version {appInfo.version}</span>{/if}
     <ZButton zWave={false} zType="ghost" zSize="sm" class="relative ml-auto h-6 w-6" aria-label={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} title={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} onclick={onUpdateClick}>
       <ZIcon zType={(turning ? 'lucideLoaderCircle' : 'lucideArrowDownToLine') as ZIconName} class="size-3.5 {turning ? 'animate-spin' : ''}" />
       {#if updater.status === 'available' || updater.status === 'downloading'}<span class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"></span>{/if}
