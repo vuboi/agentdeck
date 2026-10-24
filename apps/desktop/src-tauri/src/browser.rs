@@ -317,6 +317,7 @@ pub fn browser_layer(app: AppHandle, below: bool) {
 
 /// The page's own password manager: the browser offers to save a password after a sign-in and fills it next time,
 /// as Edge or Chrome do. The setting belongs to the WebView2 profile, so it covers every page.
+#[cfg(windows)]
 fn allow_password_saving(view: &Webview) {
     let _ = view.with_webview(|platform| {
         use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4;
@@ -337,6 +338,9 @@ fn allow_password_saving(view: &Webview) {
     });
 }
 
+#[cfg(not(windows))]
+fn allow_password_saving(_view: &Webview) {}
+
 /// A real press at a point of the page, as a person's mouse would make it. `x` and `y` are CSS pixels of the page
 /// and `zoom` is the page's zoom (1 at 100%).
 #[tauri::command]
@@ -349,8 +353,13 @@ pub fn browser_press(app: AppHandle, tab: String, x: f64, y: f64, zoom: f64) -> 
     // Physical pixels: the window's client area, then the page inside it, then the point.
     let px = origin.x as f64 + at.x as f64 + x * zoom * scale;
     let py = origin.y as f64 + at.y as f64 + y * zoom * scale;
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
-    press_at(hwnd.0 as isize, px.round() as i32, py.round() as i32);
+    #[cfg(windows)]
+    {
+        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        press_at(hwnd.0 as isize, px.round() as i32, py.round() as i32);
+    }
+    #[cfg(not(windows))]
+    press_at(0, px.round() as i32, py.round() as i32);
     Ok(())
 }
 
