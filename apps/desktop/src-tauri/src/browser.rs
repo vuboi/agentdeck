@@ -359,7 +359,11 @@ pub fn browser_press(app: AppHandle, tab: String, x: f64, y: f64, zoom: f64) -> 
         press_at(hwnd.0 as isize, px.round() as i32, py.round() as i32);
     }
     #[cfg(not(windows))]
-    press_at(0, px.round() as i32, py.round() as i32);
+    {
+        // macOS wants points, X11 pixels.
+        let divide = if cfg!(target_os = "macos") { scale } else { 1.0 };
+        press_at(0, (px / divide).round() as i32, (py / divide).round() as i32);
+    }
     Ok(())
 }
 
@@ -382,7 +386,18 @@ fn press_at(hwnd: isize, x: i32, y: i32) {
 }
 
 #[cfg(not(windows))]
-fn press_at(_hwnd: isize, _x: i32, _y: i32) {}
+fn press_at(_hwnd: isize, x: i32, y: i32) {
+    use enigo::{Button, Coordinate, Direction, Enigo, Mouse, Settings};
+    // macOS asks for the Accessibility permission the first time; Wayland sessions cannot be driven this way.
+    let Ok(mut enigo) = Enigo::new(&Settings::default()) else {
+        return;
+    };
+    let _ = enigo.move_mouse(x, y, Coordinate::Abs);
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let _ = enigo.button(Button::Left, Direction::Press);
+    std::thread::sleep(std::time::Duration::from_millis(40));
+    let _ = enigo.button(Button::Left, Direction::Release);
+}
 
 /// Follows the panel when it moves or resizes.
 #[tauri::command]
