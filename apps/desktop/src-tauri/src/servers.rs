@@ -103,7 +103,14 @@ pub fn start(command: &str, cwd: &str, port: u16) -> Result<PathBuf, String> {
     #[cfg(windows)]
     job::adopt(&child);
     let mut running = RUNNING.lock().map_err(|_| "busy".to_string())?;
-    running.retain_mut(|server| server.key != port || matches!(server.child.try_wait(), Ok(None)));
+    // Starting again on a port replaces what held it: the old server is stopped, so a port is on the list once.
+    running.retain_mut(|server| {
+        if server.key != port {
+            return true;
+        }
+        kill_tree(&mut server.child);
+        false
+    });
     running.push(Server { key: port, child, command: command.to_string(), cwd: cwd.to_string(), url: None, started: std::time::SystemTime::now() });
     Ok(log)
 }
