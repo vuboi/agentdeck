@@ -187,6 +187,27 @@
   // measured, so the pin to the end works while nobody sees it.
   let revealed = $state(true);
   async function revealAtEnd() {
+    const target = restoreTarget;
+    restoreTarget = null;
+    const at = target ? chat.messages.findIndex((message) => message.id === target.id) : -1;
+    if (target && at >= 0) {
+      // Back from a child chat: the view goes to the message it was on, at the same place on screen, not to the end.
+      stopSticking();
+      const put = () => {
+        $virtualizer.scrollToIndex(at, { align: 'start' });
+        if (viewportEl) viewportEl.scrollTop = Math.max(0, viewportEl.scrollTop - target.offset);
+      };
+      await tick();
+      for (let pass = 0; pass < 4; pass++) {
+        put();
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      await whenColoured(300);
+      setEagerColour(false);
+      put();
+      revealed = true;
+      return;
+    }
     await pinToNewest();
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     // Code on screen is coloured before it is seen (a long wait is not worth it: 300ms at most).
@@ -227,14 +248,37 @@
   // A chat whose tab was closed and is opened again starts over too: at its end, with only its newest rows.
   const tabOpen = $derived(contentTabs.tabs.some((tab) => tab.kind === 'chat' && tab.sessionId === workspace.activeId));
   const openKey = $derived(`${workspace.activeId}|${workspace.sessions.some((item) => item.id === workspace.activeId) ? 'found' : 'missing'}|${tabOpen ? 'tab' : 'no tab'}`);
+  // Where each chat was being read when it was left (the message at the top of the view, and how far from the top of
+  // the view it sat). Used when coming back from a child chat with the Back button, which must not jump to the end.
+  const readingAt = new Map<string, { id: string; offset: number }>();
+  let shownSession = '';
+  let restoreFor = '';
+  let restoreTarget: { id: string; offset: number } | null = null;
+  function rememberReading(sessionId: string) {
+    if (!sessionId || !viewportEl || chat.messages.length === 0) return;
+    const top = viewportEl.getBoundingClientRect().top;
+    const first = [...viewportEl.querySelectorAll<HTMLElement>('[role="log"] > div[data-index]')].find((row) => row.getBoundingClientRect().bottom > top + 1);
+    const message = first ? chat.messages[Number(first.dataset.index)] : undefined;
+    if (first && message) readingAt.set(sessionId, { id: message.id, offset: Math.round(first.getBoundingClientRect().top - top) });
+  }
+  function backToParent(parentId: string) {
+    restoreFor = parentId;
+    showSession(parentId);
+  }
   $effect(() => {
     void openKey;
     untrack(() => {
+      const id = workspace.activeId;
+      if (shownSession && shownSession !== id) rememberReading(shownSession);
+      shownSession = id;
+      restoreTarget = restoreFor === id ? (readingAt.get(id) ?? null) : null;
+      restoreFor = '';
       revealed = false;
       setEagerColour(true);
-      stickToEnd(6000);
-      void openTranscript(workspace.sessions.find((item) => item.id === workspace.activeId)).then(() => {
-        stickToEnd();
+      if (!restoreTarget) stickToEnd(6000);
+      else stopSticking();
+      void openTranscript(workspace.sessions.find((item) => item.id === id)).then(() => {
+        if (!restoreTarget) stickToEnd();
       });
     });
   });
@@ -318,7 +362,7 @@
     const last = chat.messages.at(-1);
     const added = last?.id !== lastMessageId;
     lastMessageId = last?.id;
-    if (added && last?.role === 'user') untrack(() => ((following = true), stickToEnd(1500), pinToNewest()));
+    if (added && revealed && last?.role === 'user') untrack(() => ((following = true), stickToEnd(1500), pinToNewest()));
   });
 
   async function jumpToTurn(turn: number) {
@@ -449,7 +493,7 @@
     {#if contentTabs.active.startsWith('chat:') && parentOfActive}
       <!-- A sub chat (a step of a flow, a delegated task, a fork): one click back to the chat it came from. -->
       <div class="relative z-30 flex h-8 shrink-0 items-center gap-2 border-b border-border bg-background px-3 text-xs">
-        <button type="button" class="inline-flex h-6 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Back to {parentOfActive.title}" onclick={() => showSession(parentOfActive.id)}>
+        <button type="button" class="inline-flex h-6 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Back to {parentOfActive.title}" onclick={() => backToParent(parentOfActive.id)}>
           <ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-3.5 shrink-0" />
           <span class="shrink-0">Back to</span>
           <span class="truncate font-medium text-foreground">{parentOfActive.title}</span>
