@@ -56,15 +56,14 @@
   }
   // A heading folds its rows, and "Show more" adds some, by changing which nodes the tree is given, which the tree
   // cannot animate on its own. The classes it uses for a folder do it here: rows that go fade out first, rows that
-  // arrive fade in, and the ones below glide to their new place (`z-tree-exit`, `z-tree-enter`, and `z-tree-moving`
-  // on an ancestor). Rows are found by their position in the visible list (`data-index`).
+  // arrive fade in, and the ones below glide to their new place (`z-tree-exit`, `z-tree-enter`). Rows are found by their position in the visible list (`data-index`).
   let treeWrap: HTMLDivElement | undefined = $state();
   const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   let glideTimer: ReturnType<typeof setTimeout> | undefined;
   function glide() {
-    treeWrap?.classList.add('z-tree-moving');
+    treeWrap?.classList.add('sidebar-glide');
     clearTimeout(glideTimer);
-    glideTimer = setTimeout(() => treeWrap?.classList.remove('z-tree-moving'), 320);
+    glideTimer = setTimeout(() => treeWrap?.classList.remove('sidebar-glide'), 320);
   }
   const visibleIds = (list: ZTreeNode<TreeData>[], open: string[] = expanded): string[] =>
     list.flatMap((node) => [node.id, ...(node.children?.length && open.includes(node.id) ? visibleIds(node.children, open) : [])]);
@@ -818,9 +817,21 @@
 
 
 <style>
+  /* The rows below a fold glide to their new place. The tree's own `z-tree-moving` also switches the hover highlight
+     off for the whole glide, so it blinked back afterwards: this one moves the rows only. */
+  aside :global(.sidebar-glide [role='treeitem']) {
+    transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    aside :global(.sidebar-glide [role='treeitem']) {
+      transition: none;
+    }
+  }
   /* The scrollbar has its own lane, so rows do not shift sideways when it appears or goes. */
   aside :global(.z-tree) {
     scrollbar-gutter: stable;
+    /* The empty lane is 10px on the right: a little on the left keeps the rows from looking pushed to one side. */
+    padding-left: 6px;
   }
   /* Where a new session will go: its project (or "This computer") keeps a tinted row until the first message. */
   /* Opaque (mixed with the sidebar), so the fading overlay of the row's buttons uses the very same colour. */

@@ -488,7 +488,7 @@
       </div>
     {/if}
 
-    <div bind:this={viewportEl} onscroll={onViewportScroll} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden transition-opacity duration-200 ease-out" style:opacity={chat.loading ? 0 : 1}>
+    <div bind:this={viewportEl} onscroll={onViewportScroll} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 transition-opacity duration-200 ease-out [scrollbar-gutter:stable]" style:opacity={chat.loading ? 0 : 1}>
       <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" role="log" aria-live="polite" aria-label="Conversation">
         {#each $virtualizer.getVirtualItems() as row (row.key)}
           {@const message = chat.messages[row.index + from]}
