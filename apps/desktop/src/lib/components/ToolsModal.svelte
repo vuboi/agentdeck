@@ -182,7 +182,7 @@
         <ZIcon zType={win.max ? 'lucideMinimize2' : 'lucideMaximize2'} class="size-3.5" />
       </ZButton>
       <ZButton zWave={false} zType="ghost" zSize="sm" class={headerButton} aria-label="Dock back" title="Dock back" onclick={() => dockTool(win.tool)}>
-        <ZIcon zType="lucidePanelRightOpen" class="size-4" />
+        <ZIcon zType="lucidePanelRight" class="size-4" />
       </ZButton>
       <ZButton zWave={false} zType="ghost" zSize="sm" class={headerButton} aria-label="Close" title="Close" onclick={() => dockTool(win.tool)}>
         <ZIcon zType="lucideX" class="size-4" />

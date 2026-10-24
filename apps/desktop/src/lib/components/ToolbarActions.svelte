@@ -36,6 +36,6 @@
     <ZIcon zType="lucidePalette" class="size-4" />
   </ZButton>
   <ZButton zWave={false} zType="ghost" zSize="sm" class="hidden size-7! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary min-[1000px]:inline-flex" aria-label={layout.toolsOpen ? 'Hide tools panel' : 'Show tools panel'} title={layout.toolsOpen ? 'Hide tools' : 'Show tools'} onclick={toggleTools}>
-    <ZIcon zType={layout.toolsOpen ? 'lucidePanelRightClose' : 'lucidePanelRightOpen'} class="size-4" />
+    <ZIcon zType={'lucidePanelRight'} class="size-4" />
   </ZButton>
 </div>
