@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ZIcon } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import type { ContentTab } from '../content-tabs.svelte';
   import { addedLines, countsOf, parseDiff, relativeTo, type DiffRow } from '../diff';
@@ -20,9 +20,12 @@
   let rows = $state.raw<DiffRow[]>([]);
   let diffRead = $state(false);
 
+  // Bumped by "Try again" to read the file once more.
+  let attempt = $state(0);
   $effect(() => {
     const target = file;
     void fileWrites.tick;
+    void attempt;
     error = '';
     readProjectFile(target.root, target.path)
       .then((content) => {
@@ -59,6 +62,16 @@
   const changed = $derived(rows.length > 0);
   const view = $derived(file.view === 'changes' && (changed || !diffRead) ? 'changes' : 'file');
   const icon = (name: string) => name as ZIconName;
+  // The reason, without the "Error:" every Rust error string starts with, as a sentence.
+  const reason = $derived(error.replace(/^(Error:\s*)+/i, '').replace(/^\w/, (c) => c.toUpperCase()));
+  const folder = $derived(file.path.slice(0, Math.max(file.path.lastIndexOf('/'), file.path.lastIndexOf('\\')) + 1));
+  let copied = $state(false);
+  function copyPath() {
+    void navigator.clipboard.writeText(file.path).then(() => {
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    });
+  }
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-background" role="tabpanel" aria-label={file.name}>
@@ -78,10 +91,25 @@
     </div>
   {/if}
   {#if error}
-    <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
-      <ZIcon zType="lucideFile" class="size-8 opacity-60" />
-      <p class="m-0 max-w-md break-all font-mono text-xs leading-relaxed">{file.path}</p>
-      <p class="m-0 max-w-md text-xs leading-relaxed text-destructive">{error}</p>
+    <div class="flex flex-1 items-center justify-center p-6">
+      <div class="flex w-full max-w-md flex-col items-center gap-3 rounded-lg border border-border bg-card px-6 py-7 text-center">
+        <span class="grid size-10 place-items-center rounded-full bg-destructive/10 text-destructive">
+          <ZIcon zType={icon('lucideFileX')} class="size-5" />
+        </span>
+        <div class="flex flex-col gap-1">
+          <p class="m-0 text-sm font-medium text-foreground">Can't open {file.name}</p>
+          <p class="m-0 text-xs leading-relaxed text-muted-foreground">{reason}</p>
+        </div>
+        <p class="m-0 max-w-full truncate rounded-sm bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground" title={file.path}>{folder}<span class="text-foreground">{file.name}</span></p>
+        <div class="flex gap-2">
+          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" onclick={() => attempt++}>
+            <ZIcon zType={icon('lucideRotateCw')} class="size-3.5" /> Try again
+          </ZButton>
+          <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" onclick={copyPath}>
+            <ZIcon zType={icon(copied ? 'lucideCheck' : 'lucideCopy')} class="size-3.5" /> {copied ? 'Copied' : 'Copy path'}
+          </ZButton>
+        </div>
+      </div>
     </div>
   {:else if view === 'changes'}
     {#if changed}
