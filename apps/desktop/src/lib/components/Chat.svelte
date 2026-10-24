@@ -195,6 +195,12 @@
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     revealed = true;
   }
+  // As soon as there is something to show (the saved copy, or the file once it is read), not when the file has been
+  // read as well: the skeleton stays until then, so there is no blank in between, and the swap from the saved copy to
+  // the fresh one keeps the same rows (they are keyed by message), so it does not flash either.
+  $effect(() => {
+    if (!revealed && !chat.loading) untrack(() => void revealAtEnd());
+  });
 
   $effect(() => {
     if (viewportEl) untrack(pinToNewest);
@@ -226,7 +232,6 @@
       revealed = false;
       stickToEnd(6000);
       void openTranscript(workspace.sessions.find((item) => item.id === workspace.activeId)).then(() => {
-        void revealAtEnd();
         stickToEnd();
         const grow = () => (windowSize = Math.max(windowSize, PAGE));
         if (typeof requestIdleCallback === 'function') requestIdleCallback(grow, { timeout: 1000 });
@@ -493,9 +498,9 @@
       </div>
     {/if}
 
-    {#if chat.messages.length === 0}
+    {#if chat.messages.length === 0 || !revealed}
       <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center text-xs text-muted-foreground">
-        {#if chat.loading}
+        {#if chat.loading || (!revealed && chat.messages.length > 0)}
           <div class="flex w-full max-w-3xl animate-pulse flex-col gap-6 px-6" role="status" aria-label="Loading conversation">
             {#each [60, 90, 75, 40, 85] as width, index}
               <div class="flex flex-col gap-2 {index % 2 === 0 ? 'items-end' : ''}">
