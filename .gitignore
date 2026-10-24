@@ -10,3 +10,10 @@
 !*.env.example
 /apps/desktop/src-tauri/gen/
 /.tauri/
+
+# local agent credentials
+.codex/auth.json
+**/auth.json
+*.pem
+*.key
+.claude/settings.local.json

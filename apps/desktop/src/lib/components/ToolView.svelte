@@ -8,6 +8,7 @@
   import TasksView from './TasksView.svelte';
   import McpView from './McpView.svelte';
   import WorkflowView from './WorkflowView.svelte';
+  import UsageView from './UsageView.svelte';
 
   // The body of a workspace tool. Same view in the right panel and in the detached modal.
   let { tool }: { tool: string } = $props();
@@ -28,6 +29,8 @@
   <DevTools embedded />
 {:else if tool === 'MCP'}
   <McpView />
+{:else if tool === 'Usage'}
+  <UsageView />
 {:else}
 
 <div class="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground" role="tabpanel" aria-label={current.label}>

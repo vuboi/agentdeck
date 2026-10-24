@@ -60,6 +60,12 @@ export type UsageRecord = {
 };
 
 const LOG_KEY = 'usage.log';
+const listeners = new Set<() => void>();
+/** Calls `listener` whenever a reply is added to the log; returns how to stop. */
+export function onUsage(listener: () => void) {
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
+}
 const LOG_LIMIT = 20000;
 let writing: Promise<void> = Promise.resolve();
 
@@ -69,6 +75,7 @@ export function recordUsage(record: UsageRecord) {
     const log = (await getPref<UsageRecord[]>(LOG_KEY)) ?? [];
     log.push(record);
     setPref(LOG_KEY, log.length > LOG_LIMIT ? log.slice(-LOG_LIMIT) : log);
+    for (const listener of listeners) listener();
   });
 }
 
