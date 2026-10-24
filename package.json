@@ -7,6 +7,7 @@
     "dev:linux": "GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 pnpm --filter desktop tauri dev",
     "check": "node scripts/cargo.mjs check --workspace && node scripts/cargo.mjs clippy --workspace -- -D warnings && pnpm -r check",
     "test": "node scripts/cargo.mjs test --workspace && pnpm -r --if-present test",
+    "gen:icons": "node scripts/gen-icons.mjs",
     "gen:types": "node scripts/cargo.mjs run -q -p ag-protocol --example export_ts",
     "format": "prettier --write ."
   },

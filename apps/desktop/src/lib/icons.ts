@@ -1,4 +1,8 @@
-import { zLoadIcon } from '@shival99/z-ui-svelte';
+import { zConfigureIcons, zLoadIcon } from '@shival99/z-ui-svelte';
+import './bundled-icons';
+
+// The brand logos ship with the app (static/brand/<name>/<variant>.svg), not from thesvg.org.
+zConfigureIcons({ cdn: { brand: '/brand' } });
 
 // Icons load lazily (memory, then IndexedDB, then CDN). Opening a popover for the first time after
 // a reload used to wait for them and hitch, so warm the ones the app uses right after start-up.
