@@ -1,5 +1,6 @@
+import { trackTerminal } from './activity.svelte';
 import { getPref, setPref } from './prefs';
-import { disposeSession, writeToSession, type SessionStatus } from './terminal-session';
+import { disposeSession, noteCommand, watchRuns, writeToSession, type SessionStatus } from './terminal-session';
 
 export type TerminalTab = { id: string; name: string; status: SessionStatus };
 
@@ -48,6 +49,43 @@ export function runInTerminal(command: string) {
   terminal.open = true;
   const lines = command.trimEnd().split(/\r?\n/);
   writeToSession(terminal.active, lines.join('\r') + '\r');
+  noteCommand(terminal.active, command);
+}
+
+// ---- What the tabs are running: long commands (dev servers, watchers) listed with the background servers.
+export type TerminalRun = { id: string; command: string; cwd?: string; startedAt: number; url: string | null; interruptedAt: number | null };
+export const terminalRuns = $state<{ list: TerminalRun[] }>({ list: [] });
+
+watchRuns((id, run) => {
+  trackTerminal(id, run);
+  const index = terminalRuns.list.findIndex((item) => item.id === id);
+  if (!run) {
+    if (index !== -1) terminalRuns.list.splice(index, 1);
+  } else if (index === -1) {
+    terminalRuns.list.push({ id, ...run, interruptedAt: null });
+  } else {
+    const item = terminalRuns.list[index];
+    if (item.command !== run.command || item.startedAt !== run.startedAt) item.interruptedAt = null;
+    Object.assign(item, run);
+  }
+});
+
+/** Puts a tab in front (opening the panel). */
+export function showTerminalTab(id: string) {
+  if (terminal.tabs.some((tab) => tab.id === id)) terminal.active = id;
+  terminal.open = true;
+}
+
+/** Interrupts what a tab runs (Ctrl+C); when that was tried a moment ago and it still runs, closes the tab. */
+export function stopTerminalRun(id: string) {
+  const item = terminalRuns.list.find((run) => run.id === id);
+  if (!item) return;
+  if (item.interruptedAt !== null && Date.now() - item.interruptedAt > 2500) {
+    closeTerminal(id);
+    return;
+  }
+  item.interruptedAt = Date.now();
+  writeToSession(id, '\x03');
 }
 
 export function newTerminal() {

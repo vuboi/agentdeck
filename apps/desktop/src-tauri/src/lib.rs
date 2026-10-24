@@ -201,6 +201,23 @@ fn models_of(agent: &str) -> Vec<ag_adapters::models::ModelInfo> {
     }
 }
 
+/// The last `lines` lines of the log of the server on `port` (colour codes kept), for the Tasks panel.
+#[tauri::command]
+fn server_log(port: u16, lines: usize) -> String {
+    let log = servers::read_log(port);
+    let all: Vec<&str> = log.lines().collect();
+    let skip = all.len().saturating_sub(lines.max(1));
+    let tail = all[skip..].join("\n");
+    let start = tail.len().saturating_sub(20 * 1024);
+    let start = (start..=tail.len()).find(|index| tail.is_char_boundary(*index)).unwrap_or(tail.len());
+    let tail = &tail[start..];
+    if skip > 0 || start > 0 {
+        format!("(Earlier output not shown)\n{tail}")
+    } else {
+        tail.to_string()
+    }
+}
+
 /// Sessions Claude Code and Codex already saved on this machine. Read-only.
 #[tauri::command]
 async fn history_list() -> Result<Vec<HistorySession>, String> {
@@ -839,15 +856,17 @@ pub fn run() {
             // The Preview's own page for an address that did not answer.
             if request.uri().path() == "/error" {
                 let text = request.uri().to_string();
-                let target = tauri::Url::parse(&text)
-                    .or_else(|_| tauri::Url::parse(&format!("http://localhost{text}")))
-                    .ok()
-                    .and_then(|url| url.query_pairs().find(|(key, _)| key == "url").map(|(_, value)| value.into_owned()))
-                    .unwrap_or_default();
+                let query = tauri::Url::parse(&text).or_else(|_| tauri::Url::parse(&format!("http://localhost{text}"))).ok();
+                let param = |name: &str| {
+                    query
+                        .as_ref()
+                        .and_then(|url| url.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned()))
+                        .unwrap_or_default()
+                };
                 return tauri::http::Response::builder()
                     .status(200)
                     .header("Content-Type", "text/html; charset=utf-8")
-                    .body(browser::error_html(&target).into_bytes())
+                    .body(browser::error_html(&param("url"), &param("reason")).into_bytes())
                     .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()));
             }
             browser::handle_report(context.app_handle(), request.body());
@@ -941,6 +960,7 @@ pub fn run() {
             detect::detect_run_targets,
             servers::servers_list,
             servers::server_stop,
+            server_log,
             detect::run_target,
             browser::browser_show,
             browser::browser_bounds,

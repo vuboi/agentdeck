@@ -238,9 +238,9 @@ html[data-warming] [data-z-popover] {
 .md-table tr + tr td { border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent); }
 .md img { max-width: 100%; border-radius: var(--radius-large); }
 .md-code { margin: 0 0 0.75rem; overflow: clip; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
-.md-code-head, .md-code-foot { position: sticky; z-index: 1; display: flex; align-items: center; justify-content: space-between; background: var(--muted); color: var(--muted-foreground); font-size: 0.6875rem; }
-.md-code-head { top: 0; padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); }
-.md-code-foot { bottom: 0; justify-content: flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid var(--border); }
+.md-code-head, .md-code-foot { position: relative; display: flex; align-items: center; justify-content: space-between; background: var(--muted); color: var(--muted-foreground); font-size: 0.6875rem; }
+.md-code-head { padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); }
+.md-code-foot { justify-content: flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid var(--border); }
 .md-code-actions { display: flex; align-items: center; gap: 0.1rem; }
 .md-code-head button, .md-code-foot button { position: relative; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; padding: 0; cursor: pointer; border-radius: var(--radius-small); font: inherit; }
 .md-code-head button:hover, .md-code-foot button:hover { background: var(--accent); color: var(--foreground); }
@@ -319,3 +319,7 @@ body {
   width: 12px !important;
   height: 12px !important;
 }
+
+/* The terminal draws its own 14px scrollbar (xterm 6): slimmed to match the app's. */
+.xterm .xterm-scrollable-element > .scrollbar.vertical { width: 10px !important; }
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider { width: 6px !important; left: 2px !important; border-radius: 3px; }

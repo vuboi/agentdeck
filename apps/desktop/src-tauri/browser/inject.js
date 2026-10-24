@@ -6,12 +6,27 @@
   const BASE = '__BASE__';
   const TAB = '__TAB__';
   const post = (message) => {
+    // AgentDeck's own error page is not the page the tab shows: its reports (address, title, polling) are not kept.
+    // Answers to the app's requests (they carry an id) still go through.
+    if (!message.id && message.kind !== 'focus-address' && location.href.startsWith(BASE + 'error')) return;
     try {
       fetch(BASE + 'r', { method: 'POST', body: JSON.stringify({ tab: TAB, ...message }), mode: 'no-cors', keepalive: true }).catch(() => {});
     } catch {
       // A page policy may block it; the app then simply sees nothing from this page.
     }
   };
+  // Ctrl+L inside the page: the keys go to the page, not the app. The app is told so it can focus the address bar.
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'l') {
+        event.preventDefault();
+        event.stopPropagation();
+        post({ kind: 'focus-address' });
+      }
+    },
+    true,
+  );
   const cut = (text, max) => (text.length > max ? text.slice(0, max) + '…' : text);
   const show = (value) => {
     try {

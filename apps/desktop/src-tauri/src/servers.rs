@@ -126,14 +126,20 @@ pub fn exited(port: u16) -> bool {
         .all(|server| !matches!(server.child.try_wait(), Ok(None)))
 }
 
-/// The last lines of a server's log, to explain a start that failed.
-pub fn tail(port: u16, lines: usize) -> String {
+/// The end of a server's log as it is (up to 64 KB, colour codes and all).
+pub fn read_log(port: u16) -> String {
+    use std::io::{Read, Seek, SeekFrom};
     let Ok(path) = log_path(port) else {
         return String::new();
     };
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    let all: Vec<&str> = text.lines().collect();
-    all[all.len().saturating_sub(lines)..].join("\n")
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let length = file.metadata().map_or(0, |meta| meta.len());
+    let _ = file.seek(SeekFrom::Start(length.saturating_sub(64 * 1024)));
+    let mut bytes = Vec::new();
+    let _ = file.read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Stops a server with the processes it started (a dev server is a shell, a package manager and a node process:

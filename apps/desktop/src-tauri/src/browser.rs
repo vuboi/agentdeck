@@ -23,6 +23,18 @@ static REQUESTED: std::sync::Mutex<Option<std::collections::HashMap<String, Stri
 /// Marks the error page AgentDeck shows in place of the browser's own (Chromium's `chrome-error://` page).
 const ERROR_MARK: &str = "<!--agentdeck-error-->";
 
+/// How many times a tab's failed page was asked for again, and whether one such retry is running now, by tab id.
+/// More than `RETRIES` means it gave up and shows AgentDeck's error page. A page that loads, or an address the user
+/// asks for, starts the count again.
+static FAILURES: std::sync::Mutex<Option<std::collections::HashMap<String, (u8, bool)>>> = std::sync::Mutex::new(None);
+
+/// How often a page the engine could not load is asked for again (after 1 s, 2 s, 4 s) before the error page.
+const RETRIES: u8 = 3;
+
+fn failures<R>(f: impl FnOnce(&mut std::collections::HashMap<String, (u8, bool)>) -> R) -> Option<R> {
+    FAILURES.lock().ok().map(|mut map| f(map.get_or_insert_with(Default::default)))
+}
+
 fn requested(tab: &str) -> Option<String> {
     REQUESTED.lock().ok()?.as_ref()?.get(tab).cloned()
 }
@@ -36,7 +48,8 @@ fn remember(tab: &str, url: &str) {
 /// AgentDeck's page for an address that did not answer, like a browser's own: the tab keeps the address, Reload
 /// tries again, and the page opens the address by itself as soon as its server answers. It is served by the
 /// `agentdeck` scheme (WebView2 does not show `data:` pages here).
-pub(crate) fn error_html(target: &str) -> String {
+pub(crate) fn error_html(target: &str, reason: &str) -> String {
+    let (what, code) = what_happened(target, reason);
     let shown = target.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
     let host = tauri::Url::parse(target)
         .ok()
@@ -44,13 +57,26 @@ pub(crate) fn error_html(target: &str) -> String {
         .unwrap_or_else(|| shown.clone());
     let go = target.replace('\\', "\\\\").replace('\'', "\\'").replace('"', "%22");
     format!(
-        "{ERROR_MARK}<!doctype html><html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>{host}</title><style>:root{{color-scheme:light dark;--bg:#ffffff;--fg:#202124;--muted:#5f6368;--accent:#1a73e8}}@media (prefers-color-scheme:dark){{:root{{--bg:#202124;--fg:#e8eaed;--muted:#9aa0a6;--accent:#8ab4f8}}}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--muted);font:15px/1.55 system-ui,'Segoe UI',sans-serif}}main{{max-width:560px;margin:0 auto;padding:18vh 32px 32px}}svg{{width:40px;height:40px;color:var(--accent)}}h1{{margin:24px 0 12px;font-size:22px;font-weight:500;color:var(--fg)}}ul{{margin:8px 0 0;padding-left:22px}}code{{font-size:12px;letter-spacing:.02em}}button{{margin-top:32px;padding:8px 18px;border:0;border-radius:6px;background:var(--accent);color:var(--bg);font:500 14px system-ui,sans-serif;cursor:pointer}}</style><main><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'><path d='M12 21a9 9 0 1 1 9-9'/><path d='M12 7v5l3 2'/></svg><h1>This site can't be reached</h1><p><b>{host}</b> refused to connect.</p><p>Try:</p><ul><li>Checking that the dev server is running</li><li>Checking the address: <code>{shown}</code></li></ul><p><code>ERR_CONNECTION_REFUSED</code></p><button onclick=\"location.replace('{go}')\">Reload</button></main><script>setInterval(()=>fetch('{go}',{{mode:'no-cors',cache:'no-store'}}).then(()=>location.replace('{go}'),()=>{{}}),1500)</script></html>"
+        "{ERROR_MARK}<!doctype html><html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>{host}</title><style>:root{{color-scheme:light dark;--bg:#ffffff;--fg:#202124;--muted:#5f6368;--accent:#1a73e8}}@media (prefers-color-scheme:dark){{:root{{--bg:#202124;--fg:#e8eaed;--muted:#9aa0a6;--accent:#8ab4f8}}}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--muted);font:15px/1.55 system-ui,'Segoe UI',sans-serif}}main{{max-width:560px;margin:0 auto;padding:18vh 32px 32px}}svg{{width:40px;height:40px;color:var(--accent)}}h1{{margin:24px 0 12px;font-size:22px;font-weight:500;color:var(--fg)}}ul{{margin:8px 0 0;padding-left:22px}}code{{font-size:12px;letter-spacing:.02em}}button{{margin-top:32px;padding:8px 18px;border:0;border-radius:6px;background:var(--accent);color:var(--bg);font:500 14px system-ui,sans-serif;cursor:pointer}}</style><main><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'><path d='M12 21a9 9 0 1 1 9-9'/><path d='M12 7v5l3 2'/></svg><h1>This site can't be reached</h1><p>{what}</p><p>Try:</p><ul><li>Checking that the dev server is running</li><li>Checking the address, and whether it is http or https: <code>{shown}</code></li></ul><p><code>{code}</code></p><button onclick=\"location.replace('{go}')\">Reload</button></main><script>setInterval(()=>fetch('{go}',{{mode:'no-cors',cache:'no-store'}}).then(()=>location.replace('{go}'),()=>{{}}),1500)</script></html>"
     )
 }
 
-/// The address of AgentDeck's error page for `target`.
-fn error_page(target: &str) -> Result<tauri::Url, String> {
-    tauri::Url::parse_with_params(&format!("{}error", base()), &[("url", target)]).map_err(|error| error.to_string())
+/// What the error page tells about `target` (HTML) and the code under it. `reason` is `closed` (nothing answers) or
+/// anything else (it answered, but the page could not be loaded).
+fn what_happened(target: &str, reason: &str) -> (String, &'static str) {
+    let url = tauri::Url::parse(target).ok();
+    let host = url.as_ref().and_then(|url| url.host_str()).unwrap_or("this address").replace('<', "&lt;");
+    let local_port = url.as_ref().filter(|url| is_local(url)).and_then(|url| url.port_or_known_default());
+    match (reason, local_port) {
+        ("closed", Some(port)) => (format!("Nothing answers on port {port} of this machine (<b>{host}</b>). Is the dev server running?"), "ERR_CONNECTION_REFUSED"),
+        ("closed", None) => (format!("<b>{host}</b> refused to connect or did not answer."), "ERR_CONNECTION_REFUSED"),
+        _ => (format!("<b>{host}</b> did not answer properly: the connection was reset or closed, or its certificate was refused."), "ERR_CONNECTION_FAILED"),
+    }
+}
+
+/// The address of AgentDeck's error page for `target` (`reason`: see `what_happened`).
+fn error_page(target: &str, reason: &str) -> Result<tauri::Url, String> {
+    tauri::Url::parse_with_params(&format!("{}error", base()), &[("url", target), ("reason", reason)]).map_err(|error| error.to_string())
 }
 
 /// Where the page posts its reports: the custom scheme, which WebView2 serves under a localhost name.
@@ -75,6 +101,22 @@ fn injected_script(tab: &str) -> String {
 /// The handler of the `agentdeck` scheme: forwards a page's JSON report to the app window.
 pub fn handle_report(app: &AppHandle, body: &[u8]) {
     if let Ok(report) = serde_json::from_slice::<serde_json::Value>(body) {
+        if report["kind"] == "nav" {
+            let tab = report["tab"].as_str().unwrap_or_default();
+            let url = report["url"].as_str().unwrap_or_default();
+            // The injected script also runs on the engine's own error page (chrome-error://chromewebdata/): the page
+            // could not be loaded. It is asked for again, then replaced by AgentDeck's error page; the tab keeps
+            // showing the address that was asked for.
+            if url.starts_with("chrome-error:") {
+                navigation_failed(app, tab);
+                return;
+            }
+            // AgentDeck's own error page is not an address: the tab keeps the one that was asked for.
+            if url.starts_with(&format!("{}error", base())) {
+                return;
+            }
+            failures(|map| map.remove(tab));
+        }
         crate::bridge::ingest(&report);
         #[cfg(not(windows))]
         {
@@ -103,7 +145,7 @@ pub(crate) fn webview(app: &AppHandle, tab: &str) -> Result<Webview, String> {
 /// Whether a local address (localhost, 127.0.0.1, [::1]) has a server on its port. Other addresses count as up:
 /// only the page itself can tell. Vite may listen on IPv4 or IPv6 only, so both are tried.
 pub(crate) fn answers(url: &tauri::Url) -> bool {
-    if !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]" | "::1")) {
+    if !is_local(url) {
         return true;
     }
     let Some(port) = url.port_or_known_default() else {
@@ -118,14 +160,130 @@ pub(crate) fn answers(url: &tauri::Url) -> bool {
     .any(|addr| std::net::TcpStream::connect_timeout(addr, wait).is_ok())
 }
 
+/// This machine: the names a dev server is opened by.
+fn is_local(url: &tauri::Url) -> bool {
+    matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]" | "::1"))
+}
+
+/// This machine, or a `*.localhost` name (which the browser resolves to it).
+fn is_loopback(url: &tauri::Url) -> bool {
+    is_local(url) || url.host_str().is_some_and(|host| host.ends_with(".localhost"))
+}
+
+/// The same address with the other of http / https, for an address that names its port (without one the port would
+/// change as well).
+fn other_scheme(url: &tauri::Url) -> Option<tauri::Url> {
+    url.port()?;
+    let mut other = url.clone();
+    other.set_scheme(if url.scheme() == "https" { "http" } else { "https" }).ok()?;
+    Some(other)
+}
+
+/// Whether a local address really serves pages, and at which address: a port that accepts connections is not yet a
+/// page (a dev server may still be compiling and reset what it is asked), and a server started with a certificate
+/// answers at `https://` only (what a browser gets for `http://` there is an empty reply, shown as an error page).
+/// So `GET /` is made, any HTTP answer counts, and when the address as given gets none the other scheme is tried;
+/// the address that answered is returned. A server that took the request but is slow to answer (compiling) counts
+/// as up: the browser waits for it as well. `None`: nothing serves yet. Other addresses are returned as they are.
+pub(crate) async fn ready(url: &tauri::Url) -> Option<tauri::Url> {
+    ready_within(url, std::time::Duration::from_secs(4)).await
+}
+
+async fn ready_within(url: &tauri::Url, wait: std::time::Duration) -> Option<tauri::Url> {
+    if !matches!(url.scheme(), "http" | "https") || !is_local(url) {
+        return Some(url.clone());
+    }
+    let listening = {
+        let url = url.clone();
+        tokio::task::spawn_blocking(move || answers(&url)).await.unwrap_or(false)
+    };
+    if !listening {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .timeout(wait)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .danger_accept_invalid_certs(true) // a local dev certificate is self-signed
+        .build()
+        .ok()?;
+    let mut slow = None;
+    for candidate in std::iter::once(url.clone()).chain(other_scheme(url)) {
+        match client.get(candidate.as_str()).send().await {
+            Ok(_) => return Some(candidate),
+            Err(error) if error.is_timeout() => {
+                slow.get_or_insert(candidate);
+            }
+            Err(_) => {}
+        }
+    }
+    slow
+}
+
+/// Pause before the `attempt`-th new try at a page that failed to load: 1 s, 2 s, 4 s.
+fn backoff(attempt: u8) -> std::time::Duration {
+    std::time::Duration::from_millis(1000 << u32::from(attempt.saturating_sub(1)).min(3))
+}
+
+/// The engine could not load tab `tab`'s page and showed its own error page. A server that is still starting may
+/// have reset the request, so the page is asked for again a few times (and the address corrected when the other of
+/// http / https is what answers); when that does not help, AgentDeck's own error page takes its place.
+fn navigation_failed(app: &AppHandle, tab: &str) {
+    let attempt = failures(|map| {
+        let entry = map.entry(tab.to_string()).or_default();
+        if entry.1 {
+            return None;
+        }
+        entry.1 = true;
+        entry.0 = entry.0.saturating_add(1);
+        Some(entry.0)
+    })
+    .flatten();
+    let Some(attempt) = attempt else { return };
+    let (app, tab) = (app.clone(), tab.to_string());
+    tauri::async_runtime::spawn(async move {
+        if let (Ok(view), Some(target)) = (webview(&app, &tab), requested(&tab)) {
+            let parsed = parse(&target).ok();
+            let retried = if attempt <= RETRIES {
+                tokio::time::sleep(backoff(attempt)).await;
+                match &parsed {
+                    Some(url) => ready(url).await,
+                    None => None,
+                }
+            } else {
+                None
+            };
+            match retried {
+                Some(url) => {
+                    remember(&tab, url.as_str());
+                    let _ = view.navigate(url);
+                }
+                None => {
+                    // Nothing listens on the port, or the retries are used up and it still would not load.
+                    let down = parsed.as_ref().is_some_and(|url| is_local(url) && !answers(url));
+                    if let Ok(page) = error_page(&target, if down { "closed" } else { "failed" }) {
+                        let _ = view.navigate(page);
+                    }
+                }
+            }
+        }
+        failures(|map| {
+            if let Some(entry) = map.get_mut(&tab) {
+                entry.1 = false;
+            }
+        });
+    });
+}
+
 /// Where a tab goes for `url`: the page itself, or AgentDeck's error page when nothing listens on its local port.
 fn destination(tab: &str, url: &str) -> Result<tauri::Url, String> {
     let target = parse(url)?;
     remember(tab, target.as_str());
+    failures(|map| map.remove(tab));
     if answers(&target) {
         Ok(target)
     } else {
-        error_page(target.as_str())
+        error_page(target.as_str(), "closed")
     }
 }
 
@@ -230,11 +388,7 @@ pub async fn browser_show(
             let ours = url.starts_with(&format!("{}error", base()));
             if failed {
                 if event == "finished" {
-                    if let Some(target) = requested(&tab) {
-                        if let Ok(page) = error_page(&target) {
-                            let _ = view.navigate(page);
-                        }
-                    }
+                    navigation_failed(view.app_handle(), &tab);
                 }
                 return;
             }
@@ -273,6 +427,7 @@ pub async fn browser_show(
         )
         .map_err(|error| error.to_string())?;
     allow_password_saving(&view);
+    allow_local_certificates(&view);
     crate::cdp::watch_frames(&view);
     crate::cdp::watch_network(&view);
     layer(&view, BELOW.load(Ordering::Relaxed));
@@ -352,6 +507,42 @@ fn allow_password_saving(view: &Webview) {
 
 #[cfg(not(windows))]
 fn allow_password_saving(_view: &Webview) {}
+
+/// A dev server started with `--ssl` has a self-signed certificate, which the browser would stop at with a warning
+/// page (the engine's own error page, where this app cannot help). For this machine's own addresses (localhost,
+/// 127.0.0.1, [::1], `*.localhost`) the certificate is accepted; every other site keeps the browser's check.
+#[cfg(windows)]
+fn allow_local_certificates(view: &Webview) {
+    let _ = view.with_webview(|platform| {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2_14, COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW};
+        use webview2_com::ServerCertificateErrorDetectedEventHandler;
+        use windows::core::{Interface, PWSTR};
+        // SAFETY: WebView2 calls on the thread that owns the webview, as `with_webview` runs us.
+        unsafe {
+            let Ok(core) = platform.controller().CoreWebView2() else {
+                return;
+            };
+            let Ok(core) = core.cast::<ICoreWebView2_14>() else {
+                return;
+            };
+            let handler = ServerCertificateErrorDetectedEventHandler::create(Box::new(|_, args| {
+                let Some(args) = args else { return Ok(()) };
+                let mut uri = PWSTR::null();
+                args.RequestUri(&mut uri)?;
+                let uri = webview2_com::take_pwstr(uri);
+                if tauri::Url::parse(&uri).is_ok_and(|url| is_loopback(&url)) {
+                    args.SetAction(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW)?;
+                }
+                Ok(())
+            }));
+            let mut token = 0i64;
+            let _ = core.add_ServerCertificateErrorDetected(&handler, &mut token);
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn allow_local_certificates(_view: &Webview) {}
 
 /// A real press at a point of the page, as a person's mouse would make it. `x` and `y` are CSS pixels of the page
 /// and `zoom` is the page's zoom (1 at 100%).
@@ -899,4 +1090,103 @@ pub async fn browser_suggest(query: String) -> Vec<String> {
         .and_then(|list| list.as_array())
         .map(|list| list.iter().filter_map(|item| item.as_str().map(str::to_string)).take(5).collect())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// A plain HTTP server on a free local port that answers every request with `status`; `None` takes the request
+    /// and never answers.
+    async fn server(status: Option<u16>) -> u16 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("binds");
+        let port = listener.local_addr().expect("address").port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 1024];
+                    let _ = stream.read(&mut buffer).await;
+                    match status {
+                        Some(code) => {
+                            let _ = stream.write_all(format!("HTTP/1.1 {code} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await;
+                        }
+                        None => tokio::time::sleep(Duration::from_secs(30)).await,
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    fn url(scheme: &str, port: u16) -> tauri::Url {
+        format!("{scheme}://localhost:{port}/").parse().expect("url")
+    }
+
+    #[tokio::test]
+    async fn a_port_with_no_server_is_not_ready() {
+        let free = TcpListener::bind(("127.0.0.1", 0)).await.expect("binds").local_addr().expect("address").port();
+        assert_eq!(ready_within(&url("http", free), Duration::from_millis(500)).await, None);
+    }
+
+    #[tokio::test]
+    async fn any_http_answer_makes_a_server_ready_at_its_own_address() {
+        for status in [200, 404, 500] {
+            let port = server(Some(status)).await;
+            let wanted = url("http", port);
+            assert_eq!(ready_within(&wanted, Duration::from_millis(1500)).await, Some(wanted), "status {status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_scheme_the_server_speaks_is_the_one_returned() {
+        // A plain server asked for as https (what an address with the wrong scheme looks like): the http address answers.
+        let port = server(Some(200)).await;
+        assert_eq!(ready_within(&url("https", port), Duration::from_millis(1500)).await, Some(url("http", port)));
+    }
+
+    #[tokio::test]
+    async fn a_server_that_resets_connections_is_not_ready() {
+        // Like a dev server that has the port but is not serving yet: it accepts and closes.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("binds");
+        let port = listener.local_addr().expect("address").port();
+        tokio::spawn(async move { while listener.accept().await.is_ok() {} });
+        assert_eq!(ready_within(&url("http", port), Duration::from_millis(500)).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_is_slow_to_answer_counts_as_up() {
+        // A compiling dev server holds the request: the browser would wait too, so the address is kept as it is.
+        let port = server(None).await;
+        let wanted = url("http", port);
+        assert_eq!(ready_within(&wanted, Duration::from_millis(300)).await, Some(wanted));
+    }
+
+    #[test]
+    fn only_this_machine_is_probed_and_trusted() {
+        let parsed = |text: &str| -> tauri::Url { text.parse().expect("url") };
+        assert!(is_local(&parsed("http://localhost:4205/")));
+        assert!(is_local(&parsed("https://127.0.0.1:3000")));
+        assert!(is_local(&parsed("http://[::1]:5173/")));
+        assert!(!is_local(&parsed("https://example.com/")));
+        assert!(is_loopback(&parsed("https://vite.localhost:4205/")));
+        assert!(!is_loopback(&parsed("https://notlocalhost.example/")));
+        assert!(!is_loopback(&parsed("https://localhost.evil.example/")));
+    }
+
+    #[test]
+    fn the_other_scheme_keeps_the_port_and_needs_one() {
+        let parsed = |text: &str| -> tauri::Url { text.parse().expect("url") };
+        assert_eq!(other_scheme(&parsed("http://localhost:4205/")), Some(parsed("https://localhost:4205/")));
+        assert_eq!(other_scheme(&parsed("https://localhost:4205/x?y=1")), Some(parsed("http://localhost:4205/x?y=1")));
+        assert_eq!(other_scheme(&parsed("http://localhost/")), None, "without a port the other scheme is another port");
+    }
+
+    #[test]
+    fn retries_wait_longer_each_time() {
+        let waits: Vec<u64> = (1..=RETRIES).map(|attempt| backoff(attempt).as_millis() as u64).collect();
+        assert_eq!(waits, [1000, 2000, 4000]);
+    }
 }

@@ -4,6 +4,7 @@
 
 import type { AgentEvent } from './agent';
 import { inTauri } from './history';
+import { sessionTail } from './terminal-session';
 
 export type ActivityStatus = 'running' | 'background' | 'ok' | 'fail' | 'stopped';
 export type Activity = {
@@ -23,6 +24,10 @@ export type Activity = {
   output?: string;
   /** A picture the call returned (a screenshot): a data URL until it is saved, then its file name in the log. */
   image?: string;
+  /** Run project: the port the server's log is kept under (found from the servers list when not known). */
+  port?: number;
+  /** Terminal: the tab the command runs in. */
+  terminalId?: string;
 };
 
 /** A saved picture, read back as a data URL; one read per picture. */
@@ -39,6 +44,8 @@ export function auditImage(image: string): Promise<string> {
 }
 
 const LIMIT = 1000;
+/** The most output a run keeps (and the log file stores). */
+const OUTPUT_CAP = 20_000;
 export const activity = $state<Activity[]>([]);
 let calls = 0;
 
@@ -91,7 +98,7 @@ if (inTauri()) {
 /** A finished call goes to the Audit log and to disk. */
 function record(item: Activity) {
   // Tool ids restart in every turn (Codex counts from item_0 each time), so a saved entry gets its own key.
-  const entry = { ...item, key: `${item.key}@${item.startedAt}`, output: item.output?.slice(0, 4000) };
+  const entry = { ...item, key: `${item.key}@${item.startedAt}`, output: item.output?.slice(0, OUTPUT_CAP) };
   audit.push(entry);
   if (!inTauri()) return;
   const picture = entry.image?.startsWith('data:') ? entry.image : undefined;
@@ -182,20 +189,79 @@ export function trackActivity(sessionId: string, title: string, project: string,
   }
 }
 
+/** The server a Run project entry started: its port, found by command and folder in the servers list. */
+type ServerRow = { key: number; command: string; cwd: string; running: boolean };
+async function serverFor(item: Activity): Promise<ServerRow | undefined> {
+  const list = (await tauriCall('servers_list')) as ServerRow[];
+  if (item.port !== undefined) return list.find((row) => row.key === item.port);
+  const [command, cwd] = item.input.split('\n');
+  const row = list.find((entry) => entry.command.trim() === command?.trim() && entry.cwd === cwd);
+  if (row) item.port = row.key;
+  return row;
+}
+
+/**
+ * Reads again what a Run project or Terminal entry prints and puts it in `output`. Returns whether it is still
+ * alive (the server runs, the command has not returned to the prompt); other entries are never alive.
+ */
+export async function refreshOutput(item: Activity): Promise<boolean> {
+  try {
+    if (item.name === 'Run project' && inTauri()) {
+      const row = await serverFor(item);
+      // A server that is not in the list any more (stopped, or from an earlier session) keeps the text it has.
+      if (!row) return false;
+      item.output = String(await tauriCall('server_log', { port: item.port, lines: 200 })).slice(-OUTPUT_CAP);
+      return row.running;
+    }
+    if (item.name === 'Terminal' && item.terminalId) {
+      const text = sessionTail(item.terminalId, 200);
+      if (text !== null) item.output = text.slice(-OUTPUT_CAP);
+      return item.status === 'running';
+    }
+  } catch {
+    // The output stays as it was.
+  }
+  return false;
+}
+
 /**
  * A project started from the Preview: shown as running in the Tasks panel, and written to the Audit log when it
  * answers or fails. Returns the function that ends it.
  */
-export function trackRun(sessionId: string, title: string, project: string, input: string) {
-  activity.push({ key: `${sessionId}:run:${++calls}`, sessionId, title, project, name: 'Run project', input, background: false, status: 'running', startedAt: Date.now() });
+export function trackRun(sessionId: string, title: string, project: string, input: string, port?: number) {
+  activity.push({ key: `${sessionId}:run:${++calls}`, sessionId, title, project, name: 'Run project', input, background: false, status: 'running', startedAt: Date.now(), port });
   // The entry as the list holds it (reactive), so the panel sees it end.
   const item = activity[activity.length - 1];
   return (ok: boolean, output: string) => {
     item.status = ok ? 'ok' : 'fail';
-    item.output = output.length > 4000 ? `${output.slice(0, 4000)}…` : output;
+    item.output = output.length > OUTPUT_CAP ? `${output.slice(0, OUTPUT_CAP)}…` : output;
     item.endedAt = Date.now();
-    record(item);
+    // The log keeps the end of what the server printed, not only the address it came up at.
+    void (ok && inTauri() ? refreshOutput(item) : Promise.resolve(false)).finally(() => {
+      item.output ||= output;
+      record(item);
+    });
   };
+}
+
+/** Terminal tabs: the entry of the command each one runs now. */
+const terminalRuns = new Map<string, { item: Activity; startedAt: number; command: string }>();
+
+/** A command a Terminal tab runs (reported when it starts or changes, and with `null` when the prompt is back). */
+export function trackTerminal(id: string, run: { command: string; cwd?: string; startedAt: number } | null) {
+  const current = terminalRuns.get(id);
+  if (current && (!run || current.startedAt !== run.startedAt || current.command !== run.command)) {
+    terminalRuns.delete(id);
+    const item = current.item;
+    item.status = 'ok';
+    item.endedAt = Date.now();
+    const text = sessionTail(id, 200);
+    if (text !== null) item.output = text.slice(-OUTPUT_CAP);
+    record(item);
+  }
+  if (!run || terminalRuns.has(id)) return;
+  activity.push({ key: `terminal:${id}:${++calls}`, sessionId: '', title: 'Terminal', project: '', name: 'Terminal', input: run.command, background: false, status: 'running', startedAt: run.startedAt, terminalId: id });
+  terminalRuns.set(id, { item: activity[activity.length - 1], startedAt: run.startedAt, command: run.command });
 }
 
 export const clearActivity =() => activity.splice(0, activity.length);

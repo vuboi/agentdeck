@@ -22,6 +22,11 @@ pub struct RunTarget {
     pub url: Option<String>,
     /// Where the command was found: `package.json`, `launch.json`, `manage.py`.
     pub source: String,
+    /// The script file a package.json script runs (`node scripts/dev.mjs`): a wrapper that may do anything, ask
+    /// questions included.
+    pub wrapper: Option<String>,
+    /// The wrapper reads from the keyboard (a prompt library, readline): it needs a terminal.
+    pub prompts: bool,
 }
 
 const SKIP_DIRS: [&str; 8] = ["node_modules", "target", "dist", "build", "out", "coverage", "venv", "__pycache__"];
@@ -118,14 +123,31 @@ fn packages(root: &Path, folder: &Path, found: &mut Vec<RunTarget>) {
             continue;
         }
         let port = port_of(text, &dependencies, folder);
+        let wrapper = wrapper_of(text);
         found.push(RunTarget {
             name: if folder == root { name.clone() } else { format!("{package}: {name}") },
             command: runner(root, folder, name),
             cwd: folder.to_string_lossy().into_owned(),
             url: port.map(|port| format!("http://localhost:{port}/")),
             source: "package.json".into(),
+            wrapper: wrapper.clone(),
+            prompts: wrapper.as_deref().is_some_and(|file| uses_prompts(&folder.join(file))),
         });
     }
+}
+
+/// The file a script runs when it is `node file.mjs` (a wrapper around the real dev server), as written.
+fn wrapper_of(script: &str) -> Option<String> {
+    let pattern = Regex::new(r#"^\s*(?:cross-env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*node\s+(?:--?[\w-]+(?:=\S+)?\s+)*([^\s&|;<>]+\.(?:mjs|cjs|js))\b"#).ok()?;
+    pattern.captures(script).map(|found| found[1].trim_matches(['"', '\'']).to_string())
+}
+
+/// Whether a script file reads answers from the keyboard (a prompt library, readline, stdin).
+fn uses_prompts(file: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(file) else { return false };
+    let text: String = text.chars().take(200_000).collect();
+    Regex::new(r#"(?:from|require\(|import\()\s*['"](?:node:)?(?:inquirer|@inquirer/[\w-]+|enquirer|prompts|@clack/prompts|readline|readline-sync|readline/promises)['"]|process\.stdin"#)
+        .is_ok_and(|pattern| pattern.is_match(&text))
 }
 
 /// The port a script asks for, else the usual one of the framework it runs.
@@ -179,6 +201,8 @@ fn launch_json(root: &Path, found: &mut Vec<RunTarget>) {
             cwd: item["cwd"].as_str().map_or_else(|| root.to_string_lossy().into_owned(), |cwd| root.join(cwd).to_string_lossy().into_owned()),
             url: item["url"].as_str().map(str::to_string).or_else(|| port.map(|port| format!("http://localhost:{port}/"))),
             source: "launch.json".into(),
+            wrapper: None,
+            prompts: false,
         });
     }
 }
@@ -191,6 +215,8 @@ fn django(root: &Path, found: &mut Vec<RunTarget>) {
             cwd: root.to_string_lossy().into_owned(),
             url: Some("http://localhost:8000/".into()),
             source: "manage.py".into(),
+            wrapper: None,
+            prompts: false,
         });
     }
 }
@@ -199,8 +225,15 @@ fn django(root: &Path, found: &mut Vec<RunTarget>) {
 pub fn address_in(log: &str) -> Option<String> {
     let colours = Regex::new("\u{1b}\\[[0-9;]*m").ok()?;
     let plain = colours.replace_all(log, "");
-    let found = Regex::new(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})[^\s)\]]*").ok()?.captures(&plain)?;
-    Some(format!("http://localhost:{}/", &found[1]))
+    // Taken as printed (scheme, host, port, path): a server started with a certificate answers at https:// only, and
+    // one bound to 127.0.0.1 may not answer as localhost. Only an address nobody can browse to becomes localhost.
+    let found = Regex::new(r#"(https?)://(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})([^\s)\]'"<>]*)"#).ok()?.captures(&plain)?;
+    let host = match &found[2] {
+        "0.0.0.0" | "[::]" => "localhost",
+        other => other,
+    };
+    let path = found[4].trim_end_matches(['.', ',', ';']);
+    Some(format!("{}://{}:{}{}", &found[1], host, &found[3], if path.is_empty() { "/" } else { path }))
 }
 
 #[tauri::command]
@@ -212,10 +245,12 @@ pub fn detect_run_targets(cwd: String) -> Vec<RunTarget> {
 /// the one the server prints (a dev server moves to the next port when its own is taken); the guess `url` is used
 /// when it prints none. A server that already answers at the guess is not started again.
 #[tauri::command]
-pub async fn run_target(command: String, cwd: String, url: Option<String>) -> Result<String, String> {
+pub async fn run_target(command: String, cwd: String, url: Option<String>) -> Result<String, RunFailure> {
     let guess = url.as_deref().map(crate::browser::parse).transpose()?;
-    if let Some(target) = guess.as_ref().filter(|target| crate::browser::answers(target)) {
-        return Ok(target.to_string());
+    if let Some(guess) = guess.as_ref() {
+        if let Some(target) = crate::browser::ready(guess).await {
+            return Ok(target.to_string());
+        }
     }
     // The log and the process are kept under the port; a command with no guess gets a number of its own.
     let key = guess.as_ref().and_then(|target| target.port_or_known_default()).unwrap_or_else(|| {
@@ -226,22 +261,209 @@ pub async fn run_target(command: String, cwd: String, url: Option<String>) -> Re
     });
     crate::servers::start(&command, &cwd, key)?;
     let started = std::time::Instant::now();
+    // The log as it was at the last look, and since when it has not changed: a script waiting for an answer is silent.
+    let mut seen = String::new();
+    let mut quiet_since = started;
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        if let Some(target) = address_in(&crate::servers::tail(key, 200)).as_deref().and_then(|text| crate::browser::parse(text).ok()) {
-            if crate::browser::answers(&target) {
+        let log = crate::servers::read_log(key);
+        if log != seen {
+            seen = log;
+            quiet_since = std::time::Instant::now();
+        }
+        // The address the server printed answers (over HTTP, at the scheme it speaks): that is the page.
+        let printed = address_in(&seen).as_deref().and_then(|text| crate::browser::parse(text).ok());
+        if let Some(printed) = printed {
+            if let Some(target) = crate::browser::ready(&printed).await {
                 crate::servers::set_url(key, target.as_str());
                 return Ok(target.to_string());
             }
         }
         // It printed nothing we know: the guess, once it answers, is the page.
-        if let Some(target) = guess.as_ref().filter(|target| started.elapsed().as_secs() >= 6 && crate::browser::answers(target)) {
-            crate::servers::set_url(key, target.as_str());
-            return Ok(target.to_string());
+        if started.elapsed().as_secs() >= 6 {
+            if let Some(target) = match guess.as_ref() {
+                Some(guess) => crate::browser::ready(guess).await,
+                None => None,
+            } {
+                crate::servers::set_url(key, target.as_str());
+                return Ok(target.to_string());
+            }
         }
-        if crate::servers::exited(key) || started.elapsed().as_secs() > 120 {
-            return Err(format!("`{command}` did not start a page. Last lines of its log:\n{}", crate::servers::tail(key, 30)));
+        if crate::servers::exited(key) {
+            return Err(failure(&command, &cwd, &seen, Ended::Exited));
         }
+        // No keyboard here: a script that asks a question will wait for ever. Say so, and do not keep it running.
+        if quiet_since.elapsed().as_secs() >= 5 && looks_interactive(&seen) {
+            let _ = crate::servers::server_stop(Some(key));
+            return Err(failure(&command, &cwd, &seen, Ended::Asking));
+        }
+        if started.elapsed().as_secs() > 120 {
+            return Err(failure(&command, &cwd, &seen, Ended::Silent));
+        }
+    }
+}
+
+/// Why a start failed, for the Preview to show: what happened, the last lines of the log (colour codes and noise
+/// removed), and a hint when the log says what to do about it.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct RunFailure {
+    /// `exited`, `asking` (waits for an answer), `silent` (nothing came up in time), or `error`.
+    pub kind: &'static str,
+    /// One line.
+    pub message: String,
+    /// The last lines of the log.
+    pub log: String,
+    /// What to try, when it is known.
+    pub hint: Option<String>,
+    /// The script needs a keyboard: it belongs in the Terminal panel.
+    pub interactive: bool,
+    /// The script file the command runs, when it is a wrapper (`node scripts/dev.mjs`).
+    pub wrapper: Option<String>,
+}
+
+impl From<String> for RunFailure {
+    fn from(message: String) -> Self {
+        RunFailure { kind: "error", message, log: String::new(), hint: None, interactive: false, wrapper: None }
+    }
+}
+
+impl RunFailure {
+    /// The same as one text, for callers that have no layout (the agent's tools).
+    pub fn text(&self) -> String {
+        let mut text = self.message.clone();
+        if let Some(hint) = &self.hint {
+            text.push('\n');
+            text.push_str(hint);
+        }
+        if !self.log.is_empty() {
+            text.push_str("\nLast lines of its log:\n");
+            text.push_str(&self.log);
+        }
+        text
+    }
+}
+
+/// How a start ended without a page.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Ended {
+    Exited,
+    Asking,
+    Silent,
+}
+
+/// The failure of `command` (run in `cwd`) given the log it left.
+pub fn failure(command: &str, cwd: &str, raw_log: &str, ended: Ended) -> RunFailure {
+    let wrapper = script_of(command, cwd).and_then(|script| wrapper_of(&script));
+    let missing = missing_dependency(raw_log);
+    // A process that stopped with an error is not waiting for anything; one that is silent after a question is.
+    let asking = missing.is_none() && (ended == Ended::Asking || looks_interactive(raw_log));
+    let (kind, message) = match (asking, ended) {
+        (true, _) => ("asking", format!("`{command}` is waiting for an answer to a question, and AgentDeck runs servers with no keyboard.")),
+        (false, Ended::Exited) => ("exited", format!("`{command}` stopped before a page came up.")),
+        (false, _) => ("silent", format!("`{command}` did not start a page in two minutes.")),
+    };
+    let hint = if let Some(what) = missing {
+        Some(format!("Dependencies look missing ({what} was not found): run `{}` in {cwd}, then try again.", install_command(command)))
+    } else if asking {
+        Some("Run it in the Terminal panel, answer its questions there, and open the address it prints in the Preview.".to_string())
+    } else if raw_log.contains("EADDRINUSE") || raw_log.to_lowercase().contains("address already in use") {
+        Some("The port is already taken by another program: stop it, or run the server on another port.".to_string())
+    } else {
+        wrapper.as_ref().map(|script| format!("`{script}` is a script of the project, not a dev server itself: its own output is below."))
+    };
+    RunFailure { kind, message, log: clean_log(raw_log, 30), hint, interactive: asking, wrapper }
+}
+
+/// What the package.json script a command runs (`pnpm run dev`, `npm run dev`, `yarn dev`) contains.
+fn script_of(command: &str, cwd: &str) -> Option<String> {
+    let name = command.split_whitespace().last()?;
+    let manifest = read_json(&Path::new(cwd).join("package.json"))?;
+    manifest["scripts"][name].as_str().map(str::to_string)
+}
+
+/// The install command of the package manager a run command uses.
+fn install_command(command: &str) -> &'static str {
+    match command.split_whitespace().next() {
+        Some("pnpm") => "pnpm install",
+        Some("yarn") => "yarn install",
+        Some("bun") => "bun install",
+        _ => "npm install",
+    }
+}
+
+/// What a log says could not be found when that is a package or a program (not a file of the project itself).
+fn missing_dependency(log: &str) -> Option<String> {
+    let log = strip_codes(log);
+    if let Some(found) = Regex::new(r"(?i)cannot find (?:module|package) '([^']+)'").ok()?.captures(&log) {
+        let name = found[1].to_string();
+        let own_file = name.starts_with(['.', '/', '\\']) || Regex::new(r"^[A-Za-z]:").ok()?.is_match(&name);
+        if name.contains("node_modules") || !own_file {
+            return Some(name);
+        }
+    }
+    let program = r"[\w@./\\-]+";
+    for pattern in [
+        format!(r"(?i)'?({program})'? is not recognized as an internal or external command"),
+        format!(r"(?i)(?:sh|bash|zsh)(?::\s*\d+)?:\s*({program}): (?:command )?not found"),
+    ] {
+        if let Some(found) = Regex::new(&pattern).ok()?.captures(&log) {
+            return Some(found[1].to_string());
+        }
+    }
+    None
+}
+
+/// Whether the end of a log looks like a question waiting for an answer (a prompt library, a menu, a yes/no).
+pub fn looks_interactive(raw_log: &str) -> bool {
+    let log = strip_codes(raw_log);
+    // A prompt leaves the cursor on its line: the log does not end with a newline.
+    let unfinished = !log.ends_with('\n') && log.trim_end().ends_with([':', '?', '\u{203a}']);
+    let lines: Vec<&str> = log.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    let last = &lines[lines.len().saturating_sub(5)..];
+    unfinished || last.iter().any(|line| prompt_line(line))
+}
+
+fn prompt_line(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    ["use arrow keys", "arrow keys", "press enter", "[y/n]", "(y/n)", "(y/n/", "[y/n/", "(yes/no)"].iter().any(|word| lower.contains(word))
+        || line.ends_with('?')
+        || line.starts_with("? ")
+        || line.contains(" \u{203a} ")
+        || line.ends_with('\u{203a}')
+        || ["select ", "choose ", "which ", "pick "].iter().any(|word| lower.starts_with(word))
+}
+
+/// The log without colour codes and cursor movements (and without what a carriage return overwrote).
+fn strip_codes(log: &str) -> String {
+    let codes = Regex::new("\u{1b}\\[[0-9;?]*[A-Za-z]|\u{1b}\\][^\u{7}\u{1b}]*(?:\u{7}|\u{1b}\\\\)").expect("a valid pattern");
+    let plain = codes.replace_all(log, "");
+    plain.split('\n').map(|line| line.rsplit('\r').find(|part| !part.is_empty()).unwrap_or("")).collect::<Vec<_>>().join("\n")
+}
+
+/// The last `lines` lines of a log, readable: no colour codes, no package manager config warnings, no blank runs,
+/// long lines cut, and at most about 3000 characters.
+pub fn clean_log(raw_log: &str, lines: usize) -> String {
+    let plain = strip_codes(raw_log);
+    let mut kept: Vec<String> = Vec::new();
+    for line in plain.lines() {
+        let line = line.trim_end();
+        if line.starts_with("npm warn Unknown ") || line.starts_with("npm WARN Unknown ") {
+            continue;
+        }
+        if line.is_empty() && kept.last().is_none_or(|last| last.is_empty()) {
+            continue;
+        }
+        kept.push(if line.chars().count() > 240 { format!("{}\u{2026}", line.chars().take(240).collect::<String>()) } else { line.to_string() });
+    }
+    while kept.last().is_some_and(|last| last.is_empty()) {
+        kept.pop();
+    }
+    let text = kept[kept.len().saturating_sub(lines)..].join("\n");
+    if text.chars().count() > 3000 {
+        let skip = text.chars().count() - 3000;
+        format!("\u{2026}{}", text.chars().skip(skip).collect::<String>())
+    } else {
+        text
     }
 }
 
@@ -252,7 +474,7 @@ mod tests {
     #[test]
     fn reads_the_address_a_server_prints() {
         assert_eq!(address_in("  \u{1b}[32m➜\u{1b}[39m  Local:   \u{1b}[36mhttp://localhost:\u{1b}[1m5174\u{1b}[22m/\u{1b}[39m"), Some("http://localhost:5174/".into()), "colour codes inside the address");
-        assert_eq!(address_in("  ➜  Local:   http://127.0.0.1:1420/"), Some("http://localhost:1420/".into()));
+        assert_eq!(address_in("  ➜  Local:   http://127.0.0.1:1420/"), Some("http://127.0.0.1:1420/".into()), "the host as printed");
         assert_eq!(address_in("ready on http://0.0.0.0:3000"), Some("http://localhost:3000/".into()));
     }
 
@@ -264,5 +486,80 @@ mod tests {
         assert_eq!(port_of("ng serve", "", none), Some(4200));
         assert_eq!(port_of("vite", "", none), Some(5173));
         assert_eq!(port_of("node server.js", "", none), None);
+    }
+
+    #[test]
+    fn keeps_the_scheme_a_server_prints() {
+        // What `nx serve` prints for an app served with a certificate: the first address is the page, https only.
+        let log = "  \u{1b}[32m\u{279c}\u{1b}[39m  Local:   https://localhost:4205/\n  \u{279c}  Local:   https://vite.localhost:4205/\n  \u{279c}  Network: https://192.168.1.6:4205/";
+        assert_eq!(address_in(log), Some("https://localhost:4205/".into()));
+    }
+
+    #[test]
+    fn finds_a_wrapper_script() {
+        assert_eq!(wrapper_of("node scripts/z-dev-vite.mjs"), Some("scripts/z-dev-vite.mjs".into()));
+        assert_eq!(wrapper_of("cross-env NODE_ENV=development node --no-warnings scripts/dev.js --app web"), Some("scripts/dev.js".into()));
+        assert_eq!(wrapper_of("vite --port 5173"), None);
+        assert_eq!(wrapper_of("nx serve his-medic"), None);
+    }
+
+    const MISSING_NX: &str = "npm warn Unknown env config \"global-bin-dir\". This will stop working in the next major version of npm.\n\n> app@0.0.0 dev E:\\proj\n> node scripts/z-dev-vite.mjs\n\nnode:internal/modules/cjs/loader:1386\n  throw err;\n  ^\n\nError: Cannot find module 'E:\\proj\\node_modules\\nx\\bin\\nx.js'\n    at Function._resolveFilename (node:internal/modules/cjs/loader:1383:15) {\n  code: 'MODULE_NOT_FOUND',\n  requireStack: []\n}\n\nNode.js v24.0.0\n";
+
+    #[test]
+    fn missing_packages_are_told_apart_from_missing_files() {
+        assert!(missing_dependency(MISSING_NX).is_some_and(|what| what.contains("nx.js")));
+        assert_eq!(missing_dependency("Error: Cannot find module 'vite'"), Some("vite".into()));
+        assert_eq!(missing_dependency("Error: Cannot find module './config.js'"), None);
+        assert_eq!(missing_dependency("'nx' is not recognized as an internal or external command,"), Some("nx".into()));
+        assert_eq!(missing_dependency("sh: 1: vite: not found"), Some("vite".into()));
+        assert_eq!(missing_dependency("Compiled successfully"), None);
+    }
+
+    #[test]
+    fn a_failed_wrapper_is_explained_with_the_log_cleaned() {
+        let folder = std::env::temp_dir().join("agentdeck-detect-test-wrapper");
+        std::fs::create_dir_all(&folder).expect("folder");
+        std::fs::write(folder.join("package.json"), r#"{"scripts":{"dev":"node scripts/z-dev-vite.mjs"}}"#).expect("manifest");
+        let failed = failure("pnpm run dev", &folder.to_string_lossy(), MISSING_NX, Ended::Exited);
+        assert_eq!(failed.kind, "exited");
+        assert_eq!(failed.wrapper.as_deref(), Some("scripts/z-dev-vite.mjs"));
+        assert!(!failed.interactive);
+        let hint = failed.hint.as_deref().unwrap_or_default();
+        assert!(hint.contains("pnpm install") && hint.contains("missing"), "{hint}");
+        assert!(failed.log.contains("MODULE_NOT_FOUND") && !failed.log.contains("npm warn Unknown"), "{}", failed.log);
+        assert!(failed.text().contains("Last lines of its log:"));
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_question_is_recognised_and_a_build_is_not() {
+        assert!(looks_interactive("\u{1b}[36m?\u{1b}[39m Which app do you want to run? \u{203a} \n"));
+        assert!(looks_interactive("Select the app to start (Use arrow keys)\n\u{276f} his-medic\n  emr-portal"));
+        assert!(looks_interactive("Continue? [y/N]"));
+        assert!(looks_interactive("Choose a step: "));
+        assert!(!looks_interactive("\u{276f} Building...\n\u{2714} Building...\nWatch mode enabled. Watching for file changes...\n"));
+        assert!(!looks_interactive("  \u{279c}  Local:   https://localhost:4205/\n"));
+        let asking = failure("npm run dev", "/nonexistent", "Which app do you want to run? \u{203a} ", Ended::Asking);
+        assert_eq!(asking.kind, "asking");
+        assert!(asking.interactive && asking.hint.as_deref().is_some_and(|hint| hint.contains("Terminal")));
+    }
+
+    #[test]
+    fn the_log_is_cut_to_something_readable() {
+        let long = "x".repeat(500);
+        let raw = format!("a\r\nprogress 10%\rprogress 100%\n\n\n\n{long}\n");
+        let cleaned = clean_log(&raw, 30);
+        assert_eq!(cleaned.lines().count(), 4, "{cleaned}");
+        assert!(cleaned.contains("progress 100%") && !cleaned.contains("progress 10%"));
+        assert!(cleaned.lines().last().is_some_and(|line| line.chars().count() <= 241));
+        let many: String = (0..100).map(|n| format!("line {n}\n")).collect();
+        assert_eq!(clean_log(&many, 5).lines().count(), 5);
+    }
+
+    #[test]
+    fn a_package_manager_is_chosen_from_the_command() {
+        assert_eq!(install_command("pnpm run dev"), "pnpm install");
+        assert_eq!(install_command("yarn dev"), "yarn install");
+        assert_eq!(install_command("npm run start"), "npm install");
     }
 }

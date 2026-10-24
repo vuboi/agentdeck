@@ -36,6 +36,9 @@
     stopServers,
     openInPreview,
     runTarget as startTarget,
+    asRunFailure,
+    failureText,
+    terminalCommand,
     type RunTarget,
     reload,
     searchSuggestions,
@@ -51,6 +54,7 @@
   import { trackRun } from '../activity.svelte';
   import { blurPage, cutHole, modalBlur, overPage, setBelow } from '../page-layer';
   import { devtoolsOpen, layout, setDevtools } from '../layout.svelte';
+  import { runInTerminal, showTerminalTab, stopTerminalRun, terminal, terminalRuns } from '../terminal.svelte';
   import { activeSession, draftElements, draftImages, drafts, projectOf, workspace } from '../sessions.svelte';
 
   // The AgentDeck browser: tabs, an address bar, device sizes, an element picker, devtools, and a markup view
@@ -72,6 +76,15 @@
   }
 
   // Ctrl+L: the address, selected, ready to type over, while this browser is the one on screen.
+  function focusAddress() {
+    if (!addressInput) return;
+    addressInput.focus();
+    selectAddress(addressInput);
+  }
+  onMount(() => {
+    window.addEventListener('agentdeck:focus-address', focusAddress);
+    return () => window.removeEventListener('agentdeck:focus-address', focusAddress);
+  });
   function onWindowKey(event: KeyboardEvent) {
     if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'l' || !addressInput) return;
     event.preventDefault();
@@ -111,6 +124,7 @@
     if (starting.includes(id)) return;
     browser.starting = [...browser.starting, id];
     browser.error = '';
+    browser.problem = null;
     const session = activeSession();
     // The Audit log gets the run: what was started, where, and the address it came up at (or why it did not).
     const finish = trackRun(session?.id ?? '', session?.title ?? '', (session && projectOf(session)?.name) || '', `${target.command}\n${target.cwd}`);
@@ -120,11 +134,19 @@
       // The same path a link takes: the front tab, or a new one when it already shows a page.
       openInPreview(url, 'auto');
     } catch (error) {
-      finish(false, String(error));
-      browser.error = String(error);
+      const failure = asRunFailure(error);
+      finish(false, failure ? failureText(failure) : String(error));
+      if (failure) browser.problem = { ...failure, name: target.name, command: target.command, cwd: target.cwd };
+      else browser.error = String(error);
     } finally {
       browser.starting = browser.starting.filter((item) => item !== id);
     }
+  }
+
+  /** Runs a command in the Terminal panel (in its folder): for scripts that ask questions, or to see everything they print. */
+  function inTerminal(command: string, cwd: string) {
+    runInTerminal(terminalCommand(command, cwd));
+    browser.problem = null;
   }
 
   // The address bar shows the front tab's address unless it is being typed in.
@@ -582,7 +604,19 @@
   ]);
 
   // What runs in the background (servers started from the Preview or by an agent): open it, or stop it.
-  const alive = $derived(servers.list.filter((item) => item.running));
+  // Commands running in the Terminal panel's tabs are listed too (their address, when they printed one).
+  const alive = $derived({ length: servers.list.filter((item) => item.running).length + terminalRuns.list.length });
+  const rowCount = $derived(servers.list.length + terminalRuns.list.length);
+  const terminalAge = (run: { startedAt: number }) => Math.max(0, Math.floor((clock - run.startedAt) / 1000));
+  function terminalState(run: { url: string | null; interruptedAt: number | null }) {
+    if (run.interruptedAt !== null && clock - run.interruptedAt > 2500) return { label: 'Still running · press stop again to close the terminal', tone: 'text-amber-500' };
+    return run.url ? { label: `Running in terminal · ${run.url.replace(/^https?:\/\//, '')}`, tone: 'text-emerald-500' } : { label: 'Running in terminal', tone: 'text-emerald-500' };
+  }
+  const terminalName = (id: string) => terminal.tabs.find((tab) => tab.id === id)?.name ?? 'terminal';
+  function stopAll() {
+    void stopServers(null);
+    for (const run of [...terminalRuns.list]) stopTerminalRun(run.id);
+  }
   const portOf = (item: { url: string | null }) => item.url?.match(/:(\d+)/)?.[1];
   const runningFor = (age: number) => (age < 60 ? `${age}s` : age < 3600 ? `${Math.floor(age / 60)}m ${age % 60}s` : `${Math.floor(age / 3600)}h ${Math.floor((age % 3600) / 60)}m ${age % 60}s`);
   const processName = (item: { command: string; url: string | null }) => `${item.command.length > 34 ? `${item.command.slice(0, 34)}…` : item.command}${portOf(item) ? ` · :${portOf(item)}` : ''}`;
@@ -632,15 +666,15 @@
 {#snippet processTitle()}
   <span class="flex w-full min-w-0 items-center gap-2">
     <span class="truncate">Running in the background</span>
-    <span class="rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground tabular-nums">{servers.list.length}</span>
+    <span class="rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground tabular-nums">{rowCount}</span>
     <span class="flex-1"></span>
     <button type="button" class="grid size-7 cursor-pointer place-items-center rounded-md border border-border bg-muted/60 outline-none hover:bg-accent" aria-label="Close" onclick={() => (processOpen = false)}><ZIcon zType={'lucideX' as ZIconName} class="size-4" /></button>
   </span>
 {/snippet}
 
 {#snippet processFooter()}
-  {#if servers.list.length > 1}
-    <button type="button" class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-destructive/10 px-2 py-2 text-xs text-destructive outline-none hover:bg-destructive/20" onclick={() => { void stopServers(null); processOpen = false; }}>
+  {#if rowCount > 1}
+    <button type="button" class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-destructive/10 px-2 py-2 text-xs text-destructive outline-none hover:bg-destructive/20" onclick={() => { stopAll(); processOpen = false; }}>
       <svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg> Stop all
     </button>
   {/if}
@@ -879,9 +913,28 @@
         </button>
         <ZDrawer bind:open={processOpen} zPlacement="right" zWidth="380px" zFloating zClosable={false} zTitle={processTitle} footer={processFooter}>
 <div class="flex min-h-full flex-col gap-2">
-              {#if servers.list.length === 0}
+              {#if rowCount === 0}
                 <div class="col-start-1 row-start-1 flex min-h-38 flex-col items-center justify-center gap-2 self-center text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="24" /> Nothing is running in the background</div>
               {/if}
+              {#each terminalRuns.list as run (run.id)}
+                <div class="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
+                  <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left text-xs outline-none" onclick={() => { if (run.url) openInPreview(run.url, 'auto'); else showTerminalTab(run.id); processOpen = false; }}>
+                    <ZIcon zType={(run.url ? 'lucideExternalLink' : 'lucideSquareTerminal') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground" />
+                    <span class="flex min-w-0 flex-1 flex-col leading-tight">
+                      <span class="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <span class="truncate" title={run.cwd}>{run.cwd ? projectNameOf(run.cwd) : terminalName(run.id)}</span>
+                        <span class="shrink-0 rounded bg-muted px-1 text-[10px] leading-4">Terminal</span>
+                      </span>
+                      <span class="mt-0.5 truncate" title={run.command}>{run.command.length > 34 ? `${run.command.slice(0, 34)}…` : run.command}{portOf(run) ? ` · :${portOf(run)}` : ''}</span>
+                      <span class="mt-1 truncate text-[11px] {terminalState(run).tone}">{terminalState(run).label}</span>
+                    </span>
+                    <span class="shrink-0 whitespace-nowrap text-muted-foreground tabular-nums">{runningFor(terminalAge(run))}</span>
+                  </button>
+                  <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md bg-destructive/10 text-destructive outline-none hover:bg-destructive/20" aria-label="Stop (Ctrl+C)" {@attach zTooltip({ content: 'Stop (Ctrl+C)', position: 'top' })} onclick={() => stopTerminalRun(run.id)}>
+                    <svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg>
+                  </button>
+                </div>
+              {/each}
               {#each servers.list as item, index (`${item.key}:${item.pid}`)}
                 <!-- One line each, cut short when long; a line between rows. -->
                 <div class="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
@@ -908,6 +961,23 @@
     </div>
     {#if browser.error}
       <div class="shrink-0 border-b border-border px-3 py-1 text-xs text-destructive" role="status">{browser.error}</div>
+    {/if}
+    {#if browser.problem}
+      {@const problem = browser.problem}
+      <div class="flex max-h-64 shrink-0 flex-col gap-1.5 overflow-hidden border-b border-border px-3 py-2 text-xs" role="alert">
+        <div class="flex items-start gap-2">
+          <p class="m-0 min-w-0 flex-1 wrap-break-word font-medium text-destructive">{problem.message}</p>
+          <button type="button" class="grid size-5 shrink-0 cursor-pointer place-items-center rounded outline-none hover:bg-accent" aria-label="Dismiss" onclick={() => (browser.problem = null)}><ZIcon zType={'lucideX' as ZIconName} zSize="12" /></button>
+        </div>
+        {#if problem.hint}<p class="m-0 text-foreground">{problem.hint}</p>{/if}
+        {#if problem.log}<pre class="m-0 min-h-0 flex-1 overflow-auto rounded-md bg-muted/60 p-2 font-mono text-[10px] leading-snug whitespace-pre-wrap text-muted-foreground">{problem.log}</pre>{/if}
+        <div class="flex items-center gap-2">
+          <button type="button" class="inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-primary outline-none hover:bg-primary/20" onclick={() => inTerminal(problem.command, problem.cwd)}>
+            <ZIcon zType={'lucideSquareTerminal' as ZIconName} zSize="12" /> Run in the Terminal
+          </button>
+          {#if problem.interactive}<span class="text-muted-foreground">Answer its questions there, then open the address it prints.</span>{/if}
+        </div>
+      </div>
     {/if}
 
     <!-- The page itself lives in a native webview placed over this area. -->
@@ -945,6 +1015,7 @@
                       <div class="flex min-w-0 items-center gap-1.5">
                         <span class="truncate text-xs font-medium text-foreground">{target.name}</span>
                         {#if target.url}<span class="shrink-0 rounded bg-muted px-1 font-mono text-[9px] leading-4">{target.url.match(/:(\d+)/)?.[1]}</span>{/if}
+                        {#if target.wrapper}<span class="shrink-0 rounded bg-muted px-1 font-mono text-[9px] leading-4" title="Runs {target.wrapper}{target.prompts ? ', which asks questions: run it in the Terminal' : ''}">script{target.prompts ? ' · asks' : ''}</span>{/if}
                       </div>
                       <div class="truncate font-mono text-[10px]" title={target.command}>{target.command}</div>
                     </div>

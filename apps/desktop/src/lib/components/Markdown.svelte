@@ -147,7 +147,8 @@
   const COLOURED_MAX = 300;
 
   async function colour(container: HTMLElement, dark: boolean) {
-    const blocks = [...container.querySelectorAll<HTMLElement>('.md-code:not([data-coloured])')];
+    // A block coloured for the other theme (the theme changed, or the app was still settling) is coloured again.
+    const blocks = [...container.querySelectorAll<HTMLElement>(`.md-code:not([data-coloured="${dark ? 'dark' : 'light'}"])`)];
     if (blocks.length === 0) return;
     colourStarted();
     try {
@@ -162,7 +163,7 @@
       const code = block.querySelector('code');
       const pre = block.querySelector('pre');
       if (!code || !pre) continue;
-      block.dataset.coloured = '';
+      block.dataset.coloured = dark ? 'dark' : 'light';
       const source = code.textContent ?? '';
       if (source.length > COLOUR_MAX_CHARS) continue;
       const language = block.dataset.lang || 'text';

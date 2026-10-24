@@ -68,6 +68,8 @@ export const browser = $state({
   console: [] as ConsoleLine[],
   network: [] as NetworkLine[],
   error: '',
+  /** A project command from the Run list that did not bring a page up: shown until dismissed. */
+  problem: null as RunProblem | null,
   /** Open the page at once when the browser view mounts (developer hook, links). */
   autostart: '' as string,
   /** The project commands being started from the Preview (cwd|command), none when empty: they outlive the panel, and several can start at once. */
@@ -133,11 +135,17 @@ export async function listenToPage() {
       browser.annotateUndo = payload.undo === true;
       browser.annotateRedo = payload.redo === true;
       browser.annotateSelected = payload.selected === true;
-    } else if (payload.kind === 'nav' && tab) {
+    } else if (payload.kind === 'nav' && tab && !isErrorUrl(String(payload.url))) {
       tab.url = String(payload.url);
       tab.title = String(payload.title ?? '');
       void loadIcon(tab, String(payload.favicon ?? ''));
       recordVisit(tab.url, tab.title);
+    } else if (payload.kind === 'focus-address') {
+      // The page has the keyboard: bring it back to the app's window, then to the address bar.
+      void import('@tauri-apps/api/webview')
+        .then(({ getCurrentWebview }) => getCurrentWebview().setFocus())
+        .catch(() => {})
+        .finally(() => window.dispatchEvent(new Event('agentdeck:focus-address')));
     } else if (payload.kind === 'title' && tab) {
       tab.title = String(payload.title ?? '');
       recordVisit(tab.url, tab.title);
@@ -149,7 +157,7 @@ export async function listenToPage() {
     if (!tab) return;
     tab.loading = payload.event === 'started';
     if (payload.event === 'started') {
-      tab.url = payload.url;
+      if (!isErrorUrl(payload.url)) tab.url = payload.url;
       if (tab.id === browser.activeId) {
         // A new page takes the marks with it: leave the mode.
         browser.annotating = false;
@@ -279,9 +287,12 @@ function readHistory(): Visit[] {
 }
 export const visited = $state<{ list: Visit[] }>({ list: readHistory() });
 
+/** The browser's own error page or AgentDeck's: never an address of a tab, never kept in the history. */
+export const isErrorUrl = (url: string) => /^chrome-error:|^about:neterror|^https?:\/\/agentdeck\.localhost\/|^agentdeck:\/\/|agentdeck-error/i.test(url);
+
 /** One entry per address (the part after # does not make another); pages that are not web pages are left out. */
 export function recordVisit(url: string, title: string) {
-  if (!originOf(url) || url.includes('agentdeck-error')) return;
+  if (!originOf(url) || isErrorUrl(url)) return;
   const clean = url.split('#')[0];
   const found = visited.list.find((item) => item.url === clean);
   const now = Date.now();
@@ -494,7 +505,27 @@ function openForAgent(url: string, inNewTab: boolean) {
 export const linkMenu = $state({ open: false, url: '', x: 0, y: 0, file: '', root: '' });
 
 // ---- running the project from the Preview ----
-export type RunTarget = { name: string; command: string; cwd: string; url: string | null; source: string };
+export type RunTarget = { name: string; command: string; cwd: string; url: string | null; source: string; /** The script file it runs (`node scripts/dev.mjs`). */ wrapper: string | null; /** That script asks questions: it needs a terminal. */ prompts: boolean };
+
+/** Why a start did not bring a page up (see `RunFailure` in detect.rs), with what was started. */
+export type RunFailure = { kind: string; message: string; log: string; hint: string | null; interactive: boolean; wrapper: string | null };
+export type RunProblem = RunFailure & { name: string; command: string; cwd: string };
+
+/** The failure a rejected start carries (a plain error text is not one). */
+export function asRunFailure(error: unknown): RunFailure | null {
+  if (!error || typeof error !== 'object') return null;
+  const found = error as Partial<RunFailure>;
+  return typeof found.message === 'string' && typeof found.kind === 'string' ? { kind: found.kind, message: found.message, log: found.log ?? '', hint: found.hint ?? null, interactive: found.interactive === true, wrapper: found.wrapper ?? null } : null;
+}
+
+/** The failure as one text, for the Audit log. */
+export const failureText = (failure: RunFailure) => [failure.message, failure.hint, failure.log && `Last lines of its log:\n${failure.log}`].filter(Boolean).join('\n');
+
+/** A command for the Terminal panel's shell: first into the folder it belongs to. */
+export function terminalCommand(command: string, cwd: string): string {
+  if (!cwd) return command;
+  return /windows/i.test(navigator.userAgent) ? `Set-Location -LiteralPath '${cwd.replaceAll("'", "''")}'; ${command}` : `cd '${cwd.replaceAll("'", "'\\''")}' && ${command}`;
+}
 
 /** The ways the project in `cwd` can be run, read from its own files (scripts, launch.json, manage.py). */
 export const detectTargets = (cwd: string) => (inTauri() && cwd ? call<RunTarget[]>('detect_run_targets', { cwd }) : Promise.resolve([] as RunTarget[]));

@@ -674,9 +674,10 @@ pub(crate) async fn answer(
         "/open" => {
             let url = params.get("url").cloned().ok_or("send ?url= with the address to open")?;
             let target = crate::browser::parse(&url)?;
-            if !crate::browser::answers(&target) {
+            // The address that answers, at the scheme the server speaks (a server with a certificate is https only).
+            let Some(target) = crate::browser::ready(&target).await else {
                 return Err(format!("nothing answers at {target}: start the server with browser_serve first"));
-            }
+            };
             let new_tab = wants_new_tab(params);
             open_page(app, target.as_str(), new_tab, params.get("chat").map_or("", String::as_str)).await
         }
@@ -705,23 +706,27 @@ pub(crate) async fn answer(
             let command = params.get("command").cloned().ok_or("send ?command=&cwd=&url=")?;
             let cwd = params.get("cwd").cloned().ok_or("send ?cwd= with the project folder")?;
             let url = params.get("url").cloned().ok_or("send ?url= with the address the server will answer at")?;
-            let target = crate::browser::parse(&url)?;
+            let mut target = crate::browser::parse(&url)?;
             let port = target.port_or_known_default().ok_or("the address has no port")?;
             let mut log = None;
             // Already up (started earlier, by the user or by AgentDeck): just open it.
-            if !crate::browser::answers(&target) {
-                log = Some(crate::servers::start(&command, &cwd, port)?);
-                let deadline = std::time::Instant::now() + Duration::from_secs(120);
-                loop {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    if crate::browser::answers(&target) {
-                        break;
-                    }
-                    if crate::servers::exited(port) || std::time::Instant::now() > deadline {
-                        return Err(format!(
-                            "`{command}` did not start a server at {target}. Last lines of its log:\n{}",
-                            crate::servers::tail(port, 30)
-                        ));
+            match crate::browser::ready(&target).await {
+                Some(found) => target = found,
+                None => {
+                    log = Some(crate::servers::start(&command, &cwd, port)?);
+                    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        if let Some(found) = crate::browser::ready(&target).await {
+                            target = found;
+                            break;
+                        }
+                        let exited = crate::servers::exited(port);
+                        if exited || std::time::Instant::now() > deadline {
+                            let ended = if exited { crate::detect::Ended::Exited } else { crate::detect::Ended::Silent };
+                            let why = crate::detect::failure(&command, &cwd, &crate::servers::read_log(port), ended);
+                            return Err(format!("`{command}` did not start a server at {target}. {}", why.text()));
+                        }
                     }
                 }
             }

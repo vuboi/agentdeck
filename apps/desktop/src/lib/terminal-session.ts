@@ -28,6 +28,18 @@ type Live = {
   cwd?: string;
   hooks: SessionHooks;
   exited: boolean;
+  /** The foreground command being watched (see `evaluate`), the address it printed, and the timer of the next look. */
+  run?: { command: string; startedAt: number; line: number };
+  url: string | null;
+  timer: number;
+};
+
+/** A command a tab is still running (a dev server, a watcher…): what the "running in the background" list shows. */
+export type RunInfo = { command: string; cwd?: string; startedAt: number; url: string | null };
+let runWatcher: ((id: string, run: RunInfo | null) => void) | null = null;
+/** Tells `watch` every time a tab starts, updates or ends a long-running command. */
+export const watchRuns = (watch: (id: string, run: RunInfo | null) => void) => {
+  runWatcher = watch;
 };
 
 const live = new Map<string, Live>();
@@ -84,6 +96,9 @@ function theme(): ITheme {
     cursor: resolve('var(--primary)'),
     cursorAccent: background,
     selectionBackground: resolve('color-mix(in oklab, var(--primary) 35%, transparent)'),
+    scrollbarSliderBackground: resolve('color-mix(in oklab, var(--muted-foreground) 30%, transparent)'),
+    scrollbarSliderHoverBackground: resolve('color-mix(in oklab, var(--muted-foreground) 55%, transparent)'),
+    scrollbarSliderActiveBackground: resolve('color-mix(in oklab, var(--muted-foreground) 70%, transparent)'),
   };
 }
 
@@ -119,11 +134,13 @@ function listenToShells(): Promise<void> {
       const bytes = new Uint8Array(text.length);
       for (let index = 0; index < text.length; index++) bytes[index] = text.charCodeAt(index);
       session.term.write(bytes);
+      if (session.run) schedule(payload.id, session, 800);
     });
     await listen<{ id: string; code: number | null }>('pty-exit', ({ payload }) => {
       const session = live.get(payload.id);
       if (!session) return;
       session.exited = true;
+      endRun(payload.id, session);
       session.hooks.status('exited');
       const how = payload.code === null || payload.code === 0 ? 'exited' : `exited with code ${payload.code}`;
       session.term.write(`\r\n\x1b[2m[shell ${how}. Press Enter to start a new one.]\x1b[0m\r\n`);
@@ -142,6 +159,104 @@ export function writeToSession(id: string, data: string) {
   else waiting.set(id, (waiting.get(id) ?? '') + data);
 }
 
+// ---- What a tab is running. There is no shell integration, so a command counts as running when it was sent (Enter, or
+// `noteCommand`) and, a moment later, the cursor's line is not a prompt any more. It is looked at when the shell writes
+// (at most every 0.8 s, and only while a command is watched), never on a timer of its own.
+
+const PROMPT = /^\s*(PS [^>]*>|[A-Za-z]:[\\/][^>]*>|\S+@\S+.*?[$#%]|[$#%>❯»➜λ])(\s|$)/;
+const LOCAL = String.raw`(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])`;
+const LOCAL_URL = new RegExp(String.raw`(?:https?:\/\/${LOCAL}(?::\d+)?|${LOCAL}:\d+)[^\s"'<>)\]]*`, 'gi');
+const SETTLE = 1200;
+/** Commands sent to a tab whose shell is not up yet: they are watched once it starts. */
+const queuedRuns = new Map<string, string>();
+
+/** The line the cursor is on (joined with the lines it wraps over); null in a full-screen program. */
+function cursorLine(term: Terminal) {
+  const buffer = term.buffer.active;
+  if (buffer.type === 'alternate') return null;
+  let y = buffer.baseY + buffer.cursorY;
+  let text = '';
+  for (;;) {
+    const line = buffer.getLine(y);
+    if (!line) break;
+    text = line.translateToString(true) + text;
+    if (!line.isWrapped || y === 0) break;
+    y -= 1;
+  }
+  return text;
+}
+
+/** The last local address printed since line `from` (the text of the buffer has no colour codes). */
+function localUrlSince(term: Terminal, from: number) {
+  const buffer = term.buffer.active;
+  let found: string | null = null;
+  let text = '';
+  const scan = () => {
+    for (const match of text.matchAll(LOCAL_URL)) found = match[0];
+    text = '';
+  };
+  for (let y = Math.max(from, buffer.length - 400, 0); y < buffer.length; y++) {
+    const line = buffer.getLine(y);
+    if (!line) continue;
+    if (!line.isWrapped) scan();
+    text += line.translateToString(true);
+  }
+  scan();
+  if (found === null) return null;
+  return (found as string)
+    .replace(/[.,;:]+$/, '')
+    .replace(/^(?!https?:\/\/)/i, 'http://')
+    .replace('//0.0.0.0', '//localhost');
+}
+
+function report(id: string, session: Live) {
+  if (session.run) runWatcher?.(id, { command: session.run.command, cwd: session.cwd, startedAt: session.run.startedAt, url: session.url });
+}
+
+function endRun(id: string, session: Live) {
+  clearTimeout(session.timer);
+  session.timer = 0;
+  if (!session.run) return;
+  session.run = undefined;
+  session.url = null;
+  runWatcher?.(id, null);
+}
+
+function schedule(id: string, session: Live, delay: number) {
+  if (session.timer) return;
+  session.timer = window.setTimeout(() => evaluate(id, session), delay);
+}
+
+/** Looks once at a watched command: still running (and on which address), or the prompt is back. */
+function evaluate(id: string, session: Live) {
+  session.timer = 0;
+  const run = session.run;
+  if (!run || live.get(id) !== session) return;
+  if (session.exited) return endRun(id, session);
+  const wait = run.startedAt + SETTLE - Date.now();
+  if (wait > 0) return schedule(id, session, wait);
+  const line = cursorLine(session.term);
+  if (line !== null && PROMPT.test(line)) return endRun(id, session);
+  session.url = localUrlSince(session.term, run.line);
+  report(id, session);
+}
+
+function beginRun(id: string, session: Live, command: string) {
+  const first = command.split(/\r?\n/).find((line) => line.trim())?.trim();
+  if (!first) return;
+  endRun(id, session);
+  const buffer = session.term.buffer.active;
+  session.run = { command: first, startedAt: Date.now(), line: buffer.baseY + buffer.cursorY };
+  schedule(id, session, SETTLE);
+}
+
+/** A command sent to tab `id` from outside (a chat's Run button): watched as if it had been typed there. */
+export function noteCommand(id: string, command: string) {
+  const session = live.get(id);
+  if (session && !session.exited && session.term.element && !waiting.has(id)) beginRun(id, session, command);
+  else queuedRuns.set(id, command);
+}
+
 async function start(id: string, session: Live) {
   session.exited = false;
   session.hooks.status('starting');
@@ -152,6 +267,9 @@ async function start(id: string, session: Live) {
     const queued = waiting.get(id);
     waiting.delete(id);
     if (queued) void call('pty_write', { id, data: queued }).catch(() => {});
+    const command = queuedRuns.get(id);
+    queuedRuns.delete(id);
+    if (command) beginRun(id, session, command);
   } catch (error) {
     session.exited = true;
     session.hooks.status('exited');
@@ -180,12 +298,19 @@ function create(id: string, cwd: string | undefined, hooks: SessionHooks): Live 
       void call('open_external', { url: uri }).catch(() => {});
     }),
   );
-  const session: Live = { term, fit, search, cwd, hooks, exited: false };
+  const session: Live = { term, fit, search, cwd, hooks, exited: false, url: null, timer: 0 };
 
   term.onData((data) => {
     if (session.exited) {
       if (data === '\r') void start(id, session);
       return;
+    }
+    if (data.includes('\r')) {
+      // Enter: the cursor line still holds the prompt and what was typed after it.
+      const line = cursorLine(term);
+      const match = line === null ? null : PROMPT.exec(line);
+      const command = line !== null && match ? line.slice(match[0].length).trim() : '';
+      if (command) beginRun(id, session, command);
     }
     void call('pty_write', { id, data }).catch(() => {});
   });
@@ -261,7 +386,25 @@ export function fitSession(id: string) {
   }
 }
 
-export const focusSession = (id: string) => live.get(id)?.term.focus();
+/** The last `lines` lines of a terminal's buffer as plain text (no colours), for the Tasks panel; null when it is gone. */
+export function sessionTail(id: string, lines: number): string | null {
+  const session = live.get(id);
+  if (!session) return null;
+  const buffer = session.term.buffer.active;
+  const first = Math.max(0, buffer.length - lines);
+  const out: string[] = [];
+  for (let y = first; y < buffer.length; y++) {
+    const line = buffer.getLine(y);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    if (line.isWrapped && out.length > 0) out[out.length - 1] += text;
+    else out.push(text);
+  }
+  while (out.length > 0 && !out[out.length - 1].trim()) out.pop();
+  return (first > 0 ? '(Earlier output not shown)\n' : '') + out.join('\n');
+}
+
+export const focusSession =(id: string) => live.get(id)?.term.focus();
 
 export function findInSession(id: string, query: string, backwards = false) {
   const session = live.get(id);
@@ -292,7 +435,9 @@ export async function copyOrPaste(id: string) {
 export function disposeSession(id: string) {
   const session = live.get(id);
   if (!session) return;
+  endRun(id, session);
   live.delete(id);
+  queuedRuns.delete(id);
   session.term.dispose();
   void call('pty_close', { id }).catch(() => {});
 }

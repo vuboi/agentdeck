@@ -1,5 +1,6 @@
 <script lang="ts">
   import DevEmpty from './DevEmpty.svelte';
+  import LiveCommand from './LiveCommand.svelte';
   import { ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { slide } from 'svelte/transition';
@@ -263,22 +264,26 @@
           <span aria-hidden="true">·</span>
           <span class="tabular-nums">{STATUS[item.status].label}, {took(item)}</span>
         </div>
-        {#if item.input}
-          <div class="group/code relative">
-          <pre class="m-0 overflow-x-auto rounded-md border border-border bg-background py-1.5 pr-7 pl-2 font-mono whitespace-pre-wrap break-all">{item.input}</pre>
-          {@render copyButton(item.input, 'Command')}
-        </div>
-        {:else if empty}
-          <!-- Nothing was asked in text and nothing came back: say so inside the one box, not in an empty box plus a line. -->
-          <p class="m-0 rounded-md border border-border bg-background px-2 py-1.5 text-muted-foreground italic">No information found.</p>
-        {/if}
-        {#if item.output}
-          <div class="group/code relative rounded-md {item.status === 'fail' ? 'border border-destructive/30 bg-destructive/5' : ''}">
-            <pre class="m-0 max-h-48 overflow-auto py-1 pr-7 pl-1.5 font-mono whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
-            {@render copyButton(item.output ?? '', item.status === 'fail' ? 'Error' : 'Output')}
+        {#if item.input && /^(Run project|Terminal|Bash)$/.test(item.name)}
+          <LiveCommand {item} oncopy={(text) => copy(text, 'Output')} />
+        {:else}
+          {#if item.input}
+            <div class="group/code relative">
+            <pre class="m-0 overflow-x-auto rounded-md border border-border bg-background py-1.5 pr-7 pl-2 font-mono whitespace-pre-wrap break-all">{item.input}</pre>
+            {@render copyButton(item.input, 'Command')}
           </div>
-        {:else if empty && item.input}
-          <p class="m-0 px-1 text-muted-foreground italic">No information found.</p>
+          {:else if empty}
+            <!-- Nothing was asked in text and nothing came back: say so inside the one box, not in an empty box plus a line. -->
+            <p class="m-0 rounded-md border border-border bg-background px-2 py-1.5 text-muted-foreground italic">No information found.</p>
+          {/if}
+          {#if item.output}
+            <div class="group/code relative rounded-md {item.status === 'fail' ? 'border border-destructive/30 bg-destructive/5' : ''}">
+              <pre class="m-0 max-h-48 overflow-auto py-1 pr-7 pl-1.5 font-mono whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
+              {@render copyButton(item.output ?? '', item.status === 'fail' ? 'Error' : 'Output')}
+            </div>
+          {:else if empty && item.input}
+            <p class="m-0 px-1 text-muted-foreground italic">No information found.</p>
+          {/if}
         {/if}
         {#if item.image}
           <!-- The picture the call returned (a screenshot of the page): click to see it full size. -->
