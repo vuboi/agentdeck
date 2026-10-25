@@ -18,13 +18,16 @@ import { trackActivity } from './activity.svelte';
 import { logTalk } from './activity.svelte';
 import { parseQuestions, QUESTION_RULE } from './questions';
 import { attachmentBlocks, splitAttachments } from './attachments';
-import { listenAgentEvents, saveAttachment, sendAgentTurn, sendCustomTurn, stopAgentTurn, type AgentEvent } from './agent';
+import { delegateReady, listenDelegateAborts, listenDelegateCalls, listenAgentEvents, replyDelegateCall, saveAttachment, sendAgentTurn, sendCustomTurn, stopAgentTurn, type AgentEvent, type DelegateCall } from './agent';
+import { agentdeckLead, argsOfCall, DELEGATE_HINT, parseHandoff, reportDigest, findAgent, formatAgents, formatTaskResult, handoffOf, isTaskId, kindOfCommand, newTaskId, parseDelegateArgs, pickTask, reasonLine, REPORT_RULE, resolveModel, startedText, toolKindOf, type AgentRow, type HandoffReport, type TaskRecord, type Verdict } from './delegate-task';
+import { elapsed } from './blocks';
 import { applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
 import { estimateCost, recordUsage } from './usage';
-import { customProviderName, modelCatalog, modelLabel, parseCustomModel } from './models.svelte';
+import { customModelId, customProviderName, modelCatalog, modelLabel, parseCustomModel } from './models.svelte';
 import { connectors } from './connectors.svelte';
 import { dequeue, enqueue } from './queue';
+import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from './handback';
 import { inputsOf, normalizeGraph, presetOf, stepGroups, type WorkflowPreset, type WorkflowStep } from './workflows.svelte';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
@@ -431,7 +434,10 @@ export function newChat() {
  * own shell dies when the command ends, which leaves the Preview on a refused connection. These tools do not.
  */
 const AGENTDECK_HINT =
-  '[AgentDeck] You run inside AgentDeck. To start a dev server or open a page, use the agentdeck tools: browser_serve (starts the server so it keeps running after your turn, and opens it in the Preview) or browser_open for an address that already answers. Then use browser_screenshot, browser_console and browser_network to look at it. Do not start servers in your own shell and do not open the system browser or Chrome: that server would stop when your command ends, and the user is looking at the AgentDeck Preview.' + '\n\n';
+  '[AgentDeck] You run inside AgentDeck. To start a dev server or open a page, use the agentdeck tools: browser_serve (starts the server so it keeps running after your turn, and opens it in the Preview) or browser_open for an address that already answers. Then use browser_screenshot, browser_console and browser_network to look at it. Do not start servers in your own shell and do not open the system browser or Chrome: that server would stop when your command ends, and the user is looking at the AgentDeck Preview.';
+
+/** Chats (and the agent in them) already told how to delegate during this run of the app. */
+const delegateHinted = new Set<string>();
 
 /** The last thing asked in each chat: "open it", "run the app" decides whether a served page opens by itself. */
 const lastPrompt: Record<string, string> = {};
@@ -601,12 +607,20 @@ function modelFor(session: SessionItem): string | null {
 const agentLabel = (agent?: Agent, model?: string | null) => (agent === 'custom' && customProviderName(model)) || (agent === 'codex' ? 'Codex' : agent === 'antigravity' ? 'Antigravity' : agent === 'custom' ? 'Custom provider' : 'Claude');
 
 /**
+ * A user message that is only the hand-back prompt (or, in a chat saved by an older version, its stand-in
+ * "↩ Claude answered"): it is never shown or quoted.
+ */
+const hiddenPrompt = (message: Message) =>
+  message.role === 'user' && message.blocks.some((block) => block.kind === 'response' && (isHandbackPrompt(block.text) || /^↩ .{1,200} answered$/.test(block.text.trim())));
+
+/**
  * What the other agents of this chat said since this agent last spoke, as text to put before the prompt.
  * Each agent keeps its own conversation, so one that joins (or comes back to) a chat would not know the turns
- * it missed. `list` ends with the message being sent. The newest turns are kept when it is long.
+ * it missed. `list` ends with the message being sent, unless `sent` is false (a hand-back turn has no message of its own:
+ * `list` is then all that came before). The newest turns are kept when it is long.
  */
-function missedTurns(session: SessionItem, list: Message[]): string {
-  const before = list.slice(0, -1);
+function missedTurns(session: SessionItem, list: Message[], sent = true): string {
+  const before = sent ? list.slice(0, -1) : list;
   const writer = (message: Message) => message.agent ?? session.source ?? session.agent;
   let start = 0;
   for (let index = before.length - 1; index >= 0; index--) {
@@ -617,7 +631,7 @@ function missedTurns(session: SessionItem, list: Message[]): string {
   }
   const missed = before.slice(start);
   if (!missed.some((message) => message.role === 'assistant')) return '';
-  const lines = missed.map((message) => {
+  const lines = missed.filter((message) => !hiddenPrompt(message)).map((message) => {
     const text = message.blocks
       .flatMap((block) => (block.kind === 'response' ? [block.text] : block.kind === 'command' ? [`(ran: ${block.command.slice(0, 160)})`] : []))
       .join('\n')
@@ -631,7 +645,7 @@ function missedTurns(session: SessionItem, list: Message[]): string {
 }
 
 /** One CLI run (`claude -p`, `codex exec`) in `session`, with a fresh live reply. Images go to disk first so the CLI can open them. */
-function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = [], preface = '', files: FileAttachment[] = []) {
+function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = [], preface = '', files: FileAttachment[] = [], silent?: Message) {
   if (images.length || !allow.length) lastPrompt[session.id] = text;
   // The CLI's own id for the conversation. Claude takes one we choose; Codex names its thread on the first turn
   // and reports it, so a new Codex chat starts without one.
@@ -675,11 +689,16 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   turns[session.id] = turn;
   const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent, model: selectedModel ?? session.model };
   const list = messagesOf(session.id);
-  const context = preface + missedTurns(session, list);
-  const asked = list.at(-1);
+  // A silent turn (the hand-back) has no message of its own: its reply simply follows the message that handed work out.
+  const context = preface + missedTurns(session, list, !silent);
+  const asked = silent ? undefined : list.at(-1);
   list.push(reply);
   liveReplies[session.id] = list[list.length - 1]; // the stored (reactive) object
   if (asked?.role === 'user') liveAsks[session.id] = asked;
+  if (silent) {
+    liveHandouts[session.id] = silent;
+    delete liveAsks[session.id];
+  } else delete liveHandouts[session.id];
   replies[session.id] = reply.id;
   session.status = 'working';
   const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
@@ -695,7 +714,8 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       const spoken = (message: Message) =>
         message.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : [])).join('\n').trim();
       const history = list
-        .slice(0, -2)
+        .slice(0, silent ? -1 : -2)
+        .filter((message) => !hiddenPrompt(message))
         .map((message) => ({ role: message.role, content: spoken(message) }))
         .filter((message) => message.content);
       await sendCustomTurn({
@@ -714,7 +734,13 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       return;
     }
     // A flow's step is not told it may open pages: it reports back, the user did not ask to see anything.
-    const hint = !session.parentId && OPEN_WORDS.test(body) ? AGENTDECK_HINT : '';
+    const openHint = !session.parentId && OPEN_WORDS.test(body) ? AGENTDECK_HINT : '';
+    // How to delegate (DELEGATE_HINT): said when the conversation starts, and once per run of the app for a chat that is
+    // resumed, not with every turn: the agent keeps it in its history. Sub chats (workers, flow steps) do not delegate.
+    const hintKey = `${session.id}|${session.agent}`;
+    const delegateHint = !session.parentId && (!resume || !delegateHinted.has(hintKey)) ? DELEGATE_HINT : '';
+    if (delegateHint) delegateHinted.add(hintKey);
+    const hint = agentdeckLead(openHint, delegateHint);
     // Pictures and documents are on disk: the prompt names their paths, which the agent opens with its own tools.
     const attached =
       (paths.length ? `Attached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}` : '') +
@@ -772,6 +798,10 @@ const replies: Record<string, string> = {};
 const liveReplies: Record<string, Message> = {};
 /** The message that started each running turn. */
 const liveAsks: Record<string, Message> = {};
+/** For a running hand-back turn (it has no message of its own): the message whose delegate cards it answers. */
+const liveHandouts: Record<string, Message> = {};
+/** For a hand-back that answers no message (a background task's report): its reply just follows the chat's last message. */
+const NO_HANDOUT: Message = { id: 'no-handout', role: 'user', time: '', blocks: [] };
 
 const askText = (message: Message) =>
   message.blocks
@@ -787,6 +817,13 @@ const askText = (message: Message) =>
  */
 function withLive(sessionId: string, list: Message[]): Message[] {
   const reply = liveReplies[sessionId];
+  const handout = liveHandouts[sessionId];
+  if (reply && handout === NO_HANDOUT) return list.includes(reply) ? list : [...list, reply];
+  if (reply && handout && !list.includes(reply)) {
+    // The file may already hold part of the reply, behind the message that handed work out: that is replaced by the live one.
+    const at = list.findLastIndex((message) => message.id === handout.id);
+    return at >= 0 ? [...list.slice(0, at), handout, reply] : [...list, handout, reply];
+  }
   const asked = liveAsks[sessionId];
   if (!reply || !asked || list.includes(reply)) return list;
   const want = askText(asked);
@@ -852,6 +889,8 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
   if (event.kind === 'done' && event.cost_usd != null) reply.cost = event.cost_usd;
   const update = applyAgentEvent(reply.blocks, event);
   reply.blocks = update.blocks;
+  // A delegate_task call just showed up: its card follows the task the call starts.
+  if (event.kind === 'tool_call' && toolKindOf(event.name) === 'delegate_task') bindTasks(sessionId);
   // The CLI has the conversation once it answers; only then is `--resume` valid for the next turn.
   const first = session.source ?? session.agents?.[0] ?? session.agent;
   const agent = reply.agent ?? session.agent;
@@ -886,6 +925,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     openServedPage(sessionId, reply);
     onDelegateDone(sessionId, reply, event.kind === 'error' ? event.message : null);
     onHandbackDone(sessionId, reply, event.kind === 'error');
+    endWaitingTasks(sessionId);
     // Our own copy of the turn (agent, model, time), apart from what the CLIs store: the base for syncing later.
     archiveTurn(
       { id: sessionId, title: session.title, agent: session.agent, model: reply.model ?? session.model, projectPath: workspace.projects.find((project) => project.id === session.projectId)?.path ?? null },
@@ -894,6 +934,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     delete replies[sessionId];
     delete liveReplies[sessionId];
     delete liveAsks[sessionId];
+    delete liveHandouts[sessionId];
     session.status = 'idle';
     persistLocal();
     // The CLI wrote the conversation to disk: pick it up so the row gets its path, in place (same id).
@@ -934,7 +975,7 @@ const delegations = new Map<string, { batch: DelegateBatch; label: string; card:
 export type RunStats = { ms: number; tokens?: import('./usage').Tokens; cost: number | null; tools: number; last: string };
 /** One question a step put to an earlier step (its chat answers it), kept for the Workflow tab and the Audit log. */
 export type Talk = { to: string; question: string; answer?: string; at: number };
-export type RunNode = { childId: string; talks?: Talk[]; /** The preset step it runs, when the run comes from a workflow. */ stepId?: string; /** What it was handed (earlier answers) and what it answered, for the audit. */ input?: string; output?: string; agent: Agent; model: string; label: string; startedAt: number; endedAt?: number; state: 'running' | 'done' | 'failed'; note?: string; stats?: RunStats };
+export type RunNode = { childId: string; talks?: Talk[]; /** The preset step it runs, when the run comes from a workflow. */ stepId?: string; /** What it was handed (earlier answers) and what it answered, for the audit. */ input?: string; output?: string; handoff?: HandoffReport | null; attempt?: number; agentSession?: string; agent: Agent; model: string; label: string; startedAt: number; endedAt?: number; state: 'running' | 'done' | 'failed'; note?: string; stats?: RunStats };
 export type DelegateRun = {
   id: string;
   main: string;
@@ -1128,6 +1169,244 @@ function endCancelled(main: string, run: DelegateRun) {
   run.endedAt = Date.now();
 }
 
+// ---------- delegate_task: an agent hands a task to another agent during its own turn ----------
+// Claude, Codex, Antigravity and local models can call the app's `delegate_task` tool (src-tauri/src/delegate.rs). The Rust
+// side emits the call here and waits for `replyDelegateCall`. A task runs as a child chat under the caller's chat, like an
+// `@agent` task, but nothing is called back by the app itself: the worker's compact report (its "## Handoff") is the tool's
+// answer. `wait: true` answers when the worker is done (the caller's turn goes on in the same turn). `wait: false` answers
+// at once with a task id; when the worker is done its report reaches the caller as a silent hand-back turn, as soon as the
+// caller is idle (reports that arrive meanwhile wait in line and go together). The card of the call (TaskCard.svelte) shows
+// the task, and stops it.
+
+export const delegateTasks = $state<Record<string, TaskRecord>>({});
+const TASKS_KEY = 'delegate.tasks';
+const TASK_LIMIT = 200;
+
+type Ending = 'user' | 'caller' | 'timeout' | 'abort';
+/** What a running task needs besides its record: the tool call that waits for its report, the timer, why it is ending. */
+const taskRuns = new Map<string, { callId?: string; timer?: ReturnType<typeof setTimeout>; ending?: Ending }>();
+
+// Tasks outlive a reload as cards: a task whose worker was running then has no run any more, so it reads as stopped.
+const taskStore = $state({ ready: false });
+void getPref<TaskRecord[]>(TASKS_KEY)
+  .then((saved) => {
+    for (const item of Array.isArray(saved) ? saved : []) {
+      if (delegateTasks[item.id]) continue;
+      const lost = item.state === 'running' || item.state === 'approval';
+      delegateTasks[item.id] = lost ? { ...item, state: 'stopped', endedAt: item.endedAt ?? Date.now(), note: 'Stopped: AgentDeck was closed or reloaded while it ran.' } : item;
+    }
+  })
+  .catch(() => undefined)
+  .finally(() => {
+    taskStore.ready = true;
+  });
+$effect.root(() => {
+  $effect(() => {
+    if (!taskStore.ready) return;
+    const all = (JSON.parse(JSON.stringify(Object.values(delegateTasks))) as TaskRecord[]).sort((a, b) => a.startedAt - b.startedAt);
+    setPref(TASKS_KEY, all.slice(-TASK_LIMIT));
+  });
+});
+
+/** Whether this chat is a worker of a task: it does not delegate further. */
+const isTaskChild = (id: string) => Object.values(delegateTasks).some((item) => item.childId === id);
+
+/** The chat of a call. A link that names none (Antigravity's stored one) is the chat of that agent running now. */
+function callerOf(chatId: string): SessionItem | undefined {
+  const named = chatId ? workspace.sessions.find((item) => item.id === chatId) : undefined;
+  if (named) return named;
+  const running = workspace.sessions.filter((item) => item.status === 'working' && replies[item.id]);
+  return running.length === 1 ? running[0] : (running.find((item) => item.id === workspace.activeId) ?? running[0]);
+}
+
+/** The agents `list_agents` shows and `delegate_task` takes: the installed CLIs, then each local provider. */
+function agentRows(): AgentRow[] {
+  const installed = (tool: string) => connectors.detected?.tools.find((item) => item.id === tool)?.path !== null;
+  const rows: AgentRow[] = [];
+  for (const [id, tool] of [['claude', 'claude'], ['codex', 'codex'], ['antigravity', 'agy']] as const) {
+    const models = (MODELS[id] ?? []).map((item) => ({ value: item.value, label: item.label, description: item.description }));
+    if (models.length && installed(tool)) rows.push({ id, label: agentLabel(id), models });
+  }
+  for (const provider of connectors.custom.filter((item) => item.enabled && item.kind !== 'anthropic')) {
+    const names = provider.models.length ? provider.models : provider.defaultModel ? [provider.defaultModel] : [];
+    if (names.length) rows.push({ id: provider.id, label: provider.name, models: names.map((name) => ({ value: name, label: name })) });
+  }
+  return rows;
+}
+
+const span = (ms: number) => elapsed(ms);
+
+/** The text a tool answers about a task that has not ended, or has. */
+function statusText(record: TaskRecord): string {
+  const head = { taskId: record.id, childId: record.childId, label: record.label, took: span((record.endedAt ?? Date.now()) - record.startedAt) };
+  if (record.state === 'running' || record.state === 'approval') {
+    return formatTaskResult({ ...head, verdict: 'running' }, record.state === 'approval' ? 'Waiting: the worker needs the user to approve a step in its chat.' : 'Still working.');
+  }
+  const verdict: Verdict = record.state === 'done' ? 'done' : record.state === 'stopped' ? 'stopped' : 'failed';
+  return formatTaskResult({ ...head, verdict }, record.digest ?? record.note ?? '');
+}
+
+/** Links each delegate_task line of a caller's live reply to the task it started (the card reads the task from it). */
+function bindTasks(callerId: string) {
+  const reply = liveReplies[callerId];
+  if (!reply) return;
+  const lines = reply.blocks.filter((block): block is Extract<Block, { kind: 'command' }> => block.kind === 'command' && kindOfCommand(block.command) === 'delegate_task');
+  for (const line of lines) {
+    if (line.taskId) continue;
+    const taken = new Set(lines.map((item) => item.taskId));
+    const free = Object.values(delegateTasks).filter((item) => item.caller === callerId && item.startedAt >= (reply.startedAt ?? 0) - 1000 && !taken.has(item.id));
+    const id = pickTask(argsOfCall(line.command.replace(/^\S+\s*/, '')), free.map((item) => ({ id: item.id, agent: item.agentId, task: item.task })));
+    if (id) line.taskId = id;
+  }
+}
+
+/** Starts the worker of a `delegate_task` call. `reply` answers the call; a task in the background answers at once. */
+function startTask(call: DelegateCall, reply: (text: string, isError?: boolean) => void) {
+  const parsed = parseDelegateArgs(call.args);
+  if (!parsed.ok) return reply(parsed.error, true);
+  const { agent: wanted, model: wantedModel, task, wait, timeoutS } = parsed.args;
+  const caller = callerOf(call.caller);
+  if (!caller) return reply('AgentDeck could not tell which chat is calling. Do the task yourself, or ask the user to run it from the chat.', true);
+  if (isTaskChild(caller.id)) return reply('You are a worker of a delegated task and cannot delegate further: do it yourself and report back.', true);
+  const rows = agentRows();
+  const row = findAgent(rows, wanted);
+  if (!row) return reply(`No agent "${wanted}" is available. ${formatAgents(rows)}`, true);
+  const chosen = resolveModel(row.models, wantedModel, row.id === 'claude' ? 'sonnet' : undefined);
+  if ('error' in chosen) return reply(chosen.error, true);
+  const agent: Agent = row.id === 'claude' || row.id === 'codex' || row.id === 'antigravity' ? row.id : 'custom';
+  const model = agent === 'custom' ? customModelId(row.id, chosen.model) : chosen.model;
+  let taskId = newTaskId();
+  while (delegateTasks[taskId]) taskId = newTaskId();
+
+  const uuid = crypto.randomUUID();
+  const id = `claude:${uuid}`;
+  const label = `${agentLabel(agent, model)} · ${modelLabel(model)}`;
+  workspace.sessions.push({ id, projectId: caller.projectId, title: `@${agentLabel(agent, model)}: ${firstLineOf(task, 50)}`, agent, agentSession: uuid, model, gitBranch: caller.gitBranch, status: 'idle', parentId: caller.id, draft: false });
+  delegateTasks[taskId] = { id: taskId, caller: caller.id, childId: id, state: 'running', wait, label, agent, agentId: row.id, model, task, startedAt: Date.now() };
+  const run: { callId?: string; timer?: ReturnType<typeof setTimeout>; ending?: Ending } = { callId: wait ? call.callId : undefined };
+  taskRuns.set(taskId, run);
+  run.timer = setTimeout(() => stopTask(taskId, 'timeout', `Timed out after ${timeoutS} s: the worker was stopped before it finished.`), timeoutS * 1000);
+  bindTasks(caller.id);
+
+  // The worker's end: its report, or why there is none. A worker stopped on an approval card waits for the user's yes.
+  const settle = (answer: string, error: string | null) => {
+    const record = delegateTasks[taskId];
+    if (!record || !taskRuns.has(taskId)) return;
+    if (!run.ending && !error && needsApproval(id)) {
+      record.state = 'approval';
+      stepWaiters.set(id, settle);
+      return;
+    }
+    const verdict: Verdict = run.ending ? (run.ending === 'timeout' ? 'timed out' : 'stopped') : error === 'stopped' ? 'stopped' : error || !answer ? 'failed' : 'done';
+    finishTask(taskId, verdict, run.ending ? '' : (error ?? ''), answer);
+  };
+  stepWaiters.set(id, settle);
+  const brief = `You were asked by another agent (${agentLabel(caller.agent, caller.model)}), who is working for the user in this project, to do the task below on your own. Answer fully, as you would for the user. ${REPORT_RULE} ${LANGUAGE_RULE}`;
+  send(id, task, [], [], [], { preface: `${brief}\n\n` });
+  persistLocal();
+  if (wait) return;
+  reply(startedText({ taskId, childId: id, label }));
+}
+
+/** Ends a task: the record, the worker's chat, and the answer: to the tool call that waits, or to the caller in line. */
+function finishTask(taskId: string, verdict: Verdict, detail: string, answer: string) {
+  const record = delegateTasks[taskId];
+  const run = taskRuns.get(taskId);
+  if (!record || !run) return;
+  clearTimeout(run.timer);
+  taskRuns.delete(taskId);
+  stepWaiters.delete(record.childId);
+  record.endedAt = Date.now();
+  record.state = verdict === 'done' ? 'done' : verdict === 'stopped' ? 'stopped' : 'failed';
+  const detailOf = run.ending === 'caller' ? 'you stopped it with task_stop' : run.ending === 'abort' ? 'the agent that asked was stopped' : detail;
+  const body = verdict === 'done' ? reportDigest(answer) : reasonLine(verdict, detailOf);
+  if (verdict === 'done') record.digest = body;
+  else record.note = body;
+  const text = formatTaskResult({ taskId, childId: record.childId, label: record.label, verdict, took: span(record.endedAt - record.startedAt) }, body);
+  if (run.callId) {
+    void replyDelegateCall(run.callId, text, verdict === 'failed' || verdict === 'timed out').catch(() => undefined);
+    return;
+  }
+  // A task in the background: its report goes to the caller, unless the user or the caller itself stopped it.
+  if (run.ending !== 'user' && run.ending !== 'caller') deliverReport(record.caller, { label: `${record.label} (task ${taskId})`, text: verdict === 'done' ? body : reasonLine(verdict, detailOf) });
+}
+
+/** Stops a task: its worker's run is killed and the task ends as stopped (or timed out). */
+function stopTask(taskId: string, how: Ending, detail = '') {
+  const record = delegateTasks[taskId];
+  const run = taskRuns.get(taskId);
+  if (!record || !run) return;
+  run.ending = how;
+  // The worker's run ends with an error event that settles the task (see `settle`). One with no run (it waits on an
+  // approval card) is ended here.
+  stopTurn(record.childId);
+  if (taskRuns.has(taskId)) finishTask(taskId, how === 'timeout' ? 'timed out' : 'stopped', detail, '');
+}
+
+/** The Stop button of a task's card. */
+export function stopDelegateTask(taskId: string) {
+  stopTask(taskId, 'user');
+}
+
+/** Reports of background tasks waiting for their caller to be idle, per caller. */
+const backlog = new Map<string, { label: string; text: string }[]>();
+
+function deliverReport(callerId: string, report: { label: string; text: string }) {
+  const list = backlog.get(callerId) ?? [];
+  list.push(report);
+  backlog.set(callerId, list);
+  if (list.length === 1) flushReports(callerId, 0);
+}
+
+/** Sends the waiting reports to their caller as one silent hand-back turn, once it is idle (an hour at most). */
+function flushReports(callerId: string, tries: number) {
+  const list = backlog.get(callerId);
+  if (!list?.length) return;
+  if (!workspace.sessions.some((item) => item.id === callerId)) {
+    backlog.delete(callerId);
+    return;
+  }
+  if (replies[callerId]) {
+    if (tries < 3600) setTimeout(() => flushReports(callerId, tries + 1), 1000);
+    else backlog.delete(callerId);
+    return;
+  }
+  backlog.delete(callerId);
+  const asked = messagesOf(callerId).findLast((message) => message.role === 'user' && !hiddenPrompt(message));
+  const task = shorten(askText(asked ?? { id: '', role: 'user', time: '', blocks: [] }), 1500) || 'the one you were working on';
+  send(callerId, '', [], [], [], { prompt: handbackPrompt({ results: list, task }), silent: NO_HANDOUT });
+}
+
+/** A caller's turn ended: the tasks it was waiting for have nobody to answer, so they stop. Background ones go on. */
+function endWaitingTasks(callerId: string) {
+  for (const record of Object.values(delegateTasks)) {
+    if (record.caller === callerId && record.wait && taskRuns.has(record.id)) stopTask(record.id, 'abort');
+  }
+}
+
+/** A call of one of the delegation tools, from the Rust side. */
+function onDelegateCall(call: DelegateCall) {
+  const reply = (text: string, isError = false) => void replyDelegateCall(call.callId, text, isError).catch(() => undefined);
+  if (call.tool === 'list_agents') return reply(formatAgents(agentRows()));
+  if (call.tool === 'delegate_task') return startTask(call, reply);
+  const id = call.args.task_id;
+  const record = isTaskId(id) ? delegateTasks[id] : undefined;
+  if (!record) return reply(`No task ${String(id)}: its id is the one delegate_task returned.`, true);
+  if (call.tool === 'task_status') return reply(statusText(record));
+  // task_stop
+  if (taskRuns.has(record.id)) stopTask(record.id, 'caller');
+  reply(statusText(record));
+}
+
+if (inTauri()) {
+  // The page before this one is gone with its chats: calls still waiting for it are answered with an error.
+  void delegateReady().catch(() => undefined);
+  void listenDelegateCalls(onDelegateCall);
+  void listenDelegateAborts((callId) => {
+    for (const [taskId, run] of taskRuns) if (run.callId === callId) stopTask(taskId, 'abort');
+  });
+}
+
 // ---------- workflow presets: the chat's agent as orchestrator ----------
 // A chat with a flow does not answer a message itself. Its steps run as child chats (sub sessions under it), each
 // stage after the one that feeds it; steps of one stage run side by side. To keep tokens down every step gets only
@@ -1159,9 +1438,6 @@ const replanOf = (text: string) => {
 /** The section a step ends with: short labelled lines the next agent reads at a glance, never prose. */
 const HANDOFF_RULE =
   'End with "## Handoff" (<=120 words, only this is passed on; "-" if empty): STATUS: done|blocked|needs-plan-change / RESULT: <1 line> / FILES: <paths> / FACTS: <<=5, "; "-separated, path:line> / OPEN: <<=3> / VERIFY: <cmd> -> pass|fail|not run / NEXT: <first thing the next step does>. Telegraphic: no filler, no restating the task.';
-
-/** How the prompt that hands the answers back starts; read back from the chat's file it is shown short. */
-const HANDBACK_HEAD = 'The agents you handed work to have answered.';
 
 /** Told to every agent of a run: the user's language, not the language of these instructions. */
 const LANGUAGE_RULE = "Reply in the user's language (these notes are English); code, paths, commands unchanged.";
@@ -1200,18 +1476,7 @@ async function runFile(root: string | null, run: string, name: string, content?:
   }
 }
 
-/** For an `@agent` task: the full answer stays in the child's chat; only this compact digest goes back to the asking agent. */
-const REPORT_RULE =
-  'End with "## Handoff" (<=600 words, fewer when the answer is short; only this goes back to the agent that asked, which answers the user from it; the user can read your full answer in your own chat): STATUS: done|blocked / RESULT: <the answer, telegraphic> / FILES: <paths> / FACTS: <<=8, "; "-separated, path:line> / OPEN: <<=3>. Telegraphic: no filler, no restating the task.';
-
 const slugOf = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'step';
-
-/** The part of an answer meant for the next step: its "## Handoff" section, else its end. */
-function handoffOf(text: string, max = 1600): string {
-  const at = text.search(/^#{1,3}\s*handoff\b/im);
-  const part = (at >= 0 ? text.slice(at).replace(/^#{1,3}\s*handoff[^\n]*\n?/i, '') : text.slice(-1200)).trim();
-  return part.length > max ? `${part.slice(0, max)}…` : part;
-}
 
 /** The findings (`[F]` lines) the steps wrote in their notes, without repeats, at most `limit` lines. */
 function findingsOf(notes: string[], limit = 30): string[] {
@@ -1236,27 +1501,32 @@ function boardText(task: string, preset: WorkflowPreset, ctx: FlowRunContext, gr
 function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: WorkflowStep, brief: string, task: string, previous: string, images: Attachment[], elements: PageElement[], files: FileAttachment[], queued?: { uuid: string; card: DelegateCard }) {
   const agent = step.agent;
   const model = step.model || MODELS[agent]?.[0]?.value || '';
-  const uuid = queued?.uuid ?? crypto.randomUUID();
+  // Replan attempts stay in the same provider conversation. This preserves context and avoids paying a new
+  // system/tool-definition prefix for a correction that belongs to the same step.
+  const prior = [...run.nodes].reverse().find((item) => item.stepId === step.id && item.agentSession);
+  const uuid = prior?.agentSession ?? queued?.uuid ?? crypto.randomUUID();
   const id = `claude:${uuid}`;
-  workspace.sessions.push({
-    id,
-    projectId: main.projectId,
-    title: `${step.name}: ${firstLineOf(task, 50)}`,
-    agent,
-    agentSession: uuid,
-    model,
-    gitBranch: main.gitBranch,
-    status: 'idle',
-    parentId: main.id,
-    stepEffort: step.effort || undefined,
-    draft: false,
-  });
+  if (!workspace.sessions.some((item) => item.id === id)) {
+    workspace.sessions.push({
+      id,
+      projectId: main.projectId,
+      title: `${step.name}: ${firstLineOf(task, 50)}`,
+      agent,
+      agentSession: uuid,
+      model,
+      gitBranch: main.gitBranch,
+      status: 'idle',
+      parentId: main.id,
+      stepEffort: step.effort || undefined,
+      draft: false,
+    });
+  }
   // Its card was made when the run began, as "queued": now it is working.
   let card: DelegateCard;
   if (queued) {
     card = queued.card;
     card.state = 'running';
-    // A step run again (its plan was sent back) gets a new chat: the card follows it.
+    // A step run again (its plan was sent back) resumes its existing chat: the card follows that conversation.
     card.childId = id;
     card.note = undefined;
   } else {
@@ -1264,7 +1534,7 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
     card = asked.blocks[asked.blocks.length - 1] as DelegateCard;
   }
   const label = `${step.name} · ${agentLabel(agent, model)}`;
-  run.nodes.push({ childId: id, stepId: step.id, agent, model, label, startedAt: Date.now(), state: 'running', input: previous });
+  run.nodes.push({ childId: id, stepId: step.id, agent, model, label, startedAt: Date.now(), state: 'running', input: previous, attempt: (prior?.attempt ?? 0) + 1, agentSession: uuid });
   const node = run.nodes[run.nodes.length - 1];
   const asks = new Map<string, number>();
   return new Promise<{ step: WorkflowStep; label: string; text: string; ok: boolean }>((resolve) => {
@@ -1312,6 +1582,7 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
       node.endedAt = Date.now();
       node.stats = statsOf(reply, node.startedAt);
       node.output = text;
+      node.handoff = parseHandoff(text);
       keepHandout(main.id, asked);
       resolve({ step, label, text: ok ? text : `(it did not answer: ${error ?? 'no text'})`, ok });
     };
@@ -1353,6 +1624,10 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
   // A step can send its input back (REPLAN): the steps that fed it run again with the reason, at most MAX_REPLANS times.
   const replanNotes = new Map<string, string>();
   let replans = 0;
+  // Keep parallel fan-out useful without turning a normal flow into a provider swarm. A preset may lower or raise
+  // this deliberately, but the app keeps the value bounded so an imported preference cannot exhaust the machine.
+  const maxParallel = Math.max(1, Math.min(6, Math.round(preset.coordination?.maxParallel ?? 3)));
+  const maxReplans = Math.max(0, Math.min(3, Math.round(preset.coordination?.maxReplans ?? MAX_REPLANS)));
   for (let stage = 0; stage < groups.length; stage++) {
     const group = groups[stage];
     const inputText = (step: WorkflowStep) =>
@@ -1372,8 +1647,10 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
     }
     if (active.length === 0) continue;
     const board = boardText(task, preset, ctx, groups);
-    const done = await Promise.all(
-      active.map((step) => {
+    const done: { step: WorkflowStep; label: string; text: string; ok: boolean }[] = [];
+    for (let offset = 0; offset < active.length; offset += maxParallel) {
+      const batch = await Promise.all(
+        active.slice(offset, offset + maxParallel).map((step) => {
         const slug = slugs.get(step.id) ?? slugOf(step.name);
         const previous = inputText(step);
         const others = active.filter((item) => item !== step).map((item) => `"${item.name}" (notes: agents/${slugs.get(item.id)}.md)`);
@@ -1397,9 +1674,11 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
         ]
           .filter((line, index, all) => line !== '' || all[index - 1] !== '')
           .join('\n');
-        return runStep(main, asked, run, step, brief, task, previous, first ? images : [], first ? elements : [], first ? files : [], cards.get(step.id));
-      }),
-    );
+          return runStep(main, asked, run, step, brief, task, previous, first ? images : [], first ? elements : [], first ? files : [], cards.get(step.id));
+        }),
+      );
+      done.push(...batch);
+    }
     first = false;
     for (const item of done) {
       const handoff = item.ok ? handoffOf(item.text) : item.text;
@@ -1415,7 +1694,7 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
     for (const step of active) replanNotes.delete(step.id);
     // A step sent its input back: the steps that fed it run again (and every stage after them), with its reason.
     const back = done.find((item) => item.ok && replanOf(item.text) !== null);
-    if (back && replans < MAX_REPLANS) {
+    if (back && replans < maxReplans) {
       const feeders = (links[back.step.id] ?? []).filter((from) => from !== 'start');
       const from = Math.min(...feeders.map((id) => groups.findIndex((list) => list.some((item) => item.id === id))).filter((index) => index >= 0));
       if (Number.isFinite(from)) {
@@ -1423,13 +1702,13 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
         const reason = replanOf(back.text) ?? '';
         for (const id of feeders) replanNotes.set(id, reason);
         const again = groups.slice(from, stage + 1).flat();
-        // Their cards wait again; each gets a new chat when it starts.
+        // Their cards wait again; runStep resumes each step's existing conversation when it starts.
         for (const item of again) {
           const entry = cards.get(item.id);
           if (!entry) continue;
           entry.card.state = 'queued';
           entry.card.note = feeders.includes(item.id) ? 'Sent back' : undefined;
-          cards.set(item.id, { uuid: crypto.randomUUID(), card: entry.card });
+          cards.set(item.id, { uuid: entry.uuid, card: entry.card });
           ctx.handoffs.delete(item.id);
         }
         batch.results = batch.results.filter((result) => !again.some((item) => result.label.startsWith(`${item.name} ·`)));
@@ -1485,12 +1764,16 @@ const HANDBACK_ANSWER_MAX = 8000;
 /** An answer that says the work failed, is blocked or needs a new plan: then the lead has to act, not only summarise. */
 const TROUBLE = /VERDICT:\s*FAIL|STATUS:\s*(?:blocked|needs-plan-change)/i;
 
-function handBack(batch: DelegateBatch) {
+/** The prompt that hands the answers of the agents asked back to the chat's own agent. */
+function handbackPrompt(batch: Pick<DelegateBatch, 'results' | 'memo' | 'orchestrator' | 'task'>): string {
   const cut = (text: string) => (text.length > HANDBACK_ANSWER_MAX ? `${text.slice(0, HANDBACK_ANSWER_MAX)}\n… (cut here: the rest is in that agent's own chat)` : text);
   const answers = batch.results.map((result) => `### ${result.label}\n${cut(result.text)}`).join('\n\n');
   // When nothing went wrong the lead only reads the answers and replies, like a manager reading a report: no tools, no
   // second round of the work. It re-checks and fixes (see `owner`) only when an answer reports trouble.
-  const trouble = batch.results.some((result) => TROUBLE.test(result.text));
+  const trouble = batch.results.some((result) => {
+    const handoff = parseHandoff(result.text);
+    return handoff?.status === 'blocked' || handoff?.status === 'needs-plan-change' || TROUBLE.test(result.text);
+  });
   const memo = batch.memo ? `\n\n${batch.memo}` : '';
   const finish = batch.orchestrator ? `${batch.orchestrator}\n\nThe user's request: ${batch.task}` : `Using their answers, finish the user's request: ${batch.task}`;
   // A step that reviews can find the work wrong. The agent that gets the answers then owns the result: it fixes what is
@@ -1499,13 +1782,18 @@ function handBack(batch: DelegateBatch) {
     "You own the result. Fix only what blocks the request: a step's VERDICT: FAIL, a failed check, or work that is wrong/unfinished. Then do not just report: see all changes (handoff FILES; git status, git diff), undo wrong ones, delete leftovers (debug output, stray files, notes), redo correctly, run the project's checks, end with what you fixed/removed. Suggestions and risks a step lists are not failures: do not edit for them, list them for the user in one short line each. If all is right, say so in one line.";
   const light =
     "The answers above are compact digests; each full answer is in that agent's own chat. Do not redo or re-check their work: run no commands, read no files, look at no git state. Write the reply to the user from the digests: combine them, say in a line where they disagree, what was done, and what the user should do next. Short.";
-  const prompt = `${HANDBACK_HEAD}\n\n${answers}${memo}\n\n${finish}\n\n${trouble ? owner : light}\n\n${LANGUAGE_RULE}`;
-  const shown = `↩ ${batch.results.map((result) => result.label.split(' · ')[0]).join(', ')} answered`;
+  return `${HANDBACK_HEAD}\n\n${answers}${memo}\n\n${finish}\n\n${trouble ? owner : light}\n\n${LANGUAGE_RULE}`;
+}
+
+function handBack(batch: DelegateBatch) {
+  const prompt = handbackPrompt(batch);
   const go = (tries: number) => {
     if (!replies[batch.main]) {
       batch.run.handback = 'running';
       batch.run.handbackAt = Date.now();
-      send(batch.main, shown, [], [], [], { prompt });
+      // Silent: the agent gets the prompt but the chat shows no message for it. The delegate card (on the message that
+      // handed work out) is the wait state, and the agent's reply follows it as if it were the same turn.
+      send(batch.main, '', [], [], [], { prompt, silent: batch.asked });
     }
     else if (tries < 900) setTimeout(() => go(tries + 1), 1000);
   };
@@ -1591,14 +1879,21 @@ export function attachmentsOf(message: Message): { images: Attachment[]; element
 
 /**
  * `extra.prompt` is what the agent is sent when it differs from the text shown in the chat, and `extra.preface` goes in
- * front of the prompt without being shown (context of a delegated task).
+ * front of the prompt without being shown (context of a delegated task). `extra.silent` (the message that handed work
+ * out) sends `extra.prompt` without any message in the chat: the agent's reply just continues after that message.
  */
-function send(sessionId: string, text: string, images: Attachment[], elements: PageElement[], mentions: Mention[] = [], extra: { prompt?: string; preface?: string; files?: FileAttachment[] } = {}) {
+function send(sessionId: string, text: string, images: Attachment[], elements: PageElement[], mentions: Mention[] = [], extra: { prompt?: string; preface?: string; files?: FileAttachment[]; silent?: Message } = {}) {
   const session = workspace.sessions.find((item) => item.id === sessionId);
   const body = text.trim();
   const files = extra.files ?? [];
   if (!session || replies[sessionId]) return;
   const messages = messagesOf(sessionId);
+  if (extra.silent && extra.prompt && inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'custom')) {
+    startTurn(session, extra.prompt, [], [], extra.preface ?? '', [], extra.silent);
+    if (!session.path) localMessages[session.id] = messages;
+    persistLocal();
+    return;
+  }
   messages.push({
     id: nextId(),
     role: 'user',
@@ -1997,7 +2292,9 @@ async function userAttachments(message: HistoryMessage): Promise<Block[]> {
   return found.images.length || found.files.length ? attachmentBlocks(found.images, found.files) : [];
 }
 
-async function toMessages(session: SessionItem, loaded: HistoryMessage[]): Promise<Message[]> {
+async function toMessages(session: SessionItem, all: HistoryMessage[]): Promise<Message[]> {
+  // The prompt that handed other agents' answers back was never a message of the user's: only the reply to it is shown.
+  const loaded = all.filter((message) => !(message.role === 'user' && message.blocks.some((block) => block.kind === 'response' && isHandbackPrompt(block.text))));
   const restored = await Promise.all(loaded.map((message) => (message.role === 'user' ? userAttachments(message) : Promise.resolve([] as Block[]))));
   return loaded.map((message, at) => ({
     ...(message.role === 'assistant' ? { agent: session.source } : {}),
@@ -2006,12 +2303,13 @@ async function toMessages(session: SessionItem, loaded: HistoryMessage[]): Promi
     time: clock(message.time),
     at: message.time || undefined,
     // A prompt sent with the turns this agent missed shows only what the user typed.
-    blocks: [...restored[at], ...toBlocks(message.blocks).map((block) =>
-      message.role === 'user' && block.kind === 'response' && block.text.startsWith('Earlier in this chat, other agents answered')
-        ? { ...block, text: block.text.slice(block.text.indexOf('Now the user says:\n') + 'Now the user says:\n'.length) }
-        : message.role === 'user' && block.kind === 'response' && block.text.startsWith(HANDBACK_HEAD)
-          ? { ...block, text: '↩ The steps answered' }
-          : block,
+    blocks: [...restored[at], ...toBlocks(message.blocks).map((block) => {
+      // The paragraph AgentDeck puts before a prompt (how to open pages, how to delegate) is not the user's text.
+      const typed = message.role === 'user' && block.kind === 'response' ? { ...block, text: stripLead(block.text) } : block;
+      return typed.kind === 'response' && message.role === 'user' && typed.text.startsWith('Earlier in this chat, other agents answered')
+        ? { ...typed, text: typed.text.slice(typed.text.indexOf('Now the user says:\n') + 'Now the user says:\n'.length) }
+        : typed;
+    }
     ).flatMap((block) => (block.kind === 'response' && !block.text ? [] : [block]))],
     // Tokens come from the transcript itself, so every reply shows them again when the chat is reopened.
     ...(message.usage

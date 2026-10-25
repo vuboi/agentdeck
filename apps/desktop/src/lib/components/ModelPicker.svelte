@@ -159,10 +159,10 @@
         </span>
       {/each}
     </span>
-    <span class="max-w-32 truncate">{flow.name}</span>
+    <span class="max-w-32 truncate" {@attach zTooltip({ content: flow.name, position: 'top', autoDetect: true })}>{flow.name}</span>
   {:else}
     {#if currentSource.logo}<img src={currentSource.logo} alt="" class="size-3 shrink-0 rounded-sm object-contain" />{:else if agent === 'codex'}<ZIcon zSvg={OPENAI_SVG} class="size-3 shrink-0 text-foreground" />{:else}<ZIcon zType={currentSource.icon} class="size-3 shrink-0 {tone(agent)}" />{/if}
-    <span class="truncate">{modelLabel}</span>
+    <span class="truncate" {@attach zTooltip({ content: modelLabel, position: 'top', autoDetect: true })}>{modelLabel}</span>
     <span class="hidden text-muted-foreground min-[720px]:inline">· {effortLabel}</span>
   {/if}
   {#if fast}<ZIcon zType="lucideZap" class="size-3 shrink-0 text-warning" />{/if}
@@ -182,7 +182,8 @@
   onClosed={() => !warming && document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()}
 >
   {#snippet children()}
-    <div class="flex w-full flex-col gap-3 overflow-y-auto px-2.5 py-2.5" style:max-height="{panelMax}px">
+    <div class="overflow-y-auto py-2.5" style:max-height="{panelMax}px">
+      <div class="flex w-full flex-col gap-3 px-2.5">
       <section aria-label="Model">
         <SectionTitle label="MODEL" />
         <div class="flex flex-col gap-0.5" {@attach glide()}>
@@ -194,7 +195,7 @@
               aria-haspopup="dialog"
               aria-expanded={subOpen && subProvider === source.key}
               data-glide-item
-              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs outline-none focus-visible:bg-primary/10 {subOpen && subProvider === source.key ? 'bg-primary/10' : ''}"
+              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {(subOpen && subProvider === source.key) || current ? 'bg-primary/10' : ''}"
               onpointerenter={(event) => openSub(source.key, event.currentTarget)}
               onfocus={(event) => openSub(source.key, event.currentTarget)}
             >
@@ -216,13 +217,13 @@
             aria-haspopup="dialog"
             aria-expanded={subOpen && subProvider === FLOW}
             data-glide-item
-            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs outline-none focus-visible:bg-primary/10 {subOpen && subProvider === FLOW ? 'bg-primary/10' : ''}"
+            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {subOpen && subProvider === FLOW ? 'bg-primary/10' : ''}"
             onpointerenter={(event) => openSub(FLOW, event.currentTarget)}
             onfocus={(event) => openSub(FLOW, event.currentTarget)}
           >
             <ZIcon zType="lucideWorkflow" class="size-3.5 shrink-0 {flow ? 'text-primary' : 'text-muted-foreground'}" />
             <span class="flex-1 truncate">Flow</span>
-            <span class="truncate text-[11px] text-muted-foreground">{flow?.name ?? 'None'}</span>
+            <span class="truncate text-[11px] text-muted-foreground" {@attach zTooltip({ content: flow?.name ?? 'None', position: 'right', autoDetect: true })}>{flow?.name ?? 'None'}</span>
             <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
           </button>
         </div>
@@ -230,7 +231,7 @@
 
       <section aria-label="Reasoning effort">
         <SectionTitle label={agent === 'custom' ? 'THINKING' : 'EFFORT'} />
-        {#key settled}
+        {#key `${settled}|${agent}|${model}`}
         <ZTabs
           zTabs={efforts}
           zType="segmented"
@@ -251,7 +252,7 @@
             <ZIcon zType="lucideZap" class="size-3.5 text-warning" />
             Fast mode
           </div>
-          <div class="mt-0.5 text-[11px] leading-snug text-muted-foreground">Faster output, higher usage</div>
+          <div class="mt-1 text-[11px] leading-snug text-muted-foreground">Faster output, higher usage</div>
         </div>
         <ZSwitch bind:checked={fast} />
       </section>
@@ -267,7 +268,7 @@
             role="radio"
             aria-checked={selected}
             data-glide-item
-            class="flex w-full items-start gap-2 rounded-md px-1.5 py-0.5 text-left outline-none focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''} {blocked ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}"
+            class="flex w-full items-start gap-2 rounded-md px-1.5 py-0.5 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''} {blocked ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}"
             disabled={blocked}
             aria-disabled={blocked}
             onclick={() => (permission = item.value)}
@@ -284,6 +285,7 @@
         {/each}
         </div>
       </section>
+      </div>
     </div>
   {/snippet}
 </ZPopover>
@@ -299,14 +301,14 @@
   {#snippet children()}
     {#if subProvider === FLOW}
       <div class="flex w-full flex-col" style:max-height="{subMax}px">
-        <div class="flex min-h-0 flex-col gap-0.5 overflow-y-auto p-1" role="radiogroup" aria-label="Flows" {@attach glide()}>
-          <button type="button" role="radio" aria-checked={!flow} data-glide-item class="flex w-full shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none focus-visible:bg-primary/10 {!flow ? 'bg-primary/10' : ''}" onclick={() => assignPreset(workspace.activeId, null)}>
+        <div class="flex min-h-0 flex-col gap-0.5 overflow-y-auto py-1 pl-1" role="radiogroup" aria-label="Flows" {@attach glide()}>
+          <button type="button" role="radio" aria-checked={!flow} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {!flow ? 'bg-primary/10' : ''}" onclick={() => assignPreset(workspace.activeId, null)} {@attach zTooltip({ content: 'No flow: the agent answers', position: 'right', autoDetect: true, offset: 6 })}>
             <span class="min-w-0 flex-1 truncate">No flow: the agent answers</span>
             {#if !flow}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
           </button>
           {#each allPresets() as preset (preset.id)}
             {@const chosen = flow?.id === preset.id}
-            <button type="button" role="radio" aria-checked={chosen} data-glide-item class="flex w-full shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none focus-visible:bg-primary/10 {chosen ? 'bg-primary/10' : ''}" onclick={() => assignPreset(workspace.activeId, preset.id)}>
+            <button type="button" role="radio" aria-checked={chosen} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {chosen ? 'bg-primary/10' : ''}" onclick={() => assignPreset(workspace.activeId, preset.id)} {@attach zTooltip({ content: preset.name, position: 'right', autoDetect: true, offset: 6 })}>
               <span class="min-w-0 flex-1 truncate">{preset.name}</span>
               {#if chosen}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
             </button>
@@ -335,7 +337,7 @@
         <p class="m-0 text-[11px] leading-snug text-muted-foreground">{sourceOf(subProvider).label} returned no models, or its provider has an error. Check it in Settings.</p>
       </div>
     {:else}
-      <div class="flex w-full flex-col gap-0.5 overflow-y-auto p-1" style:max-height="{subMax}px" role="radiogroup" aria-label="{sourceOf(subProvider).label} models" {@attach glide()}>
+      <div class="flex w-full flex-col gap-0.5 overflow-y-auto py-1 pl-1" style:max-height="{subMax}px" role="radiogroup" aria-label="{sourceOf(subProvider).label} models" {@attach glide()}>
         {#each modelsOf(subProvider) as item (item.value)}
           {@const selected = agent === sourceOf(subProvider).provider && model === item.value}
           <button
@@ -343,7 +345,7 @@
             role="radio"
             aria-checked={selected}
             data-glide-item
-            class="flex w-full cursor-pointer items-center justify-between rounded-md px-2 py-1 text-left text-xs outline-none focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''}"
+            class="mr-1 flex cursor-pointer items-center justify-between rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''}"
             onclick={() => {
               pickModel(sourceOf(subProvider).provider, item.value);
               subOpen = false;

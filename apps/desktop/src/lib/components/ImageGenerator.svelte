@@ -1,0 +1,724 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { ZDrawer, ZIcon, ZPopover, ZSwitch, ZTabs, zTooltip } from '@shival99/z-ui-svelte';
+  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { OPENAI_SVG } from '../brand-icons';
+  import { activeSession, draftImages, workspace, type Attachment } from '../sessions.svelte';
+  import {
+    generateImages,
+    listImageHistory,
+    readImageDataUrl,
+    revealFile,
+    stopImageGeneration,
+    suggestImagePrompts,
+    type GeneratedImage,
+    type ImageHistoryRun,
+    type ImageModelChoice,
+  } from '../agent';
+  import { openImages } from '../preview.svelte';
+  import { findModel, modelCatalog, modelLabel, type ProviderId } from '../models.svelte';
+  import { inTauri } from '../history';
+  import { toast } from '../toast';
+  import DevEmpty from './DevEmpty.svelte';
+  import SectionTitle from './SectionTitle.svelte';
+
+  type ImageModel = ImageModelChoice & { label: string };
+  type Preview = GeneratedImage & { src: string };
+
+  const models: ImageModel[] = [
+    { model: 'gpt-6-luna', backend: 'responses', label: 'GPT 6 Luna' },
+    { model: 'gpt-image-2', backend: 'images', label: 'GPT Image 2' },
+  ];
+  const variantTabs = [1, 2, 3, 4].map((count) => ({ value: String(count), label: String(count) }));
+  const EFFORT_LABEL: Record<string, string> = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-High', max: 'Max', ultra: 'Ultra' };
+
+  let prompt = $state('');
+  let selectedModels = $state<string[]>(models.map((item) => item.model));
+  let variants = $state(2);
+  let fast = $state(true);
+  let effort = $state('medium');
+  let working = $state(false);
+  let stopping = $state(false);
+  let previews = $state<Preview[]>([]);
+  let failureLines = $state<string[]>([]);
+  let failuresOpen = $state(false);
+  // Time of the current or last run, shown beside the history button.
+  let runMs = $state(0);
+  let loadingRun = $state(0);
+  let runStart = 0;
+  let runTimer: ReturnType<typeof setInterval> | undefined;
+
+  function formatDuration(ms: number) {
+    return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+  }
+  let history = $state<ImageHistoryRun[]>([]);
+  let activeRunId = $state<string | null>(null);
+  let promptSuggestions = $state<string[]>([]);
+  let promptModel = $state('gpt-6-luna');
+  let suggesting = $state(false);
+  let settingsOpen = $state(false);
+  let settingsTrigger = $state<HTMLElement | null>(null);
+  let modelsOpen = $state(false);
+  let modelsRow = $state<HTMLElement | null>(null);
+  let suggestOpen = $state(false);
+  let suggestRow = $state<HTMLElement | null>(null);
+  let historyOpen = $state(false);
+
+  // The full prompt of a history row that is cut off, shown in a popover while the pointer rests on the row.
+  let peek = $state<ImageHistoryRun | null>(null);
+  let peekAnchor = $state<HTMLElement | null>(null);
+  let peekOpen = $state(false);
+  let peekTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function peekRun(run: ImageHistoryRun, row: HTMLElement) {
+    clearTimeout(peekTimer);
+    const label = row.querySelector('span');
+    if (!label || label.scrollWidth <= label.clientWidth) {
+      peekOpen = false;
+      return;
+    }
+    peek = run;
+    peekAnchor = row;
+    peekOpen = true;
+  }
+
+  function leavePeek() {
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => (peekOpen = false), 150);
+  }
+
+  function keepPeek() {
+    clearTimeout(peekTimer);
+  }
+
+  const variantCount = $derived(Math.max(1, Math.min(4, Math.round(variants))));
+  const candidateCount = $derived(selectedModels.length * variantCount);
+  // The skeleton of a run is fixed when it starts: changing the settings only shapes the next run.
+  let runSkeleton = $state(2);
+  const settingsSummary = $derived(selectedModels.map((value) => models.find((item) => item.model === value)?.label ?? value).join(', ') || 'No model');
+  // Models that can write the prompt suggestions, grouped by the CLI they run through.
+  const promptGroups = $derived.by(() => {
+    const catalog = modelCatalog();
+    const codex = new Set<string>(['gpt-6-luna']);
+    for (const item of catalog.codex) codex.add(item.value);
+    const groups = [
+      { provider: 'codex', label: 'Codex', items: [...codex].map((value) => ({ value, label: modelLabel(value) })) },
+      { provider: 'claude', label: 'Claude', icon: 'brandClaude' as ZIconName, items: catalog.claude.map((item) => ({ value: item.value, label: item.label })) },
+      { provider: 'antigravity', label: 'Antigravity', icon: 'brandGemini' as ZIconName, items: catalog.antigravity.map((item) => ({ value: item.value, label: item.label })) },
+    ];
+    return groups.filter((group) => group.items.length);
+  });
+  const promptModels = $derived(promptGroups.flatMap((group) => group.items));
+  // The effort levels follow the model that writes the suggestions, as they do in the chat picker.
+  const promptProvider = $derived((promptGroups.find((group) => group.items.some((item) => item.value === promptModel))?.provider ?? 'codex') as ProviderId);
+  const effortTabs = $derived.by(() => {
+    const levels: string[] = findModel(promptProvider, promptModel)?.efforts ?? ['low', 'medium', 'high', 'max'];
+    return levels.map((value) => ({ value, label: EFFORT_LABEL[value] ?? value }));
+  });
+  $effect(() => {
+    const levels = effortTabs.map((item) => item.value);
+    if (!levels.includes(effort)) effort = findModel(promptProvider, promptModel)?.defaultEffort ?? levels[Math.min(1, levels.length - 1)];
+  });
+  const suggestLabel = $derived(promptModels.find((item) => item.value === promptModel)?.label ?? promptModel);
+
+  $effect(() => {
+    if (!promptModels.some((item) => item.value === promptModel)) promptModel = promptModels[0]?.value ?? '';
+  });
+
+  const projectPath = $derived.by(() => {
+    const session = activeSession();
+    return session ? workspace.projects.find((project) => project.id === session.projectId)?.path ?? null : null;
+  });
+
+  onMount(() => {
+    if (inTauri()) void refreshHistory();
+  });
+
+  async function refreshHistory() {
+    try {
+      history = await listImageHistory();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function selected() {
+    return models.filter((item) => selectedModels.includes(item.model));
+  }
+
+  function toggleModel(model: string) {
+    selectedModels = selectedModels.includes(model) ? selectedModels.filter((value) => value !== model) : [...selectedModels, model];
+  }
+
+  async function withPreviews(images: GeneratedImage[]): Promise<Preview[]> {
+    const loaded = await Promise.all(
+      images.map(async (image) => {
+        try {
+          return { ...image, src: await readImageDataUrl(image.path) };
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return loaded.filter((image): image is Preview => image !== null);
+  }
+
+  async function suggestPrompts() {
+    if (suggesting) return;
+    if (!inTauri()) {
+      toast.error('AI prompt suggestions need the desktop app');
+      return;
+    }
+    if (!prompt.trim()) {
+      toast.error('Enter an image prompt first');
+      return;
+    }
+    suggesting = true;
+    promptSuggestions = [];
+    try {
+      const result = await suggestImagePrompts({ prompt: prompt.trim(), model: promptModel });
+      promptSuggestions = result.suggestions;
+      if (!promptSuggestions.length) toast.error('The prompt model returned no suggestions');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      suggesting = false;
+    }
+  }
+
+  function useSuggestion(value: string) {
+    prompt = value;
+    promptSuggestions = [];
+  }
+
+  async function generate() {
+    if (!inTauri()) {
+      toast.error('Image generation needs the desktop app');
+      return;
+    }
+    const choices = selected();
+    if (!prompt.trim()) {
+      toast.error('Write an image prompt first');
+      return;
+    }
+    if (!choices.length) {
+      toast.error('Choose at least one image model');
+      return;
+    }
+    runSkeleton = Math.max(2, Math.min(6, choices.length * variantCount));
+    working = true;
+    runStart = performance.now();
+    runMs = 0;
+    clearInterval(runTimer);
+    runTimer = setInterval(() => (runMs = performance.now() - runStart), 100);
+    stopping = false;
+    previews = [];
+    failureLines = [];
+    activeRunId = null;
+    try {
+      const result = await generateImages({ prompt, models: choices, variants: variantCount, cwd: projectPath });
+      activeRunId = result.run_id;
+      failureLines = result.failures.map((failure) => `${failure.model} #${failure.variant}: ${failure.error}`);
+      previews = await withPreviews(result.images);
+      if (!previews.length && failureLines.length) toast.error('No image was generated. Check the details below.');
+      void refreshHistory();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      clearInterval(runTimer);
+      runMs = performance.now() - runStart;
+      working = false;
+      stopping = false;
+    }
+  }
+
+  async function stop() {
+    stopping = true;
+    try {
+      await stopImageGeneration();
+    } catch (error) {
+      stopping = false;
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function openRun(run: ImageHistoryRun) {
+    activeRunId = run.id;
+    failureLines = run.failures;
+    previews = [];
+    // Skeletons until the saved files are read back, so the click answers at once.
+    loadingRun = run.images.length;
+    try {
+      previews = await withPreviews(
+        run.images.map((image) => ({ model: image.model, backend: image.backend, path: image.path, variant: image.variant })),
+      );
+    } finally {
+      loadingRun = 0;
+    }
+  }
+
+  function openPreview(index: number) {
+    openImages(
+      previews.map((image) => ({ src: image.src, name: `${image.model}-${image.variant}.png` })),
+      index,
+    );
+  }
+
+  function useInChat(image: Preview) {
+    const session = activeSession();
+    if (!session) return;
+    const attachment: Attachment = { id: crypto.randomUUID(), name: `generated-${image.model}-${image.variant}.png`, mime: 'image/png', src: image.src };
+    draftImages[session.id] = [...(draftImages[session.id] ?? []), attachment];
+    toast.success('Image added to the composer');
+  }
+
+  function dayLabel(millis: number) {
+    const date = new Date(millis);
+    const today = new Date();
+    const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    if (date.toDateString() === today.toDateString()) return 'Today';
+    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return date.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
+  function timeLabel(millis: number) {
+    return new Date(millis).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+
+  // History grouped by day: a header row, then the runs of that day. Rows have fixed heights so the list can be windowed.
+  type HistoryItem = { kind: 'day'; key: string; label: string } | { kind: 'run'; key: string; run: ImageHistoryRun };
+  const DAY_HEIGHT = 28;
+  const RUN_HEIGHT = 52;
+  const historyItems = $derived.by(() => {
+    const items: HistoryItem[] = [];
+    let day = '';
+    for (const run of history) {
+      const label = dayLabel(run.created_at);
+      if (label !== day) {
+        day = label;
+        items.push({ kind: 'day', key: `day:${label}`, label });
+      }
+      items.push({ kind: 'run', key: run.id, run });
+    }
+    return items;
+  });
+  const historyOffsets = $derived.by(() => {
+    const offsets = [0];
+    for (const item of historyItems) offsets.push(offsets[offsets.length - 1] + (item.kind === 'day' ? DAY_HEIGHT : RUN_HEIGHT));
+    return offsets;
+  });
+  let historyScroll = $state(0);
+  let historyViewport = $state(0);
+  const historyWindow = $derived.by(() => {
+    const top = historyScroll;
+    const bottom = historyScroll + historyViewport;
+    let start = 0;
+    while (start < historyItems.length && historyOffsets[start + 1] < top) start++;
+    let end = start;
+    while (end < historyItems.length && historyOffsets[end] < bottom) end++;
+    return { start: Math.max(0, start - 4), end: Math.min(historyItems.length, end + 4) };
+  });
+
+  // The nested menus open on hover of their row, one at a time; closing the settings closes them too.
+  function openSub(which: 'models' | 'suggest') {
+    modelsOpen = which === 'models';
+    suggestOpen = which === 'suggest';
+  }
+
+  // Opening the settings only opens the settings: the nested menus wait for the pointer to reach their row.
+  function toggleSettings() {
+    settingsOpen = !settingsOpen;
+  }
+
+  // The pointer may already rest on a row when the settings open: that is not a hover, so hover waits a moment.
+  let settingsOpenedAt = 0;
+  function hoverOpens() {
+    return performance.now() - settingsOpenedAt > 300;
+  }
+
+  $effect(() => {
+    if (settingsOpen) {
+      settingsOpenedAt = performance.now();
+    } else {
+      modelsOpen = false;
+      suggestOpen = false;
+    }
+  });
+
+  async function openHistoryRun(run: ImageHistoryRun) {
+    historyOpen = false;
+    clearTimeout(peekTimer);
+    peekOpen = false;
+    await openRun(run);
+  }
+
+  function statusLabel(status: ImageHistoryRun['status']) {
+    return status === 'stopped' ? 'Stopped' : status === 'failed' ? 'Failed' : null;
+  }
+</script>
+
+<div class="flex h-full min-h-0 flex-col" role="tabpanel" aria-label="Image generator">
+  <header class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-[13px]">
+    <span class="grid size-7 place-items-center rounded-lg bg-primary/12 text-primary"><ZIcon zType="lucideImage" class="size-4" /></span>
+    <h2 class="m-0 min-w-0 flex-1 truncate text-xs font-semibold text-foreground">Image candidates</h2>
+    {#if runMs > 0}
+      <span class="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground" title="Time of the last run" aria-live="off">{formatDuration(runMs)}</span>
+    {/if}
+    <button
+      type="button"
+      class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {historyOpen ? 'bg-primary/10 text-primary' : ''}"
+      aria-label="Image history"
+      title="Image history"
+      aria-expanded={historyOpen}
+      onclick={() => (historyOpen = !historyOpen)}
+    >
+      <ZIcon zType="lucideHistory" class="size-3.5" />
+    </button>
+  </header>
+
+  <ZDrawer bind:open={historyOpen} zPlacement="right" zWidth="320px" zFloating zTitle="History" zBodyClass="p-0">
+    <div class="flex h-full min-h-0 flex-col">
+      {#if historyItems.length === 0}
+        <DevEmpty icon="lucideImages" title="No history yet" hint="Each run you generate is kept here." />
+      {:else}
+        <div
+          class="min-h-0 flex-1 overflow-y-auto"
+          aria-label="Image history"
+          bind:clientHeight={historyViewport}
+          onscroll={(event) => (historyScroll = event.currentTarget.scrollTop)}
+        >
+          <div style="padding-top: {historyOffsets[historyWindow.start]}px; padding-bottom: {historyOffsets[historyItems.length] - historyOffsets[historyWindow.end]}px">
+            {#each historyItems.slice(historyWindow.start, historyWindow.end) as item (item.key)}
+              {#if item.kind === 'day'}
+                <div class="flex items-center gap-2 px-2 text-[10px] font-medium tracking-wider text-muted-foreground uppercase" style="height: {DAY_HEIGHT}px">
+                  <span class="shrink-0">{item.label}</span>
+                  <span class="h-px flex-1 bg-border" aria-hidden="true"></span>
+                </div>
+              {:else}
+                <div class="px-1 py-0.5" style="height: {RUN_HEIGHT}px">
+                  <button
+                    type="button"
+                    class="flex h-full w-full cursor-pointer flex-col justify-center gap-0.5 rounded-md px-2 text-left outline-none transition-colors hover:bg-accent focus-visible:bg-accent {activeRunId === item.run.id ? 'bg-primary/10' : ''}"
+                    onclick={() => void openHistoryRun(item.run)}
+                    onpointerenter={(event) => peekRun(item.run, event.currentTarget)}
+                    onpointerleave={leavePeek}
+                  >
+                    <span class="truncate text-xs">{item.run.prompt}</span>
+                    <span class="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+                      <span class="shrink-0">{timeLabel(item.run.created_at)}</span>
+                      <span class="truncate">· {item.run.models.length} model{item.run.models.length === 1 ? '' : 's'} · {item.run.images.length} image{item.run.images.length === 1 ? '' : 's'}</span>
+                      {#if statusLabel(item.run.status)}<span class="shrink-0 text-warning">· {statusLabel(item.run.status)}</span>{/if}
+                    </span>
+                  </button>
+                </div>
+              {/if}
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </div>
+  </ZDrawer>
+
+  <ZPopover
+    anchor={peekAnchor}
+    bind:open={peekOpen}
+    zTrigger="manual"
+    zPosition="left-top"
+    zOffset={6}
+    zWidth={256}
+  >
+    {#snippet children()}
+      <!-- The handlers sit on the content: the popover host overrides its own pointer handlers. -->
+      <div class="max-h-28 overflow-y-auto p-2 text-xs leading-snug break-words whitespace-normal" role="presentation" onpointerenter={keepPeek} onpointerleave={leavePeek}>{peek?.prompt}</div>
+    {/snippet}
+  </ZPopover>
+
+  <div class="min-h-0 flex-1 overflow-y-auto py-3">
+    <div class="flex min-h-full flex-col gap-3 px-3">
+      <div class="relative min-w-0 rounded-2xl border border-input bg-card p-2 shadow-lg transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-ring/20 focus-within:ring-2">
+        <textarea
+          bind:value={prompt}
+          rows="2"
+          aria-label="Image prompt"
+          placeholder="Describe the image, style, composition and constraints…"
+          class="max-h-45 min-h-6 w-[calc(100%+0.5rem)] resize-none overflow-x-hidden break-words border-0 bg-transparent p-0 pr-2 text-sm leading-normal outline-none placeholder:text-muted-foreground"
+        ></textarea>
+
+        <div class="flex min-w-0 items-center justify-between gap-2">
+          <button
+            bind:this={settingsTrigger}
+            type="button"
+            class="flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingsOpen ? 'bg-primary/10 text-primary' : ''}"
+            aria-haspopup="menu"
+            aria-expanded={settingsOpen}
+            aria-label="Image settings"
+            onclick={toggleSettings}
+          >
+            <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
+            <span class="truncate" {@attach zTooltip({ content: `${settingsSummary} · ${variantCount}×`, position: 'top', autoDetect: true })}>{settingsSummary}</span>
+            <span class="hidden shrink-0 text-muted-foreground min-[720px]:inline">· {variantCount}×</span>
+            <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 text-muted-foreground" />
+          </button>
+
+          <div class="flex h-8 shrink-0 items-center gap-0.5 rounded-full border border-border bg-background p-0.5" role="group" aria-label="Image actions">
+            <button
+              type="button"
+              class="grid size-7 cursor-pointer place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+              aria-label="AI suggestions"
+              title="AI suggestions"
+              disabled={!prompt.trim() || !promptModel}
+              aria-busy={suggesting}
+              onclick={() => void suggestPrompts()}
+            >
+              {#if suggesting}
+                <ZIcon zType="lucideLoaderCircle" class="size-3.5 animate-spin" />
+              {:else}
+                <ZIcon zType="lucideWandSparkles" class="size-3.5" />
+              {/if}
+            </button>
+
+            {#if working}
+              <button
+                type="button"
+                class="grid size-7 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
+                aria-label="Stop generating"
+                title="Stop"
+                disabled={stopping}
+                onclick={() => void stop()}
+              >
+                <svg class="size-2.5" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
+              </button>
+            {:else}
+              <button
+                type="button"
+                class="grid size-7 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
+                aria-label="Generate images"
+                title="Generate {candidateCount} image candidates"
+                disabled={!prompt.trim() || selectedModels.length === 0}
+                onclick={() => void generate()}
+              >
+                <ZIcon zType="lucideArrowUp" class="size-3.5" />
+              </button>
+            {/if}
+          </div>
+        </div>
+
+        <ZPopover anchor={settingsTrigger} bind:open={settingsOpen} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={260}>
+          {#snippet children()}
+            <div class="flex w-full flex-col gap-4 overflow-y-auto px-2.5 py-2.5 text-xs" role="menu" aria-label="Image settings">
+              <section aria-label="Image models">
+                <SectionTitle label="MODEL" />
+                <button
+                  bind:this={modelsRow}
+                  type="button"
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={modelsOpen}
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {modelsOpen ? 'bg-primary/10 text-primary' : ''}"
+                  onpointerenter={() => hoverOpens() && openSub('models')}
+                >
+                  <span class="min-w-0 flex-1 truncate" {@attach zTooltip({ content: settingsSummary, position: 'right', autoDetect: true })}>{settingsSummary}</span>
+                  <ZIcon zType="lucideChevronRight" class="size-3.5 shrink-0 text-muted-foreground" />
+                </button>
+              </section>
+
+              <section aria-label="Prompt suggestions">
+                <SectionTitle label="PROMPT" />
+                <button
+                  bind:this={suggestRow}
+                  type="button"
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={suggestOpen}
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {suggestOpen ? 'bg-primary/10 text-primary' : ''}"
+                  onpointerenter={() => hoverOpens() && openSub('suggest')}
+                >
+                  <span class="min-w-0 flex-1 truncate" {@attach zTooltip({ content: `Suggest with ${suggestLabel}`, position: 'right', autoDetect: true })}>Suggest with {suggestLabel}</span>
+                  <ZIcon zType="lucideChevronRight" class="size-3.5 shrink-0 text-muted-foreground" />
+                </button>
+              </section>
+
+              <section aria-label="Variants per model">
+                <SectionTitle label="VARIANTS" />
+                <ZTabs
+                  zTabs={variantTabs}
+                  zType="segmented"
+                  zSize="xs"
+                  zTabsOnly
+                  zNavFullWidth
+                  zCache={false}
+                  class="w-full [&_.z-tab-item]:flex-1 [&_.z-tab-item-label]:text-center"
+                  activeTab={String(variantCount)}
+                  onTabChange={(value) => (variants = Number(value))}
+                />
+              </section>
+
+              <section aria-label="Reasoning effort">
+                <SectionTitle label="EFFORT" />
+                <ZTabs
+                  zTabs={effortTabs}
+                  zType="segmented"
+                  zSize="xs"
+                  zTabsOnly
+                  zNavFullWidth
+                  zCache={false}
+                  class="w-full [&_.z-tab-item]:flex-1 [&_.z-tab-item-label]:text-center"
+                  activeTab={effort}
+                  onTabChange={(value) => (effort = String(value))}
+                />
+              </section>
+
+              <section aria-label="Speed" class="flex items-center justify-between gap-6 px-0.5">
+                <div>
+                  <div class="flex items-center gap-1.5 text-xs font-medium">
+                    <ZIcon zType="lucideZap" class="size-3.5 text-warning" />
+                    Fast mode
+                  </div>
+                  <div class="mt-1 text-[11px] leading-snug text-muted-foreground">Faster output, higher usage</div>
+                </div>
+                <ZSwitch bind:checked={fast} />
+              </section>
+            </div>
+          {/snippet}
+        </ZPopover>
+
+        <ZPopover anchor={modelsRow} bind:open={modelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={160}>
+          {#snippet children()}
+            <div class="flex w-full flex-col gap-0.5 p-1.5 text-xs" role="menu" aria-label="Image models">
+              {#each models as item (item.model)}
+                {@const active = selectedModels.includes(item.model)}
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={active}
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : ''}"
+                  onclick={() => toggleModel(item.model)}
+                  {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}
+                >
+                  <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
+                  <span class="min-w-0 flex-1 truncate">{item.label}</span>
+                  {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
+                </button>
+              {/each}
+            </div>
+          {/snippet}
+        </ZPopover>
+
+        <ZPopover anchor={suggestRow} bind:open={suggestOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={160}>
+          {#snippet children()}
+            <div class="flex max-h-80 w-full flex-col gap-0.5 overflow-y-auto py-1.5 pl-1.5 text-xs" role="menu" aria-label="Suggestion model">
+              {#each promptGroups as group, groupIndex (group.provider)}
+                {#if groupIndex > 0}<div class="mt-2 mb-0.5 h-px bg-border" role="separator"></div>{/if}
+                <div class="flex items-center gap-1.5 px-1.5 pt-0 pb-2.5" role="presentation">
+                  {#if group.provider === 'codex'}
+                    <ZIcon zSvg={OPENAI_SVG} class="size-3 shrink-0 text-foreground" />
+                  {:else}
+                    <ZIcon zType={group.icon} class="size-3 shrink-0 text-muted-foreground" />
+                  {/if}
+                  <span class="shrink-0 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">{group.label}</span>
+                  <span class="h-px flex-1 bg-border" aria-hidden="true"></span>
+                </div>
+                {#each group.items as item (item.value)}
+                  {@const active = item.value === promptModel}
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={active}
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : ''}"
+                    onclick={() => {
+                      promptModel = item.value;
+                      suggestOpen = false;
+                    }}
+                    {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}
+                  >
+                    <span class="min-w-0 flex-1 truncate">{item.label}</span>
+                    {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
+                  </button>
+                {/each}
+              {/each}
+            </div>
+          {/snippet}
+        </ZPopover>
+
+        {#if suggesting || promptSuggestions.length}
+          <div class="-mx-3 -mb-2 mt-2 flex flex-col gap-1 border-t border-border px-3 pt-2 pb-2" aria-label="Prompt suggestions">
+            <span class="px-1 text-[11px] text-muted-foreground">Suggested prompts · click to use</span>
+            {#if suggesting}
+              <div class="flex flex-col gap-2 px-1 py-1" role="status" aria-label="Writing prompt suggestions">
+                {#each [0, 1, 2] as line (line)}
+                  <div class="h-3 animate-pulse rounded bg-muted {line === 2 ? 'w-3/5' : 'w-full'}"></div>
+                {/each}
+              </div>
+            {:else}
+              {#each promptSuggestions as suggestion (suggestion)}
+                <button type="button" class="rounded-md bg-muted/50 px-2 py-1.5 text-left text-xs leading-4 text-foreground transition-colors hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:text-primary outline-none" onclick={() => useSuggestion(suggestion)}>
+                  {suggestion}
+                </button>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      </div>
+
+      <div class="-mx-3 min-h-0 flex-1 border-t border-border pt-3">
+        <div class="min-h-full px-3">
+          {#if working || loadingRun}
+            <div class="grid grid-cols-2 gap-2" role="status" aria-label="Generating image candidates">
+              {#each Array.from({ length: working ? runSkeleton : loadingRun }) as _, index (index)}
+                <div class="overflow-hidden rounded-lg border border-border bg-background shadow-sm">
+                  <div class="relative aspect-square overflow-hidden bg-muted/60">
+                    <div class="absolute inset-0 animate-pulse bg-gradient-to-br from-muted via-primary/10 to-muted"></div>
+                  </div>
+                  <div class="flex items-center gap-2 px-2 py-2">
+                    <div class="h-2.5 w-2/5 animate-pulse rounded-full bg-muted"></div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {:else if previews.length}
+            <div class="grid grid-cols-2 gap-2" aria-label="Generated image candidates">
+              {#each previews as image, index (image.path)}
+                <article class="group overflow-hidden rounded-lg border border-border bg-background">
+                  <button type="button" class="block w-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Preview {image.model} #{image.variant}" onclick={() => openPreview(index)}>
+                    <img src={image.src} alt="Generated candidate" class="aspect-square w-full object-cover" />
+                  </button>
+                  <div class="flex items-center gap-1 px-1.5 py-1.5">
+                    <span class="min-w-0 flex-1 truncate text-[10px] text-muted-foreground" title={image.path}>{image.model} · #{image.variant}</span>
+                    <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Use image in chat" title="Use image in chat" onclick={() => useInChat(image)}>
+                      <ZIcon zType="lucideMessageSquarePlus" class="size-3.5" />
+                    </button>
+                    <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Reveal image file" title="Reveal image file" onclick={() => void revealFile(image.path)}>
+                      <ZIcon zType="lucideFolderOpen" class="size-3.5" />
+                    </button>
+                  </div>
+                </article>
+              {/each}
+            </div>
+          {:else}
+            <DevEmpty icon="lucideImages" title="No image candidates yet" hint="Enter a prompt, choose your models, then generate a few options here." />
+          {/if}
+
+          {#if failureLines.length && !working}
+            <div class="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[11px] text-destructive">
+              <button type="button" class="flex w-full cursor-pointer items-center gap-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-expanded={failuresOpen} onclick={() => (failuresOpen = !failuresOpen)}>
+                <ZIcon zType="lucideChevronDown" class="size-3.5 shrink-0 transition-transform duration-200 {failuresOpen ? '' : '-rotate-90'}" />
+                {failureLines.length} candidate{failureLines.length === 1 ? '' : 's'} failed
+              </button>
+              <!-- The rows animate their height with the grid, so the list never jumps: no margin outside the animated box. -->
+              <div class="grid transition-[grid-template-rows] duration-200 ease-out {failuresOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
+                <div class="min-h-0 overflow-hidden">
+                  <ul class="list-disc space-y-1 pt-1.5 pl-4">
+                    {#each failureLines as line (line)}
+                      <li>{line}</li>
+                    {/each}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          {/if}
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

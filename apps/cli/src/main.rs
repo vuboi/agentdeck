@@ -17,6 +17,9 @@ mod tests {
 
     #[test]
     fn version_output_includes_package_version() {
-        assert_eq!(version_output(), "ag 0.0.0");
+        assert_eq!(
+            version_output(),
+            format!("ag {}", env!("CARGO_PKG_VERSION"))
+        );
     }
 }

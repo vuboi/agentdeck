@@ -45,6 +45,10 @@ dependencies = [
 [[package]]
 name = "ag-orchestrator"
 version = "0.1.8"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "ag-protocol"
@@ -91,6 +95,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

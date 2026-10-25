@@ -128,11 +128,9 @@
   // App updates: checked in the background; the button next to Settings shows a dot when one is waiting.
   let updateOpen = $state(false);
   $effect(() => startUpdateChecks());
-  // `pnpm dev:update`: open the update dialog with a pretend release.
+  // `pnpm dev:update`: a pretend release is waiting (the button shows its dot); the dialog opens when the button is clicked.
   $effect(() => {
-    if (!FAKE_UPDATE) return;
-    useFakeUpdate();
-    updateOpen = true;
+    if (FAKE_UPDATE) useFakeUpdate();
   });
   // The icon turns while a check runs, and for at least a moment so a quick answer is still seen.
   let spinning = $state(false);

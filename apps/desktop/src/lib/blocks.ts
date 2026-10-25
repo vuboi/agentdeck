@@ -1,12 +1,13 @@
 // Pure helpers for how a reply is laid out: commands folded into one group, status wording, durations.
 import type { ZLoadingSpinner } from '@shival99/z-ui-svelte';
 import { LOADER } from './loaders';
+import { kindOfCommand } from './delegate-task';
 import type { Block } from './mock';
 
 export type CommandBlock = Extract<Block, { kind: 'command' }>;
 export type ThinkingBlock = Extract<Block, { kind: 'thinking' }>;
 export type PlanItem = { content: string; status: 'pending' | 'in_progress' | 'completed' };
-export type Segment = { kind: 'plan'; items: PlanItem[] } | { kind: 'block'; block: Block } | { kind: 'commands'; items: CommandBlock[]; /** Reasoning between the steps, folded into the group. */ thoughts: ThinkingBlock[] };
+export type Segment = { kind: 'plan'; items: PlanItem[] } | { kind: 'block'; block: Block } | /** Calls of delegate_task: each is a card of its own, not a line among the steps. */ { kind: 'tasks'; items: CommandBlock[] } | { kind: 'commands'; items: CommandBlock[]; /** Reasoning between the steps, folded into the group. */ thoughts: ThinkingBlock[] };
 
 /** Consecutive commands become one group; everything else stays as it is. Reasoning with no text draws nothing,
  *  so it does not split a group either: the steps then count up on one line, as in Claude and Codex. Reasoning that
@@ -47,6 +48,13 @@ export function segments(blocks: Block[]): Segment[] {
     if (block.kind !== 'command') {
       flush();
       out.push({ kind: 'block', block });
+      continue;
+    }
+    if (kindOfCommand(block.command) === 'delegate_task') {
+      flush();
+      const shown = out.at(-1);
+      if (shown?.kind === 'tasks') shown.items.push(block);
+      else out.push({ kind: 'tasks', items: [block] });
       continue;
     }
     const plan = planOf(block.command);
@@ -130,6 +138,11 @@ export function describeStep(item: CommandBlock): Step {
   if (PAGE_LOOK.test(tool)) return { verb: verbs('Looked at page', 'Looking at page'), subject: '' };
   if (PAGE_READ.test(tool)) return { verb: verbs('Found on page', 'Finding on page'), subject: '' };
   if (tool === 'Plan') return { verb: verbs('Planned', 'Planning'), subject: '' };
+  const delegation = kindOfCommand(item.command);
+  if (delegation === 'delegate_task') return { verb: verbs('Messaged an agent', 'Messaging an agent'), subject: '' };
+  if (delegation === 'list_agents') return { verb: verbs('Listed the agents', 'Listing the agents'), subject: '' };
+  if (delegation === 'task_status') return { verb: verbs('Checked a task', 'Checking a task'), subject: '' };
+  if (delegation === 'task_stop') return { verb: verbs('Stopped a task', 'Stopping a task'), subject: '' };
   if (tool === 'PackageInfo') return { verb: verbs('Checked the package', 'Checking the package'), subject };
   if (/^code_/.test(tool)) return { verb: verbs('Looked up in the code index', 'Looking up in the code index'), subject: `${tool.slice(5)} ${subject}`.trim() };
   return { verb: verbs('Used', 'Using'), subject: `${tool} ${subject}`.trim() };
@@ -183,6 +196,7 @@ export function liveState(blocks: Block[]): { label: string; spinner: ZLoadingSp
     if (SEARCH.test(tool)) return { label: 'Searching', spinner: LOADER.check };
     if (FETCH.test(tool)) return { label: 'Fetching', spinner: LOADER.fetch };
     if (AGENT.test(tool)) return { label: 'Running agent', spinner: LOADER.background };
+    if (kindOfCommand(last.command) === 'delegate_task') return { label: 'Waiting for an agent', spinner: LOADER.background };
     if (PAGE_ACT.test(tool)) return { label: 'Interacting with page', spinner: LOADER.action };
     if (PAGE_SCRIPT.test(tool)) return { label: 'Running page script', spinner: LOADER.command };
     if (PAGE_LOOK.test(tool) || PAGE_READ.test(tool)) return { label: 'Looking at page', spinner: LOADER.check };

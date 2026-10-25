@@ -116,6 +116,11 @@ pub trait Provider: Send + Sync {
     fn candidates(&self) -> Vec<std::path::PathBuf>;
     /// Command-line arguments for one turn.
     fn args(&self, req: &TurnRequest) -> Vec<String>;
+    /// `true` when `args` leaves the prompt out and the CLI reads it from stdin. Windows caps a command line at
+    /// about 32k characters, so a long prompt (pasted files, logs) has to go this way.
+    fn prompt_on_stdin(&self) -> bool {
+        false
+    }
     /// One line of stdout to zero or more events. Lines this provider does not understand give none.
     fn parse_line(&self, line: &str) -> Vec<AgentEvent>;
     /// Runs before the CLI starts, for what a turn needs that flags cannot say (a rule in the CLI's own settings).

@@ -1,6 +1,8 @@
 <script lang="ts" module>
   // The last list read for each project: reopening the panel shows it at once while git is read again.
   const lastRead = new Map<string, { path: string; status: string; staged: boolean; added: number; removed: number }[]>();
+  /** The project whose changes were shown last: used while the open chat has none. */
+  let lastRoot = '';
 </script>
 
 <script lang="ts">
@@ -20,7 +22,13 @@
   const icon = (name: string) => name as ZIconName;
 
   const session = $derived(activeSession());
-  const root = $derived(workspace.projects.find((item) => item.id === session?.projectId)?.path ?? '');
+  // The folder whose changes are listed: the open chat's project. A chat with no project (a new session) keeps showing the
+  // project last shown instead of an empty list.
+  const own = $derived(workspace.projects.find((item) => item.id === session?.projectId)?.path ?? '');
+  const root = $derived(own || lastRoot);
+  $effect(() => {
+    if (own) lastRoot = own;
+  });
 
   let changes = $state<Change[]>(untrack(() => lastRead.get(root) ?? []));
   // False until the first read of this project ends: an empty list is only shown as empty once git has answered.

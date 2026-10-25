@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use crate::mcp_client::Server;
 use crate::slash_commands::{self, ProviderCommand};
-use ag_adapters::agent::{allow_entry, file_change, summarize_tool_input, AgentEvent, PermissionRequest};
+use ag_adapters::agent::{
+    allow_entry, file_change, summarize_tool_input, AgentEvent, PermissionRequest,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::AppHandle;
@@ -48,7 +50,9 @@ pub struct ChatMessage {
 /// Characters of one attached text file that go into the message.
 const FILE_INLINE_MAX: usize = 40_000;
 const TEXT_EXTENSIONS: &[&str] = &[
-    "txt", "md", "mdx", "log", "csv", "tsv", "json", "yaml", "yml", "toml", "xml", "html", "css", "scss", "js", "ts", "tsx", "jsx", "svelte", "vue", "py", "rs", "go", "java", "c", "cpp", "h", "cs", "rb", "php", "sh", "ps1", "sql", "ini", "env",
+    "txt", "md", "mdx", "log", "csv", "tsv", "json", "yaml", "yml", "toml", "xml", "html", "css",
+    "scss", "js", "ts", "tsx", "jsx", "svelte", "vue", "py", "rs", "go", "java", "c", "cpp", "h",
+    "cs", "rb", "php", "sh", "ps1", "sql", "ini", "env",
 ];
 
 /// A message as the provider takes it: the text with the attached documents after it, and the pictures in the
@@ -57,23 +61,45 @@ fn wire_message(message: &ChatMessage) -> Value {
     let mut text = message.content.clone();
     for path in &message.files {
         let file = std::path::Path::new(path);
-        let name = file.file_name().map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
-        let extension = file.extension().map(|ext| ext.to_string_lossy().to_lowercase()).unwrap_or_default();
-        let inline = if TEXT_EXTENSIONS.contains(&extension.as_str()) { std::fs::read_to_string(file).ok() } else { None };
+        let name = file
+            .file_name()
+            .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
+        let extension = file
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let inline = if TEXT_EXTENSIONS.contains(&extension.as_str()) {
+            std::fs::read_to_string(file).ok()
+        } else {
+            None
+        };
         match inline {
             Some(body) => {
                 let cut: String = body.chars().take(FILE_INLINE_MAX).collect();
-                let more = if cut.len() < body.len() { "\n[...cut: the file is longer]" } else { "" };
-                text.push_str(&format!("\n\nAttached file {name} ({path}):\n```\n{cut}{more}\n```"));
+                let more = if cut.len() < body.len() {
+                    "\n[...cut: the file is longer]"
+                } else {
+                    ""
+                };
+                text.push_str(&format!(
+                    "\n\nAttached file {name} ({path}):\n```\n{cut}{more}\n```"
+                ));
             }
-            None => text.push_str(&format!("\n\nAttached file {name}, at {path} (open it with a tool if you need it).")),
+            None => text.push_str(&format!(
+                "\n\nAttached file {name}, at {path} (open it with a tool if you need it)."
+            )),
         }
     }
     if message.images.is_empty() {
         return json!({ "role": message.role, "content": text });
     }
     let mut parts = vec![json!({ "type": "text", "text": text })];
-    parts.extend(message.images.iter().map(|url| json!({ "type": "image_url", "image_url": { "url": url } })));
+    parts.extend(
+        message
+            .images
+            .iter()
+            .map(|url| json!({ "type": "image_url", "image_url": { "url": url } })),
+    );
     json!({ "role": message.role, "content": parts })
 }
 
@@ -134,13 +160,29 @@ fn builtin_tools() -> Vec<Value> {
 /// The AgentDeck browser tools, asked of the MCP server the app runs for itself, as OpenAI functions.
 async fn browser_tools(app: &AppHandle, chat: &str) -> Vec<Value> {
     let request = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
-    let Some(answer) = crate::mcp::handle(app, &request, chat).await else { return Vec::new() };
-    let Ok(answer) = serde_json::from_str::<Value>(&answer) else { return Vec::new() };
+    let Some(answer) = crate::mcp::handle(app, &request, chat).await else {
+        return Vec::new();
+    };
+    let Ok(answer) = serde_json::from_str::<Value>(&answer) else {
+        return Vec::new();
+    };
     answer["result"]["tools"]
         .as_array()
         .into_iter()
         .flatten()
-        .map(|tool| function(tool["name"].as_str().unwrap_or_default(), tool["description"].as_str().unwrap_or_default(), tool["inputSchema"]["properties"].clone(), &tool["inputSchema"]["required"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>()))
+        .map(|tool| {
+            function(
+                tool["name"].as_str().unwrap_or_default(),
+                tool["description"].as_str().unwrap_or_default(),
+                tool["inputSchema"]["properties"].clone(),
+                &tool["inputSchema"]["required"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>(),
+            )
+        })
         .collect()
 }
 
@@ -152,11 +194,19 @@ struct Outcome {
 }
 
 fn failed(text: impl Into<String>) -> Outcome {
-    Outcome { text: text.into(), is_error: true, image: None }
+    Outcome {
+        text: text.into(),
+        is_error: true,
+        image: None,
+    }
 }
 
 fn ok(text: impl Into<String>) -> Outcome {
-    Outcome { text: text.into(), is_error: false, image: None }
+    Outcome {
+        text: text.into(),
+        is_error: false,
+        image: None,
+    }
 }
 
 /// The end of `text` when it is longer than the limit (the end of a command's output is what matters).
@@ -191,7 +241,11 @@ async fn run_bash(command: &str, cwd: Option<&Path>) -> Outcome {
         process.args(["-c", command]);
         process
     };
-    process.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    process
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     if let Some(dir) = cwd.filter(|dir| dir.is_dir()) {
         process.current_dir(dir);
     }
@@ -217,11 +271,24 @@ async fn run_bash(command: &str, cwd: Option<&Path>) -> Outcome {
     };
     match tokio::time::timeout(Duration::from_secs(120), collect).await {
         Ok((out, err, status)) => {
-            let text = [out.trim_end(), err.trim_end()].iter().filter(|part| !part.is_empty()).copied().collect::<Vec<_>>().join("\n");
+            let text = [out.trim_end(), err.trim_end()]
+                .iter()
+                .filter(|part| !part.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
             let text = tail(&text, OUTPUT_MAX);
             match status {
-                Ok(status) if status.success() => ok(if text.is_empty() { "(no output)".to_string() } else { text }),
-                Ok(status) => failed(format!("{text}\n(exit code {})", status.code().unwrap_or(-1)).trim().to_string()),
+                Ok(status) if status.success() => ok(if text.is_empty() {
+                    "(no output)".to_string()
+                } else {
+                    text
+                }),
+                Ok(status) => failed(
+                    format!("{text}\n(exit code {})", status.code().unwrap_or(-1))
+                        .trim()
+                        .to_string(),
+                ),
                 Err(error) => failed(error.to_string()),
             }
         }
@@ -229,12 +296,24 @@ async fn run_bash(command: &str, cwd: Option<&Path>) -> Outcome {
     }
 }
 
-const SKIPPED_DIRS: [&str; 7] = [".git", "node_modules", "target", "dist", ".svelte-kit", ".next", "__pycache__"];
+const SKIPPED_DIRS: [&str; 7] = [
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    ".svelte-kit",
+    ".next",
+    "__pycache__",
+];
 
 /// A name pattern as a regular expression over `/`-separated relative paths: `**` crosses folders, `*` and `?` do not.
 fn glob_regex(pattern: &str) -> Option<regex::Regex> {
     let pattern = pattern.replace('\\', "/");
-    let pattern = if pattern.contains('/') { pattern } else { format!("**/{pattern}") };
+    let pattern = if pattern.contains('/') {
+        pattern
+    } else {
+        format!("**/{pattern}")
+    };
     let mut out = String::from("(?i)^");
     let mut chars = pattern.chars().peekable();
     while let Some(c) = chars.next() {
@@ -262,32 +341,65 @@ fn files_under(root: &Path) -> impl Iterator<Item = (PathBuf, String)> {
     let base = root.to_path_buf();
     walkdir::WalkDir::new(root)
         .into_iter()
-        .filter_entry(|entry| !(entry.file_type().is_dir() && entry.depth() > 0 && SKIPPED_DIRS.contains(&entry.file_name().to_string_lossy().as_ref())))
+        .filter_entry(|entry| {
+            !(entry.file_type().is_dir()
+                && entry.depth() > 0
+                && SKIPPED_DIRS.contains(&entry.file_name().to_string_lossy().as_ref()))
+        })
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .map(move |entry| {
-            let relative = entry.path().strip_prefix(&base).unwrap_or(entry.path()).to_string_lossy().replace('\\', "/");
+            let relative = entry
+                .path()
+                .strip_prefix(&base)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace('\\', "/");
             (entry.into_path(), relative)
         })
 }
 
 fn glob_files(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let Some(pattern) = args["pattern"].as_str() else { return failed("pattern is required") };
-    let Some(matcher) = glob_regex(pattern) else { return failed("that pattern is not valid") };
+    let Some(pattern) = args["pattern"].as_str() else {
+        return failed("pattern is required");
+    };
+    let Some(matcher) = glob_regex(pattern) else {
+        return failed("that pattern is not valid");
+    };
     let root = resolve(cwd, args["path"].as_str().unwrap_or("."));
-    let mut found: Vec<String> = files_under(&root).filter(|(_, relative)| matcher.is_match(relative)).map(|(_, relative)| relative).take(500).collect();
+    let mut found: Vec<String> = files_under(&root)
+        .filter(|(_, relative)| matcher.is_match(relative))
+        .map(|(_, relative)| relative)
+        .take(500)
+        .collect();
     found.sort();
-    ok(if found.is_empty() { "no file matches".to_string() } else { found.join("\n") })
+    ok(if found.is_empty() {
+        "no file matches".to_string()
+    } else {
+        found.join("\n")
+    })
 }
 
 fn grep_files(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let Some(pattern) = args["pattern"].as_str() else { return failed("pattern is required") };
+    let Some(pattern) = args["pattern"].as_str() else {
+        return failed("pattern is required");
+    };
     let ignore = args["ignore_case"].as_bool().unwrap_or(false);
-    let Ok(matcher) = regex::RegexBuilder::new(pattern).case_insensitive(ignore).build() else { return failed("that is not a valid regular expression") };
+    let Ok(matcher) = regex::RegexBuilder::new(pattern)
+        .case_insensitive(ignore)
+        .build()
+    else {
+        return failed("that is not a valid regular expression");
+    };
     let only = args["glob"].as_str().and_then(glob_regex);
     let root = resolve(cwd, args["path"].as_str().unwrap_or("."));
     let candidates: Vec<(PathBuf, String)> = if root.is_file() {
-        vec![(root.clone(), root.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default())]
+        vec![(
+            root.clone(),
+            root.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        )]
     } else {
         files_under(&root).collect()
     };
@@ -296,45 +408,90 @@ fn grep_files(args: &Value, cwd: Option<&Path>) -> Outcome {
         if only.as_ref().is_some_and(|only| !only.is_match(&relative)) {
             continue;
         }
-        if std::fs::metadata(&path).map(|meta| meta.len() > 2_000_000).unwrap_or(true) {
+        if std::fs::metadata(&path)
+            .map(|meta| meta.len() > 2_000_000)
+            .unwrap_or(true)
+        {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
         if bytes.iter().take(1024).any(|byte| *byte == 0) {
             continue;
         }
         for (index, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
             if matcher.is_match(line) {
-                lines.push(format!("{relative}:{}: {}", index + 1, line.trim().chars().take(200).collect::<String>()));
+                lines.push(format!(
+                    "{relative}:{}: {}",
+                    index + 1,
+                    line.trim().chars().take(200).collect::<String>()
+                ));
                 if lines.len() >= 200 {
                     break 'files;
                 }
             }
         }
     }
-    ok(if lines.is_empty() { "no match".to_string() } else { lines.join("\n") })
+    ok(if lines.is_empty() {
+        "no match".to_string()
+    } else {
+        lines.join("\n")
+    })
 }
 
 /// The text of a page: scripts and styles dropped, tags removed, blank runs collapsed.
 fn page_text(html: &str) -> String {
-    let strip = |text: String, pattern: &str| regex::Regex::new(pattern).map(|re| re.replace_all(&text, " ").into_owned()).unwrap_or(text);
-    let text = strip(html.to_owned(), r"(?is)<script[^>]*>.*?</script>|<style[^>]*>.*?</style>|<noscript[^>]*>.*?</noscript>");
+    let strip = |text: String, pattern: &str| {
+        regex::Regex::new(pattern)
+            .map(|re| re.replace_all(&text, " ").into_owned())
+            .unwrap_or(text)
+    };
+    let text = strip(
+        html.to_owned(),
+        r"(?is)<script[^>]*>.*?</script>|<style[^>]*>.*?</style>|<noscript[^>]*>.*?</noscript>",
+    );
     let text = strip(text, r"(?s)<[^>]+>");
-    let text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"");
-    text.lines().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\n")
+    let text = text
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"");
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 async fn web_fetch(args: &Value) -> Outcome {
-    let Some(url) = args["url"].as_str().filter(|url| url.starts_with("http://") || url.starts_with("https://")) else { return failed("url must start with http:// or https://") };
-    let client = match reqwest::Client::builder().timeout(Duration::from_secs(30)).user_agent("AgentDeck").build() {
+    let Some(url) = args["url"]
+        .as_str()
+        .filter(|url| url.starts_with("http://") || url.starts_with("https://"))
+    else {
+        return failed("url must start with http:// or https://");
+    };
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("AgentDeck")
+        .build()
+    {
         Ok(client) => client,
         Err(error) => return failed(error.to_string()),
     };
     match client.get(url).send().await {
         Ok(response) if response.status().is_success() => {
-            let html = response.headers().get("content-type").and_then(|value| value.to_str().ok()).is_some_and(|kind| kind.contains("html"));
+            let html = response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|kind| kind.contains("html"));
             match response.text().await {
-                Ok(text) => ok(tail(&if html { page_text(&text) } else { text }, OUTPUT_MAX)),
+                Ok(text) => ok(tail(
+                    &if html { page_text(&text) } else { text },
+                    OUTPUT_MAX,
+                )),
                 Err(error) => failed(error.to_string()),
             }
         }
@@ -361,11 +518,17 @@ fn list_dir(args: &Value, cwd: Option<&Path>) -> Outcome {
         })
         .collect();
     rows.sort();
-    ok(if rows.is_empty() { "(empty folder)".to_string() } else { rows.join("\n") })
+    ok(if rows.is_empty() {
+        "(empty folder)".to_string()
+    } else {
+        rows.join("\n")
+    })
 }
 
 fn make_dir(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let Some(path) = args["path"].as_str() else { return failed("path is required") };
+    let Some(path) = args["path"].as_str() else {
+        return failed("path is required");
+    };
     match std::fs::create_dir_all(resolve(cwd, path)) {
         Ok(()) => ok(format!("Folder ready: {path}")),
         Err(error) => failed(format!("could not create {path}: {error}")),
@@ -374,13 +537,17 @@ fn make_dir(args: &Value, cwd: Option<&Path>) -> Outcome {
 
 /// Copy or move: refuses to overwrite, so nothing is lost by a slip.
 fn transfer(args: &Value, cwd: Option<&Path>, moving: bool) -> Outcome {
-    let (Some(from), Some(to)) = (args["from"].as_str(), args["to"].as_str()) else { return failed("from and to are required") };
+    let (Some(from), Some(to)) = (args["from"].as_str(), args["to"].as_str()) else {
+        return failed("from and to are required");
+    };
     let (source, target) = (resolve(cwd, from), resolve(cwd, to));
     if !source.exists() {
         return failed(format!("{from} does not exist"));
     }
     if target.exists() {
-        return failed(format!("{to} already exists: pick another name or Delete it first"));
+        return failed(format!(
+            "{to} already exists: pick another name or Delete it first"
+        ));
     }
     if let Some(parent) = target.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -393,7 +560,10 @@ fn transfer(args: &Value, cwd: Option<&Path>, moving: bool) -> Outcome {
         std::fs::copy(&source, &target).map(|_| ())
     };
     match done {
-        Ok(()) => ok(format!("{} {from} to {to}", if moving { "Moved" } else { "Copied" })),
+        Ok(()) => ok(format!(
+            "{} {from} to {to}",
+            if moving { "Moved" } else { "Copied" }
+        )),
         Err(error) => failed(error.to_string()),
     }
 }
@@ -413,13 +583,23 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// Deletes a file or folder, but only inside the project folder.
 fn delete_path(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let Some(path) = args["path"].as_str() else { return failed("path is required") };
+    let Some(path) = args["path"].as_str() else {
+        return failed("path is required");
+    };
     let target = resolve(cwd, path);
-    let (Ok(real), Some(Ok(root))) = (target.canonicalize(), cwd.map(Path::canonicalize)) else { return failed(format!("{path} does not exist, or there is no project folder")) };
+    let (Ok(real), Some(Ok(root))) = (target.canonicalize(), cwd.map(Path::canonicalize)) else {
+        return failed(format!(
+            "{path} does not exist, or there is no project folder"
+        ));
+    };
     if real == root || !real.starts_with(&root) {
         return failed("only files and folders inside the project folder can be deleted");
     }
-    let done = if real.is_dir() { std::fs::remove_dir_all(&real) } else { std::fs::remove_file(&real) };
+    let done = if real.is_dir() {
+        std::fs::remove_dir_all(&real)
+    } else {
+        std::fs::remove_file(&real)
+    };
     match done {
         Ok(()) => ok(format!("Deleted {path}")),
         Err(error) => failed(error.to_string()),
@@ -428,12 +608,26 @@ fn delete_path(args: &Value, cwd: Option<&Path>) -> Outcome {
 
 /// A web search through DuckDuckGo's plain HTML page: title, address and snippet of the first results.
 async fn web_search(args: &Value) -> Outcome {
-    let Some(query) = args["query"].as_str().filter(|query| !query.trim().is_empty()) else { return failed("query is required") };
-    let client = match reqwest::Client::builder().timeout(Duration::from_secs(20)).user_agent("Mozilla/5.0 AgentDeck").build() {
+    let Some(query) = args["query"]
+        .as_str()
+        .filter(|query| !query.trim().is_empty())
+    else {
+        return failed("query is required");
+    };
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent("Mozilla/5.0 AgentDeck")
+        .build()
+    {
         Ok(client) => client,
         Err(error) => return failed(error.to_string()),
     };
-    let page = match client.get("https://html.duckduckgo.com/html/").query(&[("q", query)]).send().await {
+    let page = match client
+        .get("https://html.duckduckgo.com/html/")
+        .query(&[("q", query)])
+        .send()
+        .await
+    {
         Ok(response) if response.status().is_success() => response.text().await.unwrap_or_default(),
         Ok(response) => return failed(format!("the search answered {}", response.status())),
         Err(error) => return failed(error.to_string()),
@@ -445,24 +639,53 @@ async fn web_search(args: &Value) -> Outcome {
         return failed("search is unavailable");
     };
     let clean = |html: &str| page_text(html).replace('\n', " ");
-    let snippets: Vec<String> = snippet.captures_iter(&page).map(|found| clean(&found[1])).collect();
+    let snippets: Vec<String> = snippet
+        .captures_iter(&page)
+        .map(|found| clean(&found[1]))
+        .collect();
     let mut rows = Vec::new();
     for (index, found) in link.captures_iter(&page).take(8).enumerate() {
         let href = found[1].replace("&amp;", "&");
-        let href = if href.starts_with("//") { format!("https:{href}") } else { href };
+        let href = if href.starts_with("//") {
+            format!("https:{href}")
+        } else {
+            href
+        };
         // The result address is wrapped in a redirect: `?uddg=<the real address>`.
-        let target = tauri::Url::parse(&href).ok().and_then(|url| url.query_pairs().find(|(key, _)| key == "uddg").map(|(_, value)| value.into_owned())).unwrap_or(href);
-        rows.push(format!("{}. {}\n   {target}\n   {}", index + 1, clean(&found[2]), snippets.get(index).cloned().unwrap_or_default()));
+        let target = tauri::Url::parse(&href)
+            .ok()
+            .and_then(|url| {
+                url.query_pairs()
+                    .find(|(key, _)| key == "uddg")
+                    .map(|(_, value)| value.into_owned())
+            })
+            .unwrap_or(href);
+        rows.push(format!(
+            "{}. {}\n   {target}\n   {}",
+            index + 1,
+            clean(&found[2]),
+            snippets.get(index).cloned().unwrap_or_default()
+        ));
     }
-    ok(if rows.is_empty() { "no results".to_string() } else { rows.join("\n") })
+    ok(if rows.is_empty() {
+        "no results".to_string()
+    } else {
+        rows.join("\n")
+    })
 }
 
 /// The file change a Write or Edit makes. A Write over an existing file shows what it replaces, so the diff is
 /// the real one and not "every line added".
-fn change_for(name: &str, args: &Value, cwd: Option<&Path>) -> Option<ag_adapters::agent::FileChange> {
+fn change_for(
+    name: &str,
+    args: &Value,
+    cwd: Option<&Path>,
+) -> Option<ag_adapters::agent::FileChange> {
     let mut change = file_change(name, args)?;
     if name == "Write" {
-        if let Ok(old) = std::fs::read_to_string(resolve(cwd, args["file_path"].as_str().unwrap_or_default())) {
+        if let Ok(old) =
+            std::fs::read_to_string(resolve(cwd, args["file_path"].as_str().unwrap_or_default()))
+        {
             change.removed = old.lines().count();
             change.before = old.chars().take(3000).collect();
         }
@@ -471,26 +694,45 @@ fn change_for(name: &str, args: &Value, cwd: Option<&Path>) -> Option<ag_adapter
 }
 
 fn read_file(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let Some(path) = args["file_path"].as_str() else { return failed("file_path is required") };
+    let Some(path) = args["file_path"].as_str() else {
+        return failed("file_path is required");
+    };
     let text = match std::fs::read(resolve(cwd, path)) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(error) => return failed(format!("could not read {path}: {error}")),
     };
     let first = args["offset"].as_u64().unwrap_or(1).max(1) as usize;
     let limit = args["limit"].as_u64().unwrap_or(2000) as usize;
-    let numbered: Vec<String> = text.lines().enumerate().skip(first - 1).take(limit).map(|(index, line)| format!("{:>6}\t{line}", index + 1)).collect();
-    ok(if numbered.is_empty() { "(empty)".to_string() } else { tail(&numbered.join("\n"), OUTPUT_MAX * 3) })
+    let numbered: Vec<String> = text
+        .lines()
+        .enumerate()
+        .skip(first - 1)
+        .take(limit)
+        .map(|(index, line)| format!("{:>6}\t{line}", index + 1))
+        .collect();
+    ok(if numbered.is_empty() {
+        "(empty)".to_string()
+    } else {
+        tail(&numbered.join("\n"), OUTPUT_MAX * 3)
+    })
 }
 
 fn write_file(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let (Some(path), Some(content)) = (args["file_path"].as_str(), args["content"].as_str()) else { return failed("file_path and content are required") };
+    let (Some(path), Some(content)) = (args["file_path"].as_str(), args["content"].as_str()) else {
+        return failed("file_path and content are required");
+    };
     let target = resolve(cwd, path);
     if let Some(parent) = target.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let existed = target.exists();
     match std::fs::write(&target, content) {
-        Ok(()) => ok(format!("{} {} lines {} {path}", if existed { "Updated" } else { "Created" }, content.lines().count(), if existed { "in" } else { "in new file" })),
+        Ok(()) => ok(format!(
+            "{} {} lines {} {path}",
+            if existed { "Updated" } else { "Created" },
+            content.lines().count(),
+            if existed { "in" } else { "in new file" }
+        )),
         Err(error) => failed(format!("could not write {path}: {error}")),
     }
 }
@@ -499,7 +741,10 @@ fn write_file(args: &Value, cwd: Option<&Path>) -> Outcome {
 fn path_key(cwd: Option<&Path>, path: &str) -> String {
     let full = resolve(cwd, path);
     let full = std::fs::canonicalize(&full).unwrap_or(full);
-    full.to_string_lossy().replace('\\', "/").trim_start_matches("//?/").to_lowercase()
+    full.to_string_lossy()
+        .replace('\\', "/")
+        .trim_start_matches("//?/")
+        .to_lowercase()
 }
 
 /// Lines of `text` around `at` (0-based), numbered, for showing the model what is really there.
@@ -507,14 +752,28 @@ fn numbered_around(text: &str, at: usize, before: usize, after: usize) -> String
     let lines: Vec<&str> = text.lines().collect();
     let from = at.saturating_sub(before);
     let to = (at + after + 1).min(lines.len());
-    (from..to).map(|index| format!("{:>6}\t{}", index + 1, lines[index])).collect::<Vec<_>>().join("\n")
+    (from..to)
+        .map(|index| format!("{:>6}\t{}", index + 1, lines[index]))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Why an Edit did not find its text: the nearest place in the file, so the next try can copy it exactly.
 fn not_found(text: &str, old: &str, path: &str) -> String {
-    let wanted: Vec<&str> = old.lines().map(str::trim).filter(|line| line.len() > 3).collect();
+    let wanted: Vec<&str> = old
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.len() > 3)
+        .collect();
     let lines: Vec<&str> = text.lines().collect();
-    let hit = wanted.iter().find_map(|line| lines.iter().position(|candidate| candidate.trim() == *line)).or_else(|| wanted.iter().find_map(|line| lines.iter().position(|candidate| candidate.contains(*line))));
+    let hit = wanted
+        .iter()
+        .find_map(|line| lines.iter().position(|candidate| candidate.trim() == *line))
+        .or_else(|| {
+            wanted
+                .iter()
+                .find_map(|line| lines.iter().position(|candidate| candidate.contains(*line)))
+        });
     match hit {
         Some(at) => format!("old_string was not found in {path}: it must match the file exactly, spaces, tabs and line breaks included. The closest place is at line {}:\n{}\nCopy the text from here (Read the lines if you need more) and try again.", at + 1, numbered_around(text, at, 2, 8)),
         None => format!("old_string was not found in {path}, and none of its lines is in the file. Read the file (or code_outline it), then copy the exact text you want to replace."),
@@ -522,23 +781,47 @@ fn not_found(text: &str, old: &str, path: &str) -> String {
 }
 
 /// The Plan tool: what will change, and where. Returns the plan as the model should see it, and the files it names.
-fn plan_tool(args: &Value, cwd: Option<&Path>) -> (Outcome, Option<std::collections::HashSet<String>>) {
-    let list = |name: &str| args[name].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
+fn plan_tool(
+    args: &Value,
+    cwd: Option<&Path>,
+) -> (Outcome, Option<std::collections::HashSet<String>>) {
+    let list = |name: &str| {
+        args[name]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
     let (files, steps) = (list("files"), list("steps"));
     if files.is_empty() || steps.is_empty() {
         return (failed("Give the files you will change (find them with code_search, Grep or Glob first) and the steps."), None);
     }
     let mut keys = std::collections::HashSet::new();
-    let mut out = format!("Plan recorded: {}\nFiles:", args["goal"].as_str().unwrap_or_default());
+    let mut out = format!(
+        "Plan recorded: {}\nFiles:",
+        args["goal"].as_str().unwrap_or_default()
+    );
     for file in &files {
         keys.insert(path_key(cwd, file));
-        out.push_str(&format!("\n- {file} ({})", if resolve(cwd, file).exists() { "exists: Read it before you edit it" } else { "will be created" }));
+        out.push_str(&format!(
+            "\n- {file} ({})",
+            if resolve(cwd, file).exists() {
+                "exists: Read it before you edit it"
+            } else {
+                "will be created"
+            }
+        ));
     }
     out.push_str("\nSteps:");
     for (index, step) in steps.iter().enumerate() {
         out.push_str(&format!("\n{}. {step}", index + 1));
     }
-    if let Some(checks) = args["checks"].as_str().filter(|text| !text.trim().is_empty()) {
+    if let Some(checks) = args["checks"]
+        .as_str()
+        .filter(|text| !text.trim().is_empty())
+    {
         out.push_str(&format!("\nCheck with: {checks}"));
     }
     out.push_str("\nDo step 1 now. After the last step, run the check and look at the result before you answer.");
@@ -547,33 +830,88 @@ fn plan_tool(args: &Value, cwd: Option<&Path>) -> (Outcome, Option<std::collecti
 
 /// The latest version of a package, from its registry.
 async fn package_info(args: &Value) -> Outcome {
-    let Some(name) = args["name"].as_str().map(str::trim).filter(|name| !name.is_empty() && name.len() < 120 && !name.contains(char::is_whitespace)) else { return failed("name is required") };
-    let client = match reqwest::Client::builder().timeout(Duration::from_secs(20)).user_agent("AgentDeck").build() {
+    let Some(name) = args["name"]
+        .as_str()
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && name.len() < 120 && !name.contains(char::is_whitespace))
+    else {
+        return failed("name is required");
+    };
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent("AgentDeck")
+        .build()
+    {
         Ok(client) => client,
         Err(error) => return failed(error.to_string()),
     };
     let get = |url: String| {
         let client = client.clone();
-        async move { client.get(url).send().await.map_err(|error| error.to_string())?.error_for_status().map_err(|error| error.to_string())?.json::<Value>().await.map_err(|error| error.to_string()) }
+        async move {
+            client
+                .get(url)
+                .send()
+                .await
+                .map_err(|error| error.to_string())?
+                .error_for_status()
+                .map_err(|error| error.to_string())?
+                .json::<Value>()
+                .await
+                .map_err(|error| error.to_string())
+        }
     };
     let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
     match args["ecosystem"].as_str().unwrap_or("npm") {
-        "crates" | "cargo" | "rust" => match get(format!("https://crates.io/api/v1/crates/{name}")).await {
-            Ok(json) => {
-                let krate = &json["crate"];
-                ok(format!("{name} (crates.io)\nlatest stable: {}\nnewest: {}\n{}\ndocs: {}\nhome: {}", text(&krate["max_stable_version"]), text(&krate["newest_version"]), text(&krate["description"]), text(&krate["documentation"]), text(&krate["homepage"])))
+        "crates" | "cargo" | "rust" => {
+            match get(format!("https://crates.io/api/v1/crates/{name}")).await {
+                Ok(json) => {
+                    let krate = &json["crate"];
+                    ok(format!(
+                        "{name} (crates.io)\nlatest stable: {}\nnewest: {}\n{}\ndocs: {}\nhome: {}",
+                        text(&krate["max_stable_version"]),
+                        text(&krate["newest_version"]),
+                        text(&krate["description"]),
+                        text(&krate["documentation"]),
+                        text(&krate["homepage"])
+                    ))
+                }
+                Err(error) => failed(format!("no answer for {name}: {error}")),
             }
-            Err(error) => failed(format!("no answer for {name}: {error}")),
-        },
+        }
         "pypi" | "python" => match get(format!("https://pypi.org/pypi/{name}/json")).await {
-            Ok(json) => ok(format!("{name} (PyPI)\nlatest: {}\n{}\nhome: {}\nrequires python: {}", text(&json["info"]["version"]), text(&json["info"]["summary"]), text(&json["info"]["home_page"]), text(&json["info"]["requires_python"]))),
+            Ok(json) => ok(format!(
+                "{name} (PyPI)\nlatest: {}\n{}\nhome: {}\nrequires python: {}",
+                text(&json["info"]["version"]),
+                text(&json["info"]["summary"]),
+                text(&json["info"]["home_page"]),
+                text(&json["info"]["requires_python"])
+            )),
             Err(error) => failed(format!("no answer for {name}: {error}")),
         },
-        _ => match get(format!("https://registry.npmjs.org/{}/latest", name.replace('/', "%2F"))).await {
+        _ => match get(format!(
+            "https://registry.npmjs.org/{}/latest",
+            name.replace('/', "%2F")
+        ))
+        .await
+        {
             Ok(json) => {
-                let tags = get(format!("https://registry.npmjs.org/-/package/{}/dist-tags", name.replace('/', "%2F"))).await.map(|tags| tags.to_string()).unwrap_or_default();
-                let deprecated = json["deprecated"].as_str().map(|why| format!("\nDEPRECATED: {why}")).unwrap_or_default();
-                ok(format!("{name} (npm)\nlatest: {}\ntags: {tags}\n{}\nhome: {}{deprecated}", text(&json["version"]), text(&json["description"]), text(&json["homepage"])))
+                let tags = get(format!(
+                    "https://registry.npmjs.org/-/package/{}/dist-tags",
+                    name.replace('/', "%2F")
+                ))
+                .await
+                .map(|tags| tags.to_string())
+                .unwrap_or_default();
+                let deprecated = json["deprecated"]
+                    .as_str()
+                    .map(|why| format!("\nDEPRECATED: {why}"))
+                    .unwrap_or_default();
+                ok(format!(
+                    "{name} (npm)\nlatest: {}\ntags: {tags}\n{}\nhome: {}{deprecated}",
+                    text(&json["version"]),
+                    text(&json["description"]),
+                    text(&json["homepage"])
+                ))
             }
             Err(error) => failed(format!("no answer for {name}: {error}")),
         },
@@ -587,7 +925,32 @@ fn project_brief(cwd: Option<&Path>) -> String {
     let mut out = String::new();
     if let Ok(text) = std::fs::read_to_string(dir.join("package.json")) {
         if let Ok(json) = serde_json::from_str::<Value>(&text) {
-            const MAIN: [&str; 24] = ["@angular/core", "@angular/material", "svelte", "@sveltejs/kit", "react", "react-dom", "next", "vue", "nuxt", "solid-js", "tailwindcss", "vite", "typescript", "rxjs", "zod", "@tauri-apps/api", "@ngrx/store", "@tanstack/query-core", "pinia", "express", "nestjs", "@nestjs/core", "prisma", "drizzle-orm"];
+            const MAIN: [&str; 24] = [
+                "@angular/core",
+                "@angular/material",
+                "svelte",
+                "@sveltejs/kit",
+                "react",
+                "react-dom",
+                "next",
+                "vue",
+                "nuxt",
+                "solid-js",
+                "tailwindcss",
+                "vite",
+                "typescript",
+                "rxjs",
+                "zod",
+                "@tauri-apps/api",
+                "@ngrx/store",
+                "@tanstack/query-core",
+                "pinia",
+                "express",
+                "nestjs",
+                "@nestjs/core",
+                "prisma",
+                "drizzle-orm",
+            ];
             let mut found = Vec::new();
             for section in ["dependencies", "devDependencies"] {
                 for (name, version) in json[section].as_object().into_iter().flatten() {
@@ -599,7 +962,12 @@ fn project_brief(cwd: Option<&Path>) -> String {
             if !found.is_empty() {
                 out.push_str(&format!("\n\nThe project's own versions (write code for these, not for older ones you may remember): {}.", found.join(", ")));
             }
-            let scripts: Vec<&str> = json["scripts"].as_object().into_iter().flat_map(|map| map.keys().map(String::as_str)).take(16).collect();
+            let scripts: Vec<&str> = json["scripts"]
+                .as_object()
+                .into_iter()
+                .flat_map(|map| map.keys().map(String::as_str))
+                .take(16)
+                .collect();
             if !scripts.is_empty() {
                 out.push_str(&format!("\npackage.json scripts: {}.", scripts.join(", ")));
             }
@@ -608,7 +976,9 @@ fn project_brief(cwd: Option<&Path>) -> String {
     for file in ["AGENTS.md", "CLAUDE.md"] {
         if let Ok(text) = std::fs::read_to_string(dir.join(file)) {
             let rules: String = text.chars().take(4500).collect();
-            out.push_str(&format!("\n\nThe project's rules ({file}); follow them:\n{rules}"));
+            out.push_str(&format!(
+                "\n\nThe project's rules ({file}); follow them:\n{rules}"
+            ));
             break;
         }
     }
@@ -616,7 +986,11 @@ fn project_brief(cwd: Option<&Path>) -> String {
 }
 
 fn edit_file(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let (Some(path), Some(old), Some(new)) = (args["file_path"].as_str(), args["old_string"].as_str(), args["new_string"].as_str()) else {
+    let (Some(path), Some(old), Some(new)) = (
+        args["file_path"].as_str(),
+        args["old_string"].as_str(),
+        args["new_string"].as_str(),
+    ) else {
         return failed("file_path, old_string and new_string are required");
     };
     let target = resolve(cwd, path);
@@ -626,7 +1000,13 @@ fn edit_file(args: &Value, cwd: Option<&Path>) -> Outcome {
     };
     // A file with Windows line ends, and a model that wrote its text with plain ones: the same text.
     let crlf = text.contains("\r\n");
-    let fit = |piece: &str| if crlf && !piece.contains("\r\n") { piece.replace('\n', "\r\n") } else { piece.to_owned() };
+    let fit = |piece: &str| {
+        if crlf && !piece.contains("\r\n") {
+            piece.replace('\n', "\r\n")
+        } else {
+            piece.to_owned()
+        }
+    };
     let (old, new) = (fit(old), fit(new));
     let (old, new) = (old.as_str(), new.as_str());
     match text.matches(old).count() {
@@ -636,23 +1016,35 @@ fn edit_file(args: &Value, cwd: Option<&Path>) -> Outcome {
             let updated = text.replacen(old, new, 1);
             match std::fs::write(&target, &updated) {
                 // The result is shown back, so the model sees where its text landed and what is around it.
-                Ok(()) => ok(format!("Edited {path} at line {}. It now reads:\n{}", line + 1, numbered_around(&updated, line, 3, new.lines().count() + 2))),
+                Ok(()) => ok(format!(
+                    "Edited {path} at line {}. It now reads:\n{}",
+                    line + 1,
+                    numbered_around(&updated, line, 3, new.lines().count() + 2)
+                )),
                 Err(error) => failed(format!("could not write {path}: {error}")),
             }
         }
-        count if args["replace_all"].as_bool() == Some(true) => match std::fs::write(&target, text.replace(old, new)) {
-            Ok(()) => ok(format!("Edited {path}: {count} replacements")),
-            Err(error) => failed(format!("could not write {path}: {error}")),
-        },
-        count => failed(format!("old_string appears {count} times: add more surrounding text, or set replace_all")),
+        count if args["replace_all"].as_bool() == Some(true) => {
+            match std::fs::write(&target, text.replace(old, new)) {
+                Ok(()) => ok(format!("Edited {path}: {count} replacements")),
+                Err(error) => failed(format!("could not write {path}: {error}")),
+            }
+        }
+        count => failed(format!(
+            "old_string appears {count} times: add more surrounding text, or set replace_all"
+        )),
     }
 }
 
 /// Calls one AgentDeck browser tool through the MCP server the app runs for itself.
 async fn browser_call(app: &AppHandle, chat: &str, name: &str, args: &Value) -> Outcome {
     let request = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": args } }).to_string();
-    let Some(answer) = crate::mcp::handle(app, &request, chat).await else { return failed("the browser did not answer") };
-    let Ok(answer) = serde_json::from_str::<Value>(&answer) else { return failed("the browser answered with something unreadable") };
+    let Some(answer) = crate::mcp::handle(app, &request, chat).await else {
+        return failed("the browser did not answer");
+    };
+    let Ok(answer) = serde_json::from_str::<Value>(&answer) else {
+        return failed("the browser answered with something unreadable");
+    };
     let result = &answer["result"];
     let mut text = Vec::new();
     let mut image = None;
@@ -660,7 +1052,11 @@ async fn browser_call(app: &AppHandle, chat: &str, name: &str, args: &Value) -> 
         match part["type"].as_str() {
             Some("text") => text.push(part["text"].as_str().unwrap_or_default().to_owned()),
             Some("image") => {
-                image = Some(format!("data:{};base64,{}", part["mimeType"].as_str().unwrap_or("image/png"), part["data"].as_str().unwrap_or_default()));
+                image = Some(format!(
+                    "data:{};base64,{}",
+                    part["mimeType"].as_str().unwrap_or("image/png"),
+                    part["data"].as_str().unwrap_or_default()
+                ));
             }
             _ => {}
         }
@@ -669,7 +1065,11 @@ async fn browser_call(app: &AppHandle, chat: &str, name: &str, args: &Value) -> 
     if text.is_empty() && image.is_some() {
         text = "Screenshot taken.".into();
     }
-    Outcome { text: tail(&text, OUTPUT_MAX), is_error: result["isError"].as_bool().unwrap_or(false), image }
+    Outcome {
+        text: tail(&text, OUTPUT_MAX),
+        is_error: result["isError"].as_bool().unwrap_or(false),
+        image,
+    }
 }
 
 enum Decision {
@@ -682,7 +1082,10 @@ enum Decision {
 /// `external`: the tool comes from an MCP server the user set up (AgentDeck's own browser tools are not external).
 fn decide(turn: &Turn, name: &str, args: &Value, external: bool) -> Decision {
     let mode = turn.permission_mode.as_deref();
-    let approved = turn.allowed.iter().any(|entry| entry == name || *entry == allow_entry(name, args));
+    let approved = turn
+        .allowed
+        .iter()
+        .any(|entry| entry == name || *entry == allow_entry(name, args));
     match name {
         "Read" | "Glob" | "Grep" | "WebFetch" | "WebSearch" | "Skill" | "LS" => Decision::Allow,
         _ if external => match mode {
@@ -692,13 +1095,17 @@ fn decide(turn: &Turn, name: &str, args: &Value, external: bool) -> Decision {
             _ => Decision::Ask,
         },
         "Write" | "Edit" | "MkDir" | "Move" | "Copy" => match mode {
-            Some("plan") => Decision::Deny("plan mode: nothing may be changed. Describe the plan instead."),
+            Some("plan") => {
+                Decision::Deny("plan mode: nothing may be changed. Describe the plan instead.")
+            }
             Some("acceptEdits" | "auto" | "bypassPermissions") => Decision::Allow,
             _ if approved => Decision::Allow,
             _ => Decision::Ask,
         },
         "Bash" | "Delete" => match mode {
-            Some("plan") => Decision::Deny("plan mode: commands may not run. Describe the plan instead."),
+            Some("plan") => {
+                Decision::Deny("plan mode: commands may not run. Describe the plan instead.")
+            }
             Some("auto" | "bypassPermissions") => Decision::Allow,
             _ if approved => Decision::Allow,
             _ => Decision::Ask,
@@ -730,17 +1137,23 @@ struct Step {
 
 /// Reads one `data:` line of the stream: emits text and reasoning, collects the tool calls.
 fn read_chunk(data: &str, step: &mut Step, emit: &mut impl FnMut(AgentEvent)) {
-    let Ok(json) = serde_json::from_str::<Value>(data) else { return };
+    let Ok(json) = serde_json::from_str::<Value>(data) else {
+        return;
+    };
     let delta = &json["choices"][0]["delta"];
     for key in ["reasoning_content", "reasoning"] {
         if let Some(part) = delta[key].as_str().filter(|part| !part.is_empty()) {
-            emit(AgentEvent::Thinking { text: part.to_owned() });
+            emit(AgentEvent::Thinking {
+                text: part.to_owned(),
+            });
             break;
         }
     }
     if let Some(part) = delta["content"].as_str().filter(|part| !part.is_empty()) {
         step.text.push_str(part);
-        emit(AgentEvent::Delta { text: part.to_owned() });
+        emit(AgentEvent::Delta {
+            text: part.to_owned(),
+        });
     }
     if let Some(finish) = json["choices"][0]["finish_reason"].as_str() {
         step.finish = finish.to_owned();
@@ -768,7 +1181,13 @@ fn read_chunk(data: &str, step: &mut Step, emit: &mut impl FnMut(AgentEvent)) {
 }
 
 /// Sends the conversation and streams the answer. `Err` is a message for the user.
-async fn model_call(client: &reqwest::Client, turn: &Turn, messages: &[Value], tools: &[Value], emit: &mut impl FnMut(AgentEvent)) -> Result<Step, String> {
+async fn model_call(
+    client: &reqwest::Client,
+    turn: &Turn,
+    messages: &[Value],
+    tools: &[Value],
+    emit: &mut impl FnMut(AgentEvent),
+) -> Result<Step, String> {
     let mut body = json!({
         "model": turn.model,
         "stream": true,
@@ -790,21 +1209,32 @@ async fn model_call(client: &reqwest::Client, turn: &Turn, messages: &[Value], t
         Some(_) => body["reasoning_effort"] = json!("high"),
         None => {}
     }
-    let mut request = client.post(chat_url(&turn.kind, &turn.base_url)).json(&body);
+    let mut request = client
+        .post(chat_url(&turn.kind, &turn.base_url))
+        .json(&body);
     if let Some(key) = turn.api_key.as_deref().filter(|key| !key.is_empty()) {
         request = request.bearer_auth(key);
     }
     let mut response = match request.send().await {
         Ok(response) => response,
-        Err(error) if error.is_connect() => return Err("could not connect: is the server running?".into()),
+        Err(error) if error.is_connect() => {
+            return Err("could not connect: is the server running?".into())
+        }
         Err(error) => return Err(error.to_string()),
     };
     if !response.status().is_success() {
         let status = response.status();
         let detail = response.text().await.unwrap_or_default();
-        let detail = serde_json::from_str::<Value>(&detail).ok().and_then(|json| json["error"]["message"].as_str().map(str::to_owned)).unwrap_or(detail);
+        let detail = serde_json::from_str::<Value>(&detail)
+            .ok()
+            .and_then(|json| json["error"]["message"].as_str().map(str::to_owned))
+            .unwrap_or(detail);
         let detail = detail.trim();
-        return Err(if detail.is_empty() { format!("the server answered {status}") } else { format!("{status}: {detail}") });
+        return Err(if detail.is_empty() {
+            format!("the server answered {status}")
+        } else {
+            format!("{status}: {detail}")
+        });
     }
     let mut step = Step::default();
     let mut pending = String::new();
@@ -812,14 +1242,21 @@ async fn model_call(client: &reqwest::Client, turn: &Turn, messages: &[Value], t
         // A server that stops sending (a stuck model, a dropped connection) must not leave the chat waiting for ever.
         let next = match tokio::time::timeout(STALL, response.chunk()).await {
             Ok(next) => next,
-            Err(_) => return Err(format!("the model sent nothing for {} seconds and was stopped", STALL.as_secs())),
+            Err(_) => {
+                return Err(format!(
+                    "the model sent nothing for {} seconds and was stopped",
+                    STALL.as_secs()
+                ))
+            }
         };
         match next {
             Ok(Some(bytes)) => {
                 pending.push_str(&String::from_utf8_lossy(&bytes));
                 while let Some(end) = pending.find('\n') {
                     let line: String = pending.drain(..=end).collect();
-                    let Some(data) = line.trim().strip_prefix("data:") else { continue };
+                    let Some(data) = line.trim().strip_prefix("data:") else {
+                        continue;
+                    };
                     let data = data.trim();
                     if data == "[DONE]" {
                         break 'stream;
@@ -835,7 +1272,9 @@ async fn model_call(client: &reqwest::Client, turn: &Turn, messages: &[Value], t
 }
 
 fn system_prompt(cwd: Option<&Path>, skills: &[ProviderCommand]) -> String {
-    let folder = cwd.map(|dir| format!(" The working folder is {}.", dir.display())).unwrap_or_default();
+    let folder = cwd
+        .map(|dir| format!(" The working folder is {}.", dir.display()))
+        .unwrap_or_default();
     let mut prompt = format!(
         "You are a coding agent running inside AgentDeck, a desktop app.{folder} You work through tools, and you only know what they show you: never invent a file, a function, an API or a result. \
          Tools. Code index (fast, use it first to find things): code_search (a symbol by name), code_outline (the structure of a file), code_definition (a symbol with its source), code_references (where a name is used), code_imports and code_importers (what a file needs, and what breaks if you change it). \
@@ -858,7 +1297,11 @@ fn system_prompt(cwd: Option<&Path>, skills: &[ProviderCommand]) -> String {
     if !skills.is_empty() {
         prompt.push_str("\n\nSkills you can load with the Skill tool when the task matches (name: what it is for):");
         for skill in skills.iter().take(60) {
-            prompt.push_str(&format!("\n- {}: {}", skill.name, skill.description.chars().take(110).collect::<String>()));
+            prompt.push_str(&format!(
+                "\n- {}: {}",
+                skill.name,
+                skill.description.chars().take(110).collect::<String>()
+            ));
         }
     }
     prompt
@@ -866,23 +1309,53 @@ fn system_prompt(cwd: Option<&Path>, skills: &[ProviderCommand]) -> String {
 
 /// The skills and commands the user has for Claude, Codex and Antigravity (each name once), for the Skill tool.
 fn skills_for(cwd: Option<&Path>) -> Vec<ProviderCommand> {
-    let Ok(home) = crate::home_folder() else { return Vec::new() };
+    let Ok(home) = crate::home_folder() else {
+        return Vec::new();
+    };
     let project = cwd.filter(|dir| dir.is_dir());
     let mut seen = std::collections::HashSet::new();
-    ["claude", "codex", "antigravity"].iter().flat_map(|agent| slash_commands::list(agent, &home, project)).filter(|item| seen.insert(item.name.clone())).collect()
+    ["claude", "codex", "antigravity"]
+        .iter()
+        .flat_map(|agent| slash_commands::list(agent, &home, project))
+        .filter(|item| seen.insert(item.name.clone()))
+        .collect()
 }
 
 /// A tool name an OpenAI function may carry: letters, digits, `_` and `-`, at most 64 characters.
 fn tool_name(server: &str, tool: &str) -> String {
-    let clean = |text: &str| text.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect::<String>();
-    format!("mcp__{}__{}", clean(server), clean(tool)).chars().take(64).collect()
+    let clean = |text: &str| {
+        text.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>()
+    };
+    format!("mcp__{}__{}", clean(server), clean(tool))
+        .chars()
+        .take(64)
+        .collect()
 }
 
 /// Starts the user's MCP servers at the same time; one that fails or is slow is left out.
 async fn start_servers(cwd: Option<&Path>) -> Vec<Server> {
     let project = cwd.map(Path::to_path_buf);
-    let raws = tauri::async_runtime::spawn_blocking(move || crate::mcp_manage::servers_for(project.as_deref())).await.unwrap_or_default();
-    let handles: Vec<_> = raws.into_iter().map(|raw| tokio::spawn(async move { tokio::time::timeout(Duration::from_secs(30), Server::start(&raw)).await })).collect();
+    let raws = tauri::async_runtime::spawn_blocking(move || {
+        crate::mcp_manage::servers_for(project.as_deref())
+    })
+    .await
+    .unwrap_or_default();
+    let handles: Vec<_> = raws
+        .into_iter()
+        .map(|raw| {
+            tokio::spawn(async move {
+                tokio::time::timeout(Duration::from_secs(30), Server::start(&raw)).await
+            })
+        })
+        .collect();
     let mut servers = Vec::new();
     for handle in handles {
         if let Ok(Ok(Ok(server))) = handle.await {
@@ -894,18 +1367,38 @@ async fn start_servers(cwd: Option<&Path>) -> Vec<Server> {
 
 /// Runs one turn: the conversation goes to the model, its tool calls are run and answered, until it replies in
 /// plain text. Ends with `Done`, `PermissionDenied` then `Done`, or `Error`.
-pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>, mut emit: impl FnMut(AgentEvent)) {
+pub async fn run_turn(
+    app: &AppHandle,
+    mut turn: Turn,
+    history: Vec<ChatMessage>,
+    mut emit: impl FnMut(AgentEvent),
+) {
     if !(turn.base_url.starts_with("http://") || turn.base_url.starts_with("https://")) {
-        return emit(AgentEvent::Error { message: "the provider address must start with http:// or https://".into() });
+        return emit(AgentEvent::Error {
+            message: "the provider address must start with http:// or https://".into(),
+        });
     }
     if turn.kind == "anthropic" {
-        return emit(AgentEvent::Error { message: "Anthropic-compatible providers cannot chat yet".into() });
+        return emit(AgentEvent::Error {
+            message: "Anthropic-compatible providers cannot chat yet".into(),
+        });
     }
-    let client = match reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build() {
+    let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+    {
         Ok(client) => client,
-        Err(error) => return emit(AgentEvent::Error { message: error.to_string() }),
+        Err(error) => {
+            return emit(AgentEvent::Error {
+                message: error.to_string(),
+            })
+        }
     };
-    let chat: String = turn.chat.chars().filter(|c| c.is_ascii_alphanumeric() || "-_:".contains(*c)).collect();
+    let chat: String = turn
+        .chat
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || "-_:".contains(*c))
+        .collect();
     let mut tools = builtin_tools();
     if let Some(folder) = &turn.cwd {
         crate::index::set_root(&chat, &folder.to_string_lossy());
@@ -917,16 +1410,33 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
     let mut external: Vec<(String, usize, String)> = Vec::new();
     for (index, server) in servers.iter().enumerate() {
         for tool in &server.tools {
-            let Some(name) = tool["name"].as_str() else { continue };
+            let Some(name) = tool["name"].as_str() else {
+                continue;
+            };
             let exposed = tool_name(&server.name, name);
-            let properties = if tool["inputSchema"]["properties"].is_object() { tool["inputSchema"]["properties"].clone() } else { json!({}) };
-            let required: Vec<&str> = tool["inputSchema"]["required"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-            tools.push(function(&exposed, tool["description"].as_str().unwrap_or_default(), properties, &required));
+            let properties = if tool["inputSchema"]["properties"].is_object() {
+                tool["inputSchema"]["properties"].clone()
+            } else {
+                json!({})
+            };
+            let required: Vec<&str> = tool["inputSchema"]["required"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            tools.push(function(
+                &exposed,
+                tool["description"].as_str().unwrap_or_default(),
+                properties,
+                &required,
+            ));
             external.push((exposed, index, name.to_owned()));
         }
     }
 
-    let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": system_prompt(turn.cwd.as_deref(), &skills) })];
+    let mut messages: Vec<Value> =
+        vec![json!({ "role": "system", "content": system_prompt(turn.cwd.as_deref(), &skills) })];
     messages.extend(history.iter().map(wire_message));
 
     let mut answer = String::new();
@@ -949,12 +1459,24 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
             Ok(step) => step,
             Err(message) => return emit(AgentEvent::Error { message }),
         };
-        emit(AgentEvent::Usage { input_tokens: step.input_tokens, output_tokens: step.output_tokens, cache_read_tokens: 0, cache_write_tokens: 0, new_call: true });
+        emit(AgentEvent::Usage {
+            input_tokens: step.input_tokens,
+            output_tokens: step.output_tokens,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            new_call: true,
+        });
         answer.push_str(&step.text);
-        let calls: Vec<&Call> = step.calls.iter().filter(|call| !call.name.is_empty()).collect();
+        let calls: Vec<&Call> = step
+            .calls
+            .iter()
+            .filter(|call| !call.name.is_empty())
+            .collect();
         if calls.is_empty() {
             // Some local models write the tool call as text instead of using the tool interface: ask once more.
-            if (step.text.contains("<tool_call>") || step.text.contains("<function=")) && retries < 2 {
+            if (step.text.contains("<tool_call>") || step.text.contains("<function="))
+                && retries < 2
+            {
                 retries += 1;
                 messages.push(json!({ "role": "assistant", "content": step.text }));
                 messages.push(json!({ "role": "user", "content": "That tool call was written as text, so it did not run. Call the tool through the tool-calling interface." }));
@@ -981,7 +1503,11 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
                 }
                 return emit(AgentEvent::Error { message: "the model gave no answer (it only thought), even with thinking off. Pick another model, or try a smaller step".into() });
             }
-            return emit(AgentEvent::Done { session_id: None, text: answer, cost_usd: None });
+            return emit(AgentEvent::Done {
+                session_id: None,
+                text: answer,
+                cost_usd: None,
+            });
         }
 
         let signature = calls
@@ -996,7 +1522,17 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
             repeated_calls = 1;
         }
 
-        let ids: Vec<String> = calls.iter().enumerate().map(|(i, call)| if call.id.is_empty() { format!("call_{}_{i}", messages.len()) } else { call.id.clone() }).collect();
+        let ids: Vec<String> = calls
+            .iter()
+            .enumerate()
+            .map(|(i, call)| {
+                if call.id.is_empty() {
+                    format!("call_{}_{i}", messages.len())
+                } else {
+                    call.id.clone()
+                }
+            })
+            .collect();
         messages.push(json!({
             "role": "assistant",
             "content": if step.text.is_empty() { Value::Null } else { Value::String(step.text.clone()) },
@@ -1005,11 +1541,46 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
 
         let mut denied = Vec::new();
         for (call, id) in calls.iter().zip(&ids) {
-            let args: Value = serde_json::from_str(if call.arguments.is_empty() { "{}" } else { &call.arguments }).unwrap_or(Value::Null);
-            let user_tool = external.iter().find(|(exposed, _, _)| *exposed == call.name);
-            let builtin = matches!(call.name.as_str(), "Bash" | "Read" | "Write" | "Edit" | "Glob" | "Grep" | "WebFetch" | "WebSearch" | "Skill" | "LS" | "MkDir" | "Move" | "Copy" | "Delete" | "Plan" | "PackageInfo");
-            let shown = if builtin || user_tool.is_some() { call.name.clone() } else { format!("{MCP_PREFIX}{}", call.name) };
-            emit(AgentEvent::ToolCall { id: id.clone(), name: shown, input: summarize_tool_input(&call.name, &args), change: change_for(&call.name, &args, turn.cwd.as_deref()), background: false });
+            let args: Value = serde_json::from_str(if call.arguments.is_empty() {
+                "{}"
+            } else {
+                &call.arguments
+            })
+            .unwrap_or(Value::Null);
+            let user_tool = external
+                .iter()
+                .find(|(exposed, _, _)| *exposed == call.name);
+            let builtin = matches!(
+                call.name.as_str(),
+                "Bash"
+                    | "Read"
+                    | "Write"
+                    | "Edit"
+                    | "Glob"
+                    | "Grep"
+                    | "WebFetch"
+                    | "WebSearch"
+                    | "Skill"
+                    | "LS"
+                    | "MkDir"
+                    | "Move"
+                    | "Copy"
+                    | "Delete"
+                    | "Plan"
+                    | "PackageInfo"
+            );
+            let shown = if builtin || user_tool.is_some() {
+                call.name.clone()
+            } else {
+                format!("{MCP_PREFIX}{}", call.name)
+            };
+            emit(AgentEvent::ToolCall {
+                id: id.clone(),
+                name: shown,
+                input: summarize_tool_input(&call.name, &args),
+                change: change_for(&call.name, &args, turn.cwd.as_deref()),
+                background: false,
+            });
             let outcome = if !args.is_object() {
                 failed("the arguments were not valid JSON")
             } else {
@@ -1090,18 +1661,32 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
                                 if name.starts_with("browser_") {
                                     checked = true;
                                 }
-                                tokio::time::timeout(TOOL_LIMIT, browser_call(app, &chat, name, &args)).await.unwrap_or_else(|_| failed("the browser did not answer in time. Try browser_open again, then browser_elements."))
+                                // A delegated task has its own timeout (it may take many minutes); the browser tools do not.
+                                if crate::delegate::is_tool(name) {
+                                    browser_call(app, &chat, name, &args).await
+                                } else {
+                                    tokio::time::timeout(TOOL_LIMIT, browser_call(app, &chat, name, &args)).await.unwrap_or_else(|_| failed("the browser did not answer in time. Try browser_open again, then browser_elements."))
+                                }
                             }
                         },
                     },
                 }
             };
-            emit(AgentEvent::ToolResult { id: id.clone(), output: outcome.text.clone(), is_error: outcome.is_error, image: outcome.image.clone() });
+            emit(AgentEvent::ToolResult {
+                id: id.clone(),
+                output: outcome.text.clone(),
+                is_error: outcome.is_error,
+                image: outcome.image.clone(),
+            });
             messages.push(json!({ "role": "tool", "tool_call_id": id, "content": outcome.text }));
         }
         if !denied.is_empty() {
             emit(AgentEvent::PermissionDenied { requests: denied });
-            return emit(AgentEvent::Done { session_id: None, text: answer, cost_usd: None });
+            return emit(AgentEvent::Done {
+                session_id: None,
+                text: answer,
+                cost_usd: None,
+            });
         }
 
         if repeated_calls >= REPEATED_CALL_LIMIT {
@@ -1112,7 +1697,9 @@ pub async fn run_turn(app: &AppHandle, mut turn: Turn, history: Vec<ChatMessage>
             messages.push(json!({ "role": "user", "content": "Stop using tools now. Finish this step with a concise final answer and a `## Handoff` section. Do not call another tool unless it is strictly required to report the result." }));
         }
     }
-    emit(AgentEvent::Error { message: format!("stopped after {MAX_STEPS} steps without a final answer") });
+    emit(AgentEvent::Error {
+        message: format!("stopped after {MAX_STEPS} steps without a final answer"),
+    });
 }
 
 #[cfg(test)]
@@ -1120,7 +1707,17 @@ mod tests {
     use super::*;
 
     fn turn(mode: Option<&str>, allowed: &[&str]) -> Turn {
-        Turn { kind: "openai".into(), base_url: String::new(), api_key: None, model: String::new(), cwd: None, permission_mode: mode.map(str::to_owned), allowed: allowed.iter().map(|s| s.to_string()).collect(), chat: String::new(), effort: None }
+        Turn {
+            kind: "openai".into(),
+            base_url: String::new(),
+            api_key: None,
+            model: String::new(),
+            cwd: None,
+            permission_mode: mode.map(str::to_owned),
+            allowed: allowed.iter().map(|s| s.to_string()).collect(),
+            chat: String::new(),
+            effort: None,
+        }
     }
 
     #[test]
@@ -1129,18 +1726,31 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let file = dir.join("a.ts");
         std::fs::write(&file, "one\r\ntwo\r\nthree\r\n").expect("write");
-        let miss = edit_file(&json!({ "file_path": file.to_string_lossy(), "old_string": "   three  ", "new_string": "x" }), None);
-        assert!(miss.is_error && miss.text.contains("closest place"), "{}", miss.text);
+        let miss = edit_file(
+            &json!({ "file_path": file.to_string_lossy(), "old_string": "   three  ", "new_string": "x" }),
+            None,
+        );
+        assert!(
+            miss.is_error && miss.text.contains("closest place"),
+            "{}",
+            miss.text
+        );
         let args = json!({ "file_path": file.to_string_lossy(), "old_string": "two\nthree", "new_string": "2\n3" });
         let done = edit_file(&args, None);
         assert!(!done.is_error, "{}", done.text);
-        assert_eq!(std::fs::read_to_string(&file).expect("read"), "one\r\n2\r\n3\r\n");
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read"),
+            "one\r\n2\r\n3\r\n"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_plan_names_its_files() {
-        let (outcome, files) = plan_tool(&json!({ "goal": "g", "files": ["src/a.ts"], "steps": ["do it"] }), None);
+        let (outcome, files) = plan_tool(
+            &json!({ "goal": "g", "files": ["src/a.ts"], "steps": ["do it"] }),
+            None,
+        );
         assert!(!outcome.is_error && files.is_some_and(|set| set.len() == 1));
         let (outcome, files) = plan_tool(&json!({ "goal": "g", "files": [], "steps": [] }), None);
         assert!(outcome.is_error && files.is_none());
@@ -1148,8 +1758,14 @@ mod tests {
 
     #[test]
     fn chat_route_follows_the_kind() {
-        assert_eq!(chat_url("openai", "http://h:1234/v1/"), "http://h:1234/v1/chat/completions");
-        assert_eq!(chat_url("ollama", "http://h:11434"), "http://h:11434/v1/chat/completions");
+        assert_eq!(
+            chat_url("openai", "http://h:1234/v1/"),
+            "http://h:1234/v1/chat/completions"
+        );
+        assert_eq!(
+            chat_url("ollama", "http://h:11434"),
+            "http://h:11434/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -1157,28 +1773,84 @@ mod tests {
         let mut step = Step::default();
         let mut events = Vec::new();
         let mut emit = |event| events.push(event);
-        read_chunk(r#"{"choices":[{"delta":{"reasoning_content":"hm","content":"hi"}}]}"#, &mut step, &mut emit);
-        read_chunk(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"Bash","arguments":"{\"comm"}}]}}]}"#, &mut step, &mut emit);
-        read_chunk(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"and\":\"ls\"}"}}]}}]}"#, &mut step, &mut emit);
-        read_chunk(r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":5}}"#, &mut step, &mut emit);
+        read_chunk(
+            r#"{"choices":[{"delta":{"reasoning_content":"hm","content":"hi"}}]}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"Bash","arguments":"{\"comm"}}]}}]}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"and\":\"ls\"}"}}]}}]}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_chunk(
+            r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":5}}"#,
+            &mut step,
+            &mut emit,
+        );
         read_chunk("not json", &mut step, &mut emit);
-        assert_eq!(events, [AgentEvent::Thinking { text: "hm".into() }, AgentEvent::Delta { text: "hi".into() }]);
-        assert_eq!((step.text.as_str(), step.input_tokens, step.output_tokens), ("hi", 3, 5));
-        assert_eq!((step.calls[0].id.as_str(), step.calls[0].name.as_str(), step.calls[0].arguments.as_str()), ("c1", "Bash", r#"{"command":"ls"}"#));
+        assert_eq!(
+            events,
+            [
+                AgentEvent::Thinking { text: "hm".into() },
+                AgentEvent::Delta { text: "hi".into() }
+            ]
+        );
+        assert_eq!(
+            (step.text.as_str(), step.input_tokens, step.output_tokens),
+            ("hi", 3, 5)
+        );
+        assert_eq!(
+            (
+                step.calls[0].id.as_str(),
+                step.calls[0].name.as_str(),
+                step.calls[0].arguments.as_str()
+            ),
+            ("c1", "Bash", r#"{"command":"ls"}"#)
+        );
     }
 
     #[test]
     fn permissions_follow_the_mode() {
         let write = json!({ "file_path": "a.txt", "content": "x" });
         let bash = json!({ "command": "git status" });
-        assert!(matches!(decide(&turn(None, &[]), "Read", &Value::Null, false), Decision::Allow));
-        assert!(matches!(decide(&turn(None, &[]), "Write", &write, false), Decision::Ask));
-        assert!(matches!(decide(&turn(Some("acceptEdits"), &[]), "Write", &write, false), Decision::Allow));
-        assert!(matches!(decide(&turn(Some("acceptEdits"), &[]), "Bash", &bash, false), Decision::Ask));
-        assert!(matches!(decide(&turn(Some("auto"), &[]), "Bash", &bash, false), Decision::Allow));
-        assert!(matches!(decide(&turn(Some("plan"), &[]), "Bash", &bash, false), Decision::Deny(_)));
-        assert!(matches!(decide(&turn(None, &["Bash(git status)"]), "Bash", &bash, false), Decision::Allow));
-        assert!(matches!(decide(&turn(None, &["Write"]), "Write", &write, false), Decision::Allow));
+        assert!(matches!(
+            decide(&turn(None, &[]), "Read", &Value::Null, false),
+            Decision::Allow
+        ));
+        assert!(matches!(
+            decide(&turn(None, &[]), "Write", &write, false),
+            Decision::Ask
+        ));
+        assert!(matches!(
+            decide(&turn(Some("acceptEdits"), &[]), "Write", &write, false),
+            Decision::Allow
+        ));
+        assert!(matches!(
+            decide(&turn(Some("acceptEdits"), &[]), "Bash", &bash, false),
+            Decision::Ask
+        ));
+        assert!(matches!(
+            decide(&turn(Some("auto"), &[]), "Bash", &bash, false),
+            Decision::Allow
+        ));
+        assert!(matches!(
+            decide(&turn(Some("plan"), &[]), "Bash", &bash, false),
+            Decision::Deny(_)
+        ));
+        assert!(matches!(
+            decide(&turn(None, &["Bash(git status)"]), "Bash", &bash, false),
+            Decision::Allow
+        ));
+        assert!(matches!(
+            decide(&turn(None, &["Write"]), "Write", &write, false),
+            Decision::Allow
+        ));
     }
 
     #[test]
@@ -1188,11 +1860,31 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let cwd = Some(dir.as_path());
         assert!(!make_dir(&json!({ "path": "src/lib" }), cwd).is_error);
-        assert!(!write_file(&json!({ "file_path": "src/lib/a.ts", "content": "let needle = 1;\n" }), cwd).is_error);
-        assert_eq!(glob_files(&json!({ "pattern": "*.ts" }), cwd).text, "src/lib/a.ts");
-        assert!(grep_files(&json!({ "pattern": "needle" }), cwd).text.starts_with("src/lib/a.ts:1:"));
-        assert!(list_dir(&json!({ "path": "src" }), cwd).text.contains("lib/"));
-        assert!(!transfer(&json!({ "from": "src/lib/a.ts", "to": "src/b.ts" }), cwd, true).is_error);
+        assert!(
+            !write_file(
+                &json!({ "file_path": "src/lib/a.ts", "content": "let needle = 1;\n" }),
+                cwd
+            )
+            .is_error
+        );
+        assert_eq!(
+            glob_files(&json!({ "pattern": "*.ts" }), cwd).text,
+            "src/lib/a.ts"
+        );
+        assert!(grep_files(&json!({ "pattern": "needle" }), cwd)
+            .text
+            .starts_with("src/lib/a.ts:1:"));
+        assert!(list_dir(&json!({ "path": "src" }), cwd)
+            .text
+            .contains("lib/"));
+        assert!(
+            !transfer(
+                &json!({ "from": "src/lib/a.ts", "to": "src/b.ts" }),
+                cwd,
+                true
+            )
+            .is_error
+        );
         assert!(transfer(&json!({ "from": "src/b.ts", "to": "src/lib" }), cwd, false).is_error);
         assert!(delete_path(&json!({ "path": ".." }), cwd).is_error);
         assert!(!delete_path(&json!({ "path": "src" }), cwd).is_error);
@@ -1205,7 +1897,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("agentdeck-custom-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("f.txt"), "a b a").unwrap();
-        let edit = |old: &str| edit_file(&json!({ "file_path": "f.txt", "old_string": old, "new_string": "z" }), Some(&dir));
+        let edit = |old: &str| {
+            edit_file(
+                &json!({ "file_path": "f.txt", "old_string": old, "new_string": "z" }),
+                Some(&dir),
+            )
+        };
         assert!(edit("a").is_error);
         assert!(edit("q").is_error);
         assert!(!edit("b").is_error);

@@ -19,6 +19,7 @@
   import DelegateList from './DelegateList.svelte';
   import CommandGroup from './CommandGroup.svelte';
   import PlanCard from './PlanCard.svelte';
+  import TaskCards from './TaskCards.svelte';
   import LiveStatus from './LiveStatus.svelte';
   import MessageFooter from './MessageFooter.svelte';
   import type { Segment } from '../blocks';
@@ -56,7 +57,7 @@
     for (let index = position - 1; index >= 0; index--) {
       const part = parts[index];
       if (part.kind === 'commands') return true;
-      if (part.kind === 'plan') return false;
+      if (part.kind === 'plan' || part.kind === 'tasks') return false;
       if (part.block.kind === 'thinking' && !part.block.text.trim()) continue;
       return false;
     }
@@ -624,6 +625,8 @@
     <!-- svelte-ignore a11y_no_static_element_interactions (the events only tell that the reader took over the scrolling) -->
     <div bind:this={viewportEl} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={stopSticking} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 [scrollbar-gutter:stable] {chat.loading || !revealed ? 'invisible' : ''}">
       <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" {@attach watchListHeight} role="log" aria-live="polite" aria-label="Conversation">
+        <!-- A theme change repaints every row from scratch: a row kept from before can show the old theme's colours until the page is reloaded. -->
+        {#key `${theme.dark}|${theme.primary}|${theme.neutral}`}
         {#each $virtualizer.getVirtualItems() as row (row.key)}
           {@const message = chat.messages[row.index + from]}
           {@const mine = message?.role === 'user'}
@@ -764,6 +767,8 @@
                         </div>
                       {:else if segment.kind === 'plan'}
                         <PlanCard items={segment.items} />
+                      {:else if segment.kind === 'tasks'}
+                        <TaskCards items={segment.items} />
                       {:else}
                         <ChatBlock block={segment.block} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} answered={chat.messages.at(-1)?.id !== message.id} />
                       {/if}
@@ -788,6 +793,7 @@
             </div>
           {/if}
         {/each}
+        {/key}
       </div>
     </div>
   </div>

@@ -82,8 +82,8 @@
       {@const settled = settledOf(block)}
       {@const jumpable = settled !== 'queued' && settled !== 'skipped'}
       {@const expanded = openRows[block.childId] ?? false}
-      <div class="flex w-full items-stretch {settled === 'queued' || settled === 'skipped' ? 'opacity-70' : ''}">
-      <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-left text-xs outline-none hover:bg-muted/40 focus-visible:bg-muted/60" aria-expanded={expanded} aria-label="Details of {block.step ?? block.agent}" onclick={() => (openRows[block.childId] = !expanded)}>
+      <div class="group/row flex w-full items-stretch transition-colors hover:bg-muted/40 {settled === 'queued' || settled === 'skipped' ? 'opacity-70' : ''}">
+      <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-left text-xs outline-none focus-visible:bg-muted/60" aria-expanded={expanded} aria-label="Details of {block.step ?? block.agent}" onclick={() => (openRows[block.childId] = !expanded)}>
         {#if block.agent === 'codex'}
           <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
         {:else if block.agent === 'custom'}
@@ -113,7 +113,7 @@
         </span>
         {#if needsApproval(block.childId)}<span class="shrink-0 rounded-full bg-warning/15 px-1.5 py-px text-[10px] font-medium text-warning">Needs approval</span>{/if}
       </button>
-      <button type="button" class="grid w-9 shrink-0 place-items-center text-muted-foreground outline-none hover:bg-muted/40 hover:text-primary focus-visible:bg-muted/60 {jumpable ? 'cursor-pointer' : 'cursor-default opacity-40'}" disabled={!jumpable} aria-label="Open the chat of {block.step ?? block.agent}" title="Open this step's chat" onclick={() => jumpable && showSession(block.childId)}>
+      <button type="button" class="grid w-9 shrink-0 place-items-center text-muted-foreground outline-none transition-colors hover:text-primary group-hover/row:text-foreground focus-visible:bg-muted/60 {jumpable ? 'cursor-pointer' : 'cursor-default opacity-40'}" disabled={!jumpable} aria-label="Open the chat of {block.step ?? block.agent}" title="Open this step's chat" onclick={() => jumpable && showSession(block.childId)}>
         <ZIcon zType="lucideChevronRight" class="size-3.5" />
       </button>
       </div>

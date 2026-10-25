@@ -1,14 +1,14 @@
-//! Stub library for the ag-orchestrator workspace crate.
+//! Durable-workflow domain primitives for AgentDeck.
+//!
+//! This crate owns the run/step/attempt state machine. UI code may project its state, but it must not
+//! decide whether a step is ready or whether a retry is legal. Persistence is intentionally kept at the
+//! boundary: every transition produces an audit event that a daemon can append to the event store.
 
-/// Identifies this crate as part of the AgentDeck scaffold.
-pub const ORCHESTRATOR_STUB: &str = "ag-orchestrator";
+mod error;
+mod events;
+mod model;
+mod state;
 
-#[cfg(test)]
-mod tests {
-    use super::ORCHESTRATOR_STUB;
-
-    #[test]
-    fn stub_has_expected_name() {
-        assert_eq!(ORCHESTRATOR_STUB, "ag-orchestrator");
-    }
-}
+pub use error::TransitionError;
+pub use events::WorkflowEvent;
+pub use model::{Attempt, AttemptStatus, Run, RunStatus, Step, StepSpec, StepStatus};

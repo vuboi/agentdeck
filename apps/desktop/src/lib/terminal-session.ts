@@ -20,6 +20,8 @@ export type SessionHooks = {
   status: (status: SessionStatus) => void;
   /** Ctrl+F in the terminal. */
   find: () => void;
+  /** Where the view is: at the top of the scrollback, at the bottom (for the scroll arrows). */
+  scrolled?: (top: boolean, bottom: boolean) => void;
 };
 
 type Live = {
@@ -38,6 +40,15 @@ type Live = {
   held: { bytes: Uint8Array; end: number }[];
   /** The start (or adoption) in progress or done. */
   ready?: Promise<unknown>;
+  /** The shell is up (started or adopted) and not ended: only then is typed text sent to it. */
+  up: boolean;
+  /** The next fit, waiting for the panel to stop sliding (0: none). */
+  fitFrame: number;
+  /** Who wants the tail of the output as it grows (the Tasks panel), and the timer of the next push. */
+  watchers: Set<(text: string) => void>;
+  pushTimer: number;
+  /** Tells the tab's scroll arrows where the view is. */
+  reportScroll: () => void;
 };
 
 /** A command a tab is still running (a dev server, a watcher…): what the "running in the background" list shows. */
@@ -141,13 +152,15 @@ function listenToShells(): Promise<void> {
         session.held.push({ bytes, end: payload.end ?? 0 });
         return;
       }
-      session.term.write(bytes);
+      if (session.watchers.size > 0) session.term.write(bytes, () => pushOutput(payload.id, session));
+      else session.term.write(bytes);
       if (session.run) schedule(payload.id, session, 800);
     });
     await listen<{ id: string; code: number | null }>('pty-exit', ({ payload }) => {
       const session = live.get(payload.id);
       if (!session) return;
       session.exited = true;
+      session.up = false;
       endRun(payload.id, session);
       session.hooks.status('exited');
       const how = payload.code === null || payload.code === 0 ? 'exited' : `exited with code ${payload.code}`;
@@ -170,7 +183,7 @@ const waiting = new Map<string, string>();
 /** Types `data` into the shell of tab `id` (held back until the shell is up). */
 export function writeToSession(id: string, data: string) {
   const session = live.get(id);
-  if (session && !session.exited && session.term.element) void call('pty_write', { id, data }).catch(() => {});
+  if (session && session.up && !session.exited) void call('pty_write', { id, data }).catch(() => {});
   else waiting.set(id, (waiting.get(id) ?? '') + data);
 }
 
@@ -273,7 +286,7 @@ function beginRun(id: string, session: Live, command: string) {
 /** A command sent to tab `id` from outside (a chat's Run button): watched as if it had been typed there. */
 export function noteCommand(id: string, command: string) {
   const session = live.get(id);
-  if (session && !session.exited && session.term.element && !waiting.has(id)) beginRun(id, session, command);
+  if (session && session.up && !session.exited && !waiting.has(id)) beginRun(id, session, command);
   else queuedRuns.set(id, command);
 }
 
@@ -306,11 +319,13 @@ function start(id: string, session: Live) {
 
 async function begin(id: string, session: Live) {
   session.exited = false;
+  session.up = false;
   session.hooks.status('starting');
   try {
     let name: string | null = null;
     if (!(await adopt(id, session))) name = await call<string>('pty_open', { id, cwd: session.cwd ?? null, cols: session.term.cols, rows: session.term.rows });
     if (name !== null) session.hooks.title(name);
+    session.up = true;
     session.hooks.status('running');
     const queued = waiting.get(id);
     waiting.delete(id);
@@ -320,6 +335,7 @@ async function begin(id: string, session: Live) {
     if (command) beginRun(id, session, command);
   } catch (error) {
     session.exited = true;
+    session.up = false;
     session.hooks.status('exited');
     session.term.write(`\r\n\x1b[31m${String(error)}\x1b[0m\r\nPress Enter to try again.\r\n`);
   }
@@ -330,6 +346,10 @@ function create(id: string, cwd: string | undefined, hooks: SessionHooks): Live 
   const term = new Terminal({
     allowProposedApi: true,
     cursorBlink: true,
+    // A thin bar, like an editor's cursor, instead of the block that covers the letter.
+    cursorStyle: 'bar',
+    cursorWidth: 2,
+    cursorInactiveStyle: 'bar',
     fontFamily: '"Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace',
     fontSize: 12,
     lineHeight: 1.2,
@@ -346,7 +366,7 @@ function create(id: string, cwd: string | undefined, hooks: SessionHooks): Live 
       void call('open_external', { url: uri }).catch(() => {});
     }),
   );
-  const session: Live = { term, fit, search, cwd, hooks, exited: false, url: null, timer: 0, replaying: false, held: [] };
+  const session: Live = { term, fit, search, cwd, hooks, exited: false, url: null, timer: 0, replaying: false, held: [], up: false, fitFrame: 0, watchers: new Set(), pushTimer: 0, reportScroll: () => {} };
 
   term.onData((data) => {
     if (session.replaying) return;
@@ -363,6 +383,18 @@ function create(id: string, cwd: string | undefined, hooks: SessionHooks): Live 
     }
     void call('pty_write', { id, data }).catch(() => {});
   });
+  // The scroll arrows need to know when the view is at either end (coalesced per frame).
+  let reporting = 0;
+  const reportScroll = () => {
+    cancelAnimationFrame(reporting);
+    reporting = requestAnimationFrame(() => {
+      const buffer = term.buffer.active;
+      session.hooks.scrolled?.(buffer.viewportY <= 0, buffer.viewportY >= buffer.baseY);
+    });
+  };
+  term.onScroll(reportScroll);
+  term.onWriteParsed(reportScroll);
+  session.reportScroll = reportScroll;
   term.onResize(({ cols, rows }) => {
     if (!session.exited) void call('pty_resize', { id, cols, rows }).catch(() => {});
   });
@@ -378,11 +410,16 @@ function create(id: string, cwd: string | undefined, hooks: SessionHooks): Live 
     const key = event.key.toLowerCase();
     // The page's own shortcuts (show or hide, new, close and switch terminals): not for the shell.
     if (key === '`' || (key === 'j' && !event.shiftKey) || (key === 'w' && event.shiftKey) || key === 'pageup' || key === 'pagedown') return false;
-    // Ctrl+Shift+C always copies; Ctrl+C copies only while text is selected, else it is the interrupt.
+    // Ctrl+Shift+C copies the selection; Ctrl+C does too while text is selected, else it is the interrupt.
     if (key === 'c' && (event.shiftKey || term.hasSelection())) {
       event.preventDefault();
-      void navigator.clipboard.writeText(term.getSelection()).catch(() => {});
-      term.clearSelection();
+      void copySelection(id);
+      return false;
+    }
+    // Ctrl+Shift+V pastes (plain Ctrl+V is left to the browser's own paste, which xterm handles).
+    if (key === 'v' && event.shiftKey) {
+      event.preventDefault();
+      void pasteInto(id);
       return false;
     }
     if (key === 'f' && !event.shiftKey) {
@@ -396,6 +433,33 @@ function create(id: string, cwd: string | undefined, hooks: SessionHooks): Live 
   return session;
 }
 
+/**
+ * Whether the panel is still sliding in or out. While it does, its box grows or shrinks every frame (down to nothing),
+ * and a terminal fitted to it would be cut to a row or two, and the shell with it: the output on screen would go up
+ * into the scrollback and the view would be empty. A terminal is only fitted once the box has its real size.
+ */
+function sliding(element: Element) {
+  const panel = element.closest('[data-terminal]') ?? element;
+  return panel.getAnimations({ subtree: true }).some((animation) => animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);
+}
+
+/** Resolves once `container` has its real size (not sliding, not collapsed), or when it was taken away or it took too long. */
+function settled(container: HTMLElement) {
+  return new Promise<void>((done) => {
+    let frames = 0;
+    let last = '';
+    const look = () => {
+      const size = `${container.clientWidth}x${container.clientHeight}`;
+      // The same size two frames in a row (a neighbouring panel may still be sliding), and a real one.
+      const steady = !sliding(container) && size === last && container.clientHeight > 40 && container.clientWidth > 200;
+      last = size;
+      if (!container.isConnected || steady || ++frames > 120) return done();
+      requestAnimationFrame(look);
+    };
+    look();
+  });
+}
+
 /** Shows the terminal of tab `id` in `container`, starting its shell the first time. */
 export function attachSession(id: string, container: HTMLElement, cwd: string | undefined, hooks: SessionHooks) {
   if (!terminalAvailable()) return;
@@ -403,11 +467,17 @@ export function attachSession(id: string, container: HTMLElement, cwd: string | 
   void listenToShells();
   const existing = live.get(id);
   if (existing) {
+    // The panel was hidden and is back: the same terminal (its buffer, its scrollback, its shell) moves into the new box.
     existing.hooks = hooks;
+    const viewport = existing.term.buffer.active.viewportY;
     if (existing.term.element) container.append(existing.term.element);
     else existing.term.open(container);
+    // A box that left the page forgot where its scrollbar was.
+    existing.term.scrollToLine(viewport);
     existing.hooks.status(existing.exited ? 'exited' : 'running');
+    existing.reportScroll();
     fitSession(id);
+    existing.term.refresh(0, existing.term.rows - 1);
     return;
   }
   const session = create(id, cwd, hooks);
@@ -419,8 +489,12 @@ export function attachSession(id: string, container: HTMLElement, cwd: string | 
   } catch {
     // No WebGL: the canvas-less DOM renderer stays.
   }
-  session.fit.fit();
-  void start(id, session);
+  // The shell starts at the size of the box once it has settled, not at the size of a panel that is still opening.
+  session.ready = settled(container).then(() => {
+    if (live.get(id) !== session) return;
+    if (container.isConnected) fitNow(session);
+    return start(id, session);
+  });
 }
 
 /**
@@ -441,6 +515,7 @@ export async function resumeRun(id: string, hooks: SessionHooks, saved: { comman
       session.term.dispose();
       return 'stopped';
     }
+    session.up = true;
     hooks.status('running');
   } else {
     await session.ready?.catch(() => {});
@@ -457,16 +532,33 @@ export async function resumeRun(id: string, hooks: SessionHooks, saved: { comman
   return 'running';
 }
 
-/** Fits the terminal to its container (when it is on screen) and tells the shell the new size. */
-export function fitSession(id: string) {
-  const session = live.get(id);
-  const element = session?.term.element;
-  if (!session || !element || !element.offsetParent) return;
+function fitNow(session: Live) {
   try {
+    const size = session.fit.proposeDimensions();
+    // Never to a sliver: a box with no real size yet (or a window squeezed to nothing) leaves the terminal as it is.
+    if (!size || size.rows < 2 || size.cols < 20) return;
     session.fit.fit();
   } catch {
     // Not laid out yet.
   }
+}
+
+/** Fits the terminal to its container (when it is on screen and settled) and tells the shell the new size. */
+export function fitSession(id: string) {
+  const session = live.get(id);
+  const element = session?.term.element;
+  if (!session || !element || !element.offsetParent) return;
+  if (sliding(element)) {
+    // Not yet: look again next frame, once.
+    if (!session.fitFrame) {
+      session.fitFrame = requestAnimationFrame(() => {
+        session.fitFrame = 0;
+        fitSession(id);
+      });
+    }
+    return;
+  }
+  fitNow(session);
 }
 
 /** The last `lines` lines of a terminal's buffer as plain text (no colours), for the Tasks panel; null when it is gone. */
@@ -487,7 +579,40 @@ export function sessionTail(id: string, lines: number): string | null {
   return (first > 0 ? '(Earlier output not shown)\n' : '') + out.join('\n');
 }
 
-export const focusSession =(id: string) => live.get(id)?.term.focus();
+/** How soon after output arrives the watchers are told (several chunks in that time are one push). */
+const PUSH_EVERY = 120;
+
+/** Tells the watchers of a tab the tail of its output, at most once every `PUSH_EVERY` ms. */
+function pushOutput(id: string, session: Live) {
+  if (session.pushTimer || session.watchers.size === 0) return;
+  session.pushTimer = window.setTimeout(() => {
+    session.pushTimer = 0;
+    if (live.get(id) !== session || session.watchers.size === 0) return;
+    const text = sessionTail(id, 200);
+    if (text !== null) for (const watcher of session.watchers) watcher(text);
+  }, PUSH_EVERY);
+}
+
+/**
+ * Calls `watcher` with the tail of tab `id`'s output now and again whenever the shell prints (throttled). Nothing runs
+ * while there is no watcher. Returns the function that stops watching.
+ */
+export function watchOutput(id: string, watcher: (text: string) => void): () => void {
+  const session = live.get(id);
+  if (!session) return () => {};
+  session.watchers.add(watcher);
+  const text = sessionTail(id, 200);
+  if (text !== null) watcher(text);
+  return () => {
+    session.watchers.delete(watcher);
+    if (session.watchers.size === 0) {
+      clearTimeout(session.pushTimer);
+      session.pushTimer = 0;
+    }
+  };
+}
+
+export const focusSession = (id: string) => live.get(id)?.term.focus();
 
 export function findInSession(id: string, query: string, backwards = false) {
   const session = live.get(id);
@@ -501,18 +626,28 @@ export function findInSession(id: string, query: string, backwards = false) {
 
 export const clearSession = (id: string) => live.get(id)?.term.clear();
 
-/** Copies the selection, or pastes the clipboard when nothing is selected (the right mouse button). */
-export async function copyOrPaste(id: string) {
+export const hasSelection = (id: string) => live.get(id)?.term.hasSelection() ?? false;
+
+/** Copies the selected text (if any) to the clipboard. */
+export async function copySelection(id: string) {
+  const term = live.get(id)?.term;
+  if (!term?.hasSelection()) return;
+  await navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+  term.clearSelection();
+}
+
+/** Types the clipboard's text into the shell (as a paste: bracketed when the program asked for it). */
+export async function pasteInto(id: string) {
   const session = live.get(id);
   if (!session) return;
-  if (session.term.hasSelection()) {
-    await navigator.clipboard.writeText(session.term.getSelection()).catch(() => {});
-    session.term.clearSelection();
-    return;
-  }
   const text = await navigator.clipboard.readText().catch(() => '');
   if (text) session.term.paste(text);
 }
+
+/** Scrolls tab `id`'s view by `lines` (negative: up), for the scroll arrows. */
+export const scrollSession = (id: string, lines: number) => live.get(id)?.term.scrollLines(lines);
+
+export const selectAllIn = (id: string) => live.get(id)?.term.selectAll();
 
 /** Ends the shell of a closed tab and drops its terminal. */
 export function disposeSession(id: string) {

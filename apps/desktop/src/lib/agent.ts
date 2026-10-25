@@ -86,6 +86,66 @@ export async function readFileBytes(path: string): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>('read_file_bytes', { path });
 }
 
+export type ImageModelChoice = { model: string; backend: 'responses' | 'images' };
+export type GeneratedImage = { model: string; backend: string; path: string; variant: number };
+export type ImageGenerationFailure = { model: string; backend: string; variant: number; error: string };
+export type ImageGenerateResult = { run_id: string; images: GeneratedImage[]; failures: ImageGenerationFailure[] };
+export type ImageHistoryImage = { id: string; model: string; backend: string; variant: number; path: string; sha256: string; bytes: number };
+export type ImageHistoryRun = {
+  id: string;
+  created_at: number;
+  prompt: string;
+  models: string[];
+  variants: number;
+  status: 'done' | 'stopped' | 'failed';
+  failures: string[];
+  images: ImageHistoryImage[];
+};
+export type ImagePromptSuggestResult = { model: string; suggestions: string[] };
+
+/** Generates one or more independent image candidates through the local codex-imagen skill. */
+export async function generateImages(args: {
+  prompt: string;
+  models: ImageModelChoice[];
+  variants: number;
+  referencePaths?: string[];
+  cwd?: string | null;
+}): Promise<ImageGenerateResult> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<ImageGenerateResult>('image_generate', {
+    request: {
+      prompt: args.prompt,
+      models: args.models,
+      variants: args.variants,
+      reference_paths: args.referencePaths ?? [],
+      cwd: args.cwd ?? null,
+    },
+  });
+}
+
+/** Stops the image run in progress: candidates already made stay, the running generator is killed. */
+export async function stopImageGeneration(): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('image_stop');
+}
+
+/** The newest image runs, saved on this machine, with their candidate files. */
+export async function listImageHistory(limit = 50): Promise<ImageHistoryRun[]> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<ImageHistoryRun[]>('image_history_list', { limit });
+}
+
+/** Asks the authenticated Codex Responses API to improve an image prompt. */
+export async function suggestImagePrompts(args: { prompt: string; model: string }): Promise<ImagePromptSuggestResult> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<ImagePromptSuggestResult>('image_prompt_suggest', {
+    request: {
+      prompt: args.prompt,
+      model: args.model,
+    },
+  });
+}
+
 /** Shows an attached file, selected, in the system file manager. */
 export async function revealFile(path: string): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -102,4 +162,37 @@ export async function listenAgentEvents(onEvent: (envelope: AgentEnvelope) => vo
 export async function stopAgentTurn(session: string): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('agent_stop', { session });
+}
+
+/** A delegation tool called by an agent through the app's MCP server (src-tauri/src/delegate.rs). */
+export type DelegateCall = {
+  callId: string;
+  tool: 'delegate_task' | 'list_agents' | 'task_status' | 'task_stop';
+  /** The chat whose agent called; empty when the agent's MCP link names none (Antigravity's stored link). */
+  caller: string;
+  args: Record<string, unknown>;
+};
+
+/** Subscribe to the calls of the delegation tools. Answer each with `replyDelegateCall`. */
+export async function listenDelegateCalls(onCall: (call: DelegateCall) => void): Promise<() => void> {
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<DelegateCall>('agent-delegate', (event) => onCall(event.payload));
+}
+
+/** A blocking delegate_task call that nobody waits for any more (its agent was stopped): its worker should stop. */
+export async function listenDelegateAborts(onAbort: (callId: string) => void): Promise<() => void> {
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<{ callId: string }>('agent-delegate-abort', (event) => onAbort(event.payload.callId));
+}
+
+/** The answer to a delegation tool call: the text the agent reads, and whether it is an error. */
+export async function replyDelegateCall(callId: string, text: string, isError: boolean): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('delegate_reply', { callId, text, isError });
+}
+
+/** Tells the Rust side this page just loaded: calls still waiting for the page before it are answered with an error. */
+export async function delegateReady(): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('delegate_ready');
 }

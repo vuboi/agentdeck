@@ -5,10 +5,11 @@
   import { changeLines, countsOf, parseDiff, relativeTo, type DiffRow } from '../diff';
   import { languageLabel, languageOf, readProjectFile } from '../files';
   import { canFormat, prettifyStrict } from '../format';
-  import { drafts } from '../file-buffers';
+  import { drafts, type Draft } from '../file-buffers';
+  import { diffCache, fileKey, rememberText, textCache } from '../file-cache';
   import { MAX_EDIT_BYTES, splitFileText } from '../file-edit';
   import { toast } from '../toast';
-  import { onDestroy, tick } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
   import { fade } from 'svelte/transition';
   import { fileWrites } from '../activity.svelte';
   import { inTauri } from '../history';
@@ -29,8 +30,11 @@
   let error = $state('');
   // What changed in the file since the last commit, read from git; empty for a file git has no change for.
   // Raw: a diff can have thousands of rows, and none of them is edited in place.
-  let rows = $state.raw<DiffRow[]>([]);
-  let diffRead = $state(false);
+  // A viewer built again (the tab was left and came back) starts on what the last one knew, so it never opens empty.
+  const seenDiff = untrack(() => diffCache.get(fileKey(file.root, file.path)));
+  let rows = $state.raw<DiffRow[]>(seenDiff?.rows ?? []);
+  let diffRead = $state(seenDiff !== undefined);
+  let shownDiff = seenDiff?.diff;
   // Edited and not saved. Mirrored on the tab (its dot) and in `drafts` (so the edits outlive this viewer).
   let dirty = $state(false);
   // The file on disk is no longer what the edits started from: the raw new text, until Reload or Keep mine.
@@ -73,35 +77,62 @@
     lines = editor.lineCount();
   }
 
+  const lineTotal = (text: string) => (text === '' ? 0 : text.split('\n').length);
+  /** The file is on screen: its text, or the edits this tab kept (which then stand for the file). */
+  function adopt(raw: string, kept?: Draft) {
+    disk = raw;
+    startDoc = kept ? kept.text : splitFileText(raw).text;
+    lines = lineTotal(startDoc);
+    if (kept) {
+      dirty = true;
+      file.dirty = true;
+      syncDraft();
+    }
+  }
+  // Built again after a visit to another tab: the kept edits, or the text read last time, are there at once. The
+  // read below then tells whether the disk moved on meanwhile.
+  untrack(() => {
+    const kept = drafts.get(file.id);
+    if (kept) return adopt(kept.disk, kept);
+    const seen = textCache.get(fileKey(file.root, file.path));
+    if (seen !== undefined) adopt(seen);
+  });
+
+  // An answer is matched to its file by the request, not by the tab object (which can be another proxy by the time
+  // the answer comes), and one older than an answer already used is dropped. A viewer that is gone takes no answer.
+  let readSeq = 0;
+  let readApplied = 0;
+  let destroyed = false;
   // Bumped by "Try again" to read the file once more.
   let attempt = $state(0);
   $effect(() => {
-    const target = file;
+    const { id, root, path } = file;
     void fileWrites.tick;
     void attempt;
+    const seq = ++readSeq;
+    const key = fileKey(root, path);
     error = '';
-    readProjectFile(target.root, target.path)
+    readProjectFile(root, path)
       .then((raw) => {
-        if (file !== target) return;
+        if (seq < readApplied) return;
+        readApplied = seq;
+        rememberText(key, raw);
+        if (destroyed) return;
         if (disk === null) {
           // First read: the edits this tab kept, if any, come back.
-          const kept = drafts.get(target.id);
-          disk = kept?.disk ?? raw;
-          startDoc = kept ? kept.text : splitFileText(raw).text;
-          lines = startDoc === '' ? 0 : startDoc.split('\n').length;
-          if (kept) {
-            dirty = true;
-            file.dirty = true;
-            syncDraft();
-            if (raw !== kept.disk) incoming = raw;
-          }
+          const kept = drafts.get(id);
+          adopt(kept?.disk ?? raw, kept);
+          if (kept && raw !== kept.disk) incoming = raw;
           return;
         }
         if (raw === disk) return; // the app's own save, or nothing new: leave the cursor and scroll alone
         if (!dirty) {
           disk = raw;
-          editor?.setText(splitFileText(raw).text);
-        } else if (editor?.equals(splitFileText(raw).text)) {
+          // The editor may not be built yet: it then starts on the new text.
+          startDoc = splitFileText(raw).text;
+          lines = lineTotal(startDoc);
+          editor?.setText(startDoc);
+        } else if ((editor?.getText() ?? drafts.get(id)?.text) === splitFileText(raw).text) {
           disk = raw;
           incoming = null;
           recheck();
@@ -110,7 +141,10 @@
         }
       })
       .catch((failure: unknown) => {
-        if (file === target && !dirty) error = String(failure);
+        if (seq < readApplied || destroyed) return;
+        readApplied = seq;
+        textCache.delete(key);
+        if (!dirty) error = String(failure);
       });
   });
 
@@ -130,6 +164,7 @@
 
   // Leaving (another tab in front, or the tab closed): unsaved edits stay in `drafts` while the tab lives.
   onDestroy(() => {
+    destroyed = true;
     const draft = drafts.get(file.id);
     if (!draft) return;
     if (!dirty || !contentTabs.tabs.some((tab) => tab.id === file.id)) return void drafts.delete(file.id);
@@ -138,23 +173,41 @@
     draft.saved = undefined;
   });
 
+  // Same rule as the read of the file: an answer older than one already applied is dropped, any other is used (so a
+  // run of writes, each starting a new read, cannot keep every answer from ever showing). The answer also goes to
+  // `diffCache`, even when this viewer is gone, for the next viewer of the file.
+  let diffSeq = 0;
+  let diffApplied = 0;
   $effect(() => {
-    const target = file;
+    const { root, path } = file;
     void fileWrites.tick;
     if (!inTauri()) {
       diffRead = true;
       return;
     }
+    const seq = ++diffSeq;
+    const key = fileKey(root, path);
+    const live = () => seq >= diffApplied && !destroyed;
     void import('@tauri-apps/api/core')
-      .then(({ invoke }) => invoke<string>('change_diff', { root: target.root, path: relativeTo(target.root, target.path) }))
+      .then(({ invoke }) => invoke<string>('change_diff', { root, path: relativeTo(root, path) }))
       .then((diff) => {
-        if (file === target) rows = parseDiff(diff);
+        if (seq < diffApplied) return;
+        diffApplied = seq;
+        // The same diff as on screen: keep the rows (and the scroll, the colours) as they are.
+        if (diff === shownDiff) return;
+        const next = parseDiff(diff);
+        diffCache.set(key, { diff, rows: next });
+        shownDiff = diff;
+        if (!destroyed) rows = next;
       })
       .catch(() => {
-        if (file === target) rows = [];
+        if (!live()) return;
+        diffCache.delete(key);
+        shownDiff = undefined;
+        rows = [];
       })
       .finally(() => {
-        if (file === target) {
+        if (live()) {
           diffRead = true;
           staleDiff = false;
         }
@@ -346,10 +399,13 @@
       </div>
     </div>
   {:else if view === 'changes'}
-    {#if changed}
-      <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-3 text-xs">{@render viewToggle()}</div>
-      <div class="min-h-0 flex-1" in:fade={{ duration: 200 }}><DiffView {rows} lang={language} /></div>
-    {:else if diffRead}
+    {#if changed || !diffRead}
+      <!-- The bar is there from the first frame (its counts fade in once git has answered), so the area is never a blank band. -->
+      <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-3 text-xs"><div class="flex items-center gap-1 transition-opacity duration-200 {diffRead ? 'opacity-100' : 'opacity-0'}" aria-hidden={!diffRead}>{@render viewToggle()}</div></div>
+      <div class="min-h-0 flex-1">
+        {#if changed}<div class="h-full" in:fade={{ duration: 200 }}><DiffView {rows} lang={language} /></div>{/if}
+      </div>
+    {:else}
       <DevEmpty icon="lucideGitCompare" title="No changes" hint="This file is the same as in the last commit." />
     {/if}
   {:else if disk !== null}

@@ -25,6 +25,13 @@ export type WorkflowStep = {
   /** What feeds this step: 'start' (the task) and/or ids of other steps. Unset: the step(s) of the group before it. */
   inputs?: string[];
 };
+/** Runtime guardrails for a flow. Omitted values keep the lightweight defaults. */
+export type CoordinationPolicy = {
+  /** Maximum number of workers active at once in one parallel stage. */
+  maxParallel?: number;
+  /** Maximum number of evidence-backed replans for a run. */
+  maxReplans?: number;
+};
 export type WorkflowPreset = {
   id: string;
   name: string;
@@ -32,6 +39,7 @@ export type WorkflowPreset = {
   /** What the orchestrating agent (the chat's own agent) is told when it writes the final answer. */
   orchestrator: string;
   steps: WorkflowStep[];
+  coordination?: CoordinationPolicy;
   builtin?: boolean;
 };
 

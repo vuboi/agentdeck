@@ -48,7 +48,10 @@ fn push(list: &mut VecDeque<Value>, value: Value) {
 
 /// The tab the agent's requests are about (the one last shown).
 pub fn active_tab() -> String {
-    STATE.lock().map(|state| state.active.clone()).unwrap_or_default()
+    STATE
+        .lock()
+        .map(|state| state.active.clone())
+        .unwrap_or_default()
 }
 
 /// The tab the user is looking at: what the agent's requests are about.
@@ -76,8 +79,14 @@ pub fn ingest(report: &Value) {
     let kind = report["kind"].as_str().unwrap_or_default();
     let Ok(mut state) = STATE.lock() else { return };
     match kind {
-        "console" => push(&mut state.tabs.entry(tab).or_default().console, report.clone()),
-        "network" => push(&mut state.tabs.entry(tab).or_default().network, report.clone()),
+        "console" => push(
+            &mut state.tabs.entry(tab).or_default().console,
+            report.clone(),
+        ),
+        "network" => push(
+            &mut state.tabs.entry(tab).or_default().network,
+            report.clone(),
+        ),
         "nav" => {
             let entry = state.tabs.entry(tab).or_default();
             entry.url = report["url"].as_str().unwrap_or_default().to_string();
@@ -100,8 +109,15 @@ static TOKEN: OnceLock<String> = OnceLock::new();
 static PORT: AtomicU16 = AtomicU16::new(0);
 
 fn load_token(app: &AppHandle) -> Option<String> {
-    let file = app.path().app_data_dir().ok().map(|dir| dir.join("bridge-token"));
-    if let Some(text) = file.as_ref().and_then(|file| std::fs::read_to_string(file).ok()) {
+    let file = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("bridge-token"));
+    if let Some(text) = file
+        .as_ref()
+        .and_then(|file| std::fs::read_to_string(file).ok())
+    {
         let text = text.trim();
         if text.len() >= 32 && text.chars().all(|c| c.is_ascii_hexdigit()) {
             return Some(text.to_string());
@@ -130,7 +146,9 @@ fn load_token(app: &AppHandle) -> Option<String> {
 fn authorize(head: &str, target: &str, token: &str, port: u16) -> Option<String> {
     let mut host = None;
     for line in head.lines().skip(1) {
-        let Some((name, value)) = line.split_once(':') else { continue };
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
         match name.trim().to_ascii_lowercase().as_str() {
             "origin" => return None,
             "host" => host = Some(value.trim().to_ascii_lowercase()),
@@ -224,7 +242,10 @@ async fn serve(mut stream: TcpStream, app: AppHandle) -> std::io::Result<()> {
         .nth(1)
         .unwrap_or("/")
         .to_string();
-    let Some(target) = TOKEN.get().and_then(|token| authorize(&head, &target, token, PORT.load(Ordering::Relaxed))) else {
+    let Some(target) = TOKEN
+        .get()
+        .and_then(|token| authorize(&head, &target, token, PORT.load(Ordering::Relaxed)))
+    else {
         let refusal = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         stream.write_all(refusal.as_bytes()).await?;
         return stream.shutdown().await;
@@ -245,6 +266,11 @@ async fn serve(mut stream: TcpStream, app: AppHandle) -> std::io::Result<()> {
             if let Some(root) = params.get("root") {
                 crate::index::set_root(&chat, root);
             }
+            // A call that waits for another agent for minutes (delegate_task) answers as an event stream with a
+            // comment every few seconds: a client takes a response that stays silent for five minutes as dead.
+            if accepts_stream(&head) && crate::delegate::is_long_call(&body) {
+                return stream_answer(stream, &app, &body, &chat).await;
+            }
             match crate::mcp::handle(&app, &body, &chat).await {
                 Some(text) => format!(
                     "HTTP/1.1 200 OK
@@ -259,7 +285,8 @@ Connection: close
 Content-Length: 0
 Connection: close
 
-".to_string(),
+"
+                .to_string(),
             }
         } else {
             "HTTP/1.1 405 Method Not Allowed
@@ -267,7 +294,8 @@ Allow: POST
 Content-Length: 0
 Connection: close
 
-".to_string()
+"
+            .to_string()
         };
         stream.write_all(reply.as_bytes()).await?;
         return stream.shutdown().await;
@@ -287,6 +315,44 @@ Connection: close
     stream.shutdown().await
 }
 
+/// Whether the client takes the answer to a POST as a `text/event-stream` (MCP clients send both kinds in `Accept`).
+fn accepts_stream(head: &str) -> bool {
+    head.lines().skip(1).any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("accept")
+                && value.to_ascii_lowercase().contains("text/event-stream")
+        })
+    })
+}
+
+/// Answers a JSON-RPC request as a server-sent event: the headers go out at once, `: keepalive` comments follow while
+/// the call works, and the answer ends the stream. A client that went away makes a write fail, which drops the call.
+async fn stream_answer(
+    mut stream: TcpStream,
+    app: &AppHandle,
+    body: &str,
+    chat: &str,
+) -> std::io::Result<()> {
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n: open\n\n";
+    stream.write_all(head.as_bytes()).await?;
+    let work = crate::mcp::handle(app, body, chat);
+    tokio::pin!(work);
+    let mut beat = tokio::time::interval(Duration::from_secs(15));
+    beat.tick().await;
+    let answer = loop {
+        tokio::select! {
+            answer = &mut work => break answer,
+            _ = beat.tick() => stream.write_all(b": keepalive\n\n").await?,
+        }
+    };
+    if let Some(text) = answer {
+        stream
+            .write_all(format!("event: message\ndata: {text}\n\n").as_bytes())
+            .await?;
+    }
+    stream.shutdown().await
+}
+
 fn is_post_request(head: &str) -> bool {
     head.lines()
         .next()
@@ -299,7 +365,8 @@ fn decode(text: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(&String::from_utf8_lossy(&bytes[i + 1..i + 3]), 16) {
+            if let Ok(byte) = u8::from_str_radix(&String::from_utf8_lossy(&bytes[i + 1..i + 3]), 16)
+            {
                 out.push(byte);
                 i += 3;
                 continue;
@@ -324,9 +391,15 @@ mod tests {
     #[test]
     fn token_in_the_path_is_stripped() {
         let target = format!("/{TOKEN}/page?x=1");
-        assert_eq!(authorize(&head(&target, ""), &target, TOKEN, 47821).as_deref(), Some("/page?x=1"));
+        assert_eq!(
+            authorize(&head(&target, ""), &target, TOKEN, 47821).as_deref(),
+            Some("/page?x=1")
+        );
         let bare = format!("/{TOKEN}");
-        assert_eq!(authorize(&head(&bare, ""), &bare, TOKEN, 47821).as_deref(), Some("/"));
+        assert_eq!(
+            authorize(&head(&bare, ""), &bare, TOKEN, 47821).as_deref(),
+            Some("/")
+        );
     }
 
     #[test]
@@ -342,7 +415,13 @@ mod tests {
         let target = format!("/{TOKEN}/page");
         let rebound = "GET / HTTP/1.1\r\nHost: evil.example:47821\r\n\r\n";
         assert!(authorize(rebound, &target, TOKEN, 47821).is_none());
-        assert!(authorize(&head(&target, "Origin: https://evil.example\r\n"), &target, TOKEN, 47821).is_none());
+        assert!(authorize(
+            &head(&target, "Origin: https://evil.example\r\n"),
+            &target,
+            TOKEN,
+            47821
+        )
+        .is_none());
         assert!(authorize("GET / HTTP/1.1\r\n\r\n", &target, TOKEN, 47821).is_none());
         let local = "GET / HTTP/1.1\r\nHost: localhost:47821\r\n\r\n";
         assert!(authorize(local, &target, TOKEN, 47821).is_some());
@@ -353,6 +432,21 @@ mod tests {
         assert!(is_post_request("POST /mcp HTTP/1.1\r\n"));
         assert!(is_post_request("post /mcp HTTP/1.1\r\n"));
         assert!(is_post_request("PoSt /mcp HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn a_stream_is_sent_only_to_a_client_that_accepts_one() {
+        use super::accepts_stream;
+        assert!(accepts_stream(
+            "POST /mcp HTTP/1.1\r\nHost: x\r\nAccept: application/json, text/event-stream\r\n"
+        ));
+        assert!(accepts_stream(
+            "POST /mcp HTTP/1.1\r\naccept: Text/Event-Stream\r\n"
+        ));
+        assert!(!accepts_stream(
+            "POST /mcp HTTP/1.1\r\nAccept: application/json\r\n"
+        ));
+        assert!(!accepts_stream("POST /mcp HTTP/1.1\r\nHost: x\r\n"));
     }
 
     #[test]
@@ -379,7 +473,8 @@ fn tail(lines: Vec<Value>, limit: usize) -> Value {
 /// Opens `url` in the Preview panel (a tab of its own when another page is open there) and waits until the page
 /// answers the injected script: then it is ready to act on.
 async fn open_page(app: &AppHandle, url: &str, new_tab: bool, chat: &str) -> Result<Value, String> {
-    app.emit("agent-open", json!({ "url": url, "newTab": new_tab })).map_err(|error| error.to_string())?;
+    app.emit("agent-open", json!({ "url": url, "newTab": new_tab }))
+        .map_err(|error| error.to_string())?;
     let wanted = url.trim_end_matches('/').to_string();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while std::time::Instant::now() < deadline {
@@ -392,9 +487,15 @@ async fn open_page(app: &AppHandle, url: &str, new_tab: bool, chat: &str) -> Res
             let shown = report["url"].as_str().unwrap_or_default();
             if shown.trim_end_matches('/').starts_with(&wanted) {
                 if !chat.is_empty() {
-                    STATE.lock().map_err(|_| "busy".to_string())?.owners.insert(tab.clone(), chat.to_string());
+                    STATE
+                        .lock()
+                        .map_err(|_| "busy".to_string())?
+                        .owners
+                        .insert(tab.clone(), chat.to_string());
                 }
-                return Ok(json!({ "opened": shown, "title": report["title"], "tab": tab, "newTab": new_tab }));
+                return Ok(
+                    json!({ "opened": shown, "title": report["title"], "tab": tab, "newTab": new_tab }),
+                );
             }
         }
     }
@@ -411,13 +512,26 @@ fn wants_new_tab(params: &HashMap<String, String>) -> bool {
     let Ok(state) = STATE.lock() else {
         return false;
     };
-    let shows_a_page = state.tabs.get(&state.active).is_some_and(|tab| !tab.url.is_empty());
-    shows_a_page && state.owners.get(&state.active).is_some_and(|owner| !chat.is_empty() && owner != chat)
+    let shows_a_page = state
+        .tabs
+        .get(&state.active)
+        .is_some_and(|tab| !tab.url.is_empty());
+    shows_a_page
+        && state
+            .owners
+            .get(&state.active)
+            .is_some_and(|owner| !chat.is_empty() && owner != chat)
 }
 
 /// The MIME type of a file, from its extension, for the file the agent uploads.
 fn mime_of(name: &str) -> &'static str {
-    match name.rsplit('.').next().unwrap_or_default().to_ascii_lowercase().as_str() {
+    match name
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -501,7 +615,11 @@ pub(crate) async fn answer(
             let only_ok = params.get("ok").is_some_and(|v| v != "0");
             let bodies = params.get("bodies").is_some_and(|v| v != "0");
             let url_filter = params.get("url").cloned();
-            let max_body = params.get("max_body").and_then(|v| v.parse::<usize>().ok()).unwrap_or(2000).min(20000);
+            let max_body = params
+                .get("max_body")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(2000)
+                .min(20000);
             let state = STATE.lock().map_err(|_| "busy".to_string())?;
             let lines = state
                 .tabs
@@ -555,7 +673,10 @@ pub(crate) async fn answer(
                 );
                 return crate::cdp::evaluate(&view, &script, Some(session)).await;
             }
-            let arg = params.get("selector").map(|s| json!(s)).unwrap_or(Value::Null);
+            let arg = params
+                .get("selector")
+                .map(|s| json!(s))
+                .unwrap_or(Value::Null);
             let report = ask(app, &active, "dom", arg).await?;
             Ok(json!({ "url": report["url"], "title": report["title"], "html": report["html"] }))
         }
@@ -567,7 +688,10 @@ pub(crate) async fn answer(
                 // No DevTools access (macOS, Linux): the page draws itself.
                 Err(_) => shot_via_page(app, &active).await?,
             };
-            let path = std::env::temp_dir().join(format!("agentdeck-shot-{}.png", NEXT.fetch_add(1, Ordering::Relaxed)));
+            let path = std::env::temp_dir().join(format!(
+                "agentdeck-shot-{}.png",
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
             std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
             Ok(json!({ "png": path.display().to_string() }))
         }
@@ -593,16 +717,34 @@ pub(crate) async fn answer(
         }
         "/scroll" => {
             let (x, y) = point(params)?;
-            let dy = params.get("dy").and_then(|v| v.parse::<f64>().ok()).unwrap_or(400.0);
-            let dx = params.get("dx").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
-            if crate::cdp::scroll(&page(app, &active)?, x, y, dx, dy).await.is_err() {
-                act_via_page(app, &active, "scroll", json!({ "x": x, "y": y, "dx": dx, "dy": dy })).await?;
+            let dy = params
+                .get("dy")
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(400.0);
+            let dx = params
+                .get("dx")
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            if crate::cdp::scroll(&page(app, &active)?, x, y, dx, dy)
+                .await
+                .is_err()
+            {
+                act_via_page(
+                    app,
+                    &active,
+                    "scroll",
+                    json!({ "x": x, "y": y, "dx": dx, "dy": dy }),
+                )
+                .await?;
             }
             Ok(json!({ "scrolled": true, "dx": dx, "dy": dy }))
         }
         "/type" => {
             let text = params.get("text").cloned().ok_or("send ?text=")?;
-            if crate::cdp::type_text(&page(app, &active)?, &text).await.is_err() {
+            if crate::cdp::type_text(&page(app, &active)?, &text)
+                .await
+                .is_err()
+            {
                 act_via_page(app, &active, "type", json!(text)).await?;
             }
             Ok(json!({ "typed": text }))
@@ -631,23 +773,41 @@ pub(crate) async fn answer(
                 .get_webview(&format!("browser-{active}"))
                 .ok_or("no page is open in the AgentDeck browser: call browser_open (or browser_serve to start the server) with the page address first")?;
             let logical = view.size().map_err(|error| error.to_string())?;
-            let scale = view.window().scale_factor().map_err(|error| error.to_string())?;
+            let scale = view
+                .window()
+                .scale_factor()
+                .map_err(|error| error.to_string())?;
             let zoom = (logical.width as f64 / scale) / viewport;
             crate::browser::browser_press(app.clone(), active.clone(), x, y, zoom)?;
             Ok(json!({ "pressed": true, "x": x, "y": y }))
         }
         "/fill" => {
-            let selector = params.get("selector").cloned().ok_or("send ?selector=&value=")?;
+            let selector = params
+                .get("selector")
+                .cloned()
+                .ok_or("send ?selector=&value=")?;
             let value = params.get("value").cloned().unwrap_or_default();
-            let report = ask(app, &active, "fill", json!({ "selector": selector, "value": value })).await?;
+            let report = ask(
+                app,
+                &active,
+                "fill",
+                json!({ "selector": selector, "value": value }),
+            )
+            .await?;
             match report["error"].as_str() {
                 Some(error) => Err(error.to_string()),
                 None => Ok(report["result"].clone()),
             }
         }
         "/drag" => {
-            let from = params.get("from").cloned().ok_or("send ?from=&to= as CSS selectors")?;
-            let to = params.get("to").cloned().ok_or("send ?from=&to= as CSS selectors")?;
+            let from = params
+                .get("from")
+                .cloned()
+                .ok_or("send ?from=&to= as CSS selectors")?;
+            let to = params
+                .get("to")
+                .cloned()
+                .ok_or("send ?from=&to= as CSS selectors")?;
             let report = ask(app, &active, "drag", json!({ "from": from, "to": to })).await?;
             match report["error"].as_str() {
                 Some(error) => Err(error.to_string()),
@@ -655,39 +815,77 @@ pub(crate) async fn answer(
             }
         }
         "/upload" => {
-            let selector = params.get("selector").cloned().ok_or("send ?selector=&path=")?;
-            let path = params.get("path").cloned().ok_or("send ?selector=&path= with an absolute file path")?;
+            let selector = params
+                .get("selector")
+                .cloned()
+                .ok_or("send ?selector=&path=")?;
+            let path = params
+                .get("path")
+                .cloned()
+                .ok_or("send ?selector=&path= with an absolute file path")?;
             let bytes = std::fs::read(&path).map_err(|error| format!("{path}: {error}"))?;
             if bytes.len() > 25 * 1024 * 1024 {
                 return Err(format!("{path} is over 25 MB"));
             }
-            let name = std::path::Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or("file").to_string();
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("file")
+                .to_string();
             use base64::Engine;
             let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
             let mime = mime_of(&name);
-            let report = ask(app, &active, "upload", json!({ "selector": selector, "name": name, "type": mime, "data": data })).await?;
+            let report = ask(
+                app,
+                &active,
+                "upload",
+                json!({ "selector": selector, "name": name, "type": mime, "data": data }),
+            )
+            .await?;
             match report["error"].as_str() {
                 Some(error) => Err(error.to_string()),
                 None => Ok(report["result"].clone()),
             }
         }
         "/open" => {
-            let url = params.get("url").cloned().ok_or("send ?url= with the address to open")?;
+            let url = params
+                .get("url")
+                .cloned()
+                .ok_or("send ?url= with the address to open")?;
             let target = crate::browser::parse(&url)?;
             // The address that answers, at the scheme the server speaks (a server with a certificate is https only).
             let Some(target) = crate::browser::ready(&target).await else {
-                return Err(format!("nothing answers at {target}: start the server with browser_serve first"));
+                return Err(format!(
+                    "nothing answers at {target}: start the server with browser_serve first"
+                ));
             };
             let new_tab = wants_new_tab(params);
-            open_page(app, target.as_str(), new_tab, params.get("chat").map_or("", String::as_str)).await
+            open_page(
+                app,
+                target.as_str(),
+                new_tab,
+                params.get("chat").map_or("", String::as_str),
+            )
+            .await
         }
         "/device" => {
-            let mode = params.get("mode").cloned().ok_or("send ?mode=desktop|tablet|mobile")?;
+            let mode = params
+                .get("mode")
+                .cloned()
+                .ok_or("send ?mode=desktop|tablet|mobile")?;
             if !["desktop", "tablet", "mobile"].contains(&mode.as_str()) {
-                return Err(format!("unknown device {mode}: use desktop, tablet or mobile"));
+                return Err(format!(
+                    "unknown device {mode}: use desktop, tablet or mobile"
+                ));
             }
-            let landscape = params.get("landscape").is_some_and(|value| value == "1" || value == "true");
-            app.emit("agent-device", json!({ "device": mode, "landscape": landscape })).map_err(|error| error.to_string())?;
+            let landscape = params
+                .get("landscape")
+                .is_some_and(|value| value == "1" || value == "true");
+            app.emit(
+                "agent-device",
+                json!({ "device": mode, "landscape": landscape }),
+            )
+            .map_err(|error| error.to_string())?;
             // The pages are created again with the device's user agent: wait for the new one to answer.
             tokio::time::sleep(Duration::from_millis(1500)).await;
             let deadline = std::time::Instant::now() + Duration::from_secs(20);
@@ -695,7 +893,9 @@ pub(crate) async fn answer(
                 let tab = STATE.lock().map_err(|_| "busy".to_string())?.active.clone();
                 if !tab.is_empty() {
                     if let Ok(report) = ask(app, &tab, "dom", Value::Null).await {
-                        return Ok(json!({ "device": mode, "landscape": landscape, "viewport": report["viewport"], "url": report["url"] }));
+                        return Ok(
+                            json!({ "device": mode, "landscape": landscape, "viewport": report["viewport"], "url": report["url"] }),
+                        );
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -703,11 +903,22 @@ pub(crate) async fn answer(
             Err("the page did not come back after the device change".into())
         }
         "/serve" => {
-            let command = params.get("command").cloned().ok_or("send ?command=&cwd=&url=")?;
-            let cwd = params.get("cwd").cloned().ok_or("send ?cwd= with the project folder")?;
-            let url = params.get("url").cloned().ok_or("send ?url= with the address the server will answer at")?;
+            let command = params
+                .get("command")
+                .cloned()
+                .ok_or("send ?command=&cwd=&url=")?;
+            let cwd = params
+                .get("cwd")
+                .cloned()
+                .ok_or("send ?cwd= with the project folder")?;
+            let url = params
+                .get("url")
+                .cloned()
+                .ok_or("send ?url= with the address the server will answer at")?;
             let mut target = crate::browser::parse(&url)?;
-            let port = target.port_or_known_default().ok_or("the address has no port")?;
+            let port = target
+                .port_or_known_default()
+                .ok_or("the address has no port")?;
             let mut log = None;
             // Already up (started earlier, by the user or by AgentDeck): just open it.
             match crate::browser::ready(&target).await {
@@ -723,16 +934,34 @@ pub(crate) async fn answer(
                         }
                         let exited = crate::servers::exited(port);
                         if exited || std::time::Instant::now() > deadline {
-                            let ended = if exited { crate::detect::Ended::Exited } else { crate::detect::Ended::Silent };
-                            let why = crate::detect::failure(&command, &cwd, &crate::servers::read_log(port), ended);
-                            return Err(format!("`{command}` did not start a server at {target}. {}", why.text()));
+                            let ended = if exited {
+                                crate::detect::Ended::Exited
+                            } else {
+                                crate::detect::Ended::Silent
+                            };
+                            let why = crate::detect::failure(
+                                &command,
+                                &cwd,
+                                &crate::servers::read_log(port),
+                                ended,
+                            );
+                            return Err(format!(
+                                "`{command}` did not start a server at {target}. {}",
+                                why.text()
+                            ));
                         }
                     }
                 }
             }
             crate::servers::set_url(port, target.as_str());
             let new_tab = wants_new_tab(params);
-            let mut opened = open_page(app, target.as_str(), new_tab, params.get("chat").map_or("", String::as_str)).await?;
+            let mut opened = open_page(
+                app,
+                target.as_str(),
+                new_tab,
+                params.get("chat").map_or("", String::as_str),
+            )
+            .await?;
             opened["server"] = json!({ "command": command, "log": log.map(|path| path.to_string_lossy().into_owned()) });
             Ok(opened)
         }
@@ -752,7 +981,10 @@ pub(crate) async fn answer(
             };
             // Through DevTools first: it works in frames of any origin and on pages whose policy forbids eval.
             // A script that waits or polls (an animation, a page settling) may ask for more time, up to a minute.
-            let seconds = params.get("timeout").and_then(|value| value.parse::<f64>().ok()).map_or(20, |value| value.clamp(1.0, 60.0).ceil() as u64);
+            let seconds = params
+                .get("timeout")
+                .and_then(|value| value.parse::<f64>().ok())
+                .map_or(20, |value| value.clamp(1.0, 60.0).ceil() as u64);
             match crate::cdp::evaluate_for(&view, &script, session.clone(), seconds).await {
                 Ok(value) => Ok(json!({ "result": value })),
                 Err(error) if session.is_some() => Err(error),
@@ -825,7 +1057,12 @@ async fn act_via_page(app: &AppHandle, tab: &str, kind: &str, arg: Value) -> Res
 }
 
 /// Asks the page of a tab for something and waits for its answer.
-pub(crate) async fn ask(app: &AppHandle, tab: &str, kind: &str, arg: Value) -> Result<Value, String> {
+pub(crate) async fn ask(
+    app: &AppHandle,
+    tab: &str,
+    kind: &str,
+    arg: Value,
+) -> Result<Value, String> {
     if tab.is_empty() {
         return Err("no page is open in the AgentDeck browser: call browser_open (or browser_serve to start the server) with the page address first".into());
     }

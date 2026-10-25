@@ -183,12 +183,19 @@ async fn element_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> 
     }
     // The page's answer is the script's value, possibly as text that holds JSON.
     let value_of = |answer: Value| match &answer["result"] {
-        Value::String(text) => serde_json::from_str::<Value>(text).unwrap_or_else(|_| Value::String(text.clone())),
+        Value::String(text) => {
+            serde_json::from_str::<Value>(text).unwrap_or_else(|_| Value::String(text.clone()))
+        }
         other => other.clone(),
     };
     let script = match name {
         "browser_elements" => Some(ELEMENTS_JS.replace("__HELPERS__", PAGE_HELPERS)),
-        "browser_text" => Some(text_js(args["max_chars"].as_u64().unwrap_or(20_000).clamp(500, 200_000))),
+        "browser_text" => Some(text_js(
+            args["max_chars"]
+                .as_u64()
+                .unwrap_or(20_000)
+                .clamp(500, 200_000),
+        )),
         "browser_find" => Some(find_js(args["query"].as_str().unwrap_or_default())),
         _ => None,
     };
@@ -208,18 +215,31 @@ async fn element_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> 
     if let Some(error) = target["error"].as_str() {
         return error_reply(error.to_string());
     }
-    let (Some(x), Some(y)) = (target["x"].as_f64(), target["y"].as_f64()) else { return error_reply(format!("could not locate the element: {target}")) };
+    let (Some(x), Some(y)) = (target["x"].as_f64(), target["y"].as_f64()) else {
+        return error_reply(format!("could not locate the element: {target}"));
+    };
     params.insert("x".into(), x.to_string());
     params.insert("y".into(), y.to_string());
     match crate::bridge::answer(app, "/click", &params, "").await {
         Ok(_) => {
             // Let the page react (a drawer slides in, a menu opens), then say what is on top now.
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-            let note = match crate::bridge::answer(app, "/eval", &params, &OVERLAY_NOTE_JS.replace("__HELPERS__", PAGE_HELPERS)).await {
+            let note = match crate::bridge::answer(
+                app,
+                "/eval",
+                &params,
+                &OVERLAY_NOTE_JS.replace("__HELPERS__", PAGE_HELPERS),
+            )
+            .await
+            {
                 Ok(answer) => value_of(answer).as_str().unwrap_or_default().to_owned(),
                 Err(_) => String::new(),
             };
-            text_reply(format!("Clicked <{}> \"{}\" at ({x}, {y}). {note}", target["tag"].as_str().unwrap_or("element"), target["label"].as_str().unwrap_or_default()))
+            text_reply(format!(
+                "Clicked <{}> \"{}\" at ({x}, {y}). {note}",
+                target["tag"].as_str().unwrap_or("element"),
+                target["label"].as_str().unwrap_or_default()
+            ))
         }
         Err(error) => error_reply(error),
     }
@@ -243,18 +263,25 @@ fn tool_list() -> Value {
                 })
             })
             .chain(crate::index::tool_defs())
+            .chain(crate::delegate::tool_defs())
             .collect(),
     )
 }
 
 async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Value {
+    if crate::delegate::is_tool(name) {
+        return crate::delegate::call(app, name, args, chat).await;
+    }
     if crate::index::is_tool(name) {
         return match crate::index::call(name, args, chat).await {
             Ok(text) => text_reply(text),
             Err(error) => error_reply(error),
         };
     }
-    if matches!(name, "browser_elements" | "browser_click_element" | "browser_text" | "browser_find") {
+    if matches!(
+        name,
+        "browser_elements" | "browser_click_element" | "browser_text" | "browser_find"
+    ) {
         return element_tool(app, name, args, chat).await;
     }
     let Some(tool) = TOOLS.iter().find(|tool| tool.name == name) else {
@@ -309,11 +336,19 @@ pub async fn handle(app: &AppHandle, body: &str, chat: &str) -> Option<String> {
             "protocolVersion": params["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "agentdeck", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "The page open in AgentDeck's Preview panel, the browser the user is looking at. Use these tools to see it and act on it as a user would: screenshot, then click / type / scroll, then screenshot again and check browser_console and browser_network for errors. The code_* tools search an index of the project (symbols, outlines, definitions, references, imports): use them before grepping the tree.",
+            "instructions": "The page open in AgentDeck's Preview panel, the browser the user is looking at. Use these tools to see it and act on it as a user would: screenshot, then click / type / scroll, then screenshot again and check browser_console and browser_network for errors. The code_* tools search an index of the project (symbols, outlines, definitions, references, imports): use them before grepping the tree. delegate_task hands big or clearly separable work to another agent (see list_agents): never small things or the final answer.",
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tool_list() }),
-        "tools/call" => call_tool(app, params["name"].as_str().unwrap_or_default(), &params["arguments"], chat).await,
+        "tools/call" => {
+            call_tool(
+                app,
+                params["name"].as_str().unwrap_or_default(),
+                &params["arguments"],
+                chat,
+            )
+            .await
+        }
         method => {
             return Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("unknown method {method}") } }).to_string());
         }

@@ -1,20 +1,23 @@
 use std::path::{Path, PathBuf};
 
 mod bridge;
-mod mcp;
-mod index;
-mod cdp;
 mod browser;
-mod servers;
-mod detect;
-mod connectors;
-mod mcp_manage;
-mod slash_commands;
-mod pty;
+mod cdp;
 mod changes;
+mod connectors;
 mod custom_chat;
-mod mcp_client;
+mod delegate;
+mod detect;
 mod fs_ops;
+mod image_gen;
+mod image_history;
+mod index;
+mod mcp;
+mod mcp_client;
+mod mcp_manage;
+mod pty;
+mod servers;
+mod slash_commands;
 
 use ag_adapters::agent::antigravity::Antigravity;
 use ag_adapters::agent::claude::Claude;
@@ -81,7 +84,13 @@ async fn attachment_save_file(name: String, data: String) -> Result<String, Stri
         }
         let safe: String = name
             .chars()
-            .map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ') { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ') {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         let safe = safe.trim_matches(|c: char| c == '.' || c == ' ');
         let safe = if safe.is_empty() { "file" } else { safe };
@@ -102,7 +111,11 @@ async fn attachment_save_file(name: String, data: String) -> Result<String, Stri
 #[tauri::command]
 fn attachment_stat(path: String) -> Result<Option<u64>, String> {
     let meta = std::fs::metadata(&path).map_err(|error| error.to_string())?;
-    Ok(if meta.is_file() { Some(meta.len()) } else { None })
+    Ok(if meta.is_file() {
+        Some(meta.len())
+    } else {
+        None
+    })
 }
 
 /// A picture a tool saved on disk (a screenshot), as a data URL for the chat to show. Image files only, at most 8 MB.
@@ -172,14 +185,19 @@ fn attachment_reveal(path: String) -> Result<(), String> {
         command.arg(Path::new(&path).parent().unwrap_or_else(|| Path::new("/")));
         command
     };
-    command.spawn().map(|_| ()).map_err(|error| error.to_string())
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 /// The models an agent CLI offers, from its own cache on this machine.
 #[tauri::command]
 async fn models_list(agent: String) -> Vec<ag_adapters::models::ModelInfo> {
     // `agy models` asks the server: off the main thread.
-    tauri::async_runtime::spawn_blocking(move || models_of(&agent)).await.unwrap_or_default()
+    tauri::async_runtime::spawn_blocking(move || models_of(&agent))
+        .await
+        .unwrap_or_default()
 }
 
 fn models_of(agent: &str) -> Vec<ag_adapters::models::ModelInfo> {
@@ -190,11 +208,15 @@ fn models_of(agent: &str) -> Vec<ag_adapters::models::ModelInfo> {
     match agent {
         "antigravity" => {
             let binary = resolve_binary(&Antigravity::default());
-            ag_adapters::models::antigravity(&ag_adapters::agent::antigravity::models_listing(binary))
+            ag_adapters::models::antigravity(&ag_adapters::agent::antigravity::models_listing(
+                binary,
+            ))
         }
         "claude" => ag_adapters::models::claude(&home),
         "codex" => {
-            let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".codex"));
+            let codex_home = std::env::var_os("CODEX_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".codex"));
             ag_adapters::models::codex(&codex_home)
         }
         _ => Vec::new(),
@@ -209,7 +231,9 @@ fn server_log(port: u16, lines: usize) -> String {
     let skip = all.len().saturating_sub(lines.max(1));
     let tail = all[skip..].join("\n");
     let start = tail.len().saturating_sub(20 * 1024);
-    let start = (start..=tail.len()).find(|index| tail.is_char_boundary(*index)).unwrap_or(tail.len());
+    let start = (start..=tail.len())
+        .find(|index| tail.is_char_boundary(*index))
+        .unwrap_or(tail.len());
     let tail = &tail[start..];
     if skip > 0 || start > 0 {
         format!("(Earlier output not shown)\n{tail}")
@@ -282,7 +306,8 @@ fn audit_file() -> Result<PathBuf, String> {
 fn audit_append(line: String) -> Result<(), String> {
     use std::io::Write;
     let path = audit_file()?;
-    std::fs::create_dir_all(path.parent().ok_or("no folder for the audit log")?).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(path.parent().ok_or("no folder for the audit log")?)
+        .map_err(|error| error.to_string())?;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -316,7 +341,8 @@ async fn audit_prune(cutoff: f64) -> Result<usize, String> {
         let mut pictures = std::collections::HashSet::new();
         let mut dropped = 0;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            let value: serde_json::Value = serde_json::from_str(line).unwrap_or(serde_json::Value::Null);
+            let value: serde_json::Value =
+                serde_json::from_str(line).unwrap_or(serde_json::Value::Null);
             // A line it cannot read, or without a time, is kept: only what is known to be old goes.
             let started = value.get("startedAt").and_then(serde_json::Value::as_f64);
             if started.is_some_and(|started| started < cutoff) {
@@ -413,8 +439,12 @@ async fn audit_image_read(name: String) -> Result<String, String> {
             Some("gif") => "image/gif",
             _ => return Err("not a picture of the audit log".to_string()),
         };
-        let bytes = std::fs::read(audit_images()?.join(&name)).map_err(|error| error.to_string())?;
-        Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+        let bytes =
+            std::fs::read(audit_images()?.join(&name)).map_err(|error| error.to_string())?;
+        Ok(format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
     })
     .await
     .map_err(|error| error.to_string())?
@@ -463,7 +493,14 @@ async fn file_read(root: String, path: String) -> Result<String, String> {
 /// project. It holds the run's shared notes: `BOARD.md` (written by the app), `agents/<name>.md` (each agent its own)
 /// and `handoff/<n>-<name>.md` (what a step hands to the next).
 fn run_file(root: Option<String>, run: &str, name: &str) -> Result<PathBuf, String> {
-    let safe = |part: &str| !part.is_empty() && part != "." && part != ".." && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    let safe = |part: &str| {
+        !part.is_empty()
+            && part != "."
+            && part != ".."
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
     if !safe(run) || name.split('/').count() > 2 || !name.split('/').all(safe) {
         return Err("bad run file name".to_string());
     }
@@ -476,7 +513,12 @@ fn run_file(root: Option<String>, run: &str, name: &str) -> Result<PathBuf, Stri
 
 /// Writes one file of a run's notes and returns its full path. The runs folder ignores itself in git.
 #[tauri::command]
-async fn run_file_write(root: Option<String>, run: String, name: String, content: String) -> Result<String, String> {
+async fn run_file_write(
+    root: Option<String>,
+    run: String,
+    name: String,
+    content: String,
+) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let file = run_file(root, &run, &name)?;
         if let Some(folder) = file.parent() {
@@ -531,8 +573,12 @@ struct FolderEntry {
 #[tauri::command]
 async fn folder_list(root: String, path: String) -> Result<Vec<FolderEntry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
-        let path = PathBuf::from(&path).canonicalize().map_err(|error| error.to_string())?;
+        let root = PathBuf::from(&root)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let path = PathBuf::from(&path)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
         if !path.starts_with(&root) {
             return Err("folder is outside the project folder".to_string());
         }
@@ -545,7 +591,11 @@ async fn folder_list(root: String, path: String) -> Result<Vec<FolderEntry>, Str
                 (name != ".git").then_some(FolderEntry { name, dir })
             })
             .collect();
-        entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        entries.sort_by(|a, b| {
+            b.dir
+                .cmp(&a.dir)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
         Ok(entries)
     })
     .await
@@ -554,8 +604,12 @@ async fn folder_list(root: String, path: String) -> Result<Vec<FolderEntry>, Str
 
 /// `path` inside `root` (not `root` itself), both made canonical.
 fn inside_root(root: &str, path: &str) -> Result<PathBuf, String> {
-    let root = PathBuf::from(root).canonicalize().map_err(|error| error.to_string())?;
-    let path = PathBuf::from(path).canonicalize().map_err(|error| error.to_string())?;
+    let root = PathBuf::from(root)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let path = PathBuf::from(path)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
     if !path.starts_with(&root) || path == root {
         return Err("that is outside the project folder".to_string());
     }
@@ -564,7 +618,10 @@ fn inside_root(root: &str, path: &str) -> Result<PathBuf, String> {
 
 /// Where deleted files go, so they can be put back (Ctrl+Z in Explore, or by hand).
 fn file_trash() -> Result<PathBuf, String> {
-    Ok(home_folder()?.join(".agentdeck").join("trash").join("files"))
+    Ok(home_folder()?
+        .join(".agentdeck")
+        .join("trash")
+        .join("files"))
 }
 
 fn copy_all(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -623,7 +680,10 @@ async fn path_trash(root: String, path: String) -> Result<String, String> {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
-        let name = from.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = from
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let to = folder.join(format!("{stamp:x}-{name}"));
         move_path(&from, &to)?;
         Ok(to.to_string_lossy().into_owned())
@@ -636,14 +696,20 @@ async fn path_trash(root: String, path: String) -> Result<String, String> {
 #[tauri::command]
 async fn path_restore(root: String, trashed: String, to: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let trash = file_trash()?.canonicalize().map_err(|error| error.to_string())?;
-        let trashed = PathBuf::from(&trashed).canonicalize().map_err(|error| error.to_string())?;
+        let trash = file_trash()?
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let trashed = PathBuf::from(&trashed)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
         if !trashed.starts_with(&trash) {
             return Err("that is not in AgentDeck's trash".to_string());
         }
         let target = PathBuf::from(&to);
         let parent = target.parent().ok_or("no folder to restore into")?;
-        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
+        let root = PathBuf::from(&root)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
         let parent = parent.canonicalize().map_err(|error| error.to_string())?;
         if !parent.starts_with(&root) {
             return Err("that is outside the project folder".to_string());
@@ -662,11 +728,19 @@ async fn path_restore(root: String, trashed: String, to: String) -> Result<(), S
 #[tauri::command]
 async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let picked = tauri::async_runtime::spawn_blocking(move || app.dialog().file().set_title("Add a project folder").blocking_pick_folder())
-        .await
-        .map_err(|error| error.to_string())?;
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("Add a project folder")
+            .blocking_pick_folder()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
     match picked {
-        Some(path) => path.into_path().map(|path| Some(path.display().to_string())).map_err(|error| error.to_string()),
+        Some(path) => path
+            .into_path()
+            .map(|path| Some(path.display().to_string()))
+            .map_err(|error| error.to_string()),
         None => Ok(None),
     }
 }
@@ -684,7 +758,11 @@ fn reveal_path(path: String) -> Result<(), String> {
     } else {
         "xdg-open"
     };
-    std::process::Command::new(program).arg(&path).spawn().map(|_| ()).map_err(|error| error.to_string())
+    std::process::Command::new(program)
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 /// Bytes of one file for previews (images, PDF, SVG), base64-encoded. Same rules as `file_read`:
@@ -821,10 +899,27 @@ async fn custom_send(
     effort: Option<String>,
 ) -> Result<(), String> {
     let chat = session.clone();
-    let config = custom_chat::Turn { kind, base_url, api_key, model, cwd: cwd.map(Into::into), permission_mode, allowed: allowed_tools, chat: session.clone(), effort };
+    let config = custom_chat::Turn {
+        kind,
+        base_url,
+        api_key,
+        model,
+        cwd: cwd.map(Into::into),
+        permission_mode,
+        allowed: allowed_tools,
+        chat: session.clone(),
+        effort,
+    };
     let handle = tauri::async_runtime::spawn(async move {
         custom_chat::run_turn(&app.clone(), config, messages, |event| {
-            let _ = app.emit("agent-event", AgentEnvelope { session: chat.clone(), turn: turn.clone(), event });
+            let _ = app.emit(
+                "agent-event",
+                AgentEnvelope {
+                    session: chat.clone(),
+                    turn: turn.clone(),
+                    event,
+                },
+            );
         })
         .await;
     });
@@ -856,11 +951,17 @@ pub fn run() {
             // The Preview's own page for an address that did not answer.
             if request.uri().path() == "/error" {
                 let text = request.uri().to_string();
-                let query = tauri::Url::parse(&text).or_else(|_| tauri::Url::parse(&format!("http://localhost{text}"))).ok();
+                let query = tauri::Url::parse(&text)
+                    .or_else(|_| tauri::Url::parse(&format!("http://localhost{text}")))
+                    .ok();
                 let param = |name: &str| {
                     query
                         .as_ref()
-                        .and_then(|url| url.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned()))
+                        .and_then(|url| {
+                            url.query_pairs()
+                                .find(|(key, _)| key == name)
+                                .map(|(_, value)| value.into_owned())
+                        })
                         .unwrap_or_default()
                 };
                 return tauri::http::Response::builder()
@@ -878,6 +979,10 @@ pub fn run() {
         })
         .setup(|app| {
             bridge::start(app.handle().clone());
+            let handle = app.handle().clone();
+            servers::init(move |port| {
+                let _ = handle.emit("server-log", serde_json::json!({ "port": port }));
+            });
             if let Ok(url) = std::env::var("AGENTDECK_BROWSER_SELFTEST") {
                 browser::selftest(app.handle().clone(), url);
             }
@@ -951,12 +1056,18 @@ pub fn run() {
             agent_send,
             custom_send,
             agent_stop,
+            delegate::delegate_reply,
+            delegate::delegate_ready,
             attachment_save,
             attachment_save_file,
             attachment_stat,
             attachment_reveal,
             read_image_data_url,
             read_file_bytes,
+            image_gen::image_generate,
+            image_gen::image_prompt_suggest,
+            image_gen::image_stop,
+            image_history::image_history_list,
             detect::detect_run_targets,
             servers::servers_list,
             servers::server_stop,

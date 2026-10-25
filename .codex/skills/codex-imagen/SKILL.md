@@ -38,6 +38,14 @@ Ask for multiple outputs in the prompt. There is no `--count` flag:
 node {baseDir}/scripts/codex-imagen.mjs --timeout 300 -o out/ --prompt 'generate 3 images of a monk mage'
 ```
 
+Use the same authenticated Responses API for prompt improvement when a UI wants model-written image prompt candidates:
+
+```bash
+node {baseDir}/scripts/codex-imagen.mjs --suggest --json --model gpt-5.4 --prompt 'a city at sunrise'
+```
+
+This returns a JSON object with a `suggestions` array and does not generate an image.
+
 Use `--verbose` or `--debug` for request progress, raw Responses event names, and reference image details. Use `--quiet` when only stdout paths/JSON should be emitted.
 
 ## Retry Behavior

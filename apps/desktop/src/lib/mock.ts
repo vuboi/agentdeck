@@ -7,7 +7,7 @@ export type Session = { id: string; title: string; agent: Agent; status: 'workin
 export type Block =
   | { kind: 'thinking'; text: string; streaming?: boolean }
   | { kind: 'response'; text: string; streaming?: boolean }
-  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string }
+  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; /** A delegate_task call: the task it started (see delegate-task.ts). */ taskId?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string }
   | { kind: 'loading'; label: string }
   /** Part of the user's message handed to another agent in a chat of its own; `state` follows that chat. */
   | { kind: 'delegate'; childId: string; agent: Agent; model: string; state: 'queued' | 'running' | 'asking' | 'done' | 'failed' | 'skipped'; note?: string; /** The workflow step it runs, when it comes from a flow. */ step?: string; /** Questions the step asked the user (state 'asking'). */ questions?: import('./questions').Question[]; /** The earlier step it is asking something right now, and what. */ talking?: string; talkText?: string }
@@ -138,6 +138,14 @@ messages.push(
         status: 'ok',
         change: { path: 'src/lib/app.css', added: 3, removed: 1, before: 'color: red;', after: 'color: blue;\nmargin: 0;\npadding: 0;' },
       },
+      {
+        kind: 'command',
+        id: 'c5',
+        command: 'mcp__agentdeck__delegate_task  {"agent":"claude","model":"haiku","task":"Search the repo for usages of useSession and list the files that call it."}',
+        output: '[task t-demo1 · chat claude:demo-worker · Claude · Haiku 5.5 · done · 42s]\n\nSTATUS: done\nRESULT: 4 call sites, all read-only\nFILES: src/a.ts; src/b.ts; src/c.ts; src/d.ts\nOPEN: none',
+        status: 'ok',
+      },
+      { kind: 'command', id: 'c6', command: 'agentdeck.delegate_task  {"agent":"codex","task":"Review the diff of the last commit for bugs.","wait":false}', output: '', status: 'running' },
       { kind: 'permission', state: 'pending', requests: [{ id: 'p1', tool: 'Bash', summary: 'git push origin main', allow: 'Bash(git push origin main)' }] },
       {
         kind: 'response',

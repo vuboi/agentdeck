@@ -52,6 +52,7 @@
   } from '../browser.svelte';
   import { inTauri } from '../history';
   import { trackRun } from '../activity.svelte';
+  import RunCard from './RunCard.svelte';
   import { blurPage, cutHole, modalBlur, overPage, setBelow } from '../page-layer';
   import { devtoolsOpen, layout, setDevtools } from '../layout.svelte';
   import { runInTerminal, showTerminalTab, stopTerminalRun, terminal, terminalRuns } from '../terminal.svelte';
@@ -605,6 +606,8 @@
 
   // What runs in the background (servers started from the Preview or by an agent): open it, or stop it.
   // Commands running in the Terminal panel's tabs are listed too (their address, when they printed one).
+  // The rows whose live output is open.
+  let shown = $state<Record<string, boolean>>({});
   const alive = $derived({ length: servers.list.filter((item) => item.running).length + terminalRuns.list.length });
   const rowCount = $derived(servers.list.length + terminalRuns.list.length);
   const terminalAge = (run: { startedAt: number }) => Math.max(0, Math.floor((clock - run.startedAt) / 1000));
@@ -917,7 +920,7 @@
                 <div class="col-start-1 row-start-1 flex min-h-38 flex-col items-center justify-center gap-2 self-center text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="24" /> Nothing is running in the background</div>
               {/if}
               {#each terminalRuns.list as run (run.id)}
-                <div class="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
+                <div class="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
                   <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left text-xs outline-none" onclick={() => { if (run.url) openInPreview(run.url, 'auto'); else showTerminalTab(run.id); processOpen = false; }}>
                     <ZIcon zType={(run.url ? 'lucideExternalLink' : 'lucideSquareTerminal') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground" />
                     <span class="flex min-w-0 flex-1 flex-col leading-tight">
@@ -930,14 +933,18 @@
                     </span>
                     <span class="shrink-0 whitespace-nowrap text-muted-foreground tabular-nums">{runningFor(terminalAge(run))}</span>
                   </button>
+                  <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Show output" aria-expanded={shown[`t:${run.id}`] ?? false} {@attach zTooltip({ content: 'Output', position: 'top' })} onclick={() => (shown[`t:${run.id}`] = !shown[`t:${run.id}`])}>
+                    <ZIcon zType={'lucideChevronRight' as ZIconName} zSize="12" class="transition-transform duration-200 {shown[`t:${run.id}`] ? 'rotate-90' : ''}" />
+                  </button>
                   <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md bg-destructive/10 text-destructive outline-none hover:bg-destructive/20" aria-label="Stop (Ctrl+C)" {@attach zTooltip({ content: 'Stop (Ctrl+C)', position: 'top' })} onclick={() => stopTerminalRun(run.id)}>
                     <svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg>
                   </button>
+                  {#if shown[`t:${run.id}`]}<RunCard terminalId={run.id} command={run.command} cwd={run.cwd} startedAt={run.startedAt} />{/if}
                 </div>
               {/each}
               {#each servers.list as item, index (`${item.key}:${item.pid}`)}
                 <!-- One line each, cut short when long; a line between rows. -->
-                <div class="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
+                <div class="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
                   <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left text-xs outline-none" onclick={() => { if (item.url && item.running) { openInPreview(item.url, 'auto'); processOpen = false; } else toast.info(serverState(item).hint); }}>
                     <ZIcon zType={(item.running ? (item.url ? 'lucideExternalLink' : 'lucideLoaderCircle') : 'lucideCircleOff') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground {item.running && !item.url ? 'animate-spin' : ''}" />
                     <span class="flex min-w-0 flex-1 flex-col leading-tight">
@@ -947,9 +954,13 @@
                     </span>
                     <span class="shrink-0 whitespace-nowrap text-muted-foreground tabular-nums">{runningFor(ageOf(item))}</span>
                   </button>
+                  <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Show output" aria-expanded={shown[`s:${item.key}`] ?? false} {@attach zTooltip({ content: 'Output', position: 'top' })} onclick={() => (shown[`s:${item.key}`] = !shown[`s:${item.key}`])}>
+                    <ZIcon zType={'lucideChevronRight' as ZIconName} zSize="12" class="transition-transform duration-200 {shown[`s:${item.key}`] ? 'rotate-90' : ''}" />
+                  </button>
                   <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md bg-destructive/10 text-destructive outline-none hover:bg-destructive/20" aria-label={item.running ? 'Stop' : 'Remove from the list'} {@attach zTooltip({ content: item.running ? 'Stop' : 'Remove from the list', position: 'top' })} onclick={() => void stopServers(item.key)}>
                     {#if item.running}<svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg>{:else}<ZIcon zType={'lucideX' as ZIconName} zSize="12" />{/if}
                   </button>
+                  {#if shown[`s:${item.key}`]}<RunCard port={item.key} command={item.command} cwd={item.cwd} startedAt={Date.now() - item.age * 1000} running={item.running} />{/if}
                 </div>
               {/each}
 </div>

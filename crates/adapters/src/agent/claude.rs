@@ -84,10 +84,14 @@ impl Provider for Claude {
         candidates_for(std::env::consts::OS, home, env_path("APPDATA"))
     }
 
+    fn prompt_on_stdin(&self) -> bool {
+        true
+    }
+
     fn args(&self, req: &TurnRequest) -> Vec<String> {
+        // `-p` with no prompt argument reads the prompt from stdin (see `prompt_on_stdin`).
         let mut args = vec![
             "-p".to_string(),
-            req.prompt.clone(),
             "--output-format".to_string(),
             "stream-json".to_string(),
             "--verbose".to_string(),

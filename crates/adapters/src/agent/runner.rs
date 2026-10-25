@@ -207,7 +207,7 @@ pub async fn drive_turn(
     let mut command = Command::new(binary);
     command
         .args(provider.args(req))
-        .stdin(Stdio::null())
+        .stdin(if provider.prompt_on_stdin() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -225,6 +225,17 @@ pub async fn drive_turn(
             });
         }
     };
+
+    // Written apart from the reader: a long prompt must not hold up the output, and the CLI reads all of it
+    // before it starts working, so a closed or early-exiting child only ends this write.
+    if let Some(mut stdin) = child.stdin.take() {
+        let prompt = req.prompt.clone();
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let _ = stdin.write_all(prompt.as_bytes()).await;
+            let _ = stdin.shutdown().await;
+        });
+    }
 
     let mut finished = false;
     if let Some(stdout) = child.stdout.take() {

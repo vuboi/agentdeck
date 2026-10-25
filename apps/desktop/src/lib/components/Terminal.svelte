@@ -1,11 +1,11 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
-  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDropdownMenu, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
+  import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import { terminal, newTerminal, closeTerminal, toggleTerminal } from '../terminal.svelte';
   import { activeSession, projectOf } from '../sessions.svelte';
-  import { attachSession, clearSession, copyOrPaste, findInSession, fitSession, focusSession, terminalAvailable, type SessionHooks } from '../terminal-session';
+  import { attachSession, clearSession, copySelection, findInSession, fitSession, focusSession, hasSelection, pasteInto, scrollSession, selectAllIn, terminalAvailable, type SessionHooks } from '../terminal-session';
 
   let searching = $state(false);
   let query = $state('');
@@ -27,7 +27,31 @@
       if (tab) tab.status = status;
     },
     find: () => openFind(),
+    scrolled: (top, bottom) => (ends[id] = { top, bottom }),
   });
+
+  // Where each tab's view is, for its scroll arrows.
+  let ends = $state<Record<string, { top: boolean; bottom: boolean }>>({});
+
+  // Press and hold: a step at once, then steps every 50 ms after 300 ms.
+  let hold = 0;
+  let holdTimer = 0;
+  function press(event: PointerEvent, id: string, lines: number) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    release();
+    scrollSession(id, lines);
+    hold = window.setTimeout(() => {
+      holdTimer = window.setInterval(() => scrollSession(id, lines), 50);
+    }, 300);
+    window.addEventListener('pointerup', release, { once: true });
+    window.addEventListener('pointercancel', release, { once: true });
+  }
+  function release() {
+    clearTimeout(hold);
+    clearInterval(holdTimer);
+  }
+  const arrow = 'absolute right-0 z-10 grid size-2.5 cursor-pointer place-items-center text-muted-foreground opacity-70 outline-none hover:opacity-100 disabled:cursor-default disabled:opacity-25 disabled:hover:opacity-25';
 
   /** Puts a tab's terminal into its box, keeps it fitted to it, and gives it the keyboard when it is the open one. */
   function mount(element: HTMLElement, id: string) {
@@ -72,6 +96,39 @@
       findInSession(terminal.active, query, event.shiftKey);
     }
   }
+
+  // The right-click menu, at the pointer: Copy (only while text is selected), Paste, Select all, Clear.
+  let menu = $state<{ x: number; y: number; id: string; selected: boolean } | null>(null);
+  let menuOpen = $state(false);
+  let menuKey = $state(0);
+
+  function onContextMenu(event: MouseEvent, id: string) {
+    event.preventDefault();
+    menuKey++;
+    menu = { x: event.clientX, y: event.clientY, id, selected: hasSelection(id) };
+    menuOpen = true;
+  }
+
+  const item = (label: string, icon: string, shortcut: string | undefined, run: (id: string) => unknown, extra: Partial<ZDropdownMenuItem> = {}): ZDropdownMenuItem => ({
+    label,
+    icon: icon as ZIconName,
+    iconSize: '12',
+    shortcut,
+    class: 'text-xs! py-1',
+    onClick: () => {
+      const id = menu?.id;
+      if (!id) return;
+      void Promise.resolve(run(id)).finally(() => focusSession(id));
+    },
+    ...extra,
+  });
+
+  const menuItems = $derived<ZDropdownMenuItem[]>([
+    item('Copy', 'lucideCopy', 'Ctrl+Shift+C', copySelection, { hidden: !menu?.selected }),
+    item('Paste', 'lucideClipboardPaste', 'Ctrl+Shift+V', pasteInto),
+    item('Select all', 'lucideTextSelect', undefined, selectAllIn, { divide: 'before' }),
+    item('Clear', 'lucideBan', undefined, clearSession),
+  ]);
 
   const iconButton = 'size-7! shrink-0 p-0 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary';
 </script>
@@ -154,15 +211,33 @@
         {#each terminal.tabs as tab (tab.id)}
           <!-- Every tab keeps its box (a hidden one has no size), so its shell and scrollback stay. -->
           <div
-            class="absolute inset-0 px-3 pb-2 {tab.id === terminal.active ? '' : 'hidden'}"
+            class="absolute inset-0 {tab.id === terminal.active ? '' : 'hidden'}"
             role="tabpanel"
             tabindex="-1"
             aria-label={tab.name}
-            oncontextmenu={(event) => { event.preventDefault(); void copyOrPaste(tab.id); }}
+            oncontextmenu={(event) => onContextMenu(event, tab.id)}
             {@attach (element) => mount(element, tab.id)}
-          ></div>
+          >
+            <!-- The scroll arrows sit in the terminal's own top and bottom padding, at the right edge, in line with its scrollbar. -->
+            <button type="button" tabindex="-1" aria-label="Scroll up" class="{arrow} top-0" disabled={ends[tab.id]?.top ?? true} onpointerdown={(event) => press(event, tab.id, -3)}>
+              <svg viewBox="0 0 8 8" width="8" height="8" class="block" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 5.2 4 2.8 6.5 5.2" /></svg>
+            </button>
+            <button type="button" tabindex="-1" aria-label="Scroll down" class="{arrow} bottom-0" disabled={ends[tab.id]?.bottom ?? true} onpointerdown={(event) => press(event, tab.id, 3)}>
+              <svg viewBox="0 0 8 8" width="8" height="8" class="block" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 2.8 4 5.2 6.5 2.8" /></svg>
+            </button>
+          </div>
         {/each}
       </div>
     {/if}
   </section>
+{/if}
+
+{#if menu}
+  {#key menuKey}
+    <div class="pointer-events-none fixed z-50 size-px" style:left="{menu.x}px" style:top="{menu.y}px">
+      <ZDropdownMenu zItems={menuItems} bind:open={menuOpen} zPosition="bottom-left" zOffset={4} zMinWidth={190} zContentClass="p-1 text-xs">
+        <span class="block size-px"></span>
+      </ZDropdownMenu>
+    </div>
+  {/key}
 {/if}

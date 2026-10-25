@@ -5,7 +5,7 @@
 import type { AgentEvent } from './agent';
 import { inTauri } from './history';
 import { planRunRestore, terminalStep, updateInflight, loadInflight, withTerminal, withoutTerminal, type InflightRun, type ServerLike } from './inflight';
-import { sessionTail } from './terminal-session';
+import { sessionTail, watchOutput } from './terminal-session';
 
 export type ActivityStatus = 'running' | 'background' | 'ok' | 'fail' | 'stopped';
 export type Activity = {
@@ -227,6 +227,41 @@ export async function refreshOutput(item: Activity): Promise<boolean> {
     // The output stays as it was.
   }
   return false;
+}
+
+/**
+ * Keeps a Terminal entry's `output` in step with what its tab prints: the terminal pushes the tail whenever the shell
+ * writes (throttled there), nothing is read on a timer. Returns the function that stops it.
+ */
+export function watchTerminalOutput(item: Activity): () => void {
+  if (!item.terminalId) return () => {};
+  return watchOutput(item.terminalId, (text) => {
+    // A finished entry keeps what it ended with: the tab's next command is another entry.
+    if (item.status !== 'running') return;
+    item.output = text.slice(-OUTPUT_CAP);
+  });
+}
+
+// ---- The Rust side tells when a server's log grew (`server-log`, {port}), so a card reads it again at once.
+const logWatchers = new Map<number, Set<() => void>>();
+let listeningToLogs: Promise<void> | null = null;
+
+/** Calls `changed` whenever the log of the server on `port` grows. Returns the function that stops it. */
+export function watchServerLog(port: number, changed: () => void): () => void {
+  if (!inTauri()) return () => {};
+  listeningToLogs ??= import('@tauri-apps/api/event').then(async ({ listen }) => {
+    await listen<{ port: number }>('server-log', ({ payload }) => {
+      for (const watcher of logWatchers.get(payload.port) ?? []) watcher();
+    });
+  });
+  void listeningToLogs.catch(() => (listeningToLogs = null));
+  const set = logWatchers.get(port) ?? new Set();
+  set.add(changed);
+  logWatchers.set(port, set);
+  return () => {
+    set.delete(changed);
+    if (set.size === 0 && logWatchers.get(port) === set) logWatchers.delete(port);
+  };
 }
 
 /**

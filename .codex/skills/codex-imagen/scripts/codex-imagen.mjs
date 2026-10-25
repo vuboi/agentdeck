@@ -125,6 +125,7 @@ Options:
   --refresh-url <url>   OAuth refresh endpoint. Default: ${DEFAULT_REFRESH_URL}
   --cwd <path>          Resolve relative input/output paths from this working directory.
   --smoke               Check auth discovery and print redacted auth metadata. No generation.
+  --suggest             Ask the Responses API for improved image prompt candidates instead of generating images.
   --force-refresh       Refresh Codex OAuth before generating.
   --refresh-only        Refresh Codex OAuth and exit. Does not require a prompt.
   --no-refresh          Disable proactive refresh and 401 refresh retry.
@@ -181,6 +182,7 @@ function parseArgs(argv) {
     refreshUrl: process.env.CODEX_REFRESH_TOKEN_URL_OVERRIDE || DEFAULT_REFRESH_URL,
     retries: DEFAULT_RETRIES,
     smoke: false,
+    suggest: false,
     stream: true,
     timeoutMs: null,
     timeoutMsExplicit: false,
@@ -284,6 +286,8 @@ function parseArgs(argv) {
       options.cwd = next();
     } else if (arg === "--smoke") {
       options.smoke = true;
+    } else if (arg === "--suggest") {
+      options.suggest = true;
     } else if (arg === "--force-refresh") {
       options.forceRefresh = true;
     } else if (arg === "--refresh-only") {
@@ -2506,6 +2510,109 @@ async function postResponsesRequest(endpoint, body, auth, requestId, sessionId, 
   return { response, cloudflareCookieCount };
 }
 
+function buildSuggestionBody(options, prompt, requestId) {
+  return {
+    model: options.model,
+    instructions:
+      "You improve prompts for image generation. Return exactly three distinct, ready-to-use prompts as a JSON array of strings. Preserve the user's subject and intent. Add useful visual detail such as style, composition, lighting, camera or rendering direction. Do not add commentary, markdown, numbering, policy text, or claims about the image.",
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: prompt }],
+      },
+    ],
+    prompt_cache_key: requestId,
+    stream: true,
+    store: false,
+    reasoning: null,
+  };
+}
+
+// The Codex backend only accepts `stream: true`, so the suggestion comes back as server-sent events:
+// keep the final response when it is sent, otherwise join the text deltas.
+async function readSuggestionStream(response) {
+  let completed = null;
+  let deltas = "";
+  for (const line of (await response.text()).split(/\r?\n/)) {
+    if (!line.startsWith("data:")) continue;
+    const event = tryParseJson(line.slice(5).trim());
+    if (event?.type === "response.completed") completed = event.response;
+    if (event?.type === "response.output_text.delta" && typeof event.delta === "string") deltas += event.delta;
+  }
+  return completed ?? { output_text: deltas };
+}
+
+function responseText(payload) {
+  if (typeof payload?.output_text === "string") {
+    return payload.output_text;
+  }
+  return (Array.isArray(payload?.output) ? payload.output : [])
+    .flatMap((item) => (Array.isArray(item?.content) ? item.content : []))
+    .map((item) => (typeof item?.text === "string" ? item.text : item?.text?.value))
+    .filter((text) => typeof text === "string")
+    .join("\n");
+}
+
+function promptSuggestionsFromText(text) {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const direct = tryParseJson(cleaned);
+  const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+  const embedded = arrayMatch ? tryParseJson(arrayMatch[0]) : null;
+  const values = Array.isArray(direct)
+    ? direct
+    : Array.isArray(direct?.suggestions)
+      ? direct.suggestions
+      : Array.isArray(embedded)
+        ? embedded
+        : cleaned.split(/\r?\n/).map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, ""));
+  return [...new Set(values.filter((value) => typeof value === "string").map((value) => value.trim()).filter(Boolean))].slice(0, 5);
+}
+
+async function requestPromptSuggestions(options, prompt, auth) {
+  const requestId = randomUUID();
+  const sessionId = randomUUID();
+  const endpoint = `${options.baseUrl.replace(/\/+$/, "")}/responses`;
+  const body = buildSuggestionBody(options, prompt, requestId);
+  const abortController = new AbortController();
+  const watchdog = createGenerationWatchdog(options, abortController);
+
+  logProgress(options, `codex-imagen: POST ${endpoint}`);
+  logProgress(options, "codex-imagen: operation prompt_suggestions");
+  logProgress(options, `codex-imagen: model ${options.model}`);
+  try {
+    let { response, cloudflareCookieCount } = await postResponsesRequest(
+      endpoint,
+      body,
+      auth,
+      requestId,
+      sessionId,
+      abortController.signal
+    );
+    if (response.status === 403 && cloudflareCookieCount > 0) {
+      ({ response } = await postResponsesRequest(endpoint, body, auth, requestId, sessionId, abortController.signal));
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      const preview = text.length > 4000 ? `${text.slice(0, 4000)}...` : text;
+      throw new HttpStatusError(response.status, response.statusText, preview);
+    }
+    const payload = await readSuggestionStream(response);
+    const suggestions = promptSuggestionsFromText(responseText(payload));
+    if (suggestions.length === 0) {
+      throw new GenerationFailedError("The prompt model returned no usable suggestions.");
+    }
+    return { request_id: requestId, model: options.model, suggestions };
+  } catch (error) {
+    if (abortController.signal.aborted) {
+      throw new TimeoutError(`Timed out after ${describeTimeout(options.timeoutMs)} before prompt suggestions arrived.`);
+    }
+    throw error;
+  } finally {
+    watchdog.clear();
+  }
+}
+
 function timestampForPath() {
   return new Date()
     .toISOString()
@@ -3021,6 +3128,31 @@ async function main() {
   const prompt = await readPrompt(options);
   if (!prompt?.trim()) {
     throw new UsageError("Prompt is required. Pass it positionally, with --prompt, or with --prompt-file.");
+  }
+
+  if (options.suggest) {
+    let result;
+    try {
+      result = await requestPromptSuggestions(options, prompt, auth);
+    } catch (error) {
+      if (!(error instanceof HttpStatusError) || error.status !== 401 || !options.refresh) {
+        throw error;
+      }
+      const retryRefresh = await refreshAuth(options, auth, "401 from Codex backend");
+      auth = retryRefresh.auth;
+      result = await requestPromptSuggestions(options, prompt, auth);
+      refresh = retryRefresh;
+    }
+    if (refresh && options.json) {
+      result.auth_refresh = {
+        refreshed: refresh.refreshed,
+        skipped: refresh.skipped,
+        last_refresh: auth.lastRefresh,
+        access_token_expires_in_seconds: tokenSecondsLeft(auth.tokenPayload, auth.expiresMs),
+      };
+    }
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
   }
 
   let result;

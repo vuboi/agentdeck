@@ -84,8 +84,8 @@ body {
 
 /* ---- Global scrollbars: slim, flush with the edge, arrow buttons at both ends ---- */
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
 }
 *::-webkit-scrollbar-track,
 *::-webkit-scrollbar-corner {
@@ -321,5 +321,13 @@ body {
 }
 
 /* The terminal draws its own 14px scrollbar (xterm 6): slimmed to match the app's. */
-.xterm .xterm-scrollable-element > .scrollbar.vertical { width: 10px !important; }
-.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider { width: 6px !important; left: 2px !important; border-radius: 3px; }
+/* The padding of the text is the terminal's own (the fit counts it), so its scrollbar sits flush against the panel's right edge. */
+/* Top and bottom padding is the room of the scroll arrows (Terminal.svelte), 10px like the app's scrollbar buttons. */
+.xterm { padding: 10px 0 10px 12px; }
+/* xterm paints its scroll area black by default: it would show in the padding (and in a light theme). */
+.xterm .xterm-viewport { background-color: transparent !important; }
+.xterm .xterm-scrollable-element > .scrollbar.vertical { width: 12px !important; }
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider { width: 7px !important; left: 3px !important; border-radius: 3px; }
+
+/* The overlay scrollbars of z-ui (sidebar lists, dialogs, scroll areas): a little thicker than its 6px default. */
+.os-theme-z.os-scrollbar { --os-size: 9px; }

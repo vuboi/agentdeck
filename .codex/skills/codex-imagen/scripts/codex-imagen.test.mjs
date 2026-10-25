@@ -374,6 +374,58 @@ test("generation defaults to hosted Responses image_generation request", async (
   }
 });
 
+test("prompt suggestion mode posts a text Responses request and returns model suggestions", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-imagen-prompt-suggest-"));
+  const authPath = path.join(tempDir, "agent", "auth-profiles.json");
+  await writeOpenClawAuthProfile(authPath, freshOpenClawProfile());
+
+  const seen = [];
+  const server = createServer(async (request, response) => {
+    if (request.url === "/backend-api/codex/responses") {
+      seen.push({ headers: request.headers, body: await readJsonBody(request) });
+      // The backend only accepts stream: true, so the answer arrives as server-sent events.
+      const output_text = JSON.stringify(["cinematic city at sunrise", "editorial city poster", "detailed 3D city render"]);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(`data: ${JSON.stringify({ type: "response.completed", response: { output_text } })}\n\n`);
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  try {
+    const result = await runCli(
+      [
+        "--auth",
+        authPath,
+        "--base-url",
+        `http://127.0.0.1:${port}/backend-api/codex`,
+        "--suggest",
+        "--json",
+        "--quiet",
+        "--model",
+        "gpt-5.6-terra",
+        "--prompt",
+        "a city at sunrise",
+      ],
+      { OPENCLAW_STATE_DIR: path.join(tempDir, "state"), ...deterministicCodexUserAgentEnv }
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].body.model, "gpt-5.6-terra");
+    assert.equal(seen[0].body.stream, true);
+    assert.equal(seen[0].body.tools, undefined);
+    assert.match(seen[0].body.instructions, /image generation/i);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.model, "gpt-5.6-terra");
+    assert.deepEqual(output.suggestions, ["cinematic city at sunrise", "editorial city poster", "detailed 3D city render"]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("interrupted Responses stream fails but leaves already saved images", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-imagen-interrupted-responses-"));
   const authPath = path.join(tempDir, "agent", "auth-profiles.json");

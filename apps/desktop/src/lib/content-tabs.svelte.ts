@@ -3,6 +3,7 @@ import { history, pendingProject, watchDroppedDrafts, workspace } from './sessio
 import { getPref, setPref } from './prefs';
 import { fileWrites } from './activity.svelte';
 import { drafts } from './file-buffers';
+import { fileKey, rememberText } from './file-cache';
 import { joinFileText, splitFileText } from './file-edit';
 import { inTauri } from './history';
 import { toast } from './toast';
@@ -189,6 +190,7 @@ export async function saveTab(id: string): Promise<boolean> {
     return false;
   }
   draft.disk = raw;
+  rememberText(fileKey(tab.root, tab.path), raw); // the next viewer of this file opens on what was just written
   if (draft.saved) draft.saved(raw);
   else {
     drafts.delete(id);

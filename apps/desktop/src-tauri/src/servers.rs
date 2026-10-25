@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(windows)]
 mod job {
@@ -16,8 +16,9 @@ mod job {
 
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
     /// The raw job handle (0: it could not be made, and servers then only stop through `kill_all`).
@@ -27,7 +28,9 @@ mod job {
         let raw = *JOB.get_or_init(|| {
             // SAFETY: plain Win32 calls with a handle made here and a correctly sized, initialised struct.
             unsafe {
-                let Ok(job) = CreateJobObjectW(None, None) else { return 0 };
+                let Ok(job) = CreateJobObjectW(None, None) else {
+                    return 0;
+                };
                 let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
                 info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
                 let set = SetInformationJobObject(
@@ -54,6 +57,60 @@ mod job {
     }
 }
 
+/// What tells the page that the log of the server on a port grew (set once at start-up; tests run without one). A
+/// callback, not the app handle, so this module (and its tests) does not pull the window toolkit in.
+type LogAnnouncer = Box<dyn Fn(u16) + Send + Sync>;
+static ANNOUNCE: OnceLock<LogAnnouncer> = OnceLock::new();
+
+/// Gives the module the function that announces a grown log.
+pub fn init(announce: impl Fn(u16) + Send + Sync + 'static) {
+    let _ = ANNOUNCE.set(Box::new(announce));
+}
+
+/// How often a running server's log file is looked at for growth. A look is one `stat`; the page is told only when
+/// the length changed, so a quiet server costs the webview nothing.
+const LOG_LOOK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Whether the log is now a different length than at the last look (it grew, or the file was started over).
+fn changed(last: &mut u64, now: u64) -> bool {
+    let differs = *last != now;
+    *last = now;
+    differs
+}
+
+/// Emits `server-log` {port} whenever the log of the server (process `pid`) on `port` changes, until that server has
+/// ended or been replaced; one last event goes out when it ends, so the page reads the final lines.
+fn watch_log(port: u16, pid: u32) {
+    let Some(announce) = ANNOUNCE.get() else {
+        return;
+    };
+    let Ok(path) = log_path(port) else { return };
+    std::thread::spawn(move || {
+        let mut last = 0u64;
+        loop {
+            std::thread::sleep(LOG_LOOK);
+            let length = std::fs::metadata(&path).map_or(0, |meta| meta.len());
+            if changed(&mut last, length) {
+                announce(port);
+            }
+            let alive = RUNNING
+                .lock()
+                .map(|mut running| {
+                    running.iter_mut().any(|server| {
+                        server.key == port
+                            && server.child.id() == pid
+                            && matches!(server.child.try_wait(), Ok(None))
+                    })
+                })
+                .unwrap_or(false);
+            if !alive {
+                announce(port);
+                return;
+            }
+        }
+    });
+}
+
 /// A server this app started: what it runs, where, and the address it answers at once known.
 struct Server {
     key: u16,
@@ -68,14 +125,18 @@ static RUNNING: Mutex<Vec<Server>> = Mutex::new(Vec::new());
 
 /// The log file of the server on `port`.
 pub fn log_path(port: u16) -> Result<PathBuf, String> {
-    Ok(crate::home_folder()?.join(".agentdeck").join("servers").join(format!("{port}.log")))
+    Ok(crate::home_folder()?
+        .join(".agentdeck")
+        .join("servers")
+        .join(format!("{port}.log")))
 }
 
 /// Starts `command` in `cwd` for the server expected on `port`. A server this app started earlier on the same
 /// port that has exited is forgotten first.
 pub fn start(command: &str, cwd: &str, port: u16) -> Result<PathBuf, String> {
     let log = log_path(port)?;
-    std::fs::create_dir_all(log.parent().ok_or("no folder for the server log")?).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(log.parent().ok_or("no folder for the server log")?)
+        .map_err(|error| error.to_string())?;
     let out = std::fs::File::create(&log).map_err(|error| error.to_string())?;
     let err = out.try_clone().map_err(|error| error.to_string())?;
     let mut shell = if cfg!(windows) {
@@ -87,7 +148,11 @@ pub fn start(command: &str, cwd: &str, port: u16) -> Result<PathBuf, String> {
         shell.args(["-c", command]);
         shell
     };
-    shell.current_dir(cwd).stdin(Stdio::null()).stdout(out).stderr(err);
+    shell
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(out)
+        .stderr(err);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -99,7 +164,9 @@ pub fn start(command: &str, cwd: &str, port: u16) -> Result<PathBuf, String> {
         use std::os::unix::process::CommandExt;
         shell.process_group(0); // its own group, so the whole tree can be stopped at once
     }
-    let child = shell.spawn().map_err(|error| format!("could not start `{command}` in {cwd}: {error}"))?;
+    let child = shell
+        .spawn()
+        .map_err(|error| format!("could not start `{command}` in {cwd}: {error}"))?;
     #[cfg(windows)]
     job::adopt(&child);
     let mut running = RUNNING.lock().map_err(|_| "busy".to_string())?;
@@ -111,7 +178,17 @@ pub fn start(command: &str, cwd: &str, port: u16) -> Result<PathBuf, String> {
         kill_tree(&mut server.child);
         false
     });
-    running.push(Server { key: port, child, command: command.to_string(), cwd: cwd.to_string(), url: None, started: std::time::SystemTime::now() });
+    let pid = child.id();
+    running.push(Server {
+        key: port,
+        child,
+        command: command.to_string(),
+        cwd: cwd.to_string(),
+        url: None,
+        started: std::time::SystemTime::now(),
+    });
+    drop(running);
+    watch_log(port, pid);
     Ok(log)
 }
 
@@ -148,7 +225,9 @@ fn kill_tree(child: &mut Child) {
     let id = child.id().to_string();
     if cfg!(windows) {
         let mut kill = Command::new("taskkill");
-        kill.args(["/PID", &id, "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null());
+        kill.args(["/PID", &id, "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -156,14 +235,18 @@ fn kill_tree(child: &mut Child) {
         }
         let _ = kill.status();
     } else {
-        let _ = Command::new("kill").args(["-TERM", &format!("-{id}")]).status();
+        let _ = Command::new("kill")
+            .args(["-TERM", &format!("-{id}")])
+            .status();
     }
     let _ = child.kill();
 }
 
 /// Stops every server this app started.
 pub fn kill_all() {
-    let Ok(mut running) = RUNNING.lock() else { return };
+    let Ok(mut running) = RUNNING.lock() else {
+        return;
+    };
     for server in running.iter_mut() {
         kill_tree(&mut server.child);
     }
@@ -198,11 +281,16 @@ const NO_ANSWER_SECS: u64 = 300;
 
 #[tauri::command]
 pub fn servers_list() -> Vec<ServerInfo> {
-    let Ok(mut running) = RUNNING.lock() else { return Vec::new() };
+    let Ok(mut running) = RUNNING.lock() else {
+        return Vec::new();
+    };
     // A server that never answered on its port is stopped after a while: it is stuck, or it uses another port.
     for server in running.iter_mut() {
         let waited = server.started.elapsed().map_or(0, |age| age.as_secs());
-        if server.url.is_none() && waited > NO_ANSWER_SECS && matches!(server.child.try_wait(), Ok(None)) {
+        if server.url.is_none()
+            && waited > NO_ANSWER_SECS
+            && matches!(server.child.try_wait(), Ok(None))
+        {
             kill_tree(&mut server.child);
         }
     }
@@ -224,11 +312,29 @@ pub fn servers_list() -> Vec<ServerInfo> {
 #[tauri::command]
 pub fn server_stop(key: Option<u16>) -> Result<(), String> {
     let mut running = RUNNING.lock().map_err(|_| "busy".to_string())?;
-    for server in running.iter_mut().filter(|server| key.is_none_or(|key| server.key == key)) {
+    for server in running
+        .iter_mut()
+        .filter(|server| key.is_none_or(|key| server.key == key))
+    {
         kill_tree(&mut server.child);
     }
     running.retain(|server| key.is_some_and(|key| server.key != key));
     Ok(())
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+
+    #[test]
+    fn a_log_is_announced_only_when_its_length_changes() {
+        let mut last = 0;
+        assert!(!changed(&mut last, 0));
+        assert!(changed(&mut last, 120));
+        assert!(!changed(&mut last, 120));
+        // Started over (a server restarted on the same port): shorter, still a change.
+        assert!(changed(&mut last, 10));
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -236,8 +342,14 @@ mod tests {
     use super::*;
 
     fn pings() -> usize {
-        let out = Command::new("tasklist").args(["/FI", "IMAGENAME eq PING.EXE", "/NH"]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-        out.lines().filter(|line| line.to_uppercase().contains("PING.EXE")).count()
+        let out = Command::new("tasklist")
+            .args(["/FI", "IMAGENAME eq PING.EXE", "/NH"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        out.lines()
+            .filter(|line| line.to_uppercase().contains("PING.EXE"))
+            .count()
     }
 
     #[test]

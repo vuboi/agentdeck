@@ -550,7 +550,7 @@
 {/if}
 <form
   bind:this={formEl}
-  class="relative z-10 min-w-0 rounded-2xl border bg-card px-2.5 pt-2 pb-1.5 shadow-lg min-[720px]:px-3 min-[720px]:pt-2.5 min-[720px]:pb-1.5 transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
+  class="relative z-10 min-w-0 rounded-2xl border bg-card p-2 shadow-lg transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
   onsubmit={(event) => { event.preventDefault(); submit(); }}
   ondragover={(event) => { if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); dragging = true; } }}
   ondragleave={() => (dragging = false)}
@@ -634,7 +634,7 @@
     wrap="soft"
     aria-label="Message"
     placeholder={running ? `Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt` : 'Do anything…'}
-    class="max-h-45 min-h-6 w-full resize-none overflow-x-hidden break-words border-0 bg-transparent px-1 pt-0.5 pb-1.5 text-sm leading-normal outline-none placeholder:text-muted-foreground"
+    class="max-h-45 min-h-10 w-[calc(100%+0.5rem)] resize-none overflow-x-hidden break-words border-0 bg-transparent pt-0 pr-2 pb-1 pl-0.5 text-sm leading-normal outline-none placeholder:text-muted-foreground"
   ></textarea>
 
   <div class="flex min-w-0 items-center justify-between gap-2">

@@ -9,6 +9,7 @@
   import McpView from './McpView.svelte';
   import WorkflowView from './WorkflowView.svelte';
   import UsageView from './UsageView.svelte';
+  import ImageGenerator from './ImageGenerator.svelte';
 
   // The body of a workspace tool. Same view in the right panel and in the detached modal.
   let { tool }: { tool: string } = $props();
@@ -19,6 +20,8 @@
   <FileExplorer />
 {:else if tool === 'Preview'}
   <BrowserView />
+{:else if tool === 'Images'}
+  <ImageGenerator />
 {:else if tool === 'Tasks' || tool === 'Audit'}
   <TasksView />
 {:else if tool === 'Diff'}
