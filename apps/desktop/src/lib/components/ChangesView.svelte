@@ -14,6 +14,9 @@
   import { inTauri } from '../history';
   import { toast } from '../toast';
   import { openFileTab } from '../content-tabs.svelte';
+  import { parseDiff, relativeTo } from '../diff';
+  import { imageMimeOf, readProjectFile } from '../files';
+  import { diffCache, fileKey, rememberText } from '../file-cache';
 
   // Everything the agent left changed in the project, read from git (so it holds for every agent): files with
   // their +/- counts, a click opens the file in a tab. Revert puts a file back to the last commit; an untracked file is
@@ -65,6 +68,25 @@
         loaded = true;
       }
     }
+  }
+
+  // Hovering a row reads its diff and text in the background, so the viewer opens on them at once. The viewer
+  // reads them again on its own; a row hovered again within 3 s is not read twice.
+  const warmed = new Map<string, number>();
+  function warm(change: Change) {
+    if (change.status === 'D' || !inTauri() || imageMimeOf(change.path)) return;
+    const from = root;
+    const path = `${from.replace(/[\/]+$/, '')}/${change.path}`;
+    const key = fileKey(from, path);
+    const at = warmed.get(key);
+    if (at !== undefined && Date.now() - at < 3000) return;
+    warmed.set(key, Date.now());
+    void call<string>('change_diff', { root: from, path: relativeTo(from, path) })
+      .then((diff) => diffCache.set(key, { diff, rows: parseDiff(diff) }))
+      .catch(() => {});
+    void readProjectFile(from, path)
+      .then((raw) => rememberText(key, raw))
+      .catch(() => {});
   }
 
   function openChange(change: Change) {
@@ -197,7 +219,7 @@
             <!-- The slot is ROW high (the list is virtual); the row inside leaves 1px above and below, so rows do not touch. -->
             <div class="absolute top-0 left-0 w-full py-px" style:height="{row.size}px" style:transform="translateY({row.start}px)">
             <div class="group flex h-full items-center gap-1.5 rounded-(--radius-row) px-2.5 text-xs hover:bg-muted/50">
-              <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left no-underline outline-none" title="Open {change.path}" onclick={() => openChange(change)}>
+              <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left no-underline outline-none" title="Open {change.path}" onpointerenter={() => warm(change)} onclick={() => openChange(change)}>
                 <span class="w-3 shrink-0 text-center font-mono {STATUS[change.status]?.tone}" title={STATUS[change.status]?.label}>{change.status}</span>
                 <span class="min-w-0 truncate" title={change.path}><span class="text-muted-foreground">{dirOf(change.path)}</span>{nameOf(change.path)}</span>
               </button>

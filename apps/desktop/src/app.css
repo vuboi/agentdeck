@@ -329,11 +329,6 @@ body {
 .xterm .xterm-scrollable-element > .scrollbar.vertical { width: 12px !important; }
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider { width: 7px !important; left: 3px !important; border-radius: 3px; }
 
-/* z-ui's tree scrolls natively (its own overflow-y-auto), so it takes the global scrollbar above: slimmed here. */
-.z-tree::-webkit-scrollbar { width: 8px; height: 8px; }
-.z-tree::-webkit-scrollbar-thumb { border-width: 2px; }
-/* No arrow buttons on the tree: they made its scrollbar look heavier than the thumb alone. */
-.z-tree::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 
 /* The overlay scrollbars of z-ui (sidebar lists, drawers, dialogs, scroll areas): the same slim thumb as the
  * native ones above (a 12px track with a 6px thumb inset by 3px), so floating panels do not look heavier. */

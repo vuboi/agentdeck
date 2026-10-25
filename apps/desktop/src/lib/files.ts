@@ -46,6 +46,24 @@ const LABELS: Record<string, string> = {
 /** A short, readable name for a language id ("tsx" -> "TSX"). */
 export const languageLabel = (lang: string | undefined) => (lang ? (LABELS[lang] ?? lang[0].toUpperCase() + lang.slice(1)) : 'Plain text');
 
+// Pictures the viewer shows as an image, not as text. SVG too: an <img> never runs its script.
+const IMAGE_MIME: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', jpe: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif', svg: 'image/svg+xml',
+};
+/** The picture type of a file name, or undefined when the file is not a picture. */
+export function imageMimeOf(name: string): string | undefined {
+  const dot = name.lastIndexOf('.');
+  return dot === -1 ? undefined : IMAGE_MIME[name.slice(dot + 1).toLowerCase()];
+}
+
+/** A picture inside the project folder, as a data URL the page can show. */
+export async function readImageUrl(root: string, path: string, mime: string): Promise<string> {
+  if (!inTauri()) throw new Error('Open the desktop app to read files.');
+  const { invoke } = await import('@tauri-apps/api/core');
+  return `data:${mime};base64,${await invoke<string>('file_read_bytes', { root, path })}`;
+}
+
 /** Text of a file inside the project folder. The desktop app reads it; the browser preview cannot. */
 export async function readProjectFile(root: string, path: string): Promise<string> {
   if (!inTauri()) throw new Error('Open the desktop app to read files.');

@@ -3,7 +3,7 @@
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { contentTabs, saveTab, type ContentTab } from '../content-tabs.svelte';
   import { changeLines, countsOf, parseDiff, relativeTo, type DiffRow } from '../diff';
-  import { languageLabel, languageOf, readProjectFile } from '../files';
+  import { imageMimeOf, languageLabel, languageOf, readImageUrl, readProjectFile } from '../files';
   import { canFormat, prettifyStrict } from '../format';
   import { drafts, type Draft } from '../file-buffers';
   import { diffCache, fileKey, rememberText, textCache } from '../file-cache';
@@ -109,6 +109,7 @@
     const { id, root, path } = file;
     void fileWrites.tick;
     void attempt;
+    if (imageMimeOf(file.name)) return; // a picture is read by the picture effect below
     const seq = ++readSeq;
     const key = fileKey(root, path);
     error = '';
@@ -181,7 +182,7 @@
   $effect(() => {
     const { root, path } = file;
     void fileWrites.tick;
-    if (!inTauri()) {
+    if (!inTauri() || imageMimeOf(file.name)) {
       diffRead = true;
       return;
     }
@@ -211,6 +212,27 @@
           diffRead = true;
           staleDiff = false;
         }
+      });
+  });
+
+  // A picture: shown as it is, with its size in pixels once the browser has it. Read again on a write, like text.
+  let picture = $state('');
+  let pictureSize = $state('');
+  let pictureSeq = 0;
+  $effect(() => {
+    const { root, path, name } = file;
+    const mime = imageMimeOf(name);
+    void fileWrites.tick;
+    void attempt;
+    if (!mime) return;
+    const seq = ++pictureSeq;
+    error = '';
+    readImageUrl(root, path, mime)
+      .then((url) => {
+        if (seq === pictureSeq && !destroyed) picture = url;
+      })
+      .catch((failure: unknown) => {
+        if (seq === pictureSeq && !destroyed) error = String(failure);
       });
   });
 
@@ -397,6 +419,19 @@
           </ZButton>
         </div>
       </div>
+    </div>
+  {:else if imageMimeOf(file.name)}
+    <div class="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 [background-image:linear-gradient(45deg,var(--muted)_25%,transparent_25%),linear-gradient(-45deg,var(--muted)_25%,transparent_25%),linear-gradient(45deg,transparent_75%,var(--muted)_75%),linear-gradient(-45deg,transparent_75%,var(--muted)_75%)] [background-position:0_0,0_8px,8px_-8px,-8px_0] [background-size:16px_16px]">
+      {#if picture}
+        <img src={picture} alt={file.name} class="max-h-full max-w-full object-contain" onload={(event) => {
+            const img = event.currentTarget as HTMLImageElement;
+            pictureSize = `${img.naturalWidth} × ${img.naturalHeight}`;
+          }} />
+      {/if}
+    </div>
+    <div class="flex h-7 shrink-0 items-center gap-3 border-t border-border px-3 text-[11px] text-muted-foreground">
+      <span class="min-w-0 flex-1 truncate font-mono" title={file.path}>{shortPath}</span>
+      <span class="shrink-0 whitespace-nowrap tabular-nums">{pictureSize}</span>
     </div>
   {:else if view === 'changes'}
     {#if changed || !diffRead}
