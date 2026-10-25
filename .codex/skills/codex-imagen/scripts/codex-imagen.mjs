@@ -2510,7 +2510,7 @@ async function postResponsesRequest(endpoint, body, auth, requestId, sessionId, 
   return { response, cloudflareCookieCount };
 }
 
-function buildSuggestionBody(options, prompt, requestId) {
+async function buildSuggestionBody(options, prompt, requestId) {
   return {
     model: options.model,
     instructions:
@@ -2519,7 +2519,7 @@ function buildSuggestionBody(options, prompt, requestId) {
       {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: prompt }],
+        content: await buildPromptContent(options, prompt),
       },
     ],
     prompt_cache_key: requestId,
@@ -2559,21 +2559,31 @@ function promptSuggestionsFromText(text) {
   const direct = tryParseJson(cleaned);
   const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
   const embedded = arrayMatch ? tryParseJson(arrayMatch[0]) : null;
+  const objectMatch = cleaned.match(/\{[\s\S]*\}/);
+  const embeddedObject = objectMatch ? tryParseJson(objectMatch[0]) : null;
+  const object = direct && !Array.isArray(direct) ? direct : embeddedObject && !Array.isArray(embeddedObject) ? embeddedObject : null;
+  const listed = object?.prompts ?? object?.suggestions;
   const values = Array.isArray(direct)
     ? direct
-    : Array.isArray(direct?.suggestions)
-      ? direct.suggestions
+    : Array.isArray(listed)
+      ? listed
       : Array.isArray(embedded)
         ? embedded
         : cleaned.split(/\r?\n/).map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, ""));
-  return [...new Set(values.filter((value) => typeof value === "string").map((value) => value.trim()).filter(Boolean))].slice(0, 5);
+  const suggestions = [...new Set(values.filter((value) => typeof value === "string").map((value) => value.trim()).filter(Boolean))].slice(0, 5);
+  // Keywords are short terms for the settings under the prompt: {"category": "style", "value": "Anime"}.
+  const keywords = (Array.isArray(object?.keywords) ? object.keywords : [])
+    .filter((item) => typeof item?.category === "string" && typeof item?.value === "string" && item.value.trim())
+    .map((item) => ({ category: item.category.trim().toLowerCase(), value: item.value.trim() }))
+    .slice(0, 12);
+  return { suggestions, keywords };
 }
 
 async function requestPromptSuggestions(options, prompt, auth) {
   const requestId = randomUUID();
   const sessionId = randomUUID();
   const endpoint = `${options.baseUrl.replace(/\/+$/, "")}/responses`;
-  const body = buildSuggestionBody(options, prompt, requestId);
+  const body = await buildSuggestionBody(options, prompt, requestId);
   const abortController = new AbortController();
   const watchdog = createGenerationWatchdog(options, abortController);
 
@@ -2598,11 +2608,11 @@ async function requestPromptSuggestions(options, prompt, auth) {
       throw new HttpStatusError(response.status, response.statusText, preview);
     }
     const payload = await readSuggestionStream(response);
-    const suggestions = promptSuggestionsFromText(responseText(payload));
+    const { suggestions, keywords } = promptSuggestionsFromText(responseText(payload));
     if (suggestions.length === 0) {
       throw new GenerationFailedError("The prompt model returned no usable suggestions.");
     }
-    return { request_id: requestId, model: options.model, suggestions };
+    return { request_id: requestId, model: options.model, suggestions, keywords };
   } catch (error) {
     if (abortController.signal.aborted) {
       throw new TimeoutError(`Timed out after ${describeTimeout(options.timeoutMs)} before prompt suggestions arrived.`);

@@ -9,11 +9,14 @@
     listImageHistory,
     readImageDataUrl,
     revealFile,
+    saveAttachment,
     stopImageGeneration,
     suggestImagePrompts,
     type GeneratedImage,
     type ImageHistoryRun,
     type ImageModelChoice,
+    type ImageSettings,
+    type SuggestedKeyword,
   } from '../agent';
   import { openImages } from '../preview.svelte';
   import { findModel, modelCatalog, modelLabel, type ProviderId } from '../models.svelte';
@@ -31,6 +34,28 @@
   ];
   const variantTabs = [1, 2, 3, 4].map((count) => ({ value: String(count), label: String(count) }));
   const EFFORT_LABEL: Record<string, string> = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-High', max: 'Max', ultra: 'Ultra' };
+  // The settings under the prompt box. An empty value is Auto: nothing is sent for that setting.
+  type SettingKey = 'style' | 'domain' | 'audience' | 'ratio' | 'resolution';
+  const SETTINGS: { key: SettingKey; label: string; options: string[] }[] = [
+    { key: 'style', label: 'Style', options: ['Photorealistic', 'Anime', '2D illustration', '3D render', 'Watercolor', 'Oil painting', 'Pixel art', 'Flat vector', 'Line art', 'Cyberpunk', 'Vintage film', 'Modern minimal'] },
+    { key: 'domain', label: 'Domain', options: ['General', 'Medical and healthcare', 'Education', 'Math and geometry diagram', 'Science and biology', 'Architecture', 'Product and e-commerce', 'Fashion', 'Food', 'Game asset', 'Marketing poster', 'UI mockup'] },
+    { key: 'audience', label: 'Audience', options: ['All ages', 'Teen (13+)', 'Adult (18+)'] },
+    { key: 'ratio', label: 'Ratio', options: ['1:1', '16:9', '16:10', '4:3', '3:4', '9:16', '21:9', '3:2', '2:3'] },
+    { key: 'resolution', label: 'Resolution', options: ['SD (640×480)', 'HD (1280×720)', 'Full HD (1920×1080)', '2K (2560×1440)', '4K (3840×2160)'] },
+  ];
+  const SETTING_CATEGORY: Record<string, SettingKey> = { style: 'style', domain: 'domain', audience: 'audience', age: 'audience', ratio: 'ratio', resolution: 'resolution' };
+  const MAX_REFERENCES = 4;
+  const PICTURE = /^image\/(png|jpeg|gif|webp)$/;
+
+  // A picture pasted or dropped into the prompt box: shown above it, sent to the model with the prompt.
+  type Reference = { id: string; name: string; mime: string; src: string; path?: string };
+  let references = $state<Reference[]>([]);
+  let settings = $state<Record<SettingKey, string>>({ style: '', domain: '', audience: '', ratio: '', resolution: '' });
+  let settingKey = $state<SettingKey | null>(null);
+  let settingAnchor = $state<HTMLElement | null>(null);
+  let settingOpen = $state(false);
+  let suggestedKeywords = $state<SuggestedKeyword[]>([]);
+  const currentOptions = $derived(SETTINGS.find((item) => item.key === settingKey)?.options ?? []);
 
   let prompt = $state('');
   let selectedModels = $state<string[]>(models.map((item) => item.model));
@@ -48,8 +73,15 @@
   let runStart = 0;
   let runTimer: ReturnType<typeof setInterval> | undefined;
 
+  // Whole seconds only: "43 s", then "1m 05s", then "1h 02m 05s".
   function formatDuration(ms: number) {
-    return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+    const total = Math.floor(ms / 1000);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = String(total % 60).padStart(2, '0');
+    if (hours) return `${hours}h ${String(minutes).padStart(2, '0')}m ${seconds}s`;
+    if (minutes) return `${minutes}m ${seconds}s`;
+    return `${total} s`;
   }
   let history = $state<ImageHistoryRun[]>([]);
   let activeRunId = $state<string | null>(null);
@@ -163,21 +195,39 @@
     return loaded.filter((image): image is Preview => image !== null);
   }
 
+  /** The picked settings for the backend: null for Auto. */
+  function settingsPayload(): ImageSettings {
+    const value = (key: SettingKey) => settings[key] || null;
+    return { style: value('style'), domain: value('domain'), audience: value('audience'), ratio: value('ratio'), resolution: value('resolution') };
+  }
+
+  /** The reference pictures as files on disk, which the generator reads. Each picture is saved once. */
+  async function referencePaths(): Promise<string[]> {
+    const paths: string[] = [];
+    for (const reference of references) {
+      reference.path ??= await saveAttachment(reference.mime, reference.src.slice(reference.src.indexOf(',') + 1));
+      paths.push(reference.path);
+    }
+    return paths;
+  }
+
   async function suggestPrompts() {
     if (suggesting) return;
     if (!inTauri()) {
       toast.error('AI prompt suggestions need the desktop app');
       return;
     }
-    if (!prompt.trim()) {
-      toast.error('Enter an image prompt first');
+    if (!prompt.trim() && !references.length) {
+      toast.error('Enter an image prompt or add a reference image first');
       return;
     }
     suggesting = true;
     promptSuggestions = [];
+    suggestedKeywords = [];
     try {
-      const result = await suggestImagePrompts({ prompt: prompt.trim(), model: promptModel });
+      const result = await suggestImagePrompts({ prompt: prompt.trim(), model: promptModel, referencePaths: await referencePaths(), settings: settingsPayload() });
       promptSuggestions = result.suggestions;
+      suggestedKeywords = result.keywords;
       if (!promptSuggestions.length) toast.error('The prompt model returned no suggestions');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -189,6 +239,70 @@
   function useSuggestion(value: string) {
     prompt = value;
     promptSuggestions = [];
+    suggestedKeywords = [];
+  }
+
+  /** A suggested keyword goes to its setting when one of its options fits, otherwise it is added to the prompt. */
+  function useKeyword(keyword: SuggestedKeyword) {
+    const key = SETTING_CATEGORY[keyword.category];
+    const term = keyword.value.toLowerCase();
+    const option = SETTINGS.find((item) => item.key === key)?.options.find((value) => value.toLowerCase().startsWith(term));
+    if (key && option) {
+      settings[key] = option;
+      return;
+    }
+    prompt = prompt.trim() ? `${prompt.trim()}, ${keyword.value}` : keyword.value;
+  }
+
+  function openSetting(key: SettingKey, anchor: HTMLElement) {
+    if (settingOpen && settingKey === key) {
+      settingOpen = false;
+      return;
+    }
+    settingKey = key;
+    settingAnchor = anchor;
+    settingOpen = true;
+  }
+
+  function pickSetting(value: string) {
+    if (settingKey) settings[settingKey] = value;
+    settingOpen = false;
+  }
+
+  const readPicture = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
+  async function addPictures(files: File[]) {
+    const pictures = files.filter((file) => PICTURE.test(file.type));
+    if (!pictures.length) return;
+    const room = MAX_REFERENCES - references.length;
+    if (room <= 0) {
+      toast.error(`Up to ${MAX_REFERENCES} reference images`);
+      return;
+    }
+    for (const file of pictures.slice(0, room)) {
+      const src = await readPicture(file);
+      references = [...references, { id: crypto.randomUUID(), name: file.name || 'pasted image', mime: file.type, src }];
+    }
+  }
+
+  function onPaste(event: ClipboardEvent) {
+    const files = [...(event.clipboardData?.files ?? [])];
+    if (!files.some((file) => PICTURE.test(file.type))) return; // text pastes as usual
+    event.preventDefault();
+    void addPictures(files);
+  }
+
+  function onDrop(event: DragEvent) {
+    const files = [...(event.dataTransfer?.files ?? [])];
+    if (!files.some((file) => PICTURE.test(file.type))) return;
+    event.preventDefault();
+    void addPictures(files);
   }
 
   async function generate() {
@@ -216,7 +330,7 @@
     failureLines = [];
     activeRunId = null;
     try {
-      const result = await generateImages({ prompt, models: choices, variants: variantCount, cwd: projectPath });
+      const result = await generateImages({ prompt, models: choices, variants: variantCount, cwd: projectPath, referencePaths: await referencePaths(), settings: settingsPayload() });
       activeRunId = result.run_id;
       failureLines = result.failures.map((failure) => `${failure.model} #${failure.variant}: ${failure.error}`);
       previews = await withPreviews(result.images);
@@ -432,10 +546,32 @@
   <div class="min-h-0 flex-1 overflow-y-auto py-3">
     <div class="flex min-h-full flex-col gap-3 px-3">
       <div class="relative min-w-0 rounded-2xl border border-input bg-card p-2 shadow-lg transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-ring/20 focus-within:ring-2">
+        {#if references.length > 0}
+          <div class="mb-2 flex flex-wrap gap-2" aria-label="Reference images">
+            {#each references as reference (reference.id)}
+              <div class="group/ref relative">
+                <button type="button" class="block size-12 cursor-zoom-in overflow-hidden rounded-lg border border-border outline-none transition hover:ring-2 hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-ring" aria-label="Preview {reference.name}" onclick={() => openImages(references, references.indexOf(reference))}>
+                  <img src={reference.src} alt={reference.name} class="size-full object-cover" />
+                </button>
+                <button
+                  type="button"
+                  class="absolute -top-3 -right-2.5 flex size-5.5 cursor-pointer items-center justify-center rounded-full border border-border bg-popover text-popover-foreground shadow-md opacity-0 transition-opacity group-hover/ref:opacity-100 focus-visible:opacity-100"
+                  aria-label="Remove {reference.name}"
+                  onclick={() => (references = references.filter((item) => item !== reference))}
+                >
+                  <ZIcon zType="lucideX" zSize="12" class="block size-[12px]! shrink-0" />
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
         <textarea
           bind:value={prompt}
           rows="2"
           aria-label="Image prompt"
+          onpaste={onPaste}
+          ondragover={(event) => event.preventDefault()}
+          ondrop={onDrop}
           placeholder="Describe the image, style, composition and constraints…"
           class="max-h-45 min-h-6 w-[calc(100%+0.5rem)] resize-none overflow-x-hidden break-words border-0 bg-transparent p-0 pr-2 text-sm leading-normal outline-none placeholder:text-muted-foreground"
         ></textarea>
@@ -462,7 +598,7 @@
               class="grid size-7 cursor-pointer place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
               aria-label="AI suggestions"
               title="AI suggestions"
-              disabled={!prompt.trim() || !promptModel}
+              disabled={(!prompt.trim() && references.length === 0) || !promptModel}
               aria-busy={suggesting}
               onclick={() => void suggestPrompts()}
             >
@@ -651,10 +787,57 @@
                   {suggestion}
                 </button>
               {/each}
+              {#if suggestedKeywords.length > 0}
+                <div class="flex flex-wrap gap-1 px-1 pt-1" aria-label="Suggested keywords">
+                  {#each suggestedKeywords as keyword (keyword.category + keyword.value)}
+                    <button type="button" class="rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 text-[11px] text-primary outline-none transition-colors hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring" title={SETTINGS.find((item) => item.key === SETTING_CATEGORY[keyword.category])?.label ?? 'Prompt keyword'} onclick={() => useKeyword(keyword)}>
+                      {keyword.value}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
             {/if}
           </div>
         {/if}
       </div>
+
+      <!-- The settings under the prompt: sent with it, and suggested with it by the prompt model. -->
+      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Image settings">
+        {#each SETTINGS as setting (setting.key)}
+          {@const chosen = settings[setting.key]}
+          <button
+            type="button"
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border bg-background px-2.5 text-[11px] outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingOpen && settingKey === setting.key ? 'bg-primary/10 text-primary' : ''} {chosen ? 'text-foreground' : 'text-muted-foreground'}"
+            aria-haspopup="menu"
+            aria-expanded={settingOpen && settingKey === setting.key}
+            onclick={(event) => openSetting(setting.key, event.currentTarget)}
+          >
+            <span class="shrink-0 text-muted-foreground">{setting.label}</span>
+            <span class="max-w-36 truncate">{chosen || 'Auto'}</span>
+            <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 text-muted-foreground" />
+          </button>
+        {/each}
+      </div>
+
+      <ZPopover anchor={settingAnchor} bind:open={settingOpen} zTrigger="manual" zPosition="bottom-left" zOffset={6} zWidth={200}>
+        {#snippet children()}
+          <div class="flex max-h-72 w-full flex-col gap-0.5 overflow-y-auto p-1.5 text-xs" role="menu" aria-label="Setting options">
+            {#each ['', ...currentOptions] as option (option)}
+              {@const active = (settingKey ? settings[settingKey] : '') === option}
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={active}
+                class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : ''}"
+                onclick={() => pickSetting(option)}
+              >
+                <span class="min-w-0 flex-1 truncate">{option || 'Auto'}</span>
+                {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
+              </button>
+            {/each}
+          </div>
+        {/snippet}
+      </ZPopover>
 
       <div class="-mx-3 min-h-0 flex-1 border-t border-border pt-3">
         <div class="min-h-full px-3">

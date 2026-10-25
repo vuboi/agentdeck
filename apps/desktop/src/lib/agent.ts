@@ -101,7 +101,10 @@ export type ImageHistoryRun = {
   failures: string[];
   images: ImageHistoryImage[];
 };
-export type ImagePromptSuggestResult = { model: string; suggestions: string[] };
+/** The settings picked under the prompt box, as sentences for the model. `null` is Auto: nothing is sent for it. */
+export type ImageSettings = { style: string | null; domain: string | null; audience: string | null; ratio: string | null; resolution: string | null };
+export type SuggestedKeyword = { category: string; value: string };
+export type ImagePromptSuggestResult = { model: string; suggestions: string[]; keywords: SuggestedKeyword[] };
 
 /** Generates one or more independent image candidates through the local codex-imagen skill. */
 export async function generateImages(args: {
@@ -109,6 +112,7 @@ export async function generateImages(args: {
   models: ImageModelChoice[];
   variants: number;
   referencePaths?: string[];
+  settings?: ImageSettings;
   cwd?: string | null;
 }): Promise<ImageGenerateResult> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -118,6 +122,7 @@ export async function generateImages(args: {
       models: args.models,
       variants: args.variants,
       reference_paths: args.referencePaths ?? [],
+      config: args.settings ?? {},
       cwd: args.cwd ?? null,
     },
   });
@@ -136,12 +141,14 @@ export async function listImageHistory(limit = 50): Promise<ImageHistoryRun[]> {
 }
 
 /** Asks the authenticated Codex Responses API to improve an image prompt. */
-export async function suggestImagePrompts(args: { prompt: string; model: string }): Promise<ImagePromptSuggestResult> {
+export async function suggestImagePrompts(args: { prompt: string; model: string; referencePaths?: string[]; settings?: ImageSettings }): Promise<ImagePromptSuggestResult> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<ImagePromptSuggestResult>('image_prompt_suggest', {
     request: {
       prompt: args.prompt,
       model: args.model,
+      reference_paths: args.referencePaths ?? [],
+      config: args.settings ?? {},
     },
   });
 }

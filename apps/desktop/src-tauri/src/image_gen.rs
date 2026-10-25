@@ -27,12 +27,47 @@ const MAX_VARIANTS: u8 = 4;
 const MAX_MODELS: usize = 4;
 const MAX_PROMPT_CHARS: usize = 30_000;
 const MAX_SUGGESTIONS: usize = 5;
-const SUGGEST_INSTRUCTIONS: &str = "You improve prompts for image generation. Return exactly three distinct, ready-to-use prompts as a JSON array of strings. Preserve the user's subject and intent. Add useful visual detail such as style, composition, lighting, camera or rendering direction. Do not add commentary, markdown, numbering, policy text, or claims about the image.";
+const MAX_KEYWORDS: usize = 12;
+const SUGGEST_INSTRUCTIONS: &str = r#"You improve prompts for image generation. Reply with one JSON object and nothing else, no markdown: {"prompts": [five distinct, ready-to-use prompts as strings], "keywords": [up to ten {"category": "...", "value": "..."}]}. Preserve the user's subject and intent. Add useful visual detail: style, composition, lighting, camera or rendering direction. The settings below are fixed: follow them exactly and do not contradict them. Each keyword is a short term that fits one setting; category is one of style, domain, audience, ratio, resolution, or keyword (a plain term to add to the prompt). Reference images, when given, show the subject or style to follow: look at each one before you write. Do not add commentary, policy text, or claims about the image."#;
 
 #[derive(Debug, Deserialize)]
 pub struct ImageModelRequest {
     pub model: String,
     pub backend: String,
+}
+
+/// What the user picked under the prompt box. `None` means "Auto": no instruction is sent for that setting.
+#[derive(Debug, Default, Deserialize)]
+pub struct ImageConfig {
+    pub style: Option<String>,
+    pub domain: Option<String>,
+    pub audience: Option<String>,
+    pub ratio: Option<String>,
+    pub resolution: Option<String>,
+}
+
+impl ImageConfig {
+    /// The picked settings as lines for the model, in a fixed order. Empty when nothing is picked.
+    fn brief(&self) -> String {
+        let pick = |value: &Option<String>| value.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
+        let mut lines = Vec::new();
+        if let Some(style) = pick(&self.style) {
+            lines.push(format!("Style: {style}."));
+        }
+        if let Some(domain) = pick(&self.domain) {
+            lines.push(format!("Subject domain: {domain}."));
+        }
+        if let Some(audience) = pick(&self.audience) {
+            lines.push(format!("Audience: {audience}. Keep the content suitable for that audience; no explicit sexual content."));
+        }
+        if let Some(ratio) = pick(&self.ratio) {
+            lines.push(format!("Aspect ratio: {ratio}."));
+        }
+        if let Some(resolution) = pick(&self.resolution) {
+            lines.push(format!("Output resolution: {resolution}."));
+        }
+        lines.join("\n")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +77,8 @@ pub struct ImageGenerateRequest {
     pub variants: Option<u8>,
     #[serde(default)]
     pub reference_paths: Vec<String>,
+    #[serde(default)]
+    pub config: ImageConfig,
     pub cwd: Option<String>,
 }
 
@@ -73,12 +110,24 @@ pub struct ImageGenerateResult {
 pub struct ImagePromptSuggestRequest {
     pub prompt: String,
     pub model: String,
+    #[serde(default)]
+    pub reference_paths: Vec<String>,
+    #[serde(default)]
+    pub config: ImageConfig,
+}
+
+/// A short term the model suggests for one of the settings (or a plain keyword for the prompt).
+#[derive(Debug, Serialize)]
+pub struct SuggestedKeyword {
+    pub category: String,
+    pub value: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ImagePromptSuggestResult {
     pub model: String,
     pub suggestions: Vec<String>,
+    pub keywords: Vec<SuggestedKeyword>,
 }
 
 #[tauri::command]
@@ -150,6 +199,9 @@ fn generate(request: ImageGenerateRequest) -> Result<ImageGenerateResult, String
     let run_folder = output_root.join(&run_id);
     std::fs::create_dir_all(&run_folder).map_err(|error| error.to_string())?;
     let references = validate_references(&request.reference_paths)?;
+    // The picked settings travel with the prompt, so each candidate follows them.
+    let brief = request.config.brief();
+    let prompt_text = if brief.is_empty() { prompt.to_string() } else { format!("{prompt}\n\n{brief}") };
 
     let mut images = Vec::new();
     let mut failures = Vec::new();
@@ -173,7 +225,7 @@ fn generate(request: ImageGenerateRequest) -> Result<ImageGenerateResult, String
                 break;
             }
             let output = run_folder.join(format!("{}-{variant}.png", safe_name(&model_name)));
-            match generate_one(&script, prompt, variant, &model_name, &backend, &output, &references) {
+            match generate_one(&script, &prompt_text, variant, &model_name, &backend, &output, &references) {
                 Ok(paths) => images.extend(paths.into_iter().map(|path| GeneratedImage {
                     model: model_name.clone(),
                     backend: backend.clone(),
@@ -217,8 +269,9 @@ pub fn was_stopped() -> bool {
 fn suggest(request: ImagePromptSuggestRequest) -> Result<ImagePromptSuggestResult, String> {
     let prompt = request.prompt.trim();
     let model = request.model.trim();
-    if prompt.is_empty() {
-        return Err("prompt is required".to_string());
+    let references = validate_references(&request.reference_paths)?;
+    if prompt.is_empty() && references.is_empty() {
+        return Err("write a prompt or add a reference image".to_string());
     }
     if prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(format!(
@@ -228,8 +281,9 @@ fn suggest(request: ImagePromptSuggestRequest) -> Result<ImagePromptSuggestResul
     if model.is_empty() {
         return Err("choose a prompt suggestion model".to_string());
     }
+    let input = suggest_input(prompt, &request.config.brief(), &references);
     if model.starts_with("claude-") {
-        return suggest_with_claude(prompt, model);
+        return suggest_with_claude(&input, model, &references);
     }
 
     let script = imagen_script()?;
@@ -248,8 +302,11 @@ fn suggest(request: ImagePromptSuggestRequest) -> Result<ImagePromptSuggestResul
             "--model",
             model,
             "--prompt",
-            prompt,
-        ]);
+        ])
+        .arg(&input);
+    for reference in &references {
+        command.arg("--input-ref").arg(reference);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -268,35 +325,29 @@ fn suggest(request: ImagePromptSuggestRequest) -> Result<ImagePromptSuggestResul
     }
     let json: serde_json::Value = serde_json::from_slice(&result.stdout)
         .map_err(|error| format!("prompt suggestion API returned invalid JSON: {error}"))?;
-    let suggestions = json
-        .get("suggestions")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|suggestion| !suggestion.is_empty())
-        .take(MAX_SUGGESTIONS)
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
+    let (suggestions, keywords) = read_suggestions(&json);
     if suggestions.is_empty() {
         return Err("prompt suggestion API returned no suggestions".to_string());
     }
     Ok(ImagePromptSuggestResult {
         model: model.to_string(),
         suggestions,
+        keywords,
     })
 }
 
-/// Claude writes the suggestions in a one-shot `claude -p` run, the prompt on stdin as in a chat turn.
-fn suggest_with_claude(prompt: &str, model: &str) -> Result<ImagePromptSuggestResult, String> {
+/// Claude writes the suggestions in a one-shot `claude -p` run, the input on stdin as in a chat turn. Reference
+/// images are opened by its Read tool, which this run is allowed to use.
+fn suggest_with_claude(input: &str, model: &str, references: &[PathBuf]) -> Result<ImagePromptSuggestResult, String> {
     use std::io::Write;
 
     let binary = ag_adapters::agent::runner::resolve_binary(&ag_adapters::agent::claude::Claude);
-    let input = format!("{SUGGEST_INSTRUCTIONS}\n\n{prompt}");
     let mut command = Command::new(binary);
+    command.args(["-p", "--model", model, "--output-format", "text"]);
+    if !references.is_empty() {
+        command.args(["--allowedTools", "Read"]);
+    }
     command
-        .args(["-p", "--model", model, "--output-format", "text"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -323,24 +374,86 @@ fn suggest_with_claude(prompt: &str, model: &str) -> Result<ImagePromptSuggestRe
         });
     }
     let text = String::from_utf8_lossy(&result.stdout);
-    let suggestions = match (text.find('['), text.rfind(']')) {
-        (Some(start), Some(end)) if start < end => {
-            serde_json::from_str::<Vec<String>>(&text[start..=end]).unwrap_or_default()
-        }
-        _ => Vec::new(),
-    }
-    .into_iter()
-    .map(|suggestion| suggestion.trim().to_string())
-    .filter(|suggestion| !suggestion.is_empty())
-    .take(MAX_SUGGESTIONS)
-    .collect::<Vec<_>>();
+    let (suggestions, keywords) = parse_suggestions(&text);
     if suggestions.is_empty() {
         return Err("Claude returned no suggestions".to_string());
     }
     Ok(ImagePromptSuggestResult {
         model: model.to_string(),
         suggestions,
+        keywords,
     })
+}
+
+/// The text the model reads: the instructions, the picked settings, the reference images and the user's prompt.
+fn suggest_input(prompt: &str, brief: &str, references: &[PathBuf]) -> String {
+    let mut text = format!("{SUGGEST_INSTRUCTIONS}\n\n");
+    if !brief.is_empty() {
+        text.push_str(&format!("Settings:\n{brief}\n\n"));
+    }
+    if !references.is_empty() {
+        text.push_str("Reference images:\n");
+        for reference in references {
+            text.push_str(&format!("- {}\n", reference.display()));
+        }
+        text.push('\n');
+    }
+    text.push_str(&format!("User prompt:\n{prompt}"));
+    text
+}
+
+/// Prompts and keywords out of a model's answer: the JSON object that was asked for, or a bare array of prompts.
+fn parse_suggestions(text: &str) -> (Vec<String>, Vec<SuggestedKeyword>) {
+    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) {
+        if start < end {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text[start..=end]) {
+                return read_suggestions(&value);
+            }
+        }
+    }
+    let prompts = match (text.find('['), text.rfind(']')) {
+        (Some(start), Some(end)) if start < end => serde_json::from_str::<Vec<String>>(&text[start..=end]).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    (clean_prompts(prompts), Vec::new())
+}
+
+/// `prompts` (or `suggestions`) and `keywords` out of the model's object.
+fn read_suggestions(value: &serde_json::Value) -> (Vec<String>, Vec<SuggestedKeyword>) {
+    let prompts = value
+        .get("prompts")
+        .or_else(|| value.get("suggestions"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let keywords = value
+        .get("keywords")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let category = item.get("category")?.as_str()?.trim().to_lowercase();
+            let term = item.get("value")?.as_str()?.trim();
+            (!category.is_empty() && !term.is_empty()).then(|| SuggestedKeyword {
+                category,
+                value: term.to_string(),
+            })
+        })
+        .take(MAX_KEYWORDS)
+        .collect();
+    (clean_prompts(prompts), keywords)
+}
+
+fn clean_prompts(prompts: Vec<String>) -> Vec<String> {
+    prompts
+        .iter()
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty())
+        .take(MAX_SUGGESTIONS)
+        .collect()
 }
 
 /// Each candidate of a run gets its own direction, so the variants of one prompt do not come out alike.
