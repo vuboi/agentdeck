@@ -579,21 +579,7 @@
         ></textarea>
 
         <div class="flex min-w-0 items-center justify-between gap-2">
-          <div class="flex min-w-0 items-center gap-1">
-          <button
-            bind:this={settingsTrigger}
-            type="button"
-            class="flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingsOpen ? 'bg-primary/10 text-primary' : ''}"
-            aria-haspopup="menu"
-            aria-expanded={settingsOpen}
-            aria-label="Image settings"
-            onclick={toggleSettings}
-          >
-            <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
-            <span class="truncate" {@attach zTooltip({ content: `${settingsSummary} · ${variantCount}×`, position: 'top', autoDetect: true })}>{settingsSummary}</span>
-            <span class="hidden shrink-0 text-muted-foreground min-[720px]:inline">· {variantCount}×</span>
-            <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 text-muted-foreground" />
-          </button>
+          <div class="flex min-w-0 items-center gap-0.5">
           <button
             type="button"
             class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
@@ -615,6 +601,20 @@
               event.currentTarget.value = '';
             }}
           />
+          <button
+            bind:this={settingsTrigger}
+            type="button"
+            class="flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingsOpen ? 'bg-primary/10 text-primary' : ''}"
+            aria-haspopup="menu"
+            aria-expanded={settingsOpen}
+            aria-label="Image settings"
+            onclick={toggleSettings}
+          >
+            <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
+            <span class="truncate" {@attach zTooltip({ content: `${settingsSummary} · ${variantCount}×`, position: 'top', autoDetect: true })}>{settingsSummary}</span>
+            <span class="hidden shrink-0 text-muted-foreground min-[720px]:inline">· {variantCount}×</span>
+            <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 text-muted-foreground" />
+          </button>
           </div>
 
           <div class="flex h-8 shrink-0 items-center gap-0.5 rounded-full border border-border bg-background p-0.5" role="group" aria-label="Image actions">
@@ -827,12 +827,12 @@
       </div>
 
       <!-- The settings under the prompt: sent with it, and suggested with it by the prompt model. -->
-      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Image settings">
+      <div class="-mt-2 flex flex-wrap items-center gap-1.5" role="group" aria-label="Image settings">
         {#each SETTINGS as setting (setting.key)}
           {@const chosen = settings[setting.key]}
           <button
             type="button"
-            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border bg-background px-2.5 text-[11px] outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingOpen && settingKey === setting.key ? 'bg-primary/10 text-primary' : ''} {chosen ? 'text-foreground' : 'text-muted-foreground'}"
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded border border-border bg-background px-2.5 text-[11px] outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingOpen && settingKey === setting.key ? 'bg-primary/10 text-primary' : ''} {chosen ? 'text-foreground' : 'text-muted-foreground'}"
             aria-haspopup="menu"
             aria-expanded={settingOpen && settingKey === setting.key}
             onclick={(event) => openSetting(setting.key, event.currentTarget)}
