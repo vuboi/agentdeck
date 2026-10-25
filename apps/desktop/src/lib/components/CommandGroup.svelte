@@ -136,7 +136,7 @@
             </button>
             <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {rows[index] ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
               <div class="min-h-0 overflow-hidden">
-                <div class="flex flex-col gap-2 px-3 pt-1 pb-3">
+                <div class="flex flex-col gap-2 px-3 py-1.5">
                   {#if item.change}
                     <div class="max-h-60 overflow-auto rounded-lg border border-border bg-background py-1 font-mono text-[11px] leading-relaxed">
                       <div class="px-3 pb-1 text-muted-foreground">{item.change.path}</div>

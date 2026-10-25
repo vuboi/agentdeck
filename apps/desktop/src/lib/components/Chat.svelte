@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { closeOnScroll } from '../close-on-scroll';
   import { customProviderName, modelLabel } from '../models.svelte';
   import { tick, untrack } from 'svelte';
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
@@ -75,6 +76,7 @@
   // Right click on a tab: close it, the others, or all of them.
   let tabMenu = $state<{ x: number; y: number; id: string } | null>(null);
   let tabMenuOpen = $state(false);
+  $effect(() => closeOnScroll(() => tabMenuOpen, () => (tabMenuOpen = false)));
   let tabMenuKey = $state(0);
   function openTabMenu(event: MouseEvent, id: string) {
     event.preventDefault();

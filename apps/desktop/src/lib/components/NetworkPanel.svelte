@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { closeOnScroll } from '../close-on-scroll';
   import { ZIcon } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { getPref, setPref } from '../prefs';
@@ -241,6 +242,7 @@
 
   // Right-click on a request: copy it as a command, or copy parts of it.
   let menu = $state<{ x: number; y: number; request: NetRequest } | null>(null);
+  $effect(() => closeOnScroll(() => menu !== null, () => (menu = null)));
   function openMenu(event: MouseEvent, request: NetRequest) {
     event.preventDefault();
     menu = { x: Math.min(event.clientX, window.innerWidth - 230), y: Math.min(event.clientY, window.innerHeight - 330), request };

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { closeOnScroll } from '../close-on-scroll';
   import { tick } from 'svelte';
   import { ZDropdownMenu, zModalService } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
@@ -11,6 +12,7 @@
   // project (open it, copy its path, or delete it to the trash).
   let key = $state(0);
   let open = $state(false);
+  $effect(() => closeOnScroll(() => open, () => (open = false)));
 
   $effect(() => {
     if (!linkMenu.open) return;

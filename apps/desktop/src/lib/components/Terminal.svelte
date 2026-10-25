@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { closeOnScroll } from '../close-on-scroll';
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { ZButton, ZDropdownMenu, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
@@ -100,6 +101,7 @@
   // The right-click menu, at the pointer: Copy (only while text is selected), Paste, Select all, Clear.
   let menu = $state<{ x: number; y: number; id: string; selected: boolean } | null>(null);
   let menuOpen = $state(false);
+  $effect(() => closeOnScroll(() => menuOpen, () => (menuOpen = false)));
   let menuKey = $state(0);
 
   function onContextMenu(event: MouseEvent, id: string) {

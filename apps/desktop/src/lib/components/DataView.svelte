@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ZIcon } from '@shival99/z-ui-svelte';
+  import { untrack } from 'svelte';
+  import { ZIcon, createVirtualizer } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { toast } from '../toast';
   import CodeView from './CodeView.svelte';
@@ -51,7 +52,6 @@
   $effect(() => {
     void text;
     overrides = {};
-    scrollTop = 0;
     if (scroller) scroller.scrollTop = 0;
   });
   const isOpen = (path: string, depth: number) => overrides[path] ?? depth < OPEN_DEPTH;
@@ -108,12 +108,19 @@
   }
 
   // Windowing: the rows from a little above the top of the view to a little below the bottom.
-  let scroller = $state<HTMLElement | null>(null);
-  let scrollTop = $state(0);
-  let viewHeight = $state(320);
-  const first = $derived(Math.max(0, Math.floor(scrollTop / ROW) - 8));
-  const last = $derived(Math.min(rows.length, Math.ceil((scrollTop + viewHeight) / ROW) + 8));
-  const slice = $derived(rows.slice(first, last));
+  // TanStack Virtual (through z-ui), as the chat uses: only the rows in view are mounted.
+  let scroller = $state<HTMLDivElement | null>(null);
+  const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: 0,
+    getScrollElement: () => scroller,
+    estimateSize: () => ROW,
+    overscan: 8,
+  });
+  $effect(() => {
+    const count = rows.length;
+    untrack(() => $virtualizer.setOptions({ count, getScrollElement: () => scroller, estimateSize: () => ROW, overscan: 8 }));
+  });
+  const dataRows = $derived($virtualizer.getVirtualItems());
 
   const tone = (value: unknown) => (typeof value === 'string' ? 'text-success' : typeof value === 'number' ? 'text-warning' : 'text-destructive/80');
   const shown = (value: unknown) => {
@@ -160,14 +167,14 @@
   {:else}
   <div
     bind:this={scroller}
-    bind:clientHeight={viewHeight}
-    onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)}
     class="min-h-0 overflow-auto {fill ? 'flex-1' : ''}"
     style:max-height={fill ? undefined : '26rem'}
     role={data === null ? 'document' : 'tree'}
   >
-    <div style:height="{rows.length * ROW}px" style:padding-top="{first * ROW}px" style:box-sizing="border-box" style:min-width="max-content" class="w-full">
-      {#each slice as row (row.id)}
+    <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" style:box-sizing="border-box" style:min-width="max-content">
+      {#each dataRows as vrow (vrow.key)}
+        {@const row = rows[vrow.index]}
+        <div class="absolute top-0 left-0 w-full" style:height="{vrow.size}px" style:transform="translateY({vrow.start}px)">
         {#if row.kind === 'line'}
           <div class="h-5 pr-24 pl-2 leading-5 whitespace-pre text-foreground">{String(row.value).length > CUT ? `${String(row.value).slice(0, CUT)}…` : row.value}</div>
         {:else}
@@ -199,6 +206,7 @@
             {/if}
           </div>
         {/if}
+        </div>
       {/each}
     </div>
   </div>

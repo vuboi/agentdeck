@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { closeOnScroll } from '../close-on-scroll';
   import { customProviderName } from '../models.svelte';
   import { tick, untrack } from 'svelte';
-  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZScrollArea, ZTree, zModalService, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZPopover, ZScrollArea, ZTree, zModalService } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import Logo from './Logo.svelte';
   import { toast } from '../toast';
@@ -298,6 +299,7 @@
   // ---------- row menu: right click, or the three dots that replace the agent tag on hover ----------
   let menu = $state<{ x: number; y: number; id: string; align: 'bottom-left' | 'bottom-right'; kind: 'session' | 'project' | 'view' } | null>(null);
   let menuOpen = $state(false);
+  $effect(() => closeOnScroll(() => menuOpen, () => (menuOpen = false)));
   let menuKey = $state(0);
   let treeBox: HTMLDivElement | undefined = $state();
 
@@ -329,6 +331,7 @@
     event.stopPropagation();
     // The row it was opened from (a chat can be listed twice) stays lit.
     menuRow = (event.target as HTMLElement).closest('[role="treeitem"]');
+    // The menu hangs from the row, so it follows the row when the tree scrolls.
     menuKey++; // a fresh menu at the new spot: no close-then-open flicker
     if (anchor) {
       const rect = anchor.getBoundingClientRect();
@@ -541,8 +544,32 @@
   const ACTION = 'grid size-5 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-foreground/10 hover:text-foreground';
   // A label cut short shows in full on hover, wrapping instead of running wide. It is placed against the whole row (the
   // sidebar's width), so it always sits just past the sidebar's edge, clear of the row's buttons, whatever the name's length.
-  const clipTip = (content: string) => (node: HTMLElement) =>
-    zTooltip({ content, position: 'right', autoDetect: true, maxWidth: '200px', class: 'max-w-[200px]! whitespace-normal break-words', offset: 6, anchor: node.closest<HTMLElement>('.z-tree-row') })(node);
+  // One tooltip for the whole tree, on the right of the hovered row. z-ui's tooltip cannot follow the pointer from
+  // row to row: the one left fades out while the next shows, so they stacked. A single popover moves instead.
+  let tipOpen = $state(false);
+  let tipRow = $state<HTMLElement | null>(null);
+  let tipText = $state('');
+  const clipTip = (content: string) => (node: HTMLElement) => {
+    // The trigger is the whole row; the label only decides whether there is anything to show.
+    const row = node.closest<HTMLElement>('.z-tree-row');
+    if (!row) return;
+    const show = () => {
+      if (node.scrollWidth <= node.clientWidth) {
+        tipOpen = false;
+        return;
+      }
+      tipText = content;
+      tipRow = row;
+      tipOpen = true;
+    };
+    const hide = () => (tipOpen = false);
+    row.addEventListener('pointerenter', show);
+    row.addEventListener('pointerleave', hide);
+    return () => {
+      row.removeEventListener('pointerenter', show);
+      row.removeEventListener('pointerleave', hide);
+    };
+  };
 
   const statusColor = { working: 'bg-success', waiting: 'bg-warning', idle: 'bg-muted-foreground/40' } as const;
   const dotFallback = { working: 'var(--color-success, #22c55e)', waiting: 'var(--color-warning, #f59e0b)', idle: undefined } as const;
@@ -558,6 +585,12 @@
   import { ticker } from '../clock.svelte';
   const limitWarnings = $derived(warnings(ticker.min));
 </script>
+
+<ZPopover anchor={tipRow} bind:open={tipOpen} zTrigger="manual" zPosition="right" zOffset={6} zWidth={200}>
+  {#snippet children()}
+    <div class="max-w-[200px] px-2 py-1.5 text-xs leading-snug break-words whitespace-normal">{tipText}</div>
+  {/snippet}
+</ZPopover>
 
 {#snippet sessionStatus(session: SessionItem, row: string)}
   {#if session.status === 'working' && mainRow(session.id) === row}

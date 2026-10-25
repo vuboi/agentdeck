@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { ZDrawer, ZIcon, ZPopover, ZSwitch, ZTabs, zTooltip } from '@shival99/z-ui-svelte';
+  import { onMount, untrack } from 'svelte';
+  import { ZDrawer, ZIcon, ZPopover, ZSwitch, ZTabs, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { OPENAI_SVG } from '../brand-icons';
   import { activeSession, draftImages, workspace, type Attachment } from '../sessions.svelte';
@@ -302,22 +302,22 @@
     }
     return items;
   });
-  const historyOffsets = $derived.by(() => {
-    const offsets = [0];
-    for (const item of historyItems) offsets.push(offsets[offsets.length - 1] + (item.kind === 'day' ? DAY_HEIGHT : RUN_HEIGHT));
-    return offsets;
+  // TanStack Virtual (through z-ui), as the chat uses: only the rows in view are mounted.
+  let historyScroller = $state<HTMLDivElement | undefined>();
+  const historyKey = (index: number) => historyItems[index]?.key ?? index;
+  const historyHeight = (index: number) => (historyItems[index]?.kind === 'day' ? DAY_HEIGHT : RUN_HEIGHT);
+  const historyVirtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: 0,
+    getScrollElement: () => historyScroller ?? null,
+    estimateSize: historyHeight,
+    getItemKey: historyKey,
+    overscan: 6,
   });
-  let historyScroll = $state(0);
-  let historyViewport = $state(0);
-  const historyWindow = $derived.by(() => {
-    const top = historyScroll;
-    const bottom = historyScroll + historyViewport;
-    let start = 0;
-    while (start < historyItems.length && historyOffsets[start + 1] < top) start++;
-    let end = start;
-    while (end < historyItems.length && historyOffsets[end] < bottom) end++;
-    return { start: Math.max(0, start - 4), end: Math.min(historyItems.length, end + 4) };
+  $effect(() => {
+    const count = historyItems.length;
+    untrack(() => $historyVirtualizer.setOptions({ count, getScrollElement: () => historyScroller ?? null, estimateSize: historyHeight, getItemKey: historyKey, overscan: 6 }));
   });
+  const historyRows = $derived($historyVirtualizer.getVirtualItems());
 
   // The nested menus open on hover of their row, one at a time; closing the settings closes them too.
   function openSub(which: 'models' | 'suggest') {
@@ -381,21 +381,17 @@
       {#if historyItems.length === 0}
         <DevEmpty icon="lucideImages" title="No history yet" hint="Each run you generate is kept here." />
       {:else}
-        <div
-          class="min-h-0 flex-1 overflow-y-auto"
-          aria-label="Image history"
-          bind:clientHeight={historyViewport}
-          onscroll={(event) => (historyScroll = event.currentTarget.scrollTop)}
-        >
-          <div style="padding-top: {historyOffsets[historyWindow.start]}px; padding-bottom: {historyOffsets[historyItems.length] - historyOffsets[historyWindow.end]}px">
-            {#each historyItems.slice(historyWindow.start, historyWindow.end) as item (item.key)}
-              {#if item.kind === 'day'}
-                <div class="flex items-center gap-2 px-2 text-[10px] font-medium tracking-wider text-muted-foreground uppercase" style="height: {DAY_HEIGHT}px">
+        <div bind:this={historyScroller} class="min-h-0 flex-1 overflow-y-auto" aria-label="Image history">
+          <div class="relative w-full" style:height="{$historyVirtualizer.getTotalSize()}px">
+            {#each historyRows as row (row.key)}
+              {@const item = historyItems[row.index]}
+              {#if item?.kind === 'day'}
+                <div class="absolute top-0 left-0 flex w-full items-center gap-2 px-2 text-[10px] font-medium tracking-wider text-muted-foreground uppercase" style:height="{row.size}px" style:transform="translateY({row.start}px)">
                   <span class="shrink-0">{item.label}</span>
                   <span class="h-px flex-1 bg-border" aria-hidden="true"></span>
                 </div>
-              {:else}
-                <div class="px-1 py-0.5" style="height: {RUN_HEIGHT}px">
+              {:else if item}
+                <div class="absolute top-0 left-0 w-full px-1 py-0.5" style:height="{row.size}px" style:transform="translateY({row.start}px)">
                   <button
                     type="button"
                     class="flex h-full w-full cursor-pointer flex-col justify-center gap-0.5 rounded-md px-2 text-left outline-none transition-colors hover:bg-accent focus-visible:bg-accent {activeRunId === item.run.id ? 'bg-primary/10' : ''}"
@@ -701,11 +697,11 @@
           {#if failureLines.length && !working}
             <div class="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[11px] text-destructive">
               <button type="button" class="flex w-full cursor-pointer items-center gap-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-expanded={failuresOpen} onclick={() => (failuresOpen = !failuresOpen)}>
-                <ZIcon zType="lucideChevronDown" class="size-3.5 shrink-0 transition-transform duration-200 {failuresOpen ? '' : '-rotate-90'}" />
+                <ZIcon zType="lucideChevronDown" class="size-3.5 shrink-0 transition-transform duration-300 ease-out motion-reduce:transition-none {failuresOpen ? '' : '-rotate-90'}" />
                 {failureLines.length} candidate{failureLines.length === 1 ? '' : 's'} failed
               </button>
               <!-- The rows animate their height with the grid, so the list never jumps: no margin outside the animated box. -->
-              <div class="grid transition-[grid-template-rows] duration-200 ease-out {failuresOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
+              <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {failuresOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
                 <div class="min-h-0 overflow-hidden">
                   <ul class="list-disc space-y-1 pt-1.5 pl-4">
                     {#each failureLines as line (line)}

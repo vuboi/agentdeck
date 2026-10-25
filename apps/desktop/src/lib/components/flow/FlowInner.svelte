@@ -310,9 +310,9 @@
     {#if mode === 'edit'}
       <Panel position="bottom-center">
         <div class="flex items-center gap-1 rounded-xl border border-border bg-card/95 p-1 shadow-lg backdrop-blur" role="toolbar" aria-label="Flow tools">
-          <ZButton zWave={false} zType="ghost" onclick={addCentre}><ZIcon zType={icon('lucidePlus')} class="size-4" />Add step</ZButton>
+          <ZButton zWave={false} zType="ghost" class="hover:!bg-primary/10 hover:!text-primary focus-visible:!bg-primary/10 focus-visible:!text-primary" onclick={addCentre}><ZIcon zType={icon('lucidePlus')} class="size-4" />Add step</ZButton>
           <span class="h-5 w-px bg-border" aria-hidden="true"></span>
-          <ZButton zWave={false} zType="ghost" onclick={tidy}><ZIcon zType={icon('lucideRotateCcw')} class="size-4" />Reset layout</ZButton>
+          <ZButton zWave={false} zType="ghost" class="hover:!bg-primary/10 hover:!text-primary focus-visible:!bg-primary/10 focus-visible:!text-primary" onclick={tidy}><ZIcon zType={icon('lucideRotateCcw')} class="size-4" />Reset layout</ZButton>
         </div>
       </Panel>
     {/if}

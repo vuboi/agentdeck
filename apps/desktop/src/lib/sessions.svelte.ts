@@ -28,6 +28,7 @@ import { customModelId, customProviderName, modelCatalog, modelLabel, parseCusto
 import { connectors } from './connectors.svelte';
 import { dequeue, enqueue } from './queue';
 import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from './handback';
+import { joinContinuations } from './continuations';
 import { inputsOf, normalizeGraph, presetOf, stepGroups, type WorkflowPreset, type WorkflowStep } from './workflows.svelte';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
@@ -687,12 +688,22 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   }
   const turn = nextId();
   turns[session.id] = turn;
-  const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent, model: selectedModel ?? session.model };
   const list = messagesOf(session.id);
+  // A silent turn (the hand-back) continues the finished reply that handed work out: it is one message on screen.
+  const host = silent ? list.at(-1) : undefined;
+  const continues = !!host && host.role === 'assistant' && !host.live && host.agent === session.agent;
+  const reply: Message = continues && host
+    ? host
+    : { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent, model: selectedModel ?? session.model };
+  if (continues && host) {
+    host.live = true;
+    host.startedAt = Date.now() - (host.ms ?? 0);
+    host.callOutput = 0;
+  }
   // A silent turn (the hand-back) has no message of its own: its reply simply follows the message that handed work out.
   const context = preface + missedTurns(session, list, !silent);
   const asked = silent ? undefined : list.at(-1);
-  list.push(reply);
+  if (!continues) list.push(reply);
   liveReplies[session.id] = list[list.length - 1]; // the stored (reactive) object
   if (asked?.role === 'user') liveAsks[session.id] = asked;
   if (silent) {
@@ -886,7 +897,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     reply.callOutput = event.output_tokens;
     return;
   }
-  if (event.kind === 'done' && event.cost_usd != null) reply.cost = event.cost_usd;
+  if (event.kind === 'done' && event.cost_usd != null) reply.cost = (reply.cost ?? 0) + event.cost_usd;
   const update = applyAgentEvent(reply.blocks, event);
   reply.blocks = update.blocks;
   // A delegate_task call just showed up: its card follows the task the call starts.
@@ -2296,7 +2307,7 @@ async function toMessages(session: SessionItem, all: HistoryMessage[]): Promise<
   // The prompt that handed other agents' answers back was never a message of the user's: only the reply to it is shown.
   const loaded = all.filter((message) => !(message.role === 'user' && message.blocks.some((block) => block.kind === 'response' && isHandbackPrompt(block.text))));
   const restored = await Promise.all(loaded.map((message) => (message.role === 'user' ? userAttachments(message) : Promise.resolve([] as Block[]))));
-  return loaded.map((message, at) => ({
+  return joinContinuations(loaded.map((message, at) => ({
     ...(message.role === 'assistant' ? { agent: session.source } : {}),
     id: message.id,
     role: message.role,
@@ -2315,7 +2326,7 @@ async function toMessages(session: SessionItem, all: HistoryMessage[]): Promise<
     ...(message.usage
       ? { tokens: { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cache_read, cacheWrite: message.usage.cache_write }, model: message.model }
       : {}),
-  }));
+  })));
 }
 
 /** The file's messages minus the deleted ones, with the other agents' turns that fall in the time range `[lower, upper)`. */

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { slide } from 'svelte/transition';
   import { ZIcon, ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { LOADER } from '../loaders';
@@ -63,7 +64,7 @@
     {@const jumpable = Boolean(card.childId) && workspace.sessions.some((chat) => chat.id === card.childId)}
     <div class="overflow-hidden rounded-lg border border-border bg-background">
       <div class="group/row flex w-full items-stretch transition-colors hover:bg-muted/40">
-        <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-left outline-none focus-visible:bg-muted/60" aria-expanded={expanded} aria-label="Details of the task for {nameOf(card, record)}" onclick={() => (open[key(item, index)] = !expanded)}>
+        <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-left outline-none" aria-expanded={expanded} aria-label="Details of the task for {nameOf(card, record)}" onclick={() => (open[key(item, index)] = !expanded)}>
           {#if kind === 'codex'}
             <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
           {:else if kind === 'claude'}
@@ -98,12 +99,12 @@
             <ZIcon zType="lucideSquare" class="size-3 fill-current" /> Stop
           </button>
         {/if}
-        <button type="button" class="grid w-9 shrink-0 place-items-center text-muted-foreground outline-none transition-colors hover:text-primary group-hover/row:text-foreground focus-visible:bg-muted/60 {jumpable ? 'cursor-pointer' : 'cursor-default opacity-40'}" disabled={!jumpable} aria-label="Open the chat of the agent for {nameOf(card, record)}" title="Open this agent's chat" onclick={() => jumpable && showSession(card.childId!)}>
+        <button type="button" class="grid w-9 shrink-0 place-items-center text-muted-foreground outline-none transition-colors hover:text-primary group-hover/row:text-foreground {jumpable ? 'cursor-pointer' : 'cursor-default opacity-40'}" disabled={!jumpable} aria-label="Open the chat of the agent for {nameOf(card, record)}" title="Open this agent's chat" onclick={() => jumpable && showSession(card.childId!)}>
           <ZIcon zType="lucideChevronRight" class="size-3.5" />
         </button>
       </div>
       {#if expanded}
-        <div class="flex flex-col gap-2 border-t border-border/60 bg-muted/20 px-3 py-2 text-[11px]">
+        <div transition:slide={{ duration: 300 }} class="flex flex-col gap-2 border-t border-border/60 bg-muted/20 px-3 py-2 text-[11px]">
           {#if card.task}
             <div>
               <div class="mb-0.5 font-medium text-foreground">Task</div>

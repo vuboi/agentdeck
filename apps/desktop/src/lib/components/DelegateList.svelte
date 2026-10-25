@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { slide } from 'svelte/transition';
   import { ZIcon, ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { LOADER } from '../loaders';
@@ -77,13 +78,13 @@
       {done}/{blocks.length} done
     </span>
   </div>
-  <div class="divide-y divide-border">
-    {#each blocks as block (block.childId)}
+  <div>
+    {#each blocks as block, i (block.childId)}
       {@const settled = settledOf(block)}
       {@const jumpable = settled !== 'queued' && settled !== 'skipped'}
       {@const expanded = openRows[block.childId] ?? false}
-      <div class="group/row flex w-full items-stretch transition-colors hover:bg-muted/40 {settled === 'queued' || settled === 'skipped' ? 'opacity-70' : ''}">
-      <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-left text-xs outline-none focus-visible:bg-muted/60" aria-expanded={expanded} aria-label="Details of {block.step ?? block.agent}" onclick={() => (openRows[block.childId] = !expanded)}>
+      <div class="group/row flex w-full items-stretch transition-colors hover:bg-muted/60 {i > 0 ? 'border-t border-border' : ''} {settled === 'queued' || settled === 'skipped' ? 'opacity-70' : ''}">
+      <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-left text-xs outline-none" aria-expanded={expanded} aria-label="Details of {block.step ?? block.agent}" onclick={() => (openRows[block.childId] = !expanded)}>
         {#if block.agent === 'codex'}
           <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
         {:else if block.agent === 'custom'}
@@ -113,13 +114,13 @@
         </span>
         {#if needsApproval(block.childId)}<span class="shrink-0 rounded-full bg-warning/15 px-1.5 py-px text-[10px] font-medium text-warning">Needs approval</span>{/if}
       </button>
-      <button type="button" class="grid w-9 shrink-0 place-items-center text-muted-foreground outline-none transition-colors hover:text-primary group-hover/row:text-foreground focus-visible:bg-muted/60 {jumpable ? 'cursor-pointer' : 'cursor-default opacity-40'}" disabled={!jumpable} aria-label="Open the chat of {block.step ?? block.agent}" title="Open this step's chat" onclick={() => jumpable && showSession(block.childId)}>
+      <button type="button" class="grid w-9 shrink-0 place-items-center text-muted-foreground outline-none transition-colors hover:text-primary group-hover/row:text-foreground {jumpable ? 'cursor-pointer' : 'cursor-default opacity-40'}" disabled={!jumpable} aria-label="Open the chat of {block.step ?? block.agent}" title="Open this step's chat" onclick={() => jumpable && showSession(block.childId)}>
         <ZIcon zType="lucideChevronRight" class="size-3.5" />
       </button>
       </div>
       {#if expanded}
         {@const info = detail(block, settled)}
-        <div class="flex flex-col gap-1.5 border-t border-border/60 bg-muted/20 px-3 py-2 text-[11px]">
+        <div transition:slide={{ duration: 300 }} class="flex flex-col gap-1.5 bg-muted/20 px-3 py-2 text-[11px]">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground tabular-nums">
             <span><span class="text-foreground">{block.agent === 'codex' ? 'Codex' : block.agent === 'claude' ? 'Claude' : block.agent === 'custom' ? (customProviderName(block.model) ?? 'Custom') : 'Antigravity'}</span> · {modelLabel(block.model)}</span>
             <span class="{tone[settled]}">{info.status}</span>

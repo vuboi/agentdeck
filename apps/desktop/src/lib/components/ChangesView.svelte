@@ -7,7 +7,7 @@
 
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { ZButton, ZIcon, zModalService } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, createVirtualizer, zModalService } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { activeSession, workspace } from '../sessions.svelte';
   import { fileWrites } from '../activity.svelte';
@@ -136,14 +136,20 @@
     removed: changes.reduce((sum, item) => sum + item.removed, 0),
   });
   const ROW = 28;
-  const OVERSCAN = 10;
-  let scroller = $state<HTMLElement>();
-  let scrollTop = $state(0);
-  let viewport = $state(0);
-  const win = $derived({
-    start: Math.max(0, Math.floor(scrollTop / ROW) - OVERSCAN),
-    end: Math.min(changes.length, Math.ceil((scrollTop + viewport) / ROW) + OVERSCAN),
+  // TanStack Virtual (through z-ui), as the chat uses: only the rows in view are mounted.
+  let scroller = $state<HTMLDivElement>();
+  const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: 0,
+    getScrollElement: () => scroller ?? null,
+    estimateSize: () => ROW,
+    getItemKey: (index) => changes[index]?.path ?? index,
+    overscan: 10,
   });
+  $effect(() => {
+    const count = changes.length;
+    untrack(() => $virtualizer.setOptions({ count, getScrollElement: () => scroller ?? null, estimateSize: () => ROW, getItemKey: (index) => changes[index]?.path ?? index, overscan: 10 }));
+  });
+  const changeRows = $derived($virtualizer.getVirtualItems());
   const allStaged = $derived(changes.length > 0 && changes.every((item) => item.staged));
   const STATUS: Record<string, { label: string; tone: string }> = {
     M: { label: 'Modified', tone: 'text-amber-500' },
@@ -184,11 +190,12 @@
       </div>
 
       <!-- Virtual list: every row has the same height, so only the rows in view (plus a margin) are rendered. -->
-      <div bind:this={scroller} bind:clientHeight={viewport} class="min-h-0 flex-1 overflow-auto p-1.5" onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)}>
-        <div style="padding-top: {win.start * ROW}px; padding-bottom: {(changes.length - win.end) * ROW}px">
-          {#each changes.slice(win.start, win.end) as change (change.path)}
+      <div bind:this={scroller} class="min-h-0 flex-1 overflow-auto p-1.5">
+        <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px">
+          {#each changeRows as row (row.key)}
+            {@const change = changes[row.index]}
             <!-- The slot is ROW high (the list is virtual); the row inside leaves 1px above and below, so rows do not touch. -->
-            <div class="py-px" style="height: {ROW}px">
+            <div class="absolute top-0 left-0 w-full py-px" style:height="{row.size}px" style:transform="translateY({row.start}px)">
             <div class="group flex h-full items-center gap-1.5 rounded-(--radius-row) px-2.5 text-xs hover:bg-muted/50">
               <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left no-underline outline-none" title="Open {change.path}" onclick={() => openChange(change)}>
                 <span class="w-3 shrink-0 text-center font-mono {STATUS[change.status]?.tone}" title={STATUS[change.status]?.label}>{change.status}</span>

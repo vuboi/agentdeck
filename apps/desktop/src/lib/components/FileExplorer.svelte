@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { closeOnScroll } from '../close-on-scroll';
   import { ZDropdownMenu, ZIcon, ZTree } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import { tick, untrack } from 'svelte';
@@ -136,6 +137,7 @@
   // ---------- right click: rename, delete ----------
   let menu = $state<{ x: number; y: number; id: string } | null>(null);
   let menuOpen = $state(false);
+  $effect(() => closeOnScroll(() => menuOpen, () => (menuOpen = false)));
   let menuKey = $state(0);
   let selected = $state<string[]>([]);
 
