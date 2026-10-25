@@ -56,6 +56,13 @@
   let settingOpen = $state(false);
   let suggestedKeywords = $state<SuggestedKeyword[]>([]);
   const currentOptions = $derived(SETTINGS.find((item) => item.key === settingKey)?.options ?? []);
+  let settingQuery = $state('');
+  // The options whose name holds the search text; Auto is listed only while nothing is searched.
+  const shownOptions = $derived.by(() => {
+    const query = settingQuery.trim().toLowerCase();
+    const matches = currentOptions.filter((option) => option.toLowerCase().includes(query));
+    return query ? matches : ['', ...matches];
+  });
 
   let prompt = $state('');
   let selectedModels = $state<string[]>(models.map((item) => item.model));
@@ -261,6 +268,7 @@
     }
     settingKey = key;
     settingAnchor = anchor;
+    settingQuery = '';
     settingOpen = true;
   }
 
@@ -846,8 +854,14 @@
 
       <ZPopover anchor={settingAnchor} bind:open={settingOpen} zTrigger="manual" zPosition="bottom-left" zOffset={6} zWidth={200}>
         {#snippet children()}
-          <div class="flex max-h-72 w-full flex-col gap-0.5 overflow-y-auto p-1.5 text-xs" role="menu" aria-label="Setting options">
-            {#each ['', ...currentOptions] as option (option)}
+          <div class="flex max-h-72 w-full flex-col text-xs" role="menu" aria-label="Setting options">
+            <label class="flex shrink-0 items-center gap-2 border-b border-border px-2.5 py-2 text-muted-foreground focus-within:text-foreground">
+              <ZIcon zType="lucideSearch" class="size-3.5 shrink-0" />
+              <!-- svelte-ignore a11y_autofocus -->
+              <input bind:value={settingQuery} autofocus type="text" placeholder="Search..." aria-label="Search options" class="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground" />
+            </label>
+            <div class="flex min-h-0 flex-col gap-0.5 overflow-y-auto p-1.5">
+            {#each shownOptions as option (option)}
               {@const active = (settingKey ? settings[settingKey] : '') === option}
               <button
                 type="button"
@@ -860,6 +874,7 @@
                 {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
               </button>
             {/each}
+            </div>
           </div>
         {/snippet}
       </ZPopover>
