@@ -1027,6 +1027,13 @@ fn agent_stop(session: String) {
 /// Starts the AgentDeck desktop window.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -1074,28 +1081,29 @@ pub fn run() {
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
-                let id = event.id().as_ref();
-                if id == "exit" {
-                    app.exit(0);
-                } else if id == "new-chat" {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.unminimize();
-                        let _ = window.set_focus();
-                    }
-                    let _ = app.emit("tray-action", serde_json::json!({ "action": "new-chat" }));
-                } else if let Some(session_id) = id.strip_prefix("recent:") {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.unminimize();
-                        let _ = window.set_focus();
-                    }
-                    let _ = app.emit(
+                    let id = event.id().as_ref();
+                    if id == "exit" {
+                        app.exit(0);
+                    } else if id == "new-chat" {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                        let _ =
+                            app.emit("tray-action", serde_json::json!({ "action": "new-chat" }));
+                    } else if let Some(session_id) = id.strip_prefix("recent:") {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                        let _ = app.emit(
                         "tray-action",
                         serde_json::json!({ "action": "open-session", "sessionId": session_id }),
                     );
-                }
-            });
+                    }
+                });
             let tray = tray_builder
                 .on_tray_icon_event(|tray, event| {
                     if let tauri::tray::TrayIconEvent::Click {
@@ -1157,6 +1165,7 @@ pub fn run() {
             connectors::connectors_detect,
             connectors::connector_install,
             connectors::connector_login,
+            connectors::connector_login_cancel,
             connectors::accounts_list,
             connectors::codex_consume_reset_credit,
             connectors::account_switch,

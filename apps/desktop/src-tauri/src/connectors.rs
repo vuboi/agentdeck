@@ -9,8 +9,11 @@
 //! Provider account tokens stay in their existing credential stores. Antigravity account snapshots use Windows
 //! Credential Manager; the on-disk account index contains emails only. External commands run without a shell.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -21,6 +24,15 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
+
+struct LoginTask {
+    generation: u64,
+    abort: tokio::task::AbortHandle,
+}
+
+static LOGIN_TASKS: LazyLock<Mutex<HashMap<String, LoginTask>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static LOGIN_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------------------------------------------
 // Finding and running programs
@@ -529,6 +541,52 @@ pub async fn connector_install(app: AppHandle, id: String) -> Result<(), String>
 /// when it is installed, so the account is also added to its list.
 #[tauri::command]
 pub async fn connector_login(app: AppHandle, id: String) -> Result<(), String> {
+    let generation = LOGIN_GENERATION.fetch_add(1, Ordering::Relaxed);
+    let task = {
+        let mut tasks = LOGIN_TASKS
+            .lock()
+            .map_err(|_| "could not access connector sign-in state".to_string())?;
+        if tasks.contains_key(&id) {
+            return Err("sign-in is already running".to_string());
+        }
+        let task_id = id.clone();
+        let task = tokio::spawn(async move { connector_login_inner(app, task_id).await });
+        let abort = task.abort_handle();
+        tasks.insert(id.clone(), LoginTask { generation, abort });
+        task
+    };
+
+    let result = match task.await {
+        Ok(result) => result,
+        Err(error) if error.is_cancelled() => Err("sign-in cancelled".to_string()),
+        Err(error) => Err(format!("sign-in task failed: {error}")),
+    };
+
+    if let Ok(mut tasks) = LOGIN_TASKS.lock() {
+        if tasks
+            .get(&id)
+            .is_some_and(|task| task.generation == generation)
+        {
+            tasks.remove(&id);
+        }
+    }
+    result
+}
+
+/// Cancels an in-progress connector sign-in and drops its child process.
+#[tauri::command]
+pub fn connector_login_cancel(id: String) -> Result<(), String> {
+    let task = LOGIN_TASKS
+        .lock()
+        .map_err(|_| "could not access connector sign-in state".to_string())?
+        .remove(&id);
+    if let Some(task) = task {
+        task.abort.abort();
+    }
+    Ok(())
+}
+
+async fn connector_login_inner(app: AppHandle, id: String) -> Result<(), String> {
     let limit = Duration::from_secs(300);
     match id.as_str() {
         "claude" => {
@@ -553,18 +611,7 @@ pub async fn connector_login(app: AppHandle, id: String) -> Result<(), String> {
             )
             .await
         }
-        "agy" => {
-            // No headless sign-in: start `agy` in its own window, where it asks.
-            let agy = which("agy").ok_or("Antigravity is not installed")?;
-            if !cfg!(windows) {
-                return Err("run `agy` in a terminal and sign in there".to_string());
-            }
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "Antigravity sign-in", &agy.to_string_lossy()])
-                .spawn()
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        }
+        "agy" => antigravity_sign_in_another_account().await,
         other => Err(format!("no sign-in for `{other}`")),
     }
 }
@@ -1325,6 +1372,23 @@ fn write_secret(target: &str, secret: &str) -> Result<(), String> {
     unsafe { CredWriteW(&credential, 0).map_err(|error| error.to_string()) }
 }
 
+/// Removes a credential from Windows Credential Manager after its account-specific copy has been saved.
+#[cfg(windows)]
+fn delete_secret(target: &str) -> Result<(), String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Security::Credentials::{CredDeleteW, CRED_TYPE_GENERIC};
+
+    if stored_secret(target).is_none() {
+        return Ok(());
+    }
+    let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `wide` remains valid for the duration of the Windows API call.
+    unsafe {
+        CredDeleteW(PCWSTR(wide.as_ptr()), CRED_TYPE_GENERIC, None)
+            .map_err(|error| error.to_string())
+    }
+}
+
 fn agy_accounts_path() -> Result<PathBuf, String> {
     crate::home_folder().map(|home| home.join(".agentdeck").join("antigravity-accounts.json"))
 }
@@ -1455,31 +1519,117 @@ pub async fn antigravity_account_adopt() -> Result<(), String> {
     #[cfg(windows)]
     {
         let sign_in = agy_sign_in().ok_or("no Antigravity sign-in was found")?;
-        if sign_in["token"]["access_token"]
-            .as_str()
-            .is_none_or(str::is_empty)
-        {
-            return Err("the current Antigravity login has no access token".to_string());
-        }
         let email = antigravity_login()
             .email
             .ok_or("could not read the signed-in Antigravity email from its CLI log")?;
-        let serialized = serde_json::to_string(&sign_in).map_err(|error| error.to_string())?;
-        write_secret(&agy_secret_target(&email), &serialized)?;
-        let mut accounts = read_agy_accounts();
-        if let Some(account) = accounts.iter_mut().find(|account| account.email == email) {
-            account.active = true;
-        } else {
-            accounts.push(AgyAccount {
-                id: email.clone(),
-                email,
-                active: true,
-                expired: false,
-                status: None,
-            });
-        }
-        write_agy_accounts(&accounts)
+        save_agy_account(&sign_in, email)
     }
+}
+
+/// Saves the current credential before clearing the shared sign-in, then waits for `agy` to finish a fresh OAuth login.
+async fn antigravity_sign_in_another_account() -> Result<(), String> {
+    #[cfg(not(windows))]
+    return Err(
+        "Antigravity account sign-in currently requires Windows Credential Manager".to_string(),
+    );
+
+    #[cfg(windows)]
+    {
+        let previous = agy_sign_in();
+        if let Some(sign_in) = previous.as_ref() {
+            let email = antigravity_login().email.ok_or(
+                "could not read the signed-in Antigravity email; current login was left untouched",
+            )?;
+            save_agy_account(sign_in, email)?;
+        }
+
+        let agy = which("agy").ok_or("Antigravity is not installed")?;
+        let token_file = crate::home_folder()?
+            .join(".gemini")
+            .join("jetski-standalone-oauth-token");
+        if token_file.exists() {
+            std::fs::remove_file(&token_file).map_err(|error| {
+                format!("could not clear the old Antigravity sign-in file: {error}")
+            })?;
+        }
+        delete_secret("gemini:antigravity")?;
+
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "Antigravity sign-in", &agy.to_string_lossy()])
+            .spawn()
+            .map_err(|error| error.to_string())?;
+
+        let timeout = tokio::time::Instant::now() + Duration::from_secs(300);
+        let launch_deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+        let mut antigravity_was_running = antigravity_process_running()?;
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if let Some(current) = agy_sign_in() {
+                let has_access_token = current["token"]["access_token"]
+                    .as_str()
+                    .is_some_and(|token| !token.is_empty());
+                if has_access_token && previous.as_ref() != Some(&current) {
+                    let email = antigravity_login().email.ok_or(
+                        "sign-in completed, but the Antigravity account email could not be read; account was not saved",
+                    )?;
+                    save_agy_account(&current, email)?;
+                    return Ok(());
+                }
+            }
+            let antigravity_is_running = antigravity_process_running()?;
+            if antigravity_is_running {
+                antigravity_was_running = true;
+            } else if antigravity_was_running {
+                return Err("Antigravity was closed before sign-in completed".to_string());
+            } else if tokio::time::Instant::now() >= launch_deadline {
+                return Err("Antigravity did not open; sign-in was cancelled".to_string());
+            }
+            if tokio::time::Instant::now() >= timeout {
+                return Err("timed out waiting for Antigravity sign-in; finish login in the Antigravity window and refresh accounts".to_string());
+            }
+        }
+    }
+}
+
+/// Checks whether the Antigravity desktop process is still open while an external sign-in is pending.
+#[cfg(windows)]
+fn antigravity_process_running() -> Result<bool, String> {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq Antigravity.exe", "/NH"])
+        .output()
+        .map_err(|error| format!("could not check Antigravity process: {error}"))?;
+    if !output.status.success() {
+        return Err("could not check Antigravity process".to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.to_ascii_lowercase().contains("antigravity.exe")))
+}
+
+/// Saves an Antigravity credential under its account-specific Windows Credential Manager target.
+#[cfg(windows)]
+fn save_agy_account(sign_in: &Value, email: String) -> Result<(), String> {
+    if sign_in["token"]["access_token"]
+        .as_str()
+        .is_none_or(str::is_empty)
+    {
+        return Err("the current Antigravity login has no access token".to_string());
+    }
+    let serialized = serde_json::to_string(sign_in).map_err(|error| error.to_string())?;
+    write_secret(&agy_secret_target(&email), &serialized)?;
+    let mut accounts = read_agy_accounts();
+    if let Some(account) = accounts.iter_mut().find(|account| account.email == email) {
+        account.active = true;
+    } else {
+        accounts.push(AgyAccount {
+            id: email.clone(),
+            email,
+            active: true,
+            expired: false,
+            status: None,
+        });
+    }
+    write_agy_accounts(&accounts)
 }
 
 /// Makes a previously saved Antigravity account the active login used by agy and quota refresh.

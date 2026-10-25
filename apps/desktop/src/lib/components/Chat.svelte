@@ -2,7 +2,7 @@
   import { closeOnScroll } from '../close-on-scroll';
   import { revealTab } from '../tab-strip';
   import { customProviderName, modelLabel } from '../models.svelte';
-  import { tick, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { fly } from 'svelte/transition';
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
   import { layout, setSidebarCollapsed } from '../layout.svelte';
@@ -13,7 +13,7 @@
   import { copyMessage } from '../attachments';
   import { openSelectionMenu } from '../selection-menu.svelte';
   import FileChip from './FileChip.svelte';
-  import { activeSession, AGENTS, answerPermission, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, newSession, openTranscript, pendingProject, releaseReplyRender, replyBlockRendered, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, answerPermission, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, releaseReplyRender, replyBlockRendered, workspace } from '../sessions.svelte';
   import { ticker } from '../clock.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
@@ -31,6 +31,16 @@
 
   type ComputerApproval = { id: string; chat: string; tool: string; summary: string };
   let computerApprovals = $state<ComputerApproval[]>([]);
+  onMount(() => {
+    const openAndFocusNewChat = () => {
+      const id = workspace.activeId;
+      if (!id) return;
+      openChatTab(id);
+      void tick().then(() => requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()));
+    };
+    window.addEventListener('agentdeck:new-chat-requested', openAndFocusNewChat);
+    return () => window.removeEventListener('agentdeck:new-chat-requested', openAndFocusNewChat);
+  });
   $effect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
@@ -100,7 +110,7 @@
   import Composer from './Composer.svelte';
   import ToolbarActions from './ToolbarActions.svelte';
   import FileView from './FileView.svelte';
-  import { activateTab, closeAllTabs, closeOtherTabs, closeTab, contentTabs, openChatTab, saveTab, type ContentTab } from '../content-tabs.svelte';
+  import { activateTab, closeAllTabs, closeOtherTabs, closeTab, contentTabs, openChatTab, openNewChatTab, saveTab, type ContentTab } from '../content-tabs.svelte';
   import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
 
   // The folded desktop sidebar: hovering its button opens the recents drawer after a short wait. A click brings the
@@ -604,11 +614,7 @@
           class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none focus-visible:ring-0 hover:bg-primary/10 hover:text-primary"
           aria-label="New tab"
           title="New tab"
-          onclick={() => {
-            newSession();
-            openChatTab(workspace.activeId);
-            requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('main[aria-label="Conversation"] form textarea')?.focus());
-          }}
+          onclick={() => openNewChatTab()}
         >
           <ZIcon zType="lucidePlus" class="size-4" />
         </button>

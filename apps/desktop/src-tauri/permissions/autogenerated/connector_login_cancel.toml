@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-connector-login-cancel"
+description = "Enables the connector_login_cancel command without any pre-configured scope."
+commands.allow = ["connector_login_cancel"]
+
+[[permission]]
+identifier = "deny-connector-login-cancel"
+description = "Denies the connector_login_cancel command without any pre-configured scope."
+commands.deny = ["connector_login_cancel"]

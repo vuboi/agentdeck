@@ -441,7 +441,8 @@ let trayMenuUpdates = Promise.resolve();
 if (inTauri()) {
   void listen<{ action: string; sessionId?: string }>('tray-action', ({ payload }) => {
     if (payload.action === 'new-chat') {
-      newSession();
+      newSession(NO_PROJECT, { reuseDraft: false });
+      window.dispatchEvent(new Event('agentdeck:new-chat-requested'));
     } else if (payload.action === 'open-session' && payload.sessionId && workspace.sessions.some((item) => item.id === payload.sessionId)) {
       workspace.activeId = payload.sessionId;
     }

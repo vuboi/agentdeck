@@ -7,7 +7,7 @@
   import Logo from './Logo.svelte';
   import { toast } from '../toast';
   import AgentStack from './AgentStack.svelte';
-  import { contentTabs, openChatTab, showSession } from '../content-tabs.svelte';
+  import { contentTabs, openNewChatTab, showSession } from '../content-tabs.svelte';
   import SearchPalette from './SearchPalette.svelte';
   import DockZone from './DockZone.svelte';
   import Splitter from './Splitter.svelte';
@@ -29,8 +29,6 @@
     deleteSession,
     forkSession,
     history,
-    newChat,
-    newSession,
     hideProject,
     NO_PROJECT,
     prefetchTranscript,
@@ -294,9 +292,6 @@
       if (active instanceof HTMLElement && active.getAttribute('role') === 'treeitem') active.blur();
     });
   }
-  function focusComposer() {
-    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('main[aria-label="Conversation"] form textarea')?.focus());
-  }
   function toggleNode(id: string) {
     const next = sidebarTree.expanded.includes(id) ? sidebarTree.expanded.filter((item) => item !== id) : [...sidebarTree.expanded, id];
     animateChange({ expanded: next }, () => (sidebarTree.expanded = next));
@@ -552,9 +547,7 @@
 
   const projectId = (nodeId: string) => nodeId.replace(/^project:/, '');
   function addSession(id: string) {
-    if (id === NO_PROJECT) newChat();
-    else newSession(id);
-    openChatTab(workspace.activeId);
+    openNewChatTab(id);
   }
 
   const ACTION = 'grid size-5 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-foreground/10 hover:text-foreground';
@@ -679,7 +672,7 @@
   <div class="border-b border-border px-2 py-2">
     <div class="flex gap-1">
       <!-- Lit while the open chat is a new one nobody wrote in yet; the message box is focused, ready to type. -->
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 min-w-0 flex-1 justify-start gap-2 px-2 text-xs {pending ? 'bg-[color-mix(in_oklab,var(--color-primary)_16%,var(--color-background))]! text-foreground!' : ''}" onclick={() => { newSession(); openChatTab(workspace.activeId); focusComposer(); }}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 min-w-0 flex-1 justify-start gap-2 px-2 text-xs {pending ? 'bg-[color-mix(in_oklab,var(--color-primary)_16%,var(--color-background))]! text-foreground!' : ''}" onclick={() => openNewChatTab()}>
         <ZIcon zType="lucidePlus" class="size-3.5" />
         New session
       </ZButton>

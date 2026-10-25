@@ -80,11 +80,31 @@ export const connectors = $state({
   /** What agy last reported per model family, read from the file a status-line tool saves. `null`: none saved. */
   agyQuota: null as AgyQuota | null,
   scanning: false,
+  manualRefreshing: false,
 });
+
+const activeLoginRuns = new Map<ConnectorId, number>();
+const cancelledLoginRuns = new Set<number>();
+let loginSequence = 0;
 
 const call = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<T>(command, args);
+};
+
+/** Stops a connector screen from waiting forever if its native command never answers. */
+const callWithTimeout = async <T>(command: string, args: Record<string, unknown> | undefined, timeoutMs: number): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      call<T>(command, args),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${command} did not respond within ${Math.round(timeoutMs / 1000)} seconds`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 };
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -124,7 +144,7 @@ export async function refreshDetect() {
   if (!inTauri()) return;
   void listenToLogs();
   await task('detect', 'Checking', async () => {
-    connectors.detected = await call<Detected>('connectors_detect');
+    connectors.detected = await callWithTimeout<Detected>('connectors_detect', undefined, 30_000);
   });
 }
 
@@ -132,14 +152,15 @@ let adopted = false;
 
 export async function refreshAccounts(provider: AccountProvider, refresh = false) {
   if (!inTauri()) return;
+  const timeoutMs = provider === 'claude' ? 90_000 : 65_000;
   await task(`accounts:${provider}`, refresh ? 'Refreshing usage' : 'Reading accounts', async () => {
-    const next = await call<Accounts>('accounts_list', { provider, refresh });
+    const next = await callWithTimeout<Accounts>('accounts_list', { provider, refresh }, timeoutMs);
     // A fresh `cswap` knows no account yet: save the one Claude Code is signed in as, so the list is not empty.
     if (provider === 'claude' && next.manager && next.accounts.length === 0 && !next.error && connectors.detected?.claude.logged_in && !adopted) {
       adopted = true;
       try {
         await call('account_adopt');
-        Object.assign(next, await call<Accounts>('accounts_list', { provider, refresh }));
+        Object.assign(next, await callWithTimeout<Accounts>('accounts_list', { provider, refresh }, timeoutMs));
       } catch (error) {
         next.error = `Could not save the current Claude account: ${message(error)}`;
       }
@@ -166,20 +187,31 @@ export async function refreshAgyQuota() {
   }
 }
 
+let agyAccountsRefresh: Promise<boolean> | undefined;
+
 export async function refreshAgyAccounts() {
   if (!inTauri()) return;
-  await task('accounts:agy', 'Reading Antigravity accounts', async () => {
+  if (agyAccountsRefresh) return agyAccountsRefresh;
+  const refresh = task('accounts:agy', 'Reading Antigravity accounts', async () => {
     connectors.accounts.agy = await call<AgyAccount[]>('antigravity_accounts_list');
   });
+  agyAccountsRefresh = refresh;
+  try {
+    await refresh;
+  } finally {
+    if (agyAccountsRefresh === refresh) agyAccountsRefresh = undefined;
+  }
 }
 
-/** Saves the currently signed-in Antigravity credential in Windows Credential Manager. */
-export async function addAgyAccount(): Promise<boolean> {
-  await refreshDetect();
-  const ok = await task('add:agy', 'Saving current Antigravity account', () => call('antigravity_account_adopt'));
+/** Retries saving the currently signed-in Antigravity account after automatic adoption failed. */
+export async function retrySaveAgyAccount(): Promise<boolean> {
+  const ok = await task('save:agy', 'Saving Antigravity account', async () => {
+    await call('antigravity_account_adopt');
+    connectors.accounts.agy = await call<AgyAccount[]>('antigravity_accounts_list');
+  });
   if (ok) {
+    delete connectors.errors['login:agy'];
     toast.success('Antigravity account saved');
-    await refreshAgyAccounts();
   }
   return ok;
 }
@@ -194,9 +226,17 @@ export async function switchAgyAccount(account: AgyAccount): Promise<boolean> {
 }
 
 export async function refreshAll(refresh = false) {
-  await refreshDetect();
-  void refreshAgyQuota();
-  await Promise.all([refreshAccounts('codex', refresh), refreshAccounts('claude', refresh), refreshAgyAccounts()]);
+  if (refresh && connectors.manualRefreshing) return;
+  if (refresh) connectors.manualRefreshing = true;
+  try {
+    // Keep Claude detection first because account adoption depends on its signed-in state.
+    // Codex and Antigravity account reads can proceed while CLI detection runs.
+    void refreshAgyQuota();
+    await Promise.all([refreshDetect(), refreshAccounts('codex', refresh), refreshAgyAccounts()]);
+    await refreshAccounts('claude', refresh);
+  } finally {
+    if (refresh) connectors.manualRefreshing = false;
+  }
 }
 
 export async function install(id: string, label: string) {
@@ -209,14 +249,35 @@ export async function install(id: string, label: string) {
 }
 
 export async function login(id: ConnectorId, label: string): Promise<boolean> {
+  if (connectors.busy[`login:${id}`]) return false;
+  const run = ++loginSequence;
+  activeLoginRuns.set(id, run);
   connectors.logs[id] = [];
   const ok = await task(`login:${id}`, `Waiting for ${label} sign-in`, () => call('connector_login', { id }));
+  const cancelled = cancelledLoginRuns.delete(run);
+  if (activeLoginRuns.get(id) === run) activeLoginRuns.delete(id);
+  if (!ok && cancelled) {
+    delete connectors.errors[`login:${id}`];
+    return false;
+  }
   if (ok) {
     if (id === 'claude') adopted = false; // a fresh sign-in may fix what stopped the account being saved
-    await refreshAll();
+    // Login completion is independent from slow usage/account reads. Refresh those in the background.
+    void refreshAll();
     if (id !== 'agy') toast.success(`${label} signed in`);
   }
   return ok;
+}
+
+/** Cancels a connector sign-in started from an account confirmation dialog. */
+export async function cancelLogin(id: ConnectorId): Promise<void> {
+  const run = activeLoginRuns.get(id);
+  if (run !== undefined) cancelledLoginRuns.add(run);
+  try {
+    await call('connector_login_cancel', { id });
+  } catch {
+    if (run !== undefined) cancelledLoginRuns.delete(run);
+  }
 }
 
 export async function addAccount(provider: AccountProvider, label: string) {

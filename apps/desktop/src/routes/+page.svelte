@@ -21,8 +21,8 @@
   import { terminal, handleTerminalShortcut } from '../lib/terminal.svelte';
   import { browser } from '../lib/browser.svelte';
   import { inTauri } from '../lib/history';
-  import { newSession, workspace } from '../lib/sessions.svelte';
-  import { openChatTab } from '../lib/content-tabs.svelte';
+  import { workspace } from '../lib/sessions.svelte';
+  import { openNewChatTab } from '../lib/content-tabs.svelte';
 
   // Layout, outside in: sidebar | [left zone | (top zone / chat / bottom zone / terminal) | right zone] | tools.
   // Every pane is a fixed px size kept in layout.sizes; splitters between them change those sizes.
@@ -135,8 +135,7 @@
     // Ctrl+T (Cmd+T on macOS): a new chat tab, the same as the + button.
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 't') {
       event.preventDefault();
-      newSession();
-      openChatTab(workspace.activeId);
+      openNewChatTab();
     }
   }
 </script>

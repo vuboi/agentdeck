@@ -4,7 +4,7 @@
   import { inTauri } from '../history';
   import { activeSession, isRunning, isUnstarted, moveDraftToProject, NO_PROJECT, workspace } from '../sessions.svelte';
   import { toast } from '../toast';
-  import { addAgyAccount, connectors, login, refreshAccounts, refreshAgyAccounts, switchAccount, switchAgyAccount, type Account, type AccountProvider, type AgyAccount } from '../connectors.svelte';
+  import { cancelLogin, connectors, login, refreshAccounts, refreshAgyAccounts, switchAccount, switchAgyAccount, type Account, type AccountProvider, type AgyAccount } from '../connectors.svelte';
   import AgentLogo from './AgentLogo.svelte';
 
   // Under the message box: the project the chat works in (switchable while the chat is new, "This computer" by default)
@@ -52,6 +52,7 @@
   let loginLaunched = $state(false);
   let confirmError = $state('');
   let confirmAccount = $state<QuickAccount | null>(null);
+  let confirmGeneration = 0;
   let loginRequired = $state<Record<string, boolean>>({});
   const entryKey = (entry: QuickAccount) => `${entry.provider}:${entry.account.id}`;
   const labelFor = (provider: AccountProvider | 'agy') => (provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : 'Antigravity');
@@ -87,10 +88,15 @@
     confirmOpen = true;
   }
   function closeAccountConfirm() {
+    const provider = confirmAccount?.provider;
+    const cancelInFlightLogin = confirmBusy && confirmMode === 'login' && !loginLaunched && provider;
+    confirmGeneration += 1;
     confirmOpen = false;
     confirmAccount = null;
+    confirmBusy = false;
     loginLaunched = false;
     confirmError = '';
+    if (cancelInFlightLogin) void cancelLogin(provider);
   }
   const switchErrorKey = (entry: QuickAccount) => `switch:${entry.provider === 'agy' ? 'agy' : entry.provider}`;
   function isAuthFailure(text: string) {
@@ -99,11 +105,13 @@
   async function confirmAccountAction() {
     const entry = confirmAccount;
     if (!entry || confirmBusy) return;
+    const generation = ++confirmGeneration;
     confirmBusy = true;
     confirmError = '';
     try {
       if (confirmMode === 'switch') {
         const ok = entry.provider === 'agy' ? await switchAgyAccount(entry.account) : await switchAccount(entry.provider, entry.account);
+        if (generation !== confirmGeneration) return;
         if (ok) {
           delete loginRequired[entryKey(entry)];
           closeAccountConfirm();
@@ -122,14 +130,15 @@
       if (entry.provider === 'agy') {
         if (!loginLaunched) {
           const ok = await login('agy', 'Antigravity');
+          if (generation !== confirmGeneration) return;
           if (ok) {
             loginLaunched = true;
-            confirmError = 'Finish signing in in the Antigravity window, then choose Continue to save this login and switch back.';
+            await refreshAgyAccounts();
+            if (generation !== confirmGeneration) return;
+            confirmError = connectors.accounts.agy.some((account) => account.email === entry.account.email)
+              ? 'Account saved. Choose Continue to switch back to it.'
+              : 'Sign-in completed, but the account was not saved. Close and reopen this dialog to retry.';
           } else confirmError = connectors.errors['login:agy'] ?? 'Could not open Antigravity sign-in.';
-          return;
-        }
-        if (!(await addAgyAccount())) {
-          confirmError = connectors.errors['add:agy'] ?? 'Could not save the Antigravity login.';
           return;
         }
         delete loginRequired[entryKey(entry)];
@@ -139,24 +148,30 @@
           confirmError = refreshed.status ?? 'The saved Antigravity login still needs attention.';
           return;
         }
-        if (await switchAgyAccount(refreshed)) {
+        const switched = await switchAgyAccount(refreshed);
+        if (generation !== confirmGeneration) return;
+        if (switched) {
           delete loginRequired[entryKey(entry)];
           closeAccountConfirm();
         } else confirmError = connectors.errors['switch:agy'] ?? 'Could not switch accounts.';
         return;
       }
 
-      if (!(await login(entry.provider, labelFor(entry.provider)))) {
+      const loggedIn = await login(entry.provider, labelFor(entry.provider));
+      if (generation !== confirmGeneration) return;
+      if (!loggedIn) {
         confirmError = connectors.errors[`login:${entry.provider}`] ?? 'Sign-in did not finish.';
         return;
       }
       const refreshed = connectors.accounts[entry.provider]?.accounts.find((account) => account.id === entry.account.id) ?? entry.account;
-      if (await switchAccount(entry.provider, refreshed)) {
+      const switched = await switchAccount(entry.provider, refreshed);
+      if (generation !== confirmGeneration) return;
+      if (switched) {
         delete loginRequired[entryKey(entry)];
         closeAccountConfirm();
       } else confirmError = connectors.errors[switchErrorKey(entry)] ?? 'Could not switch accounts.';
     } finally {
-      confirmBusy = false;
+      if (generation === confirmGeneration) confirmBusy = false;
     }
   }
 

@@ -24,9 +24,10 @@
     refreshAccounts,
     refreshAgyQuota,
     refreshAgyAccounts,
-    addAgyAccount,
+    retrySaveAgyAccount,
     switchAgyAccount,
     refreshAll,
+    refreshDetect,
     removeAccount,
     removeProvider,
     saveProvider,
@@ -313,7 +314,8 @@
   });
 
   // The button's icon turns while the CLIs are checked and the usage is read again.
-  const refreshingAll = $derived(Boolean(connectors.busy.detect || connectors.busy['accounts:codex'] || connectors.busy['accounts:claude'] || connectors.busy['accounts:agy']));
+  const refreshingAll = $derived(connectors.manualRefreshing);
+  const refreshingDetect = $derived(Boolean(connectors.busy.detect));
 
   // Antigravity's figures are saved to a file by the status line of agy whenever it runs, not by AgentDeck: while Settings
   // is open the file is read again every half minute, so new figures show without pressing Refresh.
@@ -387,7 +389,24 @@
             <p class="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">Connectors need the desktop app: open AgentDeck, not the browser preview.</p>
 
           {:else if settings.section === 'connectors'}
-            {#if !connectors.detected}
+            {#if connectors.errors.detect && connectors.detected}
+              <div class="mb-4 flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs" role="alert">
+                <p class="min-w-0 flex-1 text-destructive">Could not check installed connectors: {connectors.errors.detect}</p>
+                <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2 text-xs" disabled={refreshingDetect} onclick={() => void refreshDetect()}>
+                  Retry
+                </ZButton>
+              </div>
+            {/if}
+            {#if !connectors.detected && connectors.errors.detect}
+              <div class="rounded-xl border border-destructive/30 bg-destructive/5 p-5" role="alert">
+                <h3 class="text-sm font-semibold text-destructive">Connectors could not be loaded</h3>
+                <p class="mt-2 break-words text-xs text-muted-foreground">{connectors.errors.detect}</p>
+                <ZButton zWave={false} zSize="sm" class="mt-4 h-8 gap-1.5 px-3 text-xs" disabled={refreshingDetect} onclick={() => void refreshDetect()}>
+                  <ZIcon zType={icon(refreshingDetect ? 'lucideLoaderCircle' : 'lucideRefreshCw')} class="size-3.5 {refreshingDetect ? 'animate-spin' : ''}" />
+                  {refreshingDetect ? 'Retrying…' : 'Try again'}
+                </ZButton>
+              </div>
+            {:else if !connectors.detected}
               <!-- First load: placeholders in the shape of the cards, replaced by the real ones fading in. -->
               <div class="flex flex-col gap-4" out:fade={{ duration: 120 }} aria-busy="true" aria-label="Loading connectors">
                 {#each CARDS as card (card.id)}
@@ -443,7 +462,7 @@
                           <ZIcon zType={icon(working ? 'lucideLoaderCircle' : 'lucideDownload')} class="size-3.5 {working ? 'animate-spin' : ''}" /> Install
                         </ZButton>
                       {:else if path && (card.id !== 'agy' || info?.logged_in !== true)}
-                        <ZButton zWave={false} zType={info?.logged_in ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={Boolean(working)} onclick={() => void login(card.id, card.label)}>
+                        <ZButton zWave={false} zType={info?.logged_in || card.id === 'agy' ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={Boolean(working)} onclick={() => void login(card.id, card.label)}>
                           <ZIcon zType={icon(connectors.busy[`login:${card.id}`] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy[`login:${card.id}`] ? 'animate-spin' : ''}" />
                           {connectors.busy[`login:${card.id}`] ? 'Waiting…' : info?.logged_in ? 'Sign in again' : 'Sign in'}
                         </ZButton>
@@ -477,30 +496,32 @@
                             <ZIcon zType={icon(connectors.busy['login:agy'] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy['login:agy'] ? 'animate-spin' : ''}" /> Sign in another account
                           </ZButton>
                         {/if}
-                        <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={!info?.logged_in || !info.email || Boolean(connectors.busy['add:agy'])} title={!info?.logged_in ? 'Sign in to Antigravity first' : 'Save the current Antigravity login'} onclick={() => void addAgyAccount()}>
-                          <ZIcon zType={icon(connectors.busy['add:agy'] ? 'lucideLoaderCircle' : 'lucideUserPlus')} class="size-3.5 {connectors.busy['add:agy'] ? 'animate-spin' : ''}" /> Add account
-                        </ZButton>
                       </div>
                       {#if !info?.logged_in || !info.email}
-                        <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">Choose <b class="font-medium text-foreground">Sign in</b> to open Antigravity, then return here and click <b class="font-medium text-foreground">Add account</b> to save that login.</p>
+                        <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">Sign in to Antigravity to save this account automatically.</p>
                       {:else if connectors.accounts.agy.length === 0}
-                        <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">Add the signed-in Google account to AgentDeck. Its credentials are stored in Windows Credential Manager.</p>
+                        <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">The signed-in account is being saved to Windows Credential Manager…</p>
                       {:else}
-                        <p class="mb-3 text-xs text-muted-foreground">To add another account, sign in with it in Antigravity, then click <b class="font-medium text-foreground">Add account</b> here. Use <b class="font-medium text-foreground">Use this account</b> to switch between saved accounts.</p>
-                        <ul class="mb-3 grid gap-2 sm:grid-cols-2">
+                        <ul class="mb-3 divide-y divide-border overflow-hidden rounded-lg border border-border">
                           {#each connectors.accounts.agy as account (account.id)}
-                            <li class="min-w-0 rounded-lg border {account.active ? 'border-primary/50 bg-primary/5' : 'border-border bg-background/50'} p-3">
-                              <span class="flex items-center gap-2">
-                                <span class="truncate text-sm font-medium">{account.email}</span>
-                                {#if account.active}<span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">IN USE</span>{/if}
-                              </span>
-                              {#if !account.active}<ZButton zWave={false} zType="outline" zSize="sm" class="mt-2 h-7 px-2.5 text-xs" disabled={Boolean(connectors.busy['switch:agy'])} onclick={() => void switchAgyAccount(account)}>Use this account</ZButton>{/if}
+                            <li class="flex min-h-12 min-w-0 items-center gap-2.5 px-3 py-2">
+                              <span class="min-w-0 flex-1 truncate text-sm font-medium" title={account.email}>{account.email}</span>
+                              {#if account.active}<span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">IN USE</span>{/if}
+                              {#if account.expired}<span class="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive" title={account.status ?? 'Sign in again required'}>Needs sign-in</span>{:else if account.status}<span class="max-w-36 truncate text-[11px] text-muted-foreground" title={account.status}>{account.status}</span>{/if}
+                              {#if !account.active}<ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2.5 text-xs" disabled={Boolean(connectors.busy['switch:agy'])} onclick={() => void switchAgyAccount(account)}>Use this account</ZButton>{/if}
                             </li>
                           {/each}
                         </ul>
                       {/if}
-                      {#if connectors.errors['accounts:agy'] || connectors.errors['add:agy'] || connectors.errors['switch:agy']}
-                        <p class="mb-3 text-xs text-destructive" role="alert">{connectors.errors['accounts:agy'] ?? connectors.errors['add:agy'] ?? connectors.errors['switch:agy']}</p>
+                      {#if connectors.errors['accounts:agy'] || connectors.errors['login:agy'] || connectors.errors['switch:agy']}
+                        <div class="mb-3 flex items-center gap-2 text-xs text-destructive" role="alert">
+                          <p class="min-w-0 flex-1">{connectors.errors['accounts:agy'] ?? connectors.errors['login:agy'] ?? connectors.errors['switch:agy']}</p>
+                          {#if connectors.errors['login:agy'] && info?.logged_in && info.email}
+                            <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2.5 text-xs" disabled={Boolean(connectors.busy['save:agy'])} onclick={() => void retrySaveAgyAccount()}>
+                              {connectors.busy['save:agy'] ? 'Saving…' : 'Retry save'}
+                            </ZButton>
+                          {/if}
+                        </div>
                       {/if}
                       <h4 class="mt-4 mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                         Usage

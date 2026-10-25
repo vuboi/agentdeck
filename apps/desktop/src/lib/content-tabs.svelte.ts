@@ -1,5 +1,5 @@
 import { untrack } from 'svelte';
-import { history, pendingProject, watchDroppedDrafts, workspace } from './sessions.svelte';
+import { history, newSession, NO_PROJECT, pendingProject, watchDroppedDrafts, workspace } from './sessions.svelte';
 import { getPref, setPref } from './prefs';
 import { fileWrites } from './activity.svelte';
 import { drafts } from './file-buffers';
@@ -97,6 +97,12 @@ export function openChatTab(sessionId: string) {
   }
   contentTabs.active = chatId(sessionId);
   workspace.activeId = sessionId;
+}
+
+/** Starts a distinct chat draft and asks the chat view to open its tab and focus the composer. */
+export function openNewChatTab(projectId = NO_PROJECT) {
+  newSession(projectId, { reuseDraft: false });
+  window.dispatchEvent(new Event('agentdeck:new-chat-requested'));
 }
 
 /** Sidebar pick: the session takes the place of the active chat tab, so tabs are swapped, not added.
