@@ -44,17 +44,18 @@ const catalog = $state<Record<ProviderId, ModelOption[]>>({
   ],
   // Antigravity has no built-in list: it is read from `agy models` at start-up.
   antigravity: [],
+  // Free models read from this CLI at start-up (`opencode models`); the same ids as a fallback when it is missing.
+  // OpenCode's reasoning levels are model variants the CLI does not list, so no effort is offered here.
   opencode: [
-    { value: 'opencode/big-pickle-free', label: 'Big Pickle (Free)', efforts: THINKING, defaultEffort: 'medium' },
-    { value: 'opencode/glm-5.3-flash-free', label: 'GLM 5.3 Flash (Free)', efforts: THINKING, defaultEffort: 'medium' },
-    { value: 'opencode/deepseek-v4.1-flash-free', label: 'DeepSeek V4.1 Flash (Free)', efforts: THINKING, defaultEffort: 'medium' },
-    { value: 'opencode/beam-free', label: 'Beam (Free)', efforts: THINKING, defaultEffort: 'medium' },
-    { value: 'opencode/flint-40b-free', label: 'Flint 40B (Free)', efforts: THINKING, defaultEffort: 'medium' },
-    { value: 'opencode/mimo-v2.6-flash-free', label: 'MiMo V2.6 Flash (Free)', efforts: THINKING, defaultEffort: 'medium' },
-    { value: 'opencode/nemotron-3-ultra-free', label: 'Nemotron 3 Ultra (Free)', efforts: THINKING, defaultEffort: 'medium' },
-    { value: 'opencode/nemotron-3.5-lightning-free', label: 'Nemotron 3.5 Lightning (Free)', efforts: THINKING, defaultEffort: 'medium' },
-    { value: 'opencode/nemotron-3.5-super-vl-free', label: 'Nemotron 3.5 Super VL (Free)', efforts: THINKING, defaultEffort: 'medium' },
-    { value: 'opencode/jev-1.13-free', label: 'Jev 1.13 (Free)', efforts: THINKING, defaultEffort: 'medium' },
+    { value: 'opencode/big-pickle', label: 'Big Pickle' },
+    { value: 'opencode/beam-free', label: 'Beam (Free)' },
+    { value: 'opencode/glm-5.3-flash-free', label: 'GLM 5.3 Flash (Free)' },
+    { value: 'opencode/deepseek-v4.1-flash-free', label: 'DeepSeek V4.1 Flash (Free)' },
+    { value: 'opencode/flint-40b-free', label: 'Flint 40B (Free)' },
+    { value: 'opencode/mimo-v2.6-flash-free', label: 'MiMo V2.6 Flash (Free)' },
+    { value: 'opencode/nemotron-3-ultra-free', label: 'Nemotron 3 Ultra (Free)' },
+    { value: 'opencode/nemotron-3.5-lightning-free', label: 'Nemotron 3.5 Lightning (Free)' },
+    { value: 'opencode/nemotron-3.5-super-vl-free', label: 'Nemotron 3.5 Super VL (Free)' },
   ],
   // Every model of every enabled custom provider: filled from the saved providers (see below).
   custom: [],
@@ -124,7 +125,7 @@ type Listed = { value: string; label: string; description: string; efforts: stri
 export async function loadModels() {
   if (!inTauri()) return;
   const { invoke } = await import('@tauri-apps/api/core');
-  for (const provider of ['claude', 'codex', 'antigravity'] as const) {
+  for (const provider of ['claude', 'codex', 'antigravity', 'opencode'] as const) {
     try {
       const listed = await invoke<Listed[]>('models_list', { agent: provider });
       if (listed.length) {

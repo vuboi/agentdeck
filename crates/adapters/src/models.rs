@@ -98,6 +98,45 @@ pub fn codex(codex_home: &Path) -> Vec<ModelInfo> {
         .collect()
 }
 
+/// OpenCode's models from the output of `opencode models`: one `provider/model` line each (`opencode-go/kimi-k3`),
+/// with Windows line endings. The CLI publishes no reasoning levels for them (a variant is `provider/model#name`),
+/// so none are offered rather than guessed.
+pub fn opencode(listing: &str) -> Vec<ModelInfo> {
+    let mut models: Vec<ModelInfo> = Vec::new();
+    for id in listing.lines().map(str::trim).filter(|id| !id.is_empty() && !id.contains(char::is_whitespace)) {
+        if models.iter().any(|model| model.value == id) {
+            continue;
+        }
+        let (provider, name) = id.split_once('/').unwrap_or(("", id));
+        models.push(ModelInfo {
+            value: id.into(),
+            label: title(name.rsplit('/').next().unwrap_or(name)),
+            description: provider.into(),
+            efforts: Vec::new(),
+            default_effort: None,
+        });
+    }
+    models
+}
+
+/// `gpt-6-luna` -> `GPT 6 Luna`, `deepseek-v4.1-flash` -> `Deepseek V4.1 Flash`.
+fn title(id: &str) -> String {
+    let is_number = |text: &str| !text.is_empty() && text.chars().all(|character| character.is_ascii_digit() || character == '.');
+    let mut words: Vec<String> = Vec::new();
+    for part in id.split(['-', '_']).filter(|part| !part.is_empty()) {
+        match words.last_mut() {
+            Some(last) if is_number(part) && is_number(last) => *last = format!("{last}.{part}"),
+            _ if part == "gpt" => words.push("GPT".into()),
+            _ if is_number(part) => words.push(part.to_string()),
+            _ => {
+                let mut characters = part.chars();
+                words.push(characters.next().map(|first| first.to_uppercase().collect::<String>() + characters.as_str()).unwrap_or_default());
+            }
+        }
+    }
+    words.join(" ")
+}
+
 const LEVELS: [&str; 3] = ["low", "medium", "high"];
 
 /// Antigravity's models from the output of `agy models`: one `<id>\t<label>` line each. The reasoning level is
@@ -209,5 +248,28 @@ gpt-oss-120b-medium	GPT-OSS 120B (Medium)
         assert!(antigravity("").is_empty());
         assert!(antigravity("Fetching available models...
 ").is_empty());
+    }
+
+    #[test]
+    fn opencode_lists_every_provider_line_with_a_readable_name() {
+        // The real output has Windows line endings and a few three-part ids.
+        let listing = "opencode-go/beam-free\r\nopencode-go/gpt-6-luna\r\nopencode/deepseek-v4.1-flash-free\r\nmsg_agent/qwen/qwen3.6-35b-a3b\r\nopencode-go/beam-free\r\n";
+        let models = opencode(listing);
+        assert_eq!(
+            models.iter().map(|m| m.value.as_str()).collect::<Vec<_>>(),
+            ["opencode-go/beam-free", "opencode-go/gpt-6-luna", "opencode/deepseek-v4.1-flash-free", "msg_agent/qwen/qwen3.6-35b-a3b"]
+        );
+        assert_eq!(models[1].label, "GPT 6 Luna");
+        assert_eq!(models[2].label, "Deepseek V4.1 Flash Free");
+        assert_eq!(models[3].label, "Qwen3.6 35b A3b");
+        assert_eq!(models[0].description, "opencode-go");
+        // No levels are invented: OpenCode's variants are not in its list.
+        assert!(models.iter().all(|model| model.efforts.is_empty() && model.default_effort.is_none()));
+    }
+
+    #[test]
+    fn opencode_ignores_what_is_not_a_model_id() {
+        assert!(opencode("").is_empty());
+        assert!(opencode("Fetching models...\n\n").is_empty());
     }
 }

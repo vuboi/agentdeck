@@ -752,7 +752,7 @@
           </div>
         </div>
 
-        <ZPopover anchor={settingsTrigger} bind:open={settingsOpen} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={300}>
+        <ZPopover anchor={settingsTrigger} bind:open={settingsOpen} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={256}>
           {#snippet children()}
             <div class="flex w-full flex-col gap-4 overflow-y-auto px-2.5 py-2.5 text-xs" role="menu" aria-label="Image settings" {@attach glide()}>
               <section aria-label="Image models">
@@ -849,7 +849,7 @@
           {/snippet}
         </ZPopover>
 
-        <ZPopover anchor={modelsRow} bind:open={modelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={148}>
+        <ZPopover anchor={modelsRow} bind:open={modelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={168}>
           {#snippet children()}
             <div class="flex w-full flex-col gap-0.5 p-1.5 text-xs" role="menu" aria-label="Image models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
               {#each models as item (item.model)}
@@ -878,7 +878,7 @@
             <div class="flex w-full flex-col gap-0.5 overflow-y-auto py-1 pl-1 text-xs" style:max-height="320px" role="radiogroup" aria-label="Prompt models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
               {#if !selectedGroup?.items.length}
                 <!-- The same empty state as the chat's model picker: the provider listed no models. -->
-                <div class="flex w-full flex-col items-center gap-1.5 px-3 py-4 text-center">
+                <div class="flex w-full flex-col items-center gap-1.5 px-2 py-3 text-center">
                   <ZIcon zType="lucideShieldAlert" class="size-5 text-muted-foreground" />
                   <div class="text-xs font-medium">No AI models</div>
                   <p class="m-0 text-[11px] leading-snug text-muted-foreground">{selectedGroup?.label ?? 'This provider'} returned no models, or its provider has an error. Check it in Settings.</p>

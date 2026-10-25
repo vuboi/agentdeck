@@ -214,6 +214,10 @@ fn models_of(agent: &str) -> Vec<ag_adapters::models::ModelInfo> {
             ))
         }
         "claude" => ag_adapters::models::claude(&home),
+        "opencode" => {
+            let binary = resolve_binary(&OpenCode::default());
+            ag_adapters::models::opencode(&ag_adapters::agent::opencode::models_listing(binary))
+        }
         "codex" => {
             let codex_home = std::env::var_os("CODEX_HOME")
                 .map(PathBuf::from)
