@@ -70,6 +70,14 @@
     'Marketing poster': 'lucideBell' as ZIconName,
     'UI mockup': 'lucideAppWindow' as ZIconName,
   };
+  // The icon of each setting, shown on its chip while nothing is picked (a picked option shows its own icon).
+  const SETTING_ICON: Record<SettingKey, ZIconName> = {
+    style: 'lucidePalette' as ZIconName,
+    domain: 'lucideGlobe' as ZIconName,
+    audience: 'lucideShieldCheck' as ZIconName,
+    ratio: 'lucideSquare' as ZIconName,
+    resolution: 'lucideMonitor' as ZIconName,
+  };
   const SETTING_CATEGORY: Record<string, SettingKey> ={ style: 'style', domain: 'domain', audience: 'audience', age: 'audience', ratio: 'ratio', resolution: 'resolution' };
   const MAX_REFERENCES = 5;
   const PICTURE = /^image\/(png|jpeg|gif|webp)$/;
@@ -893,6 +901,7 @@
             aria-expanded={settingOpen && settingKey === setting.key}
             onclick={(event) => openSetting(setting.key, event.currentTarget)}
           >
+            <ZIcon zType={(chosen && OPTION_ICON[chosen]) || SETTING_ICON[setting.key]} class="size-3.5 shrink-0 text-muted-foreground" />
             <span class="shrink-0 text-muted-foreground">{setting.label}</span>
             <span class="max-w-36 truncate">{chosen || 'Auto'}</span>
             <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 text-muted-foreground" />
@@ -929,8 +938,8 @@
         {/snippet}
       </ZPopover>
 
-      <div class="-mx-3 min-h-0 flex-1 border-t border-border pt-3">
-        <div class="flex min-h-full flex-col px-3">
+      <div class="-mx-3 flex min-h-0 flex-1 flex-col border-t border-border pt-3">
+        <div class="flex min-h-0 flex-1 flex-col px-3">
           {#if working || loadingRun}
             <div class="grid grid-cols-2 gap-2" role="status" aria-label="Generating image candidates">
               {#each Array.from({ length: working ? runSkeleton : loadingRun }) as _, index (index)}
