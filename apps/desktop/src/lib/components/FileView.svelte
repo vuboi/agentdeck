@@ -438,7 +438,11 @@
       <!-- The bar is there from the first frame (its counts fade in once git has answered), so the area is never a blank band. -->
       <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-3 text-xs"><div class="flex items-center gap-1 transition-opacity duration-200 {diffRead ? 'opacity-100' : 'opacity-0'}" aria-hidden={!diffRead}>{@render viewToggle()}</div></div>
       <div class="min-h-0 flex-1">
-        {#if changed}<div class="h-full" in:fade={{ duration: 200 }}><DiffView {rows} lang={language} /></div>{/if}
+        {#if changed}
+          <div class="h-full" in:fade={{ duration: 200 }}><DiffView {rows} lang={language} /></div>
+        {:else if !diffRead}
+          <div class="flex h-full items-center justify-center"><ZIcon zType={icon('lucideLoaderCircle')} class="size-5 animate-spin text-muted-foreground" /></div>
+        {/if}
       </div>
     {:else}
       <DevEmpty icon="lucideGitCompare" title="No changes" hint="This file is the same as in the last commit." />

@@ -595,8 +595,8 @@
   const menuItems = $derived<ZDropdownMenuItem[]>([
     ...(compact
       ? [
-          ...DEVICE_BUTTONS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, class: 'text-xs! py-1', checked: browser.device === item.value, onClick: () => (browser.device = item.value) })),
-          { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: browser.device === 'desktop', checked: browser.landscape && browser.device !== 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
+          ...DEVICE_BUTTONS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, class: `text-xs! py-1 ${browser.device === item.value ? 'bg-primary/10 text-primary' : ''}`, checked: browser.device === item.value, onClick: () => (browser.device = item.value) })),
+          { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${browser.landscape && browser.device !== 'desktop' ? 'bg-primary/10 text-primary' : ''}`, disabled: browser.device === 'desktop', checked: browser.landscape && browser.device !== 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
         ]
       : []),
     { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: compact ? 'before' : undefined, disabled: !tab.url, onClick: () => void openExternal(tab.url) },

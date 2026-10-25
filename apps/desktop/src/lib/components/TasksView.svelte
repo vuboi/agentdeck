@@ -324,17 +324,17 @@
     </button>
   </div>
   <!-- How far back the history reaches. -->
-  <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-2" role="tablist" aria-label="Range">
+  <div class="flex shrink-0 flex-wrap gap-1 border-b border-border px-3 py-2" role="tablist" aria-label="Range">
     {#each RANGES as item (item.value)}
-      <button type="button" role="tab" aria-selected={range === item.value} class="shrink-0 cursor-pointer rounded-full px-3 py-1 text-xs {range === item.value ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
+      <button type="button" role="tab" aria-selected={range === item.value} class="shrink-0 cursor-pointer rounded px-3 py-1 text-xs {range === item.value ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
     {/each}
   </div>
   {#if projects.length > 1}
     <!-- Projects with entries in the range. -->
-    <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-2" role="tablist" aria-label="Projects">
-      <button type="button" role="tab" aria-selected={chosenProject === null} class="shrink-0 cursor-pointer rounded-full px-3 py-1 text-xs {chosenProject === null ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = null)}>All projects</button>
+    <div class="flex shrink-0 flex-wrap gap-1 border-b border-border px-3 py-2" role="tablist" aria-label="Projects">
+      <button type="button" role="tab" aria-selected={chosenProject === null} class="shrink-0 cursor-pointer rounded px-3 py-1 text-xs {chosenProject === null ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = null)}>All projects</button>
       {#each projects as name (name)}
-        <button type="button" role="tab" aria-selected={chosenProject === name} class="shrink-0 cursor-pointer rounded-full px-3 py-1 text-xs {chosenProject === name ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = name)}>{name || 'No project'}</button>
+        <button type="button" role="tab" aria-selected={chosenProject === name} class="shrink-0 cursor-pointer rounded px-3 py-1 text-xs {chosenProject === name ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = name)}>{name || 'No project'}</button>
       {/each}
     </div>
   {/if}

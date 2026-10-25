@@ -880,7 +880,7 @@
       </ZPopover>
 
       <div class="-mx-3 min-h-0 flex-1 border-t border-border pt-3">
-        <div class="min-h-full px-3">
+        <div class="flex min-h-full flex-col px-3">
           {#if working || loadingRun}
             <div class="grid grid-cols-2 gap-2" role="status" aria-label="Generating image candidates">
               {#each Array.from({ length: working ? runSkeleton : loadingRun }) as _, index (index)}
@@ -914,7 +914,9 @@
               {/each}
             </div>
           {:else}
-            <DevEmpty icon="lucideImages" title="No image candidates yet" hint="Enter a prompt, choose your models, then generate a few options here." />
+            <div class="flex flex-1 items-center justify-center">
+              <DevEmpty icon="lucideImages" title="No image candidates yet" hint="Enter a prompt, choose your models, then generate a few options here." />
+            </div>
           {/if}
 
           {#if failureLines.length && !working}
