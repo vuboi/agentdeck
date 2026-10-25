@@ -74,6 +74,20 @@
   import { activateTab, closeAllTabs, closeOtherTabs, closeTab, contentTabs, openChatTab, saveTab, type ContentTab } from '../content-tabs.svelte';
   import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
 
+  // The folded desktop sidebar: hovering its button opens the recents drawer after a short wait. A click brings the
+  // desktop sidebar back and closes the drawer, whether the drawer had opened yet or not.
+  let railTimer: ReturnType<typeof setTimeout> | undefined;
+  function railEnter() {
+    if (!layout.sidebarCollapsed || layout.sidebarHidden) return;
+    clearTimeout(railTimer);
+    railTimer = setTimeout(() => (layout.sidebarDrawer = true), 350);
+  }
+  function railClick() {
+    clearTimeout(railTimer);
+    layout.sidebarDrawer = false;
+    layout.sidebarCollapsed = false;
+  }
+
   // Right click on a tab: close it, the others, or all of them.
   let tabMenu = $state<{ x: number; y: number; id: string } | null>(null);
   let tabMenuOpen = $state(false);
@@ -460,7 +474,9 @@
         class="ml-2 grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
         aria-label={layout.sidebarHidden ? 'Open sessions' : 'Show sidebar (Ctrl+B)'}
         title={layout.sidebarHidden ? 'Sessions' : 'Show sidebar (Ctrl+B)'}
-        onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = !layout.sidebarDrawer) : (layout.sidebarCollapsed = false))}
+        onpointerenter={railEnter}
+        onpointerleave={() => clearTimeout(railTimer)}
+        onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = !layout.sidebarDrawer) : railClick())}
       >
         <ZIcon zType={layout.sidebarHidden ? 'lucideMenu' : 'lucidePanelLeft'} class="size-4" />
       </button>
