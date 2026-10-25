@@ -1076,7 +1076,7 @@ function delegate(main: SessionItem, asked: Message, task: string, targets: Ment
     batch.pending.add(id);
     // The child has not spoken in this chat, so every earlier turn of it is background for the child.
     const background = missedTurns({ ...child, agent: '' as Agent }, history);
-    const brief = `${preface}${background}You were asked from another chat, whose own agent is ${agentLabel(main.agent)}, to do this part of the work: ${task}\n\nFinish with a complete answer that agent can use without seeing your work. ${LANGUAGE_RULE}`;
+    const brief = `${preface}${background}You were asked from another chat, whose own agent is ${agentLabel(main.agent)}, to do this part of the work: ${task}\n\nAnswer fully, as you would for the user. ${REPORT_RULE} ${LANGUAGE_RULE}`;
     send(id, task, images, elements, [], { preface: brief, files });
   }
   if (batch.pending.size === 0) {
@@ -1106,7 +1106,12 @@ function onDelegateDone(childId: string, reply: Message, error: string | null) {
   entry.node.note = ok ? undefined : (error ?? 'no answer');
   entry.node.endedAt = Date.now();
   entry.node.stats = statsOf(reply, entry.node.startedAt);
-  entry.batch.results.push({ label: entry.label, text: ok ? text : `(it did not answer: ${error ?? 'no text'})` });
+  // Only the compact digest goes back to the asking agent (the full answer stays in the child's chat); an answer with no
+  // digest goes back whole.
+  // The room for digests is shared by the agents asked together: one agent may use up to 8000 characters, ten about 1600.
+  const room = Math.max(1600, Math.floor(16000 / Math.max(1, entry.batch.run.nodes.length)));
+  const digest = ok && /^#{1,3}\s*handoff\b/im.test(text) ? handoffOf(text, Math.min(room, 8000)) : text;
+  entry.batch.results.push({ label: entry.label, text: ok ? digest : `(it did not answer: ${error ?? 'no text'})` });
   entry.batch.pending.delete(childId);
   keepHandout(entry.batch.main, entry.batch.asked);
   if (entry.batch.pending.size === 0) {
@@ -1195,13 +1200,17 @@ async function runFile(root: string | null, run: string, name: string, content?:
   }
 }
 
+/** For an `@agent` task: the full answer stays in the child's chat; only this compact digest goes back to the asking agent. */
+const REPORT_RULE =
+  'End with "## Handoff" (<=600 words, fewer when the answer is short; only this goes back to the agent that asked, which answers the user from it; the user can read your full answer in your own chat): STATUS: done|blocked / RESULT: <the answer, telegraphic> / FILES: <paths> / FACTS: <<=8, "; "-separated, path:line> / OPEN: <<=3>. Telegraphic: no filler, no restating the task.';
+
 const slugOf = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'step';
 
 /** The part of an answer meant for the next step: its "## Handoff" section, else its end. */
-function handoffOf(text: string): string {
+function handoffOf(text: string, max = 1600): string {
   const at = text.search(/^#{1,3}\s*handoff\b/im);
   const part = (at >= 0 ? text.slice(at).replace(/^#{1,3}\s*handoff[^\n]*\n?/i, '') : text.slice(-1200)).trim();
-  return part.length > 1600 ? `${part.slice(0, 1600)}…` : part;
+  return part.length > max ? `${part.slice(0, max)}…` : part;
 }
 
 /** The findings (`[F]` lines) the steps wrote in their notes, without repeats, at most `limit` lines. */
@@ -1471,15 +1480,26 @@ const REVIEW_STEP = /\b(review|verify|check|test|qa)\b/i;
 const REVIEW_RULE =
   'Verify, do not only read: if the change shows on a page, open it with agentdeck browser_open (or browser_serve), use browser_screenshot and browser_console, and say what you saw. End with one line "VERDICT: PASS" or "VERDICT: FAIL - <blocking problems>". Risks and nice-to-haves go under "Suggestions", they are not a FAIL.';
 
+/** Longest answer put whole into the hand-back prompt; the rest stays in the agent's own chat. */
+const HANDBACK_ANSWER_MAX = 8000;
+/** An answer that says the work failed, is blocked or needs a new plan: then the lead has to act, not only summarise. */
+const TROUBLE = /VERDICT:\s*FAIL|STATUS:\s*(?:blocked|needs-plan-change)/i;
+
 function handBack(batch: DelegateBatch) {
-  const answers = batch.results.map((result) => `### ${result.label}\n${result.text}`).join('\n\n');
+  const cut = (text: string) => (text.length > HANDBACK_ANSWER_MAX ? `${text.slice(0, HANDBACK_ANSWER_MAX)}\n… (cut here: the rest is in that agent's own chat)` : text);
+  const answers = batch.results.map((result) => `### ${result.label}\n${cut(result.text)}`).join('\n\n');
+  // When nothing went wrong the lead only reads the answers and replies, like a manager reading a report: no tools, no
+  // second round of the work. It re-checks and fixes (see `owner`) only when an answer reports trouble.
+  const trouble = batch.results.some((result) => TROUBLE.test(result.text));
   const memo = batch.memo ? `\n\n${batch.memo}` : '';
   const finish = batch.orchestrator ? `${batch.orchestrator}\n\nThe user's request: ${batch.task}` : `Using their answers, finish the user's request: ${batch.task}`;
   // A step that reviews can find the work wrong. The agent that gets the answers then owns the result: it fixes what is
   // wrong and cleans up after the steps, instead of only reporting it.
   const owner =
     "You own the result. Fix only what blocks the request: a step's VERDICT: FAIL, a failed check, or work that is wrong/unfinished. Then do not just report: see all changes (handoff FILES; git status, git diff), undo wrong ones, delete leftovers (debug output, stray files, notes), redo correctly, run the project's checks, end with what you fixed/removed. Suggestions and risks a step lists are not failures: do not edit for them, list them for the user in one short line each. If all is right, say so in one line.";
-  const prompt = `${HANDBACK_HEAD}\n\n${answers}${memo}\n\n${finish}\n\n${owner}\n\n${LANGUAGE_RULE}`;
+  const light =
+    "The answers above are compact digests; each full answer is in that agent's own chat. Do not redo or re-check their work: run no commands, read no files, look at no git state. Write the reply to the user from the digests: combine them, say in a line where they disagree, what was done, and what the user should do next. Short.";
+  const prompt = `${HANDBACK_HEAD}\n\n${answers}${memo}\n\n${finish}\n\n${trouble ? owner : light}\n\n${LANGUAGE_RULE}`;
   const shown = `↩ ${batch.results.map((result) => result.label.split(' · ')[0]).join(', ')} answered`;
   const go = (tries: number) => {
     if (!replies[batch.main]) {
