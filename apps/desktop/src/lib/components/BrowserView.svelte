@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fly } from 'svelte/transition';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
+  import { revealTab } from '../tab-strip';
   import { ZDrawer, ZDropdownMenu, ZIcon, ZLoading, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import { toast } from '../toast';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
@@ -358,6 +359,8 @@
   let tabStrip: HTMLDivElement | undefined = $state();
   let tabStripWidth = $state(0);
   let tabsOverflow = $state(false);
+  // Tabs cut off on the left: the strip is scrolled past its first tab.
+  let tabScrolled = $state(false);
   $effect(() => {
     void browser.tabs.length;
     void tabStripWidth;
@@ -370,11 +373,8 @@
     void browser.tabs.length;
     void tabStripWidth;
     void tick().then(() => {
-      const strip = tabStrip;
-      const el = strip?.querySelector<HTMLElement>(`[data-tab-id="${id}"]`);
-      if (!strip || !el) return;
-      if (el.offsetLeft < strip.scrollLeft) strip.scrollLeft = el.offsetLeft;
-      else if (el.offsetLeft + el.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = el.offsetLeft + el.offsetWidth - strip.clientWidth;
+      revealTab(tabStrip, id);
+      tabScrolled = (tabStrip?.scrollLeft ?? 0) > 1;
     });
   });
   const tabMenuItems = $derived<ZDropdownMenuItem[]>(browser.tabs.map((item) => ({ label: tabTitle(item), class: item.id === browser.activeId ? 'text-xs! py-1 bg-primary/15! text-primary!' : 'text-xs! py-1', checked: item.id === browser.activeId, onClick: () => selectTab(item.id) })));
@@ -692,7 +692,7 @@
     <!-- Tabs -->
     <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-1" role="tablist" aria-label="Browser tabs">
       <div class="relative flex min-w-0 shrink items-center">
-      <div bind:this={tabStrip} bind:clientWidth={tabStripWidth} class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+      <div bind:this={tabStrip} bind:clientWidth={tabStripWidth} onscroll={() => (tabScrolled = (tabStrip?.scrollLeft ?? 0) > 1)} class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
         {#each browser.tabs as item (item.id)}
           <div
             data-tab-id={item.id}
@@ -723,6 +723,9 @@
       {#if tabsOverflow}
         <!-- Fade into the background, as the chat's tab bar does: a tab that is cut off does not end in a hard edge. -->
         <div class="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-r from-transparent to-background" aria-hidden="true"></div>
+      {/if}
+      {#if tabScrolled}
+        <div class="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r from-background to-transparent" aria-hidden="true"></div>
       {/if}
       </div>
       {#if tabsOverflow}

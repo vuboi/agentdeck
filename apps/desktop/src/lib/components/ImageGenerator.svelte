@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { ZDrawer, ZIcon, ZPopover, ZSwitch, ZTabs, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { OPENAI_SVG } from '../brand-icons';
@@ -43,7 +43,34 @@
     { key: 'ratio', label: 'Ratio', options: ['1:1', '16:9', '16:10', '4:3', '3:4', '9:16', '21:9', '3:2', '2:3'] },
     { key: 'resolution', label: 'Resolution', options: ['SD (640×480)', 'HD (1280×720)', 'Full HD (1920×1080)', '2K (2560×1440)', '4K (3840×2160)'] },
   ];
-  const SETTING_CATEGORY: Record<string, SettingKey> = { style: 'style', domain: 'domain', audience: 'audience', age: 'audience', ratio: 'ratio', resolution: 'resolution' };
+  // A small icon in front of the option names that have one (Style and Domain).
+  const OPTION_ICON: Record<string, ZIconName> = {
+    Photorealistic: 'lucideImage' as ZIconName,
+    Anime: 'lucideSparkles' as ZIconName,
+    '2D illustration': 'lucidePenLine' as ZIconName,
+    '3D render': 'lucideLayers' as ZIconName,
+    Watercolor: 'lucidePalette' as ZIconName,
+    'Oil painting': 'lucideHighlighter' as ZIconName,
+    'Pixel art': 'lucideTable2' as ZIconName,
+    'Flat vector': 'lucideSquare' as ZIconName,
+    'Line art': 'lucidePencil' as ZIconName,
+    Cyberpunk: 'lucideZap' as ZIconName,
+    'Vintage film': 'lucideArchive' as ZIconName,
+    'Modern minimal': 'lucideMinus' as ZIconName,
+    General: 'lucideGlobe' as ZIconName,
+    'Medical and healthcare': 'lucideActivity' as ZIconName,
+    Education: 'lucideBrain' as ZIconName,
+    'Math and geometry diagram': 'lucideSlidersHorizontal' as ZIconName,
+    'Science and biology': 'lucideFlaskConical' as ZIconName,
+    Architecture: 'lucideColumns3' as ZIconName,
+    'Product and e-commerce': 'lucideCoins' as ZIconName,
+    Fashion: 'lucideHand' as ZIconName,
+    Food: 'lucideCookie' as ZIconName,
+    'Game asset': 'lucidePlay' as ZIconName,
+    'Marketing poster': 'lucideBell' as ZIconName,
+    'UI mockup': 'lucideAppWindow' as ZIconName,
+  };
+  const SETTING_CATEGORY: Record<string, SettingKey> ={ style: 'style', domain: 'domain', audience: 'audience', age: 'audience', ratio: 'ratio', resolution: 'resolution' };
   const MAX_REFERENCES = 5;
   const PICTURE = /^image\/(png|jpeg|gif|webp)$/;
 
@@ -57,6 +84,8 @@
   let suggestedKeywords = $state<SuggestedKeyword[]>([]);
   const currentOptions = $derived(SETTINGS.find((item) => item.key === settingKey)?.options ?? []);
   let settingQuery = $state('');
+  // The option the arrow keys are on: moved by the arrows and by a new search, picked with Enter.
+  let cursor = $state(0);
   // The options whose name holds the search text; Auto is listed only while nothing is searched.
   const shownOptions = $derived.by(() => {
     const query = settingQuery.trim().toLowerCase();
@@ -269,7 +298,26 @@
     settingKey = key;
     settingAnchor = anchor;
     settingQuery = '';
+    cursor = Math.max(0, shownOptions.indexOf(settings[key]));
     settingOpen = true;
+  }
+
+  // Arrow keys move through the options, Enter picks the one on, Escape closes the list.
+  function onSettingKey(event: KeyboardEvent) {
+    const count = shownOptions.length;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!count) return;
+      cursor = (cursor + (event.key === 'ArrowDown' ? 1 : count - 1)) % count;
+      const list = (event.currentTarget as HTMLElement).closest('[role="menu"]');
+      void tick().then(() => list?.querySelector(`[data-option-index="${cursor}"]`)?.scrollIntoView({ block: 'nearest' }));
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      if (count) pickSetting(shownOptions[cursor]);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      settingOpen = false;
+    }
   }
 
   function pickSetting(value: string) {
@@ -858,18 +906,20 @@
             <label class="flex shrink-0 items-center gap-2 border-b border-border px-2.5 py-2 text-muted-foreground focus-within:text-foreground">
               <ZIcon zType="lucideSearch" class="size-3.5 shrink-0" />
               <!-- svelte-ignore a11y_autofocus -->
-              <input bind:value={settingQuery} autofocus type="text" placeholder="Search..." aria-label="Search options" class="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground" />
+              <input bind:value={settingQuery} oninput={() => (cursor = 0)} onkeydown={onSettingKey} autofocus type="text" placeholder="Search..." aria-label="Search options" class="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground" />
             </label>
             <div class="flex min-h-0 flex-col gap-0.5 overflow-y-auto p-1.5">
-            {#each shownOptions as option (option)}
+            {#each shownOptions as option, index (option)}
               {@const active = (settingKey ? settings[settingKey] : '') === option}
               <button
                 type="button"
                 role="menuitemradio"
                 aria-checked={active}
-                class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : ''}"
+                data-option-index={index}
+                class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : index === cursor ? 'bg-primary/10' : ''}"
                 onclick={() => pickSetting(option)}
               >
+                {#if OPTION_ICON[option]}<ZIcon zType={OPTION_ICON[option]} class="size-3.5 shrink-0 text-muted-foreground" />{/if}
                 <span class="min-w-0 flex-1 truncate">{option || 'Auto'}</span>
                 {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
               </button>

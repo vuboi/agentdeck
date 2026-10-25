@@ -1,5 +1,6 @@
 <script lang="ts">
   import { closeOnScroll } from '../close-on-scroll';
+  import { revealTab } from '../tab-strip';
   import { customProviderName, modelLabel } from '../models.svelte';
   import { tick, untrack } from 'svelte';
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
@@ -103,10 +104,22 @@
   let tabStrip: HTMLDivElement | undefined = $state();
   let tabStripWidth = $state(0);
   let tabsOverflow = $state(false);
+  // Tabs cut off on the left: the strip is scrolled past its first tab.
+  let tabScrolled = $state(false);
   $effect(() => {
     void contentTabs.tabs.length;
     void tabStripWidth;
     tabsOverflow = contentTabs.tabs.length > 1 && !!tabStrip && tabStrip.scrollWidth > tabStrip.clientWidth + 1;
+  });
+  // The active tab (a click, or a pick in the arrow menu) scrolls into view.
+  $effect(() => {
+    const id = contentTabs.active;
+    void contentTabs.tabs.length;
+    void tabStripWidth;
+    void tick().then(() => {
+      revealTab(tabStrip, id);
+      tabScrolled = (tabStrip?.scrollLeft ?? 0) > 1;
+    });
   });
   const fileActive = $derived(contentTabs.tabs.find((tab) => tab.id === contentTabs.active)?.kind === 'file');
   const tabMenuItems = $derived(
@@ -132,7 +145,7 @@
   });
 
 
-  const agentText = { claude: 'text-orange-500', codex: 'text-emerald-500', antigravity: 'text-sky-500', custom: 'text-violet-500' } as const;
+  const agentText = { claude: 'text-orange-500', codex: 'text-emerald-500', antigravity: 'text-sky-500', opencode: 'text-foreground', custom: 'text-violet-500' } as const;
   const agentName = (agent: string) => AGENTS.find((item) => item.value === agent)?.label ?? agent;
 
   // ---------- virtual list (same approach as ZChat) ----------
@@ -454,13 +467,14 @@
     {/if}
     <div class="flex min-w-0 flex-1 items-center gap-1 pl-2">
       <div class="relative flex min-w-0 shrink items-center">
-        <div bind:this={tabStrip} bind:clientWidth={tabStripWidth} class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden" role="tablist" aria-label="Open tabs" data-tauri-drag-region>
+        <div bind:this={tabStrip} bind:clientWidth={tabStripWidth} onscroll={() => (tabScrolled = (tabStrip?.scrollLeft ?? 0) > 1)} class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden" role="tablist" aria-label="Open tabs" data-tauri-drag-region>
           {#each contentTabs.tabs as tab (tab.id)}
             {@const active = contentTabs.active === tab.id}
             {@const label = tabLabel(tab)}
             <div
               role="tab"
               tabindex="0"
+              data-tab-id={tab.id}
               aria-selected={active}
               title={tab.kind === 'file' ? tab.path : label}
               data-tip-clip
@@ -480,6 +494,9 @@
         {#if tabsOverflow}
           <!-- Fade into a solid backing: the strip continues under it, the arrow sits on solid background. -->
           <div class="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-r from-transparent to-background" aria-hidden="true"></div>
+        {/if}
+        {#if tabScrolled}
+          <div class="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r from-background to-transparent" aria-hidden="true"></div>
         {/if}
       </div>
       {#if tabsOverflow}
