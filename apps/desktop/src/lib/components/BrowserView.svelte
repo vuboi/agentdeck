@@ -23,7 +23,7 @@
     forgetVisit,
     forward,
     goTo,
-    capturePage,
+    capturePageIfPossible,
     hideBrowser,
     listenToPage,
     matchHistory,
@@ -205,19 +205,22 @@
   let placed = '';
 
   async function placePage() {
+    const place = frame();
+    if (!place) {
+      deviceBox = null;
+      await takePageAway();
+      return;
+    }
+    const origin = stage!.getBoundingClientRect();
+    // Keep the device frame responsive even before a URL has been opened. There is no native page
+    // to place yet, but switching Tablet/Mobile should still change the empty Preview layout.
+    deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
     // An empty tab (a new one, nothing typed yet) shows no page: the previous tab's page must go away.
     if (inTauri() && !started && !layout.dragging) {
       await takePageAway();
       return;
     }
     if (!inTauri() || !started || layout.dragging) return;
-    const place = frame();
-    if (!place) {
-      await takePageAway();
-      return;
-    }
-    const origin = stage!.getBoundingClientRect();
-    deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
     try {
       // Only the tab in front is on screen: showing it hides the others (once it is up, so no frame is left empty).
       const { x, y, w, h } = place.rect;
@@ -559,7 +562,8 @@
     try {
       const notes = await annotationNotes();
       // The page as it is now, marks included, straight from the engine: one quick capture.
-      const picture = await capturePage();
+      // No picture when the page cannot be captured: the marks still go to the chat, as text and elements.
+      const picture = await capturePageIfPossible();
       // What was written on an element goes with that element, as its note. The rest, drawn on the picture, are
       // numbered lines in the message.
       const words = notes
@@ -573,10 +577,12 @@
       if (marked.length) {
         draftElements[id] = [
           ...(draftElements[id] ?? []),
-          ...marked.map(({ element, note }) => ({ id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url: tab.url, title: tab.title, note })),
+          ...marked.map(({ element, note }, index) => ({ id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url: tab.url, title: tab.title, note, ...(index === 0 && picture ? { picture } : {}) })),
         ];
       }
-      draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'page-notes.png', mime: 'image/png', src: picture }];
+      // Keep the full marked-page capture with its element chip, like an Inspect capture. Freehand-only marks have
+      // no element chip, so their screenshot stays in the regular image attachments.
+      if (picture && !marked.length) draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'page-notes.png', mime: 'image/png', src: picture }];
       await stopAnnotating();
       toast.success('Added to the message');
     } catch (error) {
@@ -595,11 +601,19 @@
   // A narrow toolbar hides the device group; its choices move to the top of this menu.
   let barWidth = $state(1000);
   const compact = $derived(barWidth < 560);
+  const alive = $derived({ length: servers.list.filter((item) => item.running).length + terminalRuns.list.length });
+  let processOpen = $state(false);
   const menuItems = $derived<ZDropdownMenuItem[]>([
     ...(compact
       ? [
           ...DEVICE_BUTTONS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, class: `text-xs! py-1 ${browser.device === item.value ? 'bg-primary/10 text-primary' : ''}`, checked: browser.device === item.value, onClick: () => (browser.device = item.value) })),
           { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${browser.landscape && browser.device !== 'desktop' ? 'bg-primary/10 text-primary' : ''}`, disabled: browser.device === 'desktop', checked: browser.landscape && browser.device !== 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
+        ]
+      : []),
+    ...(compact
+      ? [
+          { label: errors > 0 ? `Developer tools (${errors} errors)` : 'Developer tools', icon: 'lucideSquareTerminal' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${devtoolsOpen() ? 'bg-primary/10 text-primary' : ''}`, checked: devtoolsOpen(), onClick: () => setDevtools(!devtoolsOpen()) },
+          { label: alive.length > 0 ? `Running in the background (${alive.length})` : 'Running in the background', icon: 'lucideServer' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${processOpen ? 'bg-primary/10 text-primary' : ''}`, checked: processOpen, onClick: () => (processOpen = !processOpen) },
         ]
       : []),
     { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: compact ? 'before' : undefined, disabled: !tab.url, onClick: () => void openExternal(tab.url) },
@@ -611,7 +625,6 @@
   // Commands running in the Terminal panel's tabs are listed too (their address, when they printed one).
   // The rows whose live output is open.
   let shown = $state<Record<string, boolean>>({});
-  const alive = $derived({ length: servers.list.filter((item) => item.running).length + terminalRuns.list.length });
   const rowCount = $derived(servers.list.length + terminalRuns.list.length);
   const terminalAge = (run: { startedAt: number }) => Math.max(0, Math.floor((clock - run.startedAt) / 1000));
   function terminalState(run: { url: string | null; interruptedAt: number | null }) {
@@ -642,8 +655,6 @@
     const found = workspace.projects.find((project) => project.path && (here === flat(project.path) || here.startsWith(`${flat(project.path)}/`)));
     return found?.name ?? (cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd);
   }
-  let processButton = $state<HTMLElement | null>(null);
-  let processOpen = $state(false);
   // The age of a running server counts up every second while the list is open. The list is read every 3 s and its ages
   // are whole seconds, so using them as they come makes the number jump back and forth: each server's start time is kept
   // instead, and only moved when a reading is clearly different (a restart, a long stall).
@@ -850,7 +861,7 @@
         </ZPopover>
       </form>
       <div class="flex shrink-0 items-center gap-0.5">
-        <!-- Desktop, tablet, phone: one group, the current one pressed. Rotate is part of it, off for desktop. -->
+        <!-- Desktop, tablet, phone: one group, the current one pressed. -->
         {#if browser.annotating}
           <!-- Mark-up tools sit in this row, in place of the device buttons: a bar of their own would resize the native page. -->
           <div class="mr-1 flex items-center gap-0.5" role="toolbar" aria-label="Mark up tools">
@@ -884,8 +895,8 @@
             {/if}
           </div>
         {:else}
-        <div class="mr-1 items-center rounded-md border border-border p-px {compact ? 'hidden' : 'flex'}" role="radiogroup" aria-label="Device">
-          {#each DEVICE_BUTTONS as item (item.value)}
+        <div class="mr-0.5 items-center rounded-md border border-border p-px {compact ? 'hidden' : 'flex'}" role="radiogroup" aria-label="Device">
+          {#each DEVICE_BUTTONS as item, index (item.value)}
             <button
               type="button"
               role="radio"
@@ -897,29 +908,22 @@
             >
               <ZIcon zType={item.icon} class="size-3.5" />
             </button>
+            {#if index < DEVICE_BUTTONS.length - 1}
+              <span class="mx-px h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+            {/if}
           {/each}
-          <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
-          <button
-              type="button"
-              aria-label="Rotate"
-              aria-pressed={browser.landscape}
-              disabled={browser.device === 'desktop'}
-              class="grid h-6 w-7 cursor-pointer place-items-center rounded-sm outline-none disabled:pointer-events-none disabled:opacity-40 {browser.landscape && browser.device !== 'desktop' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
-              {@attach zTooltip({ content: 'Rotate', position: 'top' })}
-              onclick={() => (browser.landscape = !browser.landscape)}
-            >
-              <ZIcon zType={'lucideRotateCw' as ZIconName} class="size-3.5" />
-            </button>
         </div>
         {/if}
-        <button type="button" class="{icon} relative {devtoolsOpen() ? 'bg-primary/15 text-primary' : ''}" aria-label="Developer tools" aria-pressed={devtoolsOpen()} {@attach zTooltip({ content: 'Developer tools', position: 'top' })} onclick={() => setDevtools(!devtoolsOpen())}>
-          <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
-          {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
-        </button>
-        <button bind:this={processButton} type="button" data-page-menu class="{icon} relative {processOpen ? 'bg-primary/15 text-primary' : ''}" aria-label="Running in the background" aria-expanded={processOpen} {@attach zTooltip({ content: 'Running in the background', position: 'top' })} onclick={() => (processOpen = !processOpen)}>
-          <ZIcon zType={'lucideServer' as ZIconName} zSize="14" />
-          {#if alive.length > 0}<span class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center text-[9px] leading-3.5 text-primary-foreground">{alive.length}</span>{/if}
-        </button>
+        {#if !compact}
+          <button type="button" class="{icon} relative {devtoolsOpen() ? 'bg-primary/15 text-primary' : ''}" aria-label="Developer tools" aria-pressed={devtoolsOpen()} {@attach zTooltip({ content: errors > 0 ? `Developer tools · ${errors} errors` : 'Developer tools', position: 'top' })} onclick={() => setDevtools(!devtoolsOpen())}>
+            <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
+            {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
+          </button>
+          <button type="button" data-page-menu class="{icon} relative {processOpen ? 'bg-primary/15 text-primary' : ''}" aria-label="Running in the background" aria-expanded={processOpen} {@attach zTooltip({ content: alive.length > 0 ? `Running in the background · ${alive.length}` : 'Running in the background', position: 'top' })} onclick={() => (processOpen = !processOpen)}>
+            <ZIcon zType={'lucideServer' as ZIconName} zSize="14" />
+            {#if alive.length > 0}<span class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center text-[9px] leading-3.5 text-primary-foreground">{alive.length}</span>{/if}
+          </button>
+        {/if}
         <ZDrawer bind:open={processOpen} zPlacement="right" zWidth="380px" zFloating zClosable={false} zTitle={processTitle} footer={processFooter}>
 <div class="flex min-h-full flex-col gap-2">
               {#if rowCount === 0}
@@ -972,7 +976,7 @@
 </div>
         </ZDrawer>
 <div data-page-menu class="flex items-center [&_.z-icon]:size-3.5! [&_svg]:size-3.5! [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
-                  <ZDropdownMenu zItems={menuItems} zIcon={'lucideSettings2' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
+                  <ZDropdownMenu zItems={menuItems} zIcon={'lucideEllipsis' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
         </div>
       </div>
     </div>
@@ -1019,7 +1023,7 @@
       {/if}
 
       {#if !started}
-        <div class="absolute inset-0 grid place-items-center p-6 text-center text-xs text-muted-foreground">
+        <div class="absolute grid place-items-center p-6 text-center text-xs text-muted-foreground {deviceBox ? '' : 'inset-0'}" style:left={deviceBox ? `${deviceBox.x}px` : undefined} style:top={deviceBox ? `${deviceBox.y}px` : undefined} style:width={deviceBox ? `${deviceBox.w}px` : undefined} style:height={deviceBox ? `${deviceBox.h}px` : undefined}>
           <div class="flex flex-col items-center gap-2">
             <ZIcon zType="lucideGlobe" zSize="28" class="size-7 opacity-60" />
             <p class="m-0">{targets.length ? 'Run the project, or enter an address above.' : 'Search or enter an address above.'}</p>

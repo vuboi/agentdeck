@@ -406,7 +406,12 @@ fn claude_answers_carry_their_token_usage_counted_once_per_call() {
     std::fs::write(&file, lines.join("\n")).unwrap();
     let messages = claude::load(&file).unwrap();
     let answer = messages.iter().find(|m| m.role == "assistant").unwrap();
-    assert_eq!(answer.usage.map(|u| (u.input, u.output, u.cache_read, u.cache_write)), Some((10, 5, 100, 20)));
+    assert_eq!(
+        answer
+            .usage
+            .map(|u| (u.input, u.output, u.cache_read, u.cache_write)),
+        Some((10, 5, 100, 20))
+    );
     assert_eq!(answer.model.as_deref(), Some("claude-opus-5-5"));
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -441,7 +446,12 @@ fn codex_tokens_and_model_come_back_with_the_answer() {
     assert_eq!(messages[1].model.as_deref(), Some("gpt-6.1-sol"));
     assert_eq!(
         messages[1].usage,
-        Some(HistoryUsage { input: 40, output: 50, cache_read: 60, cache_write: 0 })
+        Some(HistoryUsage {
+            input: 40,
+            output: 50,
+            cache_read: 60,
+            cache_write: 0
+        })
     );
     assert_eq!(messages[0].usage, None);
 }

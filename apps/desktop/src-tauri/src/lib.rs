@@ -4,6 +4,7 @@ mod bridge;
 mod browser;
 mod cdp;
 mod changes;
+mod computer;
 mod connectors;
 mod custom_chat;
 mod delegate;
@@ -28,6 +29,82 @@ use ag_adapters::agent::{AgentEvent, Provider, TurnRequest};
 use ag_adapters::history::{self, HistoryMessage, HistoryPage, HistorySession, Roots, Source};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
+
+#[derive(Default)]
+struct TrayState {
+    icon: std::sync::Mutex<Option<tauri::tray::TrayIcon<tauri::Wry>>>,
+    recent: std::sync::Mutex<Vec<TrayRecentSession>>,
+}
+
+#[derive(Clone, serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrayRecentSession {
+    id: String,
+    title: String,
+    agent: String,
+}
+
+fn tray_menu(
+    app: &AppHandle,
+    recent: &[TrayRecentSession],
+) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+
+    let new_chat = MenuItem::with_id(app, "new-chat", "New chat", true, None::<&str>)?;
+    let recent_heading =
+        MenuItem::with_id(app, "recent-heading", "Recent chats", false, None::<&str>)?;
+    let before_recent = PredefinedMenuItem::separator(app)?;
+    let recent_items: Vec<_> = recent
+        .iter()
+        .take(6)
+        .map(|session| {
+            let mut title: String = session.title.chars().take(30).collect();
+            if session.title.chars().count() > 30 {
+                title.push('…');
+            }
+            MenuItem::with_id(
+                app,
+                format!("recent:{}", session.id),
+                format!("{title} · {}", session.agent),
+                true,
+                None::<&str>,
+            )
+        })
+        .collect::<tauri::Result<_>>()?;
+    let before_exit = PredefinedMenuItem::separator(app)?;
+    let exit = MenuItem::with_id(app, "exit", "Exit", true, None::<&str>)?;
+
+    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> =
+        vec![&new_chat, &before_recent, &recent_heading];
+    items.extend(
+        recent_items
+            .iter()
+            .map(|item| item as &dyn IsMenuItem<tauri::Wry>),
+    );
+    items.extend([&before_exit as &dyn IsMenuItem<tauri::Wry>, &exit]);
+    Menu::with_items(app, &items)
+}
+
+#[tauri::command]
+fn tray_update_recent(app: AppHandle, sessions: Vec<TrayRecentSession>) -> Result<(), String> {
+    let state = app.state::<TrayState>();
+    *state.recent.lock().map_err(|error| error.to_string())? = sessions.clone();
+    app.emit("tray-recent-updated", &sessions)
+        .map_err(|error| error.to_string())?;
+    {
+        let menu = tray_menu(&app, &sessions).map_err(|error| error.to_string())?;
+        if let Some(tray) = state
+            .icon
+            .lock()
+            .map_err(|error| error.to_string())?
+            .as_ref()
+        {
+            tray.set_menu(Some(menu))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
 
 fn roots() -> Result<Roots, String> {
     let home = std::env::var_os("USERPROFILE")
@@ -953,6 +1030,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .register_uri_scheme_protocol("agentdeck", |context, request| {
             // The Preview's own page for an address that did not answer.
             if request.uri().path() == "/error" {
@@ -984,6 +1062,63 @@ pub fn run() {
                 .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
         })
         .setup(|app| {
+            app.manage(TrayState::default());
+            let tray_menu = tray_menu(app.handle(), &[])?;
+            let tray_icon = app
+                .default_window_icon()
+                .cloned()
+                .ok_or_else(|| std::io::Error::other("the AgentDeck tray icon is missing"))?;
+            let tray_builder = tauri::tray::TrayIconBuilder::new()
+                .icon(tray_icon)
+                .tooltip("AgentDeck")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                let id = event.id().as_ref();
+                if id == "exit" {
+                    app.exit(0);
+                } else if id == "new-chat" {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                    }
+                    let _ = app.emit("tray-action", serde_json::json!({ "action": "new-chat" }));
+                } else if let Some(session_id) = id.strip_prefix("recent:") {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                    }
+                    let _ = app.emit(
+                        "tray-action",
+                        serde_json::json!({ "action": "open-session", "sessionId": session_id }),
+                    );
+                }
+            });
+            let tray = tray_builder
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button,
+                        button_state,
+                        ..
+                    } = event
+                    {
+                        if button_state == tauri::tray::MouseButtonState::Up
+                            && button == tauri::tray::MouseButton::Left
+                        {
+                            if let Some(window) = tray.app_handle().get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                })
+                .build(app)?;
+            if let Ok(mut slot) = app.state::<TrayState>().icon.lock() {
+                *slot = Some(tray);
+            }
             bridge::start(app.handle().clone());
             if let Ok(dir) = app.path().resource_dir() {
                 image_gen::set_resource_dir(dir);
@@ -1010,6 +1145,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            tray_update_recent,
             history_list,
             changes::changes_list,
             changes::change_diff,
@@ -1022,6 +1158,7 @@ pub fn run() {
             connectors::connector_install,
             connectors::connector_login,
             connectors::accounts_list,
+            connectors::codex_consume_reset_credit,
             connectors::account_switch,
             connectors::account_add,
             connectors::agy_modes,
@@ -1033,6 +1170,9 @@ pub fn run() {
             mcp_manage::mcp_remove,
             mcp_manage::mcp_agy_link,
             connectors::antigravity_quota,
+            connectors::antigravity_accounts_list,
+            connectors::antigravity_account_adopt,
+            connectors::antigravity_account_switch,
             connectors::account_adopt,
             connectors::account_remove,
             connectors::codex_auto_switch,
@@ -1099,6 +1239,8 @@ pub fn run() {
             browser::open_external,
             browser::browser_favicon,
             browser::browser_suggest,
+            computer::computer_use_set_enabled,
+            computer::computer_use_approval,
             pty::pty_open,
             pty::pty_attach,
             pty::pty_write,
@@ -1108,11 +1250,22 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build AgentDeck desktop application")
-        .run(|_app, event| {
-            // The dev servers the agents asked for end with the app.
-            if let tauri::RunEvent::Exit = event {
+        .run(|app, event| match event {
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } if label == "main" => {
+                api.prevent_close();
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            // The dev servers the agents asked for end only when the user chooses Exit from the tray.
+            tauri::RunEvent::Exit => {
                 servers::kill_all();
                 pty::kill_all();
             }
+            _ => {}
         });
 }

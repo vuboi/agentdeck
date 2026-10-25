@@ -178,7 +178,7 @@ let listening = false;
 export async function listenToNetwork() {
   if (listening || !inTauri()) return;
   listening = true;
-  const { listen } = await import('@tauri-apps/api/event');
+  const { listen } = await import('./tauri-event');
   await listen<{ label: string; event: string; params: Params }>('devtools-net', ({ payload }) => {
     const tab = payload.label.replace(/^browser-/, '');
     apply(tab, payload.event, payload.params);

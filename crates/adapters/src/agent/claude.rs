@@ -122,7 +122,9 @@ impl Provider for Claude {
         context.push_str(" In the z-ui workspace, start the app the user asked for with its own script: `pnpm start:svelte` for the Svelte 5 app (default http://localhost:4301) and `pnpm start:angular` for the Angular app (default http://localhost:4200). Never open the Angular server when the user asks for Svelte, Svelte 5 or z-ui-svelte.");
         if let Some(bridge) = &bridge {
             context.push_str(" You CAN see and operate the page open in the Preview panel yourself, with the agentdeck tools: browser_screenshot to look, browser_click / browser_fill (form fields; browser_type only when the page reacts to each keystroke) / browser_key / browser_scroll / browser_hover to act as a user would (coordinates are CSS pixels of the screenshot; browser_eval with getBoundingClientRect() finds an element's point), browser_eval and browser_dom to read the page, browser_console and browser_network for errors. Never tell the user you cannot click or test in Preview, and do not ask them to do it for you. Test step by step: look, act, look again, check the console and network.");
-            context.push_str(&format!(" The same actions are plain HTTP too if a tool is missing: curl {bridge}/help."));
+            context.push_str(&format!(
+                " The same actions are plain HTTP too if a tool is missing: curl {bridge}/help."
+            ));
         }
         args.push(context);
         // The AgentDeck browser as real tools (an MCP server served by the app), allowed without asking.
@@ -175,22 +177,28 @@ impl Provider for Claude {
                         vec![AgentEvent::Usage {
                             input_tokens: usage["input_tokens"].as_u64().unwrap_or(0),
                             output_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
-                            cache_read_tokens: usage["cache_read_input_tokens"].as_u64().unwrap_or(0),
-                            cache_write_tokens: usage["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+                            cache_read_tokens: usage["cache_read_input_tokens"]
+                                .as_u64()
+                                .unwrap_or(0),
+                            cache_write_tokens: usage["cache_creation_input_tokens"]
+                                .as_u64()
+                                .unwrap_or(0),
                             new_call: true,
                         }]
                     }
                     // The call's output so far.
-                    (Some("message_delta"), _) => match value["event"]["usage"]["output_tokens"].as_u64() {
-                        Some(output) => vec![AgentEvent::Usage {
-                            input_tokens: 0,
-                            output_tokens: output,
-                            cache_read_tokens: 0,
-                            cache_write_tokens: 0,
-                            new_call: false,
-                        }],
-                        None => Vec::new(),
-                    },
+                    (Some("message_delta"), _) => {
+                        match value["event"]["usage"]["output_tokens"].as_u64() {
+                            Some(output) => vec![AgentEvent::Usage {
+                                input_tokens: 0,
+                                output_tokens: output,
+                                cache_read_tokens: 0,
+                                cache_write_tokens: 0,
+                                new_call: false,
+                            }],
+                            None => Vec::new(),
+                        }
+                    }
                     _ => Vec::new(),
                 }
             }
@@ -315,12 +323,24 @@ mod tests {
         let start = r#"{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":12,"cache_read_input_tokens":900,"cache_creation_input_tokens":40,"output_tokens":1}}}}"#;
         assert_eq!(
             Claude.parse_line(start),
-            vec![AgentEvent::Usage { input_tokens: 12, output_tokens: 1, cache_read_tokens: 900, cache_write_tokens: 40, new_call: true }]
+            vec![AgentEvent::Usage {
+                input_tokens: 12,
+                output_tokens: 1,
+                cache_read_tokens: 900,
+                cache_write_tokens: 40,
+                new_call: true
+            }]
         );
         let delta = r#"{"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":321}}}"#;
         assert_eq!(
             Claude.parse_line(delta),
-            vec![AgentEvent::Usage { input_tokens: 0, output_tokens: 321, cache_read_tokens: 0, cache_write_tokens: 0, new_call: false }]
+            vec![AgentEvent::Usage {
+                input_tokens: 0,
+                output_tokens: 321,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                new_call: false
+            }]
         );
         let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"pong","session_id":"s1","total_cost_usd":0.5}"#;
         assert_eq!(
@@ -364,7 +384,13 @@ mod tests {
         let shell = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"pnpm dev","run_in_background":true}}]}}"#;
         let agent = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Agent","input":{"prompt":"look"}}]}}"#;
         for line in [shell, agent] {
-            assert!(matches!(Claude.parse_line(line)[0], AgentEvent::ToolCall { background: true, .. }));
+            assert!(matches!(
+                Claude.parse_line(line)[0],
+                AgentEvent::ToolCall {
+                    background: true,
+                    ..
+                }
+            ));
         }
     }
 

@@ -26,7 +26,21 @@ export type HistoryBlock =
 export type HistoryUsage = { input: number; output: number; cache_read: number; cache_write: number };
 export type HistoryMessage = { id: string; role: 'user' | 'assistant'; time: string; blocks: HistoryBlock[]; usage?: HistoryUsage; model?: string };
 
-export const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+const bridge = () => (typeof window === 'undefined' ? undefined : (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWebview?: { label?: string } } } }).__TAURI_INTERNALS__);
+
+/**
+ * Whether this page is the Preview's own copy of the app (the Preview opened the app's dev address in a webview of its
+ * own). That copy shares the backend, the events and the saved data with the real window, so it only reads: it saves
+ * nothing, listens to no events and does not reset the pages.
+ */
+export const isPreviewCopy = () => Boolean(bridge()?.metadata?.currentWebview?.label?.startsWith('browser-'));
+
+/**
+ * Whether this page can call the app's commands. A release build grants them to the app's own window only, so the
+ * Preview's copy runs as a plain web page there (the same as in a browser). A debug build grants them to that copy too
+ * (the capability debug-preview, src-tauri/build.rs): it shows the real data, to look at and to try.
+ */
+export const inTauri = () => bridge() !== undefined && (import.meta.env.DEV || !isPreviewCopy());
 
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke: call } = await import('@tauri-apps/api/core');

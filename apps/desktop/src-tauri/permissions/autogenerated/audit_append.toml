@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-audit-append"
+description = "Enables the audit_append command without any pre-configured scope."
+commands.allow = ["audit_append"]
+
+[[permission]]
+identifier = "deny-audit-append"
+description = "Denies the audit_append command without any pre-configured scope."
+commands.deny = ["audit_append"]

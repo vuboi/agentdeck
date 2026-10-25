@@ -29,10 +29,30 @@ pub struct RunTarget {
     pub prompts: bool,
 }
 
-const SKIP_DIRS: [&str; 8] = ["node_modules", "target", "dist", "build", "out", "coverage", "venv", "__pycache__"];
-const SKIP_WORDS: [&str; 10] = ["build", "test", "lint", "deploy", "format", "check", "clean", "publish", "release", "e2e"];
+const SKIP_DIRS: [&str; 8] = [
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
+    "coverage",
+    "venv",
+    "__pycache__",
+];
+const SKIP_WORDS: [&str; 10] = [
+    "build", "test", "lint", "deploy", "format", "check", "clean", "publish", "release", "e2e",
+];
 /// Script names that start something worth looking at, best first.
-const RANK: [&str; 8] = ["dev", "start", "serve", "preview", "web", "storybook", "docs", "watch"];
+const RANK: [&str; 8] = [
+    "dev",
+    "start",
+    "serve",
+    "preview",
+    "web",
+    "storybook",
+    "docs",
+    "watch",
+];
 const MAX: usize = 24;
 
 /// Every way to run the project in `root`, the likeliest first.
@@ -58,17 +78,29 @@ fn package_folders(root: &Path) -> Vec<PathBuf> {
     let mut folders = vec![root.to_path_buf()];
     let children = |dir: &Path| -> Vec<PathBuf> {
         let mut list: Vec<PathBuf> = std::fs::read_dir(dir)
-            .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.path()).collect())
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .collect()
+            })
             .unwrap_or_default();
         list.retain(|path| {
-            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
             path.is_dir() && !name.starts_with('.') && !SKIP_DIRS.contains(&name)
         });
         list.sort();
         list
     };
     for child in children(root) {
-        let name = child.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string();
+        let name = child
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
         folders.push(child.clone());
         if ["apps", "packages", "services", "examples"].contains(&name.as_str()) {
             folders.extend(children(&child));
@@ -86,7 +118,13 @@ fn read_json(path: &Path) -> Option<Value> {
 fn runner(root: &Path, folder: &Path, script: &str) -> String {
     let mut dir = Some(folder);
     while let Some(here) = dir {
-        for (file, program) in [("pnpm-lock.yaml", "pnpm run"), ("yarn.lock", "yarn"), ("bun.lockb", "bun run"), ("bun.lock", "bun run"), ("package-lock.json", "npm run")] {
+        for (file, program) in [
+            ("pnpm-lock.yaml", "pnpm run"),
+            ("yarn.lock", "yarn"),
+            ("bun.lockb", "bun run"),
+            ("bun.lock", "bun run"),
+            ("package-lock.json", "npm run"),
+        ] {
             if here.join(file).is_file() {
                 return format!("{program} {script}");
             }
@@ -100,10 +138,26 @@ fn runner(root: &Path, folder: &Path, script: &str) -> String {
 }
 
 fn packages(root: &Path, folder: &Path, found: &mut Vec<RunTarget>) {
-    let Some(manifest) = read_json(&folder.join("package.json")) else { return };
-    let Some(scripts) = manifest["scripts"].as_object() else { return };
-    let dependencies = format!("{} {}", manifest["dependencies"], manifest["devDependencies"]);
-    let package = manifest["name"].as_str().map(str::to_string).unwrap_or_else(|| folder.file_name().and_then(|name| name.to_str()).unwrap_or("app").to_string());
+    let Some(manifest) = read_json(&folder.join("package.json")) else {
+        return;
+    };
+    let Some(scripts) = manifest["scripts"].as_object() else {
+        return;
+    };
+    let dependencies = format!(
+        "{} {}",
+        manifest["dependencies"], manifest["devDependencies"]
+    );
+    let package = manifest["name"]
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            folder
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("app")
+                .to_string()
+        });
     let mut names: Vec<&String> = scripts
         .keys()
         .filter(|name| {
@@ -114,24 +168,38 @@ fn packages(root: &Path, folder: &Path, found: &mut Vec<RunTarget>) {
         .collect();
     names.sort_by_key(|name| {
         let lower = name.to_lowercase();
-        (RANK.iter().position(|rank| lower == *rank).unwrap_or(RANK.len()), lower)
+        (
+            RANK.iter()
+                .position(|rank| lower == *rank)
+                .unwrap_or(RANK.len()),
+            lower,
+        )
     });
     for name in names {
         let text = scripts[name].as_str().unwrap_or_default();
         // The desktop app and the packaged ones are not a page.
-        if ["tauri", "electron", "expo", "react-native", "nodemon"].iter().any(|word| text.contains(word)) {
+        if ["tauri", "electron", "expo", "react-native", "nodemon"]
+            .iter()
+            .any(|word| text.contains(word))
+        {
             continue;
         }
         let port = port_of(text, &dependencies, folder);
         let wrapper = wrapper_of(text);
         found.push(RunTarget {
-            name: if folder == root { name.clone() } else { format!("{package}: {name}") },
+            name: if folder == root {
+                name.clone()
+            } else {
+                format!("{package}: {name}")
+            },
             command: runner(root, folder, name),
             cwd: folder.to_string_lossy().into_owned(),
             url: port.map(|port| format!("http://localhost:{port}/")),
             source: "package.json".into(),
             wrapper: wrapper.clone(),
-            prompts: wrapper.as_deref().is_some_and(|file| uses_prompts(&folder.join(file))),
+            prompts: wrapper
+                .as_deref()
+                .is_some_and(|file| uses_prompts(&folder.join(file))),
         });
     }
 }
@@ -139,12 +207,16 @@ fn packages(root: &Path, folder: &Path, found: &mut Vec<RunTarget>) {
 /// The file a script runs when it is `node file.mjs` (a wrapper around the real dev server), as written.
 fn wrapper_of(script: &str) -> Option<String> {
     let pattern = Regex::new(r#"^\s*(?:cross-env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*node\s+(?:--?[\w-]+(?:=\S+)?\s+)*([^\s&|;<>]+\.(?:mjs|cjs|js))\b"#).ok()?;
-    pattern.captures(script).map(|found| found[1].trim_matches(['"', '\'']).to_string())
+    pattern
+        .captures(script)
+        .map(|found| found[1].trim_matches(['"', '\'']).to_string())
 }
 
 /// Whether a script file reads answers from the keyboard (a prompt library, readline, stdin).
 fn uses_prompts(file: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(file) else { return false };
+    let Ok(text) = std::fs::read_to_string(file) else {
+        return false;
+    };
     let text: String = text.chars().take(200_000).collect();
     Regex::new(r#"(?:from|require\(|import\()\s*['"](?:node:)?(?:inquirer|@inquirer/[\w-]+|enquirer|prompts|@clack/prompts|readline|readline-sync|readline/promises)['"]|process\.stdin"#)
         .is_ok_and(|pattern| pattern.is_match(&text))
@@ -153,7 +225,10 @@ fn uses_prompts(file: &Path) -> bool {
 /// The port a script asks for, else the usual one of the framework it runs.
 fn port_of(script: &str, dependencies: &str, folder: &Path) -> Option<u16> {
     let explicit = Regex::new(r"(?:--port[= ]|-p[= ]|PORT=|:)(\d{4,5})\b").ok()?;
-    if let Some(port) = explicit.captures(script).and_then(|found| found[1].parse().ok()) {
+    if let Some(port) = explicit
+        .captures(script)
+        .and_then(|found| found[1].parse().ok())
+    {
         return Some(port);
     }
     let uses = |word: &str| script.contains(word) || dependencies.contains(&format!("\"{word}\""));
@@ -175,31 +250,62 @@ fn port_of(script: &str, dependencies: &str, folder: &Path) -> Option<u16> {
         ("parcel", 1234),
     ]
     .iter()
-    .find(|(word, _)| script.contains(word) || (!word.contains(' ') && dependencies.contains(&format!("\"{word}\""))))
+    .find(|(word, _)| {
+        script.contains(word)
+            || (!word.contains(' ') && dependencies.contains(&format!("\"{word}\"")))
+    })
     .map(|(_, port)| *port)
 }
 
 /// `server: { port: N }` of a vite config, when it has one.
 fn config_port(folder: &Path) -> Option<u16> {
     let pattern = Regex::new(r"\bport\s*:\s*(\d{4,5})").ok()?;
-    ["vite.config.ts", "vite.config.js", "vite.config.mts", "vite.config.mjs", "svelte.config.js"]
-        .iter()
-        .filter_map(|name| std::fs::read_to_string(folder.join(name)).ok())
-        .find_map(|text| pattern.captures(&text).and_then(|found| found[1].parse().ok()))
+    [
+        "vite.config.ts",
+        "vite.config.js",
+        "vite.config.mts",
+        "vite.config.mjs",
+        "svelte.config.js",
+    ]
+    .iter()
+    .filter_map(|name| std::fs::read_to_string(folder.join(name)).ok())
+    .find_map(|text| {
+        pattern
+            .captures(&text)
+            .and_then(|found| found[1].parse().ok())
+    })
 }
 
 /// The run configurations the project already wrote down (`.claude/launch.json`).
 fn launch_json(root: &Path, found: &mut Vec<RunTarget>) {
-    let Some(file) = read_json(&root.join(".claude").join("launch.json")) else { return };
+    let Some(file) = read_json(&root.join(".claude").join("launch.json")) else {
+        return;
+    };
     for item in file["configurations"].as_array().into_iter().flatten() {
-        let Some(program) = item["runtimeExecutable"].as_str() else { continue };
-        let args: Vec<&str> = item["runtimeArgs"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        let Some(program) = item["runtimeExecutable"].as_str() else {
+            continue;
+        };
+        let args: Vec<&str> = item["runtimeArgs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
         let port = item["port"].as_u64();
         found.push(RunTarget {
             name: item["name"].as_str().unwrap_or(program).to_string(),
-            command: std::iter::once(program).chain(args).collect::<Vec<_>>().join(" "),
-            cwd: item["cwd"].as_str().map_or_else(|| root.to_string_lossy().into_owned(), |cwd| root.join(cwd).to_string_lossy().into_owned()),
-            url: item["url"].as_str().map(str::to_string).or_else(|| port.map(|port| format!("http://localhost:{port}/"))),
+            command: std::iter::once(program)
+                .chain(args)
+                .collect::<Vec<_>>()
+                .join(" "),
+            cwd: item["cwd"].as_str().map_or_else(
+                || root.to_string_lossy().into_owned(),
+                |cwd| root.join(cwd).to_string_lossy().into_owned(),
+            ),
+            url: item["url"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| port.map(|port| format!("http://localhost:{port}/"))),
             source: "launch.json".into(),
             wrapper: None,
             prompts: false,
@@ -211,7 +317,12 @@ fn django(root: &Path, found: &mut Vec<RunTarget>) {
     if root.join("manage.py").is_file() {
         found.push(RunTarget {
             name: "Django".into(),
-            command: if cfg!(windows) { "python manage.py runserver" } else { "python3 manage.py runserver" }.into(),
+            command: if cfg!(windows) {
+                "python manage.py runserver"
+            } else {
+                "python3 manage.py runserver"
+            }
+            .into(),
             cwd: root.to_string_lossy().into_owned(),
             url: Some("http://localhost:8000/".into()),
             source: "manage.py".into(),
@@ -227,13 +338,23 @@ pub fn address_in(log: &str) -> Option<String> {
     let plain = colours.replace_all(log, "");
     // Taken as printed (scheme, host, port, path): a server started with a certificate answers at https:// only, and
     // one bound to 127.0.0.1 may not answer as localhost. Only an address nobody can browse to becomes localhost.
-    let found = Regex::new(r#"(https?)://(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})([^\s)\]'"<>]*)"#).ok()?.captures(&plain)?;
+    let found = Regex::new(
+        r#"(https?)://(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})([^\s)\]'"<>]*)"#,
+    )
+    .ok()?
+    .captures(&plain)?;
     let host = match &found[2] {
         "0.0.0.0" | "[::]" => "localhost",
         other => other,
     };
     let path = found[4].trim_end_matches(['.', ',', ';']);
-    Some(format!("{}://{}:{}{}", &found[1], host, &found[3], if path.is_empty() { "/" } else { path }))
+    Some(format!(
+        "{}://{}:{}{}",
+        &found[1],
+        host,
+        &found[3],
+        if path.is_empty() { "/" } else { path }
+    ))
 }
 
 #[tauri::command]
@@ -245,7 +366,11 @@ pub fn detect_run_targets(cwd: String) -> Vec<RunTarget> {
 /// the one the server prints (a dev server moves to the next port when its own is taken); the guess `url` is used
 /// when it prints none. A server that already answers at the guess is not started again.
 #[tauri::command]
-pub async fn run_target(command: String, cwd: String, url: Option<String>) -> Result<String, RunFailure> {
+pub async fn run_target(
+    command: String,
+    cwd: String,
+    url: Option<String>,
+) -> Result<String, RunFailure> {
     let guess = url.as_deref().map(crate::browser::parse).transpose()?;
     if let Some(guess) = guess.as_ref() {
         if let Some(target) = crate::browser::ready(guess).await {
@@ -253,12 +378,15 @@ pub async fn run_target(command: String, cwd: String, url: Option<String>) -> Re
         }
     }
     // The log and the process are kept under the port; a command with no guess gets a number of its own.
-    let key = guess.as_ref().and_then(|target| target.port_or_known_default()).unwrap_or_else(|| {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (&command, &cwd).hash(&mut hasher);
-        40_000 + (hasher.finish() % 20_000) as u16
-    });
+    let key = guess
+        .as_ref()
+        .and_then(|target| target.port_or_known_default())
+        .unwrap_or_else(|| {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (&command, &cwd).hash(&mut hasher);
+            40_000 + (hasher.finish() % 20_000) as u16
+        });
     crate::servers::start(&command, &cwd, key)?;
     let started = std::time::Instant::now();
     // The log as it was at the last look, and since when it has not changed: a script waiting for an answer is silent.
@@ -272,7 +400,9 @@ pub async fn run_target(command: String, cwd: String, url: Option<String>) -> Re
             quiet_since = std::time::Instant::now();
         }
         // The address the server printed answers (over HTTP, at the scheme it speaks): that is the page.
-        let printed = address_in(&seen).as_deref().and_then(|text| crate::browser::parse(text).ok());
+        let printed = address_in(&seen)
+            .as_deref()
+            .and_then(|text| crate::browser::parse(text).ok());
         if let Some(printed) = printed {
             if let Some(target) = crate::browser::ready(&printed).await {
                 crate::servers::set_url(key, target.as_str());
@@ -323,7 +453,14 @@ pub struct RunFailure {
 
 impl From<String> for RunFailure {
     fn from(message: String) -> Self {
-        RunFailure { kind: "error", message, log: String::new(), hint: None, interactive: false, wrapper: None }
+        RunFailure {
+            kind: "error",
+            message,
+            log: String::new(),
+            hint: None,
+            interactive: false,
+            wrapper: None,
+        }
     }
 }
 
@@ -363,15 +500,27 @@ pub fn failure(command: &str, cwd: &str, raw_log: &str, ended: Ended) -> RunFail
         (false, _) => ("silent", format!("`{command}` did not start a page in two minutes.")),
     };
     let hint = if let Some(what) = missing {
-        Some(format!("Dependencies look missing ({what} was not found): run `{}` in {cwd}, then try again.", install_command(command)))
+        Some(format!(
+            "Dependencies look missing ({what} was not found): run `{}` in {cwd}, then try again.",
+            install_command(command)
+        ))
     } else if asking {
         Some("Run it in the Terminal panel, answer its questions there, and open the address it prints in the Preview.".to_string())
-    } else if raw_log.contains("EADDRINUSE") || raw_log.to_lowercase().contains("address already in use") {
+    } else if raw_log.contains("EADDRINUSE")
+        || raw_log.to_lowercase().contains("address already in use")
+    {
         Some("The port is already taken by another program: stop it, or run the server on another port.".to_string())
     } else {
         wrapper.as_ref().map(|script| format!("`{script}` is a script of the project, not a dev server itself: its own output is below."))
     };
-    RunFailure { kind, message, log: clean_log(raw_log, 30), hint, interactive: asking, wrapper }
+    RunFailure {
+        kind,
+        message,
+        log: clean_log(raw_log, 30),
+        hint,
+        interactive: asking,
+        wrapper,
+    }
 }
 
 /// What the package.json script a command runs (`pnpm run dev`, `npm run dev`, `yarn dev`) contains.
@@ -394,9 +543,13 @@ fn install_command(command: &str) -> &'static str {
 /// What a log says could not be found when that is a package or a program (not a file of the project itself).
 fn missing_dependency(log: &str) -> Option<String> {
     let log = strip_codes(log);
-    if let Some(found) = Regex::new(r"(?i)cannot find (?:module|package) '([^']+)'").ok()?.captures(&log) {
+    if let Some(found) = Regex::new(r"(?i)cannot find (?:module|package) '([^']+)'")
+        .ok()?
+        .captures(&log)
+    {
         let name = found[1].to_string();
-        let own_file = name.starts_with(['.', '/', '\\']) || Regex::new(r"^[A-Za-z]:").ok()?.is_match(&name);
+        let own_file =
+            name.starts_with(['.', '/', '\\']) || Regex::new(r"^[A-Za-z]:").ok()?.is_match(&name);
         if name.contains("node_modules") || !own_file {
             return Some(name);
         }
@@ -418,26 +571,53 @@ pub fn looks_interactive(raw_log: &str) -> bool {
     let log = strip_codes(raw_log);
     // A prompt leaves the cursor on its line: the log does not end with a newline.
     let unfinished = !log.ends_with('\n') && log.trim_end().ends_with([':', '?', '\u{203a}']);
-    let lines: Vec<&str> = log.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    let lines: Vec<&str> = log
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
     let last = &lines[lines.len().saturating_sub(5)..];
     unfinished || last.iter().any(|line| prompt_line(line))
 }
 
 fn prompt_line(line: &str) -> bool {
     let lower = line.to_lowercase();
-    ["use arrow keys", "arrow keys", "press enter", "[y/n]", "(y/n)", "(y/n/", "[y/n/", "(yes/no)"].iter().any(|word| lower.contains(word))
+    [
+        "use arrow keys",
+        "arrow keys",
+        "press enter",
+        "[y/n]",
+        "(y/n)",
+        "(y/n/",
+        "[y/n/",
+        "(yes/no)",
+    ]
+    .iter()
+    .any(|word| lower.contains(word))
         || line.ends_with('?')
         || line.starts_with("? ")
         || line.contains(" \u{203a} ")
         || line.ends_with('\u{203a}')
-        || ["select ", "choose ", "which ", "pick "].iter().any(|word| lower.starts_with(word))
+        || ["select ", "choose ", "which ", "pick "]
+            .iter()
+            .any(|word| lower.starts_with(word))
 }
 
 /// The log without colour codes and cursor movements (and without what a carriage return overwrote).
 fn strip_codes(log: &str) -> String {
-    let codes = Regex::new("\u{1b}\\[[0-9;?]*[A-Za-z]|\u{1b}\\][^\u{7}\u{1b}]*(?:\u{7}|\u{1b}\\\\)").expect("a valid pattern");
+    let codes =
+        Regex::new("\u{1b}\\[[0-9;?]*[A-Za-z]|\u{1b}\\][^\u{7}\u{1b}]*(?:\u{7}|\u{1b}\\\\)")
+            .expect("a valid pattern");
     let plain = codes.replace_all(log, "");
-    plain.split('\n').map(|line| line.rsplit('\r').find(|part| !part.is_empty()).unwrap_or("")).collect::<Vec<_>>().join("\n")
+    plain
+        .split('\n')
+        .map(|line| {
+            line.rsplit('\r')
+                .find(|part| !part.is_empty())
+                .unwrap_or("")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The last `lines` lines of a log, readable: no colour codes, no package manager config warnings, no blank runs,
@@ -453,7 +633,11 @@ pub fn clean_log(raw_log: &str, lines: usize) -> String {
         if line.is_empty() && kept.last().is_none_or(|last| last.is_empty()) {
             continue;
         }
-        kept.push(if line.chars().count() > 240 { format!("{}\u{2026}", line.chars().take(240).collect::<String>()) } else { line.to_string() });
+        kept.push(if line.chars().count() > 240 {
+            format!("{}\u{2026}", line.chars().take(240).collect::<String>())
+        } else {
+            line.to_string()
+        });
     }
     while kept.last().is_some_and(|last| last.is_empty()) {
         kept.pop();
@@ -474,14 +658,24 @@ mod tests {
     #[test]
     fn reads_the_address_a_server_prints() {
         assert_eq!(address_in("  \u{1b}[32m➜\u{1b}[39m  Local:   \u{1b}[36mhttp://localhost:\u{1b}[1m5174\u{1b}[22m/\u{1b}[39m"), Some("http://localhost:5174/".into()), "colour codes inside the address");
-        assert_eq!(address_in("  ➜  Local:   http://127.0.0.1:1420/"), Some("http://127.0.0.1:1420/".into()), "the host as printed");
-        assert_eq!(address_in("ready on http://0.0.0.0:3000"), Some("http://localhost:3000/".into()));
+        assert_eq!(
+            address_in("  ➜  Local:   http://127.0.0.1:1420/"),
+            Some("http://127.0.0.1:1420/".into()),
+            "the host as printed"
+        );
+        assert_eq!(
+            address_in("ready on http://0.0.0.0:3000"),
+            Some("http://localhost:3000/".into())
+        );
     }
 
     #[test]
     fn guesses_the_port_from_the_script() {
         let none = Path::new("/nonexistent");
-        assert_eq!(port_of("vite --host 127.0.0.1 --port 1420", "", none), Some(1420));
+        assert_eq!(
+            port_of("vite --host 127.0.0.1 --port 1420", "", none),
+            Some(1420)
+        );
         assert_eq!(port_of("next dev", "", none), Some(3000));
         assert_eq!(port_of("ng serve", "", none), Some(4200));
         assert_eq!(port_of("vite", "", none), Some(5173));
@@ -497,8 +691,16 @@ mod tests {
 
     #[test]
     fn finds_a_wrapper_script() {
-        assert_eq!(wrapper_of("node scripts/z-dev-vite.mjs"), Some("scripts/z-dev-vite.mjs".into()));
-        assert_eq!(wrapper_of("cross-env NODE_ENV=development node --no-warnings scripts/dev.js --app web"), Some("scripts/dev.js".into()));
+        assert_eq!(
+            wrapper_of("node scripts/z-dev-vite.mjs"),
+            Some("scripts/z-dev-vite.mjs".into())
+        );
+        assert_eq!(
+            wrapper_of(
+                "cross-env NODE_ENV=development node --no-warnings scripts/dev.js --app web"
+            ),
+            Some("scripts/dev.js".into())
+        );
         assert_eq!(wrapper_of("vite --port 5173"), None);
         assert_eq!(wrapper_of("nx serve his-medic"), None);
     }
@@ -508,10 +710,22 @@ mod tests {
     #[test]
     fn missing_packages_are_told_apart_from_missing_files() {
         assert!(missing_dependency(MISSING_NX).is_some_and(|what| what.contains("nx.js")));
-        assert_eq!(missing_dependency("Error: Cannot find module 'vite'"), Some("vite".into()));
-        assert_eq!(missing_dependency("Error: Cannot find module './config.js'"), None);
-        assert_eq!(missing_dependency("'nx' is not recognized as an internal or external command,"), Some("nx".into()));
-        assert_eq!(missing_dependency("sh: 1: vite: not found"), Some("vite".into()));
+        assert_eq!(
+            missing_dependency("Error: Cannot find module 'vite'"),
+            Some("vite".into())
+        );
+        assert_eq!(
+            missing_dependency("Error: Cannot find module './config.js'"),
+            None
+        );
+        assert_eq!(
+            missing_dependency("'nx' is not recognized as an internal or external command,"),
+            Some("nx".into())
+        );
+        assert_eq!(
+            missing_dependency("sh: 1: vite: not found"),
+            Some("vite".into())
+        );
         assert_eq!(missing_dependency("Compiled successfully"), None);
     }
 
@@ -519,29 +733,62 @@ mod tests {
     fn a_failed_wrapper_is_explained_with_the_log_cleaned() {
         let folder = std::env::temp_dir().join("agentdeck-detect-test-wrapper");
         std::fs::create_dir_all(&folder).expect("folder");
-        std::fs::write(folder.join("package.json"), r#"{"scripts":{"dev":"node scripts/z-dev-vite.mjs"}}"#).expect("manifest");
-        let failed = failure("pnpm run dev", &folder.to_string_lossy(), MISSING_NX, Ended::Exited);
+        std::fs::write(
+            folder.join("package.json"),
+            r#"{"scripts":{"dev":"node scripts/z-dev-vite.mjs"}}"#,
+        )
+        .expect("manifest");
+        let failed = failure(
+            "pnpm run dev",
+            &folder.to_string_lossy(),
+            MISSING_NX,
+            Ended::Exited,
+        );
         assert_eq!(failed.kind, "exited");
         assert_eq!(failed.wrapper.as_deref(), Some("scripts/z-dev-vite.mjs"));
         assert!(!failed.interactive);
         let hint = failed.hint.as_deref().unwrap_or_default();
-        assert!(hint.contains("pnpm install") && hint.contains("missing"), "{hint}");
-        assert!(failed.log.contains("MODULE_NOT_FOUND") && !failed.log.contains("npm warn Unknown"), "{}", failed.log);
+        assert!(
+            hint.contains("pnpm install") && hint.contains("missing"),
+            "{hint}"
+        );
+        assert!(
+            failed.log.contains("MODULE_NOT_FOUND") && !failed.log.contains("npm warn Unknown"),
+            "{}",
+            failed.log
+        );
         assert!(failed.text().contains("Last lines of its log:"));
         let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]
     fn a_question_is_recognised_and_a_build_is_not() {
-        assert!(looks_interactive("\u{1b}[36m?\u{1b}[39m Which app do you want to run? \u{203a} \n"));
-        assert!(looks_interactive("Select the app to start (Use arrow keys)\n\u{276f} his-medic\n  emr-portal"));
+        assert!(looks_interactive(
+            "\u{1b}[36m?\u{1b}[39m Which app do you want to run? \u{203a} \n"
+        ));
+        assert!(looks_interactive(
+            "Select the app to start (Use arrow keys)\n\u{276f} his-medic\n  emr-portal"
+        ));
         assert!(looks_interactive("Continue? [y/N]"));
         assert!(looks_interactive("Choose a step: "));
         assert!(!looks_interactive("\u{276f} Building...\n\u{2714} Building...\nWatch mode enabled. Watching for file changes...\n"));
-        assert!(!looks_interactive("  \u{279c}  Local:   https://localhost:4205/\n"));
-        let asking = failure("npm run dev", "/nonexistent", "Which app do you want to run? \u{203a} ", Ended::Asking);
+        assert!(!looks_interactive(
+            "  \u{279c}  Local:   https://localhost:4205/\n"
+        ));
+        let asking = failure(
+            "npm run dev",
+            "/nonexistent",
+            "Which app do you want to run? \u{203a} ",
+            Ended::Asking,
+        );
         assert_eq!(asking.kind, "asking");
-        assert!(asking.interactive && asking.hint.as_deref().is_some_and(|hint| hint.contains("Terminal")));
+        assert!(
+            asking.interactive
+                && asking
+                    .hint
+                    .as_deref()
+                    .is_some_and(|hint| hint.contains("Terminal"))
+        );
     }
 
     #[test]
@@ -551,7 +798,10 @@ mod tests {
         let cleaned = clean_log(&raw, 30);
         assert_eq!(cleaned.lines().count(), 4, "{cleaned}");
         assert!(cleaned.contains("progress 100%") && !cleaned.contains("progress 10%"));
-        assert!(cleaned.lines().last().is_some_and(|line| line.chars().count() <= 241));
+        assert!(cleaned
+            .lines()
+            .last()
+            .is_some_and(|line| line.chars().count() <= 241));
         let many: String = (0..100).map(|n| format!("line {n}\n")).collect();
         assert_eq!(clean_log(&many, 5).lines().count(), 5);
     }

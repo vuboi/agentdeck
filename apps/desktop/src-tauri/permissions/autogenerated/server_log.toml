@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-server-log"
+description = "Enables the server_log command without any pre-configured scope."
+commands.allow = ["server_log"]
+
+[[permission]]
+identifier = "deny-server-log"
+description = "Denies the server_log command without any pre-configured scope."
+commands.deny = ["server_log"]

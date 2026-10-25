@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-adopt"
+description = "Enables the account_adopt command without any pre-configured scope."
+commands.allow = ["account_adopt"]
+
+[[permission]]
+identifier = "deny-account-adopt"
+description = "Denies the account_adopt command without any pre-configured scope."
+commands.deny = ["account_adopt"]

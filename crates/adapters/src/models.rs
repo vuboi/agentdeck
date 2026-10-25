@@ -28,7 +28,10 @@ fn claude_model(value: &str, label: &str, description: &str, default_effort: &st
         value: value.into(),
         label: label.into(),
         description: description.into(),
-        efforts: CLAUDE_EFFORTS.iter().map(|level| level.to_string()).collect(),
+        efforts: CLAUDE_EFFORTS
+            .iter()
+            .map(|level| level.to_string())
+            .collect(),
         default_effort: Some(default_effort.into()),
     }
 }
@@ -36,9 +39,24 @@ fn claude_model(value: &str, label: &str, description: &str, default_effort: &st
 /// Claude Code's models: the three current tiers, then what the account is additionally offered.
 pub fn claude(home: &Path) -> Vec<ModelInfo> {
     let mut models = vec![
-        claude_model("claude-opus-5-5", "Opus 5.5", "Most capable for complex work", "medium"),
-        claude_model("claude-sonnet-5-5", "Sonnet 5.5", "Fast and capable for everyday tasks", "high"),
-        claude_model("claude-haiku-5-5", "Haiku 5.5", "Fastest for quick answers", "medium"),
+        claude_model(
+            "claude-opus-5-5",
+            "Opus 5.5",
+            "Most capable for complex work",
+            "medium",
+        ),
+        claude_model(
+            "claude-sonnet-5-5",
+            "Sonnet 5.5",
+            "Fast and capable for everyday tasks",
+            "high",
+        ),
+        claude_model(
+            "claude-haiku-5-5",
+            "Haiku 5.5",
+            "Fastest for quick answers",
+            "medium",
+        ),
     ];
     let config = std::fs::read_to_string(home.join(".claude.json"))
         .ok()
@@ -49,15 +67,24 @@ pub fn claude(home: &Path) -> Vec<ModelInfo> {
         .into_iter()
         .flatten()
     {
-        let Some(value) = extra["value"].as_str() else { continue };
+        let Some(value) = extra["value"].as_str() else {
+            continue;
+        };
         if models.iter().any(|model| model.value == value) {
             continue;
         }
         let label = extra["label"].as_str().unwrap_or(value);
         // "Fable 5.1 · Most capable…": the version goes on the label, the rest is the description.
         let about = extra["description"].as_str().unwrap_or_default();
-        let (version, description) = about.split_once(" · ").or_else(|| about.split_once(" – ")).unwrap_or(("", about));
-        let label = if version.starts_with(label) { version } else { label };
+        let (version, description) = about
+            .split_once(" · ")
+            .or_else(|| about.split_once(" – "))
+            .unwrap_or(("", about));
+        let label = if version.starts_with(label) {
+            version
+        } else {
+            label
+        };
         models.push(claude_model(value, label, description.trim(), "high"));
     }
     models
@@ -84,7 +111,10 @@ pub fn codex(codex_home: &Path) -> Vec<ModelInfo> {
             let value = model["slug"].as_str()?;
             Some(ModelInfo {
                 value: value.into(),
-                label: model["display_name"].as_str().unwrap_or(value).replace('-', " "),
+                label: model["display_name"]
+                    .as_str()
+                    .unwrap_or(value)
+                    .replace('-', " "),
                 description: model["description"].as_str().unwrap_or_default().into(),
                 efforts: model["supported_reasoning_levels"]
                     .as_array()
@@ -103,7 +133,11 @@ pub fn codex(codex_home: &Path) -> Vec<ModelInfo> {
 /// so none are offered rather than guessed.
 pub fn opencode(listing: &str) -> Vec<ModelInfo> {
     let mut models: Vec<ModelInfo> = Vec::new();
-    for id in listing.lines().map(str::trim).filter(|id| !id.is_empty() && !id.contains(char::is_whitespace)) {
+    for id in listing
+        .lines()
+        .map(str::trim)
+        .filter(|id| !id.is_empty() && !id.contains(char::is_whitespace))
+    {
         if models.iter().any(|model| model.value == id) {
             continue;
         }
@@ -121,7 +155,12 @@ pub fn opencode(listing: &str) -> Vec<ModelInfo> {
 
 /// `gpt-6-luna` -> `GPT 6 Luna`, `deepseek-v4.1-flash` -> `Deepseek V4.1 Flash`.
 fn title(id: &str) -> String {
-    let is_number = |text: &str| !text.is_empty() && text.chars().all(|character| character.is_ascii_digit() || character == '.');
+    let is_number = |text: &str| {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|character| character.is_ascii_digit() || character == '.')
+    };
     let mut words: Vec<String> = Vec::new();
     for part in id.split(['-', '_']).filter(|part| !part.is_empty()) {
         match words.last_mut() {
@@ -130,7 +169,12 @@ fn title(id: &str) -> String {
             _ if is_number(part) => words.push(part.to_string()),
             _ => {
                 let mut characters = part.chars();
-                words.push(characters.next().map(|first| first.to_uppercase().collect::<String>() + characters.as_str()).unwrap_or_default());
+                words.push(
+                    characters
+                        .next()
+                        .map(|first| first.to_uppercase().collect::<String>() + characters.as_str())
+                        .unwrap_or_default(),
+                );
             }
         }
     }
@@ -150,7 +194,12 @@ pub fn antigravity(listing: &str) -> Vec<ModelInfo> {
         .filter(|(id, _)| !id.is_empty())
         .collect();
     // The id without its level, and the level, when the id ends in one.
-    let split = |id: &str| LEVELS.iter().find_map(|level| id.strip_suffix(&format!("-{level}")).map(|base| (base.to_string(), *level)));
+    let split = |id: &str| {
+        LEVELS.iter().find_map(|level| {
+            id.strip_suffix(&format!("-{level}"))
+                .map(|base| (base.to_string(), *level))
+        })
+    };
     let mut models: Vec<ModelInfo> = Vec::new();
     let mut folded: Vec<String> = Vec::new();
     for (id, label) in &entries {
@@ -161,22 +210,49 @@ pub fn antigravity(listing: &str) -> Vec<ModelInfo> {
         if folded.contains(&base) {
             continue;
         }
-        let levels: Vec<&str> = entries.iter().filter_map(|(other, _)| split(other).filter(|(b, _)| *b == base).map(|(_, level)| level)).collect();
+        let levels: Vec<&str> = entries
+            .iter()
+            .filter_map(|(other, _)| {
+                split(other)
+                    .filter(|(b, _)| *b == base)
+                    .map(|(_, level)| level)
+            })
+            .collect();
         if levels.len() < 2 {
             models.push(plain(id, label));
             continue;
         }
-        let efforts: Vec<String> = LEVELS.iter().filter(|level| levels.contains(level)).map(|level| level.to_string()).collect();
-        let default_effort = efforts.iter().find(|level| *level == "medium").or(efforts.first()).cloned();
+        let efforts: Vec<String> = LEVELS
+            .iter()
+            .filter(|level| levels.contains(level))
+            .map(|level| level.to_string())
+            .collect();
+        let default_effort = efforts
+            .iter()
+            .find(|level| *level == "medium")
+            .or(efforts.first())
+            .cloned();
         let name = label.rsplit_once(" (").map_or(*label, |(name, _)| name);
-        models.push(ModelInfo { value: base.clone(), label: name.to_string(), description: String::new(), efforts, default_effort });
+        models.push(ModelInfo {
+            value: base.clone(),
+            label: name.to_string(),
+            description: String::new(),
+            efforts,
+            default_effort,
+        });
         folded.push(base);
     }
     models
 }
 
 fn plain(id: &str, label: &str) -> ModelInfo {
-    ModelInfo { value: id.into(), label: label.into(), description: String::new(), efforts: Vec::new(), default_effort: None }
+    ModelInfo {
+        value: id.into(),
+        label: label.into(),
+        description: String::new(),
+        efforts: Vec::new(),
+        default_effort: None,
+    }
 }
 
 #[cfg(test)]
@@ -184,7 +260,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("agentdeck-models-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("agentdeck-models-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -202,7 +279,10 @@ mod tests {
         )
         .unwrap();
         let models = codex(&dir);
-        assert_eq!(models.iter().map(|m| m.value.as_str()).collect::<Vec<_>>(), ["gpt-a", "gpt-b"]);
+        assert_eq!(
+            models.iter().map(|m| m.value.as_str()).collect::<Vec<_>>(),
+            ["gpt-a", "gpt-b"]
+        );
         assert_eq!(models[1].efforts, ["low", "high"]);
         assert_eq!(models[1].default_effort.as_deref(), Some("low"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -218,7 +298,10 @@ mod tests {
         .unwrap();
         let models = claude(&dir);
         assert_eq!(models.len(), 4);
-        assert_eq!((models[3].value.as_str(), models[3].label.as_str()), ("claude-fable-5-1[1m]", "Fable 5.1"));
+        assert_eq!(
+            (models[3].value.as_str(), models[3].label.as_str()),
+            ("claude-fable-5-1[1m]", "Fable 5.1")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -233,21 +316,30 @@ claude-opus-5-5-high	Claude Opus 5.5 (High)
 gpt-oss-120b-medium	GPT-OSS 120B (Medium)
 ";
         let models = antigravity(listing);
-        assert_eq!(models.iter().map(|m| m.value.as_str()).collect::<Vec<_>>(), ["gemini-4-argon", "claude-opus-5-5", "gpt-oss-120b-medium"]);
+        assert_eq!(
+            models.iter().map(|m| m.value.as_str()).collect::<Vec<_>>(),
+            ["gemini-4-argon", "claude-opus-5-5", "gpt-oss-120b-medium"]
+        );
         assert_eq!(models[0].label, "Gemini 4 Argon");
         assert_eq!(models[0].efforts, ["low", "medium", "high"]);
         assert_eq!(models[0].default_effort.as_deref(), Some("medium"));
         assert_eq!(models[1].efforts, ["low", "high"]);
         assert_eq!(models[1].default_effort.as_deref(), Some("low"));
         // A model with one level keeps its full id: there is nothing to choose.
-        assert_eq!((models[2].label.as_str(), models[2].efforts.len()), ("GPT-OSS 120B (Medium)", 0));
+        assert_eq!(
+            (models[2].label.as_str(), models[2].efforts.len()),
+            ("GPT-OSS 120B (Medium)", 0)
+        );
     }
 
     #[test]
     fn antigravity_without_a_listing_has_no_models() {
         assert!(antigravity("").is_empty());
-        assert!(antigravity("Fetching available models...
-").is_empty());
+        assert!(antigravity(
+            "Fetching available models...
+"
+        )
+        .is_empty());
     }
 
     #[test]
@@ -257,14 +349,21 @@ gpt-oss-120b-medium	GPT-OSS 120B (Medium)
         let models = opencode(listing);
         assert_eq!(
             models.iter().map(|m| m.value.as_str()).collect::<Vec<_>>(),
-            ["opencode-go/beam-free", "opencode-go/gpt-6-luna", "opencode/deepseek-v4.1-flash-free", "msg_agent/qwen/qwen3.6-35b-a3b"]
+            [
+                "opencode-go/beam-free",
+                "opencode-go/gpt-6-luna",
+                "opencode/deepseek-v4.1-flash-free",
+                "msg_agent/qwen/qwen3.6-35b-a3b"
+            ]
         );
         assert_eq!(models[1].label, "GPT 6 Luna");
         assert_eq!(models[2].label, "Deepseek V4.1 Flash Free");
         assert_eq!(models[3].label, "Qwen3.6 35b A3b");
         assert_eq!(models[0].description, "opencode-go");
         // No levels are invented: OpenCode's variants are not in its list.
-        assert!(models.iter().all(|model| model.efforts.is_empty() && model.default_effort.is_none()));
+        assert!(models
+            .iter()
+            .all(|model| model.efforts.is_empty() && model.default_effort.is_none()));
     }
 
     #[test]

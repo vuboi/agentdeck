@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-detect-run-targets"
+description = "Enables the detect_run_targets command without any pre-configured scope."
+commands.allow = ["detect_run_targets"]
+
+[[permission]]
+identifier = "deny-detect-run-targets"
+description = "Denies the detect_run_targets command without any pre-configured scope."
+commands.deny = ["detect_run_targets"]

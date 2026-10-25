@@ -264,11 +264,22 @@ fn tool_list() -> Value {
             })
             .chain(crate::index::tool_defs())
             .chain(crate::delegate::tool_defs())
+            .chain([
+                json!({"name":"computer_screen_size","description":"Read the size of the Windows primary display.","inputSchema":{"type":"object","properties":{}}}),
+                json!({"name":"computer_screenshot","description":"Capture the Windows primary display. Requires user approval because it shares screen contents with the agent.","inputSchema":{"type":"object","properties":{}}}),
+                json!({"name":"computer_click","description":"Click a screen coordinate in Windows. Requires user approval.","inputSchema":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]}}),
+                json!({"name":"computer_type","description":"Type text into the focused Windows app. Requires user approval.","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}),
+                json!({"name":"computer_press_key","description":"Press a keyboard key in the focused Windows app. Requires user approval.","inputSchema":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}}),
+                json!({"name":"computer_scroll","description":"Scroll the Windows mouse wheel. Positive delta scrolls up; negative scrolls down. Requires user approval.","inputSchema":{"type":"object","properties":{"delta":{"type":"integer"}},"required":["delta"]}}),
+            ])
             .collect(),
     )
 }
 
 async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Value {
+    if name.starts_with("computer_") {
+        return computer_tool(app, name, args, chat).await;
+    }
     if crate::delegate::is_tool(name) {
         return crate::delegate::call(app, name, args, chat).await;
     }
@@ -326,6 +337,128 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Val
     }
 }
 
+async fn computer_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Value {
+    if !crate::computer::enabled() {
+        return error_reply(
+            "Computer use is disabled. Enable it in AgentDeck Settings > Computer use.".into(),
+        );
+    }
+    match name {
+        "computer_screen_size" => {
+            let (width, height) = crate::computer::screen_size();
+            text_reply(format!("Windows primary display: {width}×{height}"))
+        }
+        "computer_screenshot" => {
+            if let Err(error) = crate::computer::approve(
+                app,
+                chat,
+                name,
+                "Share a screenshot of the Windows desktop with this agent".into(),
+            )
+            .await
+            {
+                return error_reply(error);
+            }
+            match crate::computer::screenshot() {
+                Ok(bytes) => {
+                    use base64::Engine;
+                    json!({"content":[{"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(bytes)}]})
+                }
+                Err(error) => error_reply(error),
+            }
+        }
+        "computer_click" => {
+            let (Some(x), Some(y)) = (args["x"].as_i64(), args["y"].as_i64()) else {
+                return error_reply("x and y must be integers".into());
+            };
+            let (width, height) = crate::computer::screen_size();
+            if x < 0 || y < 0 || x >= i64::from(width) || y >= i64::from(height) {
+                return error_reply(format!(
+                    "Coordinates must be inside the primary display ({width}×{height})."
+                ));
+            }
+            if let Err(error) = crate::computer::approve(
+                app,
+                chat,
+                name,
+                format!("Click Windows screen position ({x}, {y})"),
+            )
+            .await
+            {
+                return error_reply(error);
+            }
+            match crate::computer::click(x as i32, y as i32) {
+                Ok(()) => text_reply(format!("Clicked ({x}, {y}).")),
+                Err(error) => error_reply(error),
+            }
+        }
+        "computer_type" => {
+            let Some(text) = args["text"].as_str() else {
+                return error_reply("text must be a string".into());
+            };
+            if text.chars().count() > 10_000 {
+                return error_reply(
+                    "Text input is limited to 10,000 characters per approved action.".into(),
+                );
+            }
+            let preview: String = text.chars().take(160).collect();
+            if let Err(error) = crate::computer::approve(
+                app,
+                chat,
+                name,
+                format!("Type into the focused Windows app: {preview}"),
+            )
+            .await
+            {
+                return error_reply(error);
+            }
+            match crate::computer::type_text(text) {
+                Ok(()) => text_reply("Text typed.".into()),
+                Err(error) => error_reply(error),
+            }
+        }
+        "computer_press_key" => {
+            let Some(key) = args["key"].as_str() else {
+                return error_reply("key must be a string".into());
+            };
+            if let Err(error) = crate::computer::approve(
+                app,
+                chat,
+                name,
+                format!("Press the {key} key in the focused Windows app"),
+            )
+            .await
+            {
+                return error_reply(error);
+            }
+            match crate::computer::press_key(key) {
+                Ok(()) => text_reply(format!("Pressed {key}.")),
+                Err(error) => error_reply(error),
+            }
+        }
+        "computer_scroll" => {
+            let Some(delta) = args["delta"].as_i64() else {
+                return error_reply("delta must be an integer".into());
+            };
+            if let Err(error) = crate::computer::approve(
+                app,
+                chat,
+                name,
+                format!("Scroll the Windows mouse wheel by {delta}"),
+            )
+            .await
+            {
+                return error_reply(error);
+            }
+            match crate::computer::scroll(delta.clamp(-1200, 1200) as i32) {
+                Ok(()) => text_reply("Scrolled.".into()),
+                Err(error) => error_reply(error),
+            }
+        }
+        _ => error_reply(format!("unknown computer-use tool {name}")),
+    }
+}
+
 /// One JSON-RPC message. `None` for a notification (the HTTP answer is then 202 with no body).
 pub async fn handle(app: &AppHandle, body: &str, chat: &str) -> Option<String> {
     let request: Value = serde_json::from_str(body).ok()?;
@@ -336,7 +469,7 @@ pub async fn handle(app: &AppHandle, body: &str, chat: &str) -> Option<String> {
             "protocolVersion": params["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "agentdeck", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "The page open in AgentDeck's Preview panel, the browser the user is looking at. Use these tools to see it and act on it as a user would: screenshot, then click / type / scroll, then screenshot again and check browser_console and browser_network for errors. The code_* tools search an index of the project (symbols, outlines, definitions, references, imports): use them before grepping the tree. delegate_task hands big or clearly separable work to another agent (see list_agents): never small things or the final answer.",
+            "instructions": "The page open in AgentDeck's Preview panel, the browser the user is looking at. Use these tools to see it and act on it as a user would: screenshot, then click / type / scroll, then screenshot again and check browser_console and browser_network for errors. If Computer use is enabled in Settings, use computer_screenshot, computer_click, computer_type, computer_press_key and computer_scroll to operate the user's Windows desktop. Every screen share or input operation waits for the user to approve it in the chat before it runs. The code_* tools search an index of the project (symbols, outlines, definitions, references, imports): use them before grepping the tree. delegate_task hands big or clearly separable work to another agent (see list_agents): never small things or the final answer.",
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tool_list() }),

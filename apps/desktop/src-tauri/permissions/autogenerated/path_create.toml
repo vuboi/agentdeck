@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-path-create"
+description = "Enables the path_create command without any pre-configured scope."
+commands.allow = ["path_create"]
+
+[[permission]]
+identifier = "deny-path-create"
+description = "Denies the path_create command without any pre-configured scope."
+commands.deny = ["path_create"]

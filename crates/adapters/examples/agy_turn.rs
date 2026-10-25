@@ -8,7 +8,12 @@ use ag_adapters::agent::antigravity::Antigravity;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
 use ag_adapters::agent::{AgentEvent, TurnRequest};
 
-fn request(prompt: &str, model: Option<String>, session: Option<String>, allowed: Vec<String>) -> TurnRequest {
+fn request(
+    prompt: &str,
+    model: Option<String>,
+    session: Option<String>,
+    allowed: Vec<String>,
+) -> TurnRequest {
     TurnRequest {
         prompt: prompt.into(),
         resume: session.is_some(),
@@ -25,7 +30,9 @@ fn request(prompt: &str, model: Option<String>, session: Option<String>, allowed
 #[tokio::main]
 async fn main() {
     let mut args = std::env::args().skip(1);
-    let prompt = args.next().unwrap_or_else(|| "List the files in this folder, then say done.".into());
+    let prompt = args
+        .next()
+        .unwrap_or_else(|| "List the files in this folder, then say done.".into());
     let model = args.next();
     let provider = Antigravity::default();
     let mut conversation = None;
@@ -33,12 +40,22 @@ async fn main() {
     let mut next = prompt.clone();
     for turn in 1..=2 {
         println!("--- turn {turn}");
-        let req = request(&next, model.clone(), conversation.clone(), approvals.clone());
+        let req = request(
+            &next,
+            model.clone(),
+            conversation.clone(),
+            approvals.clone(),
+        );
         let mut asked = Vec::new();
         drive_turn(resolve_binary(&provider), &provider, &req, |event| {
             match &event {
-                AgentEvent::Done { session_id: Some(id), .. } => conversation = Some(id.clone()),
-                AgentEvent::PermissionDenied { requests } => asked.extend(requests.iter().map(|request| request.allow.clone())),
+                AgentEvent::Done {
+                    session_id: Some(id),
+                    ..
+                } => conversation = Some(id.clone()),
+                AgentEvent::PermissionDenied { requests } => {
+                    asked.extend(requests.iter().map(|request| request.allow.clone()))
+                }
                 _ => {}
             }
             println!("{event:?}");

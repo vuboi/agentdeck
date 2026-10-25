@@ -60,14 +60,21 @@ pub enum AgentEvent {
     Error { message: String },
     /// A line of the CLI's output that the app does not understand (a new kind of step). Not shown in the chat;
     /// kept in the Audit log as written, so it can be copied to teach the adapter about it.
-    Raw { source: String, label: String, line: String },
+    Raw {
+        source: String,
+        label: String,
+        line: String,
+    },
 }
 
 /// The address of the browser's MCP server for one chat: `/mcp?chat=<id>&root=<folder>`. The bridge reads both from it.
 pub fn mcp_url(bridge: &str, owner: Option<&str>, cwd: Option<&std::path::Path>) -> String {
     let mut query = Vec::new();
     if let Some(chat) = owner {
-        let safe: String = chat.chars().filter(|c| c.is_ascii_alphanumeric() || "-_:".contains(*c)).collect();
+        let safe: String = chat
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || "-_:".contains(*c))
+            .collect();
         query.push(format!("chat={safe}"));
     }
     // The project folder, for the code index.
@@ -75,7 +82,13 @@ pub fn mcp_url(bridge: &str, owner: Option<&str>, cwd: Option<&std::path::Path>)
         let encoded: String = folder
             .to_string_lossy()
             .bytes()
-            .map(|byte| if byte.is_ascii_alphanumeric() || b"-_.~/".contains(&byte) { (byte as char).to_string() } else { format!("%{byte:02X}") })
+            .map(|byte| {
+                if byte.is_ascii_alphanumeric() || b"-_.~/".contains(&byte) {
+                    (byte as char).to_string()
+                } else {
+                    format!("%{byte:02X}")
+                }
+            })
             .collect();
         query.push(format!("root={encoded}"));
     }
@@ -130,20 +143,30 @@ pub trait Provider: Send + Sync {
         Ok(())
     }
     /// Environment additions for CLIs whose configuration is supplied per turn (for example MCP).
-    fn environment(&self, _req: &TurnRequest) -> Vec<(String, String)> { Vec::new() }
+    fn environment(&self, _req: &TurnRequest) -> Vec<(String, String)> {
+        Vec::new()
+    }
     /// Emits a terminal event when a CLI exits without one in its stream.
-    fn finish(&self, _req: &TurnRequest) -> Option<AgentEvent> { None }
+    fn finish(&self, _req: &TurnRequest) -> Option<AgentEvent> {
+        None
+    }
 }
 
 /// A plan tool's list (Claude `TodoWrite` `todos`, Codex `update_plan` `plan`) as `[{"content","status"}]` JSON, whole:
 /// the chat draws it as a checklist, so it must not be cut like other inputs.
 pub fn plan_json(input: &serde_json::Value) -> Option<String> {
-    let list = input.get("todos").or_else(|| input.get("plan"))?.as_array()?;
+    let list = input
+        .get("todos")
+        .or_else(|| input.get("plan"))?
+        .as_array()?;
     let items: Vec<serde_json::Value> = list
         .iter()
         .filter_map(|item| {
             let content = item.get("content").or_else(|| item.get("step"))?.as_str()?;
-            let status = item.get("status").and_then(serde_json::Value::as_str).unwrap_or("pending");
+            let status = item
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("pending");
             Some(serde_json::json!({ "content": content, "status": status }))
         })
         .collect();
@@ -220,7 +243,10 @@ fn cut(text: &str) -> String {
 /// The first picture in a tool result's content, as a `data:` URL. Claude nests it under `source`; an MCP
 /// result (Codex) has `data` and `mimeType` on the part itself.
 pub fn result_image(content: &serde_json::Value) -> Option<String> {
-    let part = content.as_array()?.iter().find(|part| part["type"] == "image")?;
+    let part = content
+        .as_array()?
+        .iter()
+        .find(|part| part["type"] == "image")?;
     let (mime, data) = match part.get("source") {
         Some(source) => (source["media_type"].as_str()?, source["data"].as_str()?),
         None => (part["mimeType"].as_str()?, part["data"].as_str()?),

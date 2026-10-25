@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-antigravity-quota"
+description = "Enables the antigravity_quota command without any pre-configured scope."
+commands.allow = ["antigravity_quota"]
+
+[[permission]]
+identifier = "deny-antigravity-quota"
+description = "Denies the antigravity_quota command without any pre-configured scope."
+commands.deny = ["antigravity_quota"]

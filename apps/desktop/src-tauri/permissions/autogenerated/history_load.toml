@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-history-load"
+description = "Enables the history_load command without any pre-configured scope."
+commands.allow = ["history_load"]
+
+[[permission]]
+identifier = "deny-history-load"
+description = "Denies the history_load command without any pre-configured scope."
+commands.deny = ["history_load"]

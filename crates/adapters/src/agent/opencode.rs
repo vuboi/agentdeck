@@ -13,9 +13,18 @@ fn input_summary(input: &Value) -> String {
     input
         .as_object()
         .and_then(|map| {
-            ["command", "filePath", "file_path", "path", "pattern", "url", "query", "description"]
-                .iter()
-                .find_map(|key| map.get(*key).and_then(Value::as_str))
+            [
+                "command",
+                "filePath",
+                "file_path",
+                "path",
+                "pattern",
+                "url",
+                "query",
+                "description",
+            ]
+            .iter()
+            .find_map(|key| map.get(*key).and_then(Value::as_str))
         })
         .map(str::to_owned)
         .unwrap_or_else(|| input.to_string())
@@ -42,16 +51,24 @@ pub fn models_listing(binary: std::ffi::OsString) -> String {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut command = std::process::Command::new(binary);
-        command.arg("models").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        command
+            .arg("models")
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let listing = command.output().map(|out| String::from_utf8_lossy(&out.stdout).into_owned()).unwrap_or_default();
+        let listing = command
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+            .unwrap_or_default();
         let _ = sender.send(listing);
     });
-    receiver.recv_timeout(std::time::Duration::from_secs(20)).unwrap_or_default()
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap_or_default()
 }
 
 pub struct OpenCode {
@@ -64,25 +81,50 @@ pub struct OpenCode {
 
 impl Default for OpenCode {
     fn default() -> Self {
-        Self { session: Mutex::new(None), tools: Mutex::new(HashSet::new()), cost: Mutex::new(0.0) }
+        Self {
+            session: Mutex::new(None),
+            tools: Mutex::new(HashSet::new()),
+            cost: Mutex::new(0.0),
+        }
     }
 }
 
 impl Provider for OpenCode {
-    fn id(&self) -> &'static str { "opencode" }
-    fn binary(&self) -> &'static str { "opencode" }
-    fn candidates(&self) -> Vec<PathBuf> { Vec::new() }
+    fn id(&self) -> &'static str {
+        "opencode"
+    }
+    fn binary(&self) -> &'static str {
+        "opencode"
+    }
+    fn candidates(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
     fn args(&self, req: &TurnRequest) -> Vec<String> {
         // `--thinking` puts the reasoning parts in the stream; a model without any simply sends none.
         // `--standalone` keeps the turn on its own server: the shared background service ignores the config handed
         // over in the environment (verified: a denied shell still ran) and is the user's own OpenCode session.
-        let mut args = vec!["run".into(), "--standalone".into(), "--format".into(), "json".into(), "--thinking".into()];
-        if let Some(model) = &req.model { args.extend(["--model".into(), model.clone()]); }
+        let mut args = vec![
+            "run".into(),
+            "--standalone".into(),
+            "--format".into(),
+            "json".into(),
+            "--thinking".into(),
+        ];
+        if let Some(model) = &req.model {
+            args.extend(["--model".into(), model.clone()]);
+        }
         // `--session` continues that conversation, or starts one under that id when the server does not know it.
-        if let (Some(session), true) = (&req.session_id, req.resume) { args.extend(["--session".into(), session.clone()]); }
+        if let (Some(session), true) = (&req.session_id, req.resume) {
+            args.extend(["--session".into(), session.clone()]);
+        }
         // Only approving what the CLI's own rules allow maps to `--auto`; in every other mode OpenCode asks, and a
         // headless run that is asked stops at the call instead of hanging the turn.
-        if matches!(req.permission_mode.as_deref(), Some("auto") | Some("bypassPermissions")) { args.push("--auto".into()); }
+        if matches!(
+            req.permission_mode.as_deref(),
+            Some("auto") | Some("bypassPermissions")
+        ) {
+            args.push("--auto".into());
+        }
         // Effort is not a flag here: OpenCode takes a model variant (`provider/model#variant`) and publishes no list
         // of them, so a chosen effort stays with whatever the model does by default.
         args
@@ -90,30 +132,65 @@ impl Provider for OpenCode {
     /// The prompt goes in on stdin: OpenCode reads it when no message argument is given, which keeps a Windows
     /// `.cmd` shim from re-parsing the text (a `&` or `|` in a message would otherwise start a second command) and
     /// takes the 32k command-line limit out of the way for a long paste.
-    fn prompt_on_stdin(&self) -> bool { true }
+    fn prompt_on_stdin(&self) -> bool {
+        true
+    }
     fn environment(&self, req: &TurnRequest) -> Vec<(String, String)> {
-        let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") else { return Vec::new() };
+        let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") else {
+            return Vec::new();
+        };
         let url = super::mcp_url(&bridge, req.owner.as_deref(), req.cwd.as_deref());
-        vec![("OPENCODE_CONFIG_CONTENT".into(), serde_json::json!({
-            "mcp": { "agentdeck": { "type": "remote", "url": url, "enabled": true } }
-        }).to_string())]
+        vec![(
+            "OPENCODE_CONFIG_CONTENT".into(),
+            serde_json::json!({
+                "mcp": { "agentdeck": { "type": "remote", "url": url, "enabled": true } }
+            })
+            .to_string(),
+        )]
     }
     fn parse_line(&self, line: &str) -> Vec<AgentEvent> {
-        let Ok(value) = serde_json::from_str::<Value>(line) else { return Vec::new() };
-        let session = value["sessionID"].as_str().or_else(|| value["session_id"].as_str()).map(str::to_owned);
-        if let Some(id) = &session { if let Ok(mut current) = self.session.lock() { *current = Some(id.clone()); } }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return Vec::new();
+        };
+        let session = value["sessionID"]
+            .as_str()
+            .or_else(|| value["session_id"].as_str())
+            .map(str::to_owned);
+        if let Some(id) = &session {
+            if let Ok(mut current) = self.session.lock() {
+                *current = Some(id.clone());
+            }
+        }
         let kind = value["type"].as_str().unwrap_or_default();
         let part = &value["part"];
-        let text = value["text"].as_str().or_else(|| part["text"].as_str()).unwrap_or_default();
+        let text = value["text"]
+            .as_str()
+            .or_else(|| part["text"].as_str())
+            .unwrap_or_default();
         match kind {
-            "text" | "message" | "agent_message" => (!text.is_empty()).then_some(AgentEvent::Delta { text: text.to_owned() }).into_iter().collect(),
-            "reasoning" | "thinking" => (!text.is_empty()).then_some(AgentEvent::Thinking { text: text.to_owned() }).into_iter().collect(),
+            "text" | "message" | "agent_message" => (!text.is_empty())
+                .then_some(AgentEvent::Delta {
+                    text: text.to_owned(),
+                })
+                .into_iter()
+                .collect(),
+            "reasoning" | "thinking" => (!text.is_empty())
+                .then_some(AgentEvent::Thinking {
+                    text: text.to_owned(),
+                })
+                .into_iter()
+                .collect(),
             "step_finish" => {
-                if let Some(cost) = part["cost"].as_f64() { if let Ok(mut total) = self.cost.lock() { *total += cost; } }
+                if let Some(cost) = part["cost"].as_f64() {
+                    if let Ok(mut total) = self.cost.lock() {
+                        *total += cost;
+                    }
+                }
                 let tokens = &part["tokens"];
                 vec![AgentEvent::Usage {
                     input_tokens: tokens["input"].as_u64().unwrap_or(0),
-                    output_tokens: tokens["output"].as_u64().unwrap_or(0) + tokens["reasoning"].as_u64().unwrap_or(0),
+                    output_tokens: tokens["output"].as_u64().unwrap_or(0)
+                        + tokens["reasoning"].as_u64().unwrap_or(0),
                     cache_read_tokens: tokens["cache"]["read"].as_u64().unwrap_or(0),
                     cache_write_tokens: tokens["cache"]["write"].as_u64().unwrap_or(0),
                     new_call: true,
@@ -122,10 +199,21 @@ impl Provider for OpenCode {
             // One line per call, and its `state.status` says how far it got: a quick tool arrives already completed,
             // so the call is announced first and the result follows in the same step.
             "tool_use" => {
-                let id = part["id"].as_str().or_else(|| part["callID"].as_str()).unwrap_or("opencode-tool").to_owned();
-                let settled = matches!(part["state"]["status"].as_str(), Some("completed" | "error"));
+                let id = part["id"]
+                    .as_str()
+                    .or_else(|| part["callID"].as_str())
+                    .unwrap_or("opencode-tool")
+                    .to_owned();
+                let settled = matches!(
+                    part["state"]["status"].as_str(),
+                    Some("completed" | "error")
+                );
                 let mut events = Vec::new();
-                let first = self.tools.lock().map(|mut seen| seen.insert(id.clone())).unwrap_or(false);
+                let first = self
+                    .tools
+                    .lock()
+                    .map(|mut seen| seen.insert(id.clone()))
+                    .unwrap_or(false);
                 if first {
                     events.push(AgentEvent::ToolCall {
                         id: id.clone(),
@@ -138,15 +226,27 @@ impl Provider for OpenCode {
                 if settled {
                     events.push(AgentEvent::ToolResult {
                         id,
-                        output: part["state"]["output"].as_str().or_else(|| part["state"]["error"].as_str()).unwrap_or_default().to_owned(),
+                        output: part["state"]["output"]
+                            .as_str()
+                            .or_else(|| part["state"]["error"].as_str())
+                            .unwrap_or_default()
+                            .to_owned(),
                         is_error: part["state"]["status"] == "error",
                         image: None,
                     });
                 }
                 events
             }
-            "done" | "session_end" => vec![AgentEvent::Done { session_id: session, text: String::new(), cost_usd: value["cost"].as_f64() }],
-            "error" => vec![AgentEvent::Error { message: error_text(&value["error"]).or_else(|| (!text.is_empty()).then_some(text.to_owned())).unwrap_or_else(|| "OpenCode failed".into()) }],
+            "done" | "session_end" => vec![AgentEvent::Done {
+                session_id: session,
+                text: String::new(),
+                cost_usd: value["cost"].as_f64(),
+            }],
+            "error" => vec![AgentEvent::Error {
+                message: error_text(&value["error"])
+                    .or_else(|| (!text.is_empty()).then_some(text.to_owned()))
+                    .unwrap_or_else(|| "OpenCode failed".into()),
+            }],
             _ => Vec::new(),
         }
     }
@@ -154,8 +254,16 @@ impl Provider for OpenCode {
     /// with the first line, so the turn is finished here.
     fn finish(&self, _req: &TurnRequest) -> Option<AgentEvent> {
         let session_id = self.session.lock().ok().and_then(|mut id| id.take())?;
-        let cost = self.cost.lock().map(|mut total| std::mem::take(&mut *total)).unwrap_or(0.0);
-        Some(AgentEvent::Done { session_id: Some(session_id), text: String::new(), cost_usd: (cost > 0.0).then_some(cost) })
+        let cost = self
+            .cost
+            .lock()
+            .map(|mut total| std::mem::take(&mut *total))
+            .unwrap_or(0.0);
+        Some(AgentEvent::Done {
+            session_id: Some(session_id),
+            text: String::new(),
+            cost_usd: (cost > 0.0).then_some(cost),
+        })
     }
 }
 
@@ -180,9 +288,16 @@ mod tests {
     #[test]
     fn parses_text_usage_tools_and_finish() {
         let provider = OpenCode::default();
-        assert_eq!(provider.parse_line(r#"{"type":"text","sessionID":"ses_1","part":{"text":"hi"}}"#), vec![AgentEvent::Delta { text: "hi".into() }]);
-        assert!(matches!(&provider.parse_line(r#"{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"running","input":{"command":"pwd"}}}}"#)[0], AgentEvent::ToolCall { name, .. } if name == "bash"));
-        assert!(matches!(provider.finish(&request("")), Some(AgentEvent::Done { session_id: Some(id), .. }) if id == "ses_1"));
+        assert_eq!(
+            provider.parse_line(r#"{"type":"text","sessionID":"ses_1","part":{"text":"hi"}}"#),
+            vec![AgentEvent::Delta { text: "hi".into() }]
+        );
+        assert!(
+            matches!(&provider.parse_line(r#"{"type":"tool_use","part":{"callID":"c1","tool":"bash","state":{"status":"running","input":{"command":"pwd"}}}}"#)[0], AgentEvent::ToolCall { name, .. } if name == "bash")
+        );
+        assert!(
+            matches!(provider.finish(&request("")), Some(AgentEvent::Done { session_id: Some(id), .. }) if id == "ses_1")
+        );
     }
 
     /// What the CLI really writes: a fast tool is already finished when its line arrives.
@@ -193,36 +308,89 @@ mod tests {
         assert_eq!(
             provider.parse_line(line),
             vec![
-                AgentEvent::ToolCall { id: "call_1".into(), name: "shell".into(), input: "echo hi".into(), change: None, background: false },
-                AgentEvent::ToolResult { id: "call_1".into(), output: "hi\n".into(), is_error: false, image: None },
+                AgentEvent::ToolCall {
+                    id: "call_1".into(),
+                    name: "shell".into(),
+                    input: "echo hi".into(),
+                    change: None,
+                    background: false
+                },
+                AgentEvent::ToolResult {
+                    id: "call_1".into(),
+                    output: "hi\n".into(),
+                    is_error: false,
+                    image: None
+                },
             ]
         );
         // The same call reported again only carries what changed: its result.
         let done = r#"{"type":"tool_use","part":{"id":"call_1","tool":"shell","state":{"status":"error","input":{"command":"echo hi"},"error":"nope"}}}"#;
-        assert_eq!(provider.parse_line(done), vec![AgentEvent::ToolResult { id: "call_1".into(), output: "nope".into(), is_error: true, image: None }]);
+        assert_eq!(
+            provider.parse_line(done),
+            vec![AgentEvent::ToolResult {
+                id: "call_1".into(),
+                output: "nope".into(),
+                is_error: true,
+                image: None
+            }]
+        );
     }
 
     #[test]
     fn a_running_tool_line_waits_for_its_result() {
         let provider = OpenCode::default();
         let running = r#"{"type":"tool_use","part":{"id":"call_2","tool":"edit","state":{"status":"running","input":{"filePath":"a.ts"}}}}"#;
-        assert_eq!(provider.parse_line(running), vec![AgentEvent::ToolCall { id: "call_2".into(), name: "edit".into(), input: "a.ts".into(), change: None, background: false }]);
+        assert_eq!(
+            provider.parse_line(running),
+            vec![AgentEvent::ToolCall {
+                id: "call_2".into(),
+                name: "edit".into(),
+                input: "a.ts".into(),
+                change: None,
+                background: false
+            }]
+        );
         let finished = r#"{"type":"tool_use","part":{"id":"call_2","tool":"edit","state":{"status":"completed","input":{"filePath":"a.ts"},"output":"ok"}}}"#;
-        assert_eq!(provider.parse_line(finished), vec![AgentEvent::ToolResult { id: "call_2".into(), output: "ok".into(), is_error: false, image: None }]);
+        assert_eq!(
+            provider.parse_line(finished),
+            vec![AgentEvent::ToolResult {
+                id: "call_2".into(),
+                output: "ok".into(),
+                is_error: false,
+                image: None
+            }]
+        );
     }
 
     #[test]
     fn parses_error_shapes_from_opencode() {
         let provider = OpenCode::default();
-        assert_eq!(provider.parse_line(r#"{"type":"error","error":{"type":"provider.auth","message":"Not logged in"}}"#), vec![AgentEvent::Error { message: "Not logged in".into() }]);
-        assert_eq!(provider.parse_line(r#"{"type":"error","error":{"data":{"message":"Provider unavailable"}}}"#), vec![AgentEvent::Error { message: "Provider unavailable".into() }]);
+        assert_eq!(
+            provider.parse_line(
+                r#"{"type":"error","error":{"type":"provider.auth","message":"Not logged in"}}"#
+            ),
+            vec![AgentEvent::Error {
+                message: "Not logged in".into()
+            }]
+        );
+        assert_eq!(
+            provider.parse_line(
+                r#"{"type":"error","error":{"data":{"message":"Provider unavailable"}}}"#
+            ),
+            vec![AgentEvent::Error {
+                message: "Provider unavailable".into()
+            }]
+        );
     }
 
     #[test]
     fn args_carry_the_model_the_session_and_auto_only_when_asking_is_off() {
         let provider = OpenCode::default();
         let mut req = request("say hi");
-        assert_eq!(provider.args(&req), vec!["run", "--standalone", "--format", "json", "--thinking"]);
+        assert_eq!(
+            provider.args(&req),
+            vec!["run", "--standalone", "--format", "json", "--thinking"]
+        );
         // The prompt is not an argument at all: it is written to stdin, so shell characters in it stay text.
         assert!(!provider.args(&req).iter().any(|arg| arg.contains("say hi")));
         assert!(provider.prompt_on_stdin());
@@ -231,10 +399,27 @@ mod tests {
         req.model = Some("opencode/big-pickle".into());
         // A session id is only continued when the caller resumes it; a new chat that falls back to the old id must
         // not silently continue the old conversation.
-        assert_eq!(provider.args(&req), vec!["run", "--standalone", "--format", "json", "--thinking", "--model", "opencode/big-pickle"]);
+        assert_eq!(
+            provider.args(&req),
+            vec![
+                "run",
+                "--standalone",
+                "--format",
+                "json",
+                "--thinking",
+                "--model",
+                "opencode/big-pickle"
+            ]
+        );
         req.resume = true;
         let args = provider.args(&req);
-        assert_eq!((args.contains(&"--session".to_string()), args.contains(&"ses_9".to_string())), (true, true));
+        assert_eq!(
+            (
+                args.contains(&"--session".to_string()),
+                args.contains(&"ses_9".to_string())
+            ),
+            (true, true)
+        );
 
         req.permission_mode = Some("ask".into());
         assert!(!provider.args(&req).contains(&"--auto".to_string()));

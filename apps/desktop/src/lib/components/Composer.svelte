@@ -18,6 +18,7 @@
     draftMentions,
     drafts,
     isRunning,
+    needsUserInput,
     lastChat,
     rememberMixed,
     MODELS,
@@ -44,6 +45,7 @@
   import { inTauri } from '../history';
   import { toast } from '../toast';
   import ModelPicker from './ModelPicker.svelte';
+  import { connectors, refreshAccounts, refreshAgyQuota, type UsageWindow } from '../connectors.svelte';
 
   // What is typed belongs to the open session: switch away and back and it is still there.
   const sessionId = $derived(workspace.activeId);
@@ -70,6 +72,7 @@
   const running = $derived(isRunning(sessionId));
   const mac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
   const waiting = $derived(queued[sessionId] ?? []);
+  const waitingForUser = $derived(needsUserInput(sessionId));
 
   // Queued messages are reordered by dragging their handle (zSortable: the rows glide, Escape cancels).
   function moveQueued(from: number, to: number) {
@@ -122,6 +125,61 @@
   let effort = $state<Effort>('medium');
   let fast = $state(true);
   let permission = $state<Permission>('auto');
+
+  // Keep the quota shown below the composer current for the provider selected here. These are the same
+  // provider readings shown in Settings; providers that do not report a limit stay explicitly unavailable.
+  $effect(() => {
+    const selected = agent;
+    if (!inTauri()) return;
+    const refresh = () => {
+      if (selected === 'antigravity') void refreshAgyQuota();
+      else if (selected === 'claude' || selected === 'codex') void refreshAccounts(selected);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    return () => clearInterval(timer);
+  });
+
+  const quota = $derived.by(() => {
+    let windows: UsageWindow[] = [];
+    let observedAt: number | null = null;
+    if (agent === 'claude' || agent === 'codex') {
+      const account = connectors.accounts[agent]?.accounts.find((item) => item.active);
+      windows = account?.usage ?? [];
+      observedAt = account?.observed_at ?? null;
+    } else if (agent === 'antigravity') {
+      const family = model.startsWith('gemini-') ? 'gemini' : /^(claude-|gpt-oss-)/.test(model) ? '3p' : null;
+      windows = connectors.agyQuota?.groups.find((group) => group.id === family)?.windows ?? [];
+      observedAt = connectors.agyQuota?.observed_at ?? null;
+    }
+    const now = Date.now() / 1000;
+    const available = windows
+      .map((item) => ({
+        label: item.label,
+        remaining: item.resets_at !== null && item.resets_at <= now ? 100 : Math.max(0, Math.min(100, 100 - item.pct)),
+        resetsAt: item.resets_at,
+        observedAt,
+      }))
+      .sort((a, b) => a.remaining - b.remaining);
+    return available[0] ?? null;
+  });
+  const quotaUnavailable = $derived(!quota);
+
+  function quotaResetText(timestamp: number | null) {
+    if (timestamp === null) return '';
+    const minutes = Math.max(0, Math.ceil((timestamp * 1000 - Date.now()) / 60_000));
+    if (minutes === 0) return 'resets now';
+    if (minutes < 60) return `resets in ${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return `resets in ${hours}h${rest ? ` ${rest}m` : ''}`;
+  }
+
+  function quotaAgeText(timestamp: number | null) {
+    if (timestamp === null) return '';
+    const minutes = Math.max(0, Math.floor((Date.now() / 1000 - timestamp) / 60));
+    return minutes < 1 ? 'updated just now' : `updated ${minutes}m ago`;
+  }
   $effect(() => {
     turnOptions.permission = permission;
     turnOptions.effort = effort;
@@ -503,22 +561,19 @@
 
 <svelte:window bind:innerWidth={innerW} />
 {#if waiting.length > 0}
-  <!-- Messages typed while the agent works sit on a tray behind the composer: they go out one by one when it is
-       free, or now with Steer. The composer overlaps the tray's lower edge. -->
+  <!-- Queued messages sit behind the composer until the agent is free and any open question or permission is resolved. -->
   <div class="mx-3 -mb-4 overflow-hidden rounded-t-2xl border border-b-0 border-border bg-card pb-4 shadow-md">
-    {#if waiting.length > 1}
-      <!-- A long queue can go in one go. Outside the sortable list, so it is not one of its rows. -->
-      <div class="flex items-center justify-between border-b border-border px-4 py-1 text-[11px] text-muted-foreground">
-        <span>{waiting.length} queued</span>
-        <button type="button" class="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 hover:bg-destructive/10 hover:text-destructive" onclick={() => delete queued[sessionId]}>
-          <ZIcon zType={'lucideTrash2' as ZIconName} zSize="12" class="size-3" />
-          <span>Clear all</span>
-        </button>
-      </div>
-    {/if}
+    <!-- Outside the sortable list, so the status and clear action are not queue rows. -->
+    <div class="flex items-center justify-between border-b border-border px-4 py-1 text-[11px] text-muted-foreground">
+      <span>{waiting.length} queued{waitingForUser ? ' · waiting for your answer' : ''}</span>
+      <button type="button" class="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 hover:bg-destructive/10 hover:text-destructive" onclick={() => delete queued[sessionId]}>
+        <ZIcon zType={'lucideTrash2' as ZIconName} zSize="12" class="size-3" />
+        <span>Clear all</span>
+      </button>
+    </div>
     <div role="list" aria-label="Queued messages" {@attach zSortable({ onSort: moveQueued, handle: '[data-handle]' })}>
-    {#each waiting as item, index (item)}
-      <div class="flex items-center gap-2.5 bg-card px-4 py-1 text-xs {index > 0 ? 'border-t border-border' : ''}" role="listitem">
+    {#each waiting as item (item)}
+      <div class="flex items-center gap-2.5 border-t border-border bg-card px-4 py-1 text-xs first:border-t-0" role="listitem">
         <!-- The list icon turns into a drag handle while the pointer is on it. -->
         <span data-handle class="group/handle grid size-3.5 shrink-0 cursor-grab touch-none place-items-center text-muted-foreground active:cursor-grabbing" aria-label="Drag to reorder">
           <ZIcon zType={'lucideListChecks' as ZIconName} class="size-3.5 group-hover/handle:hidden" />
@@ -557,7 +612,7 @@
         <div class="group/chip relative" bind:this={chipAnchors[item.id]}>
           <button type="button" class="flex h-8 max-w-60 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 font-mono text-[11px] text-muted-foreground outline-none hover:bg-muted" aria-label="Details of {item.selector}" onclick={() => (detail = detail === item.id ? null : item.id)}>
             <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 shrink-0 text-primary" />
-            {#if item.picture}<img src={item.picture} alt="" class="size-5 shrink-0 rounded-sm border border-border object-cover" />{:else}<ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 shrink-0 text-primary" />{/if}
+            {#if item.picture}<img src={item.picture} alt="" class="size-5 shrink-0 rounded-sm border border-border object-cover" />{/if}
             <span class="truncate">&lt;{item.tag} /&gt; {item.text}</span>
           </button>
           <button type="button" class="absolute -top-3 -right-2.5 flex size-5.5 cursor-pointer items-center justify-center rounded-full border border-border bg-popover text-popover-foreground shadow-md opacity-0 transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100" aria-label="Remove element" onclick={() => (draftElements[sessionId] = elements.filter((entry) => entry !== item))}>
@@ -644,10 +699,14 @@
       <ModelPicker bind:agent bind:model bind:effort bind:fast bind:permission />
     </div>
     {#if running && !hasInput}
-      <!-- A reply is being written and nothing is typed: this stops it. -->
-      <ZButton zWave={false} zType="default" zSize="default" class="size-7! shrink-0 rounded-full p-0" aria-label="Stop" {@attach zTooltip({ content: 'Stop', position: 'top' })} onclick={() => stopTurn(sessionId)}>
-        <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
-      </ZButton>
+      <!-- A reply is being written and nothing is typed: this stops it. A ring turns around it while the reply runs. -->
+      <span class="relative grid shrink-0 place-items-center">
+        <span class="pointer-events-none absolute -inset-[3px] animate-spin rounded-full [background:conic-gradient(from_0deg,transparent_0_55%,var(--color-primary)_100%)] [mask:radial-gradient(farthest-side,transparent_calc(100%-2px),#000_calc(100%-2px))] motion-reduce:hidden" aria-hidden="true"></span>
+        <span class="pointer-events-none absolute inset-0 animate-ping rounded-full bg-primary/25 [animation-duration:1.8s] motion-reduce:hidden" aria-hidden="true"></span>
+        <ZButton zWave={false} zType="default" zSize="default" class="relative size-7! shrink-0 rounded-full p-0" aria-label="Stop" {@attach zTooltip({ content: 'Stop', position: 'top' })} onclick={() => stopTurn(sessionId)}>
+          <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
+        </ZButton>
+      </span>
     {:else}
       <ZButton zWave={false} type="submit" zType="default" zSize="default" class="size-7! shrink-0 rounded-full p-0" disabled={!hasInput} aria-label={running ? 'Add to the queue' : 'Send message'} {@attach zTooltip({ content: running ? `Add to the queue · ${mac ? '⌘' : 'Ctrl'}+Enter to stop and send now` : 'Send', position: 'top' })}>
         <ZIcon zType="lucideArrowUp" class="size-3.5" />
@@ -655,6 +714,24 @@
     {/if}
   </div>
 </form>
+{#if quota}
+  <div class="mt-1.5 flex min-w-0 flex-col gap-1 px-0.5" title="Remaining quota for the selected provider's most restrictive window">
+    <div class="flex min-w-0 items-center justify-between gap-2 text-[10px] leading-none">
+      <span class="truncate text-muted-foreground">{quota.label} remaining{quotaResetText(quota.resetsAt) ? ` · ${quotaResetText(quota.resetsAt)}` : ''}{quotaAgeText(quota.observedAt) ? ` · ${quotaAgeText(quota.observedAt)}` : ''}</span>
+      <span class="shrink-0 tabular-nums {quota.remaining <= 10 ? 'text-destructive' : 'text-muted-foreground'}">{Math.round(quota.remaining)}%</span>
+    </div>
+    <div class="h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Math.round(quota.remaining)} aria-valuemin="0" aria-valuemax="100" aria-label="{model} {quota.label} quota remaining">
+      <div class="h-full rounded-full transition-[width] duration-500 {quota.remaining <= 10 ? 'bg-destructive' : quota.remaining <= 30 ? 'bg-warning' : 'bg-primary'}" style:width="{quota.remaining}%"></div>
+    </div>
+  </div>
+{:else if quotaUnavailable}
+  <div class="mt-1.5 flex min-w-0 flex-col gap-1 px-0.5" title="This provider does not currently expose quota data to AgentDeck">
+    <span class="text-[10px] leading-none text-muted-foreground">Quota unavailable for this model</span>
+    <div class="h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="{model} quota unavailable" aria-valuetext="Quota unavailable">
+      <div class="h-full w-full rounded-full bg-muted-foreground/35"></div>
+    </div>
+  </div>
+{/if}
 <ProjectBar />
 
 <ZCommand

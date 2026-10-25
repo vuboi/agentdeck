@@ -26,9 +26,9 @@ const DEFAULT_VARIANTS: u8 = 1;
 const MAX_VARIANTS: u8 = 4;
 const MAX_MODELS: usize = 4;
 const MAX_PROMPT_CHARS: usize = 30_000;
-const MAX_SUGGESTIONS: usize = 5;
+const MAX_SUGGESTIONS: usize = 7;
 const MAX_KEYWORDS: usize = 12;
-const SUGGEST_INSTRUCTIONS: &str = r#"You improve prompts for image generation. Reply with one JSON object and nothing else, no markdown: {"prompts": [five distinct, ready-to-use prompts as strings], "keywords": [up to ten {"category": "...", "value": "..."}]}. Preserve the user's subject and intent. Add useful visual detail: style, composition, lighting, camera or rendering direction. The settings below are fixed: follow them exactly and do not contradict them. Each keyword is a short term that fits one setting; category is one of style, domain, audience, ratio, resolution, or keyword (a plain term to add to the prompt). Reference images, when given, show the subject or style to follow: look at each one before you write. Do not add commentary, policy text, or claims about the image."#;
+const SUGGEST_INSTRUCTIONS: &str = r#"You improve prompts for image generation. Reply with one JSON object and nothing else, no markdown: {"prompts": [seven distinct, ready-to-use prompts as strings], "keywords": [up to ten {"category": "...", "value": "..."}]}. Preserve the user's subject and intent. Add useful visual detail: style, composition, lighting, camera or rendering direction. The settings below are fixed: follow them exactly and do not contradict them. Each keyword is a short term that fits one setting; category is one of style, domain, audience, ratio, resolution, or keyword (a plain term to add to the prompt). Reference images, when given, show the subject or style to follow: look at each one before you write. Do not add commentary, policy text, or claims about the image."#;
 
 #[derive(Debug, Deserialize)]
 pub struct ImageModelRequest {
@@ -49,7 +49,13 @@ pub struct ImageConfig {
 impl ImageConfig {
     /// The picked settings as lines for the model, in a fixed order. Empty when nothing is picked.
     fn brief(&self) -> String {
-        let pick = |value: &Option<String>| value.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
+        let pick = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
         let mut lines = Vec::new();
         if let Some(style) = pick(&self.style) {
             lines.push(format!("Style: {style}."));
@@ -108,6 +114,9 @@ pub struct ImageGenerateResult {
 
 #[derive(Debug, Deserialize)]
 pub struct ImagePromptSuggestRequest {
+    /// The CLI that writes the suggestions: `claude`, `antigravity` or `opencode`; anything else uses the Codex API.
+    #[serde(default)]
+    pub provider: Option<String>,
     pub prompt: String,
     pub model: String,
     #[serde(default)]
@@ -166,7 +175,9 @@ fn kill_tree(pid: u32) {
 }
 
 #[tauri::command]
-pub async fn image_prompt_suggest(request: ImagePromptSuggestRequest) -> Result<ImagePromptSuggestResult, String> {
+pub async fn image_prompt_suggest(
+    request: ImagePromptSuggestRequest,
+) -> Result<ImagePromptSuggestResult, String> {
     tauri::async_runtime::spawn_blocking(move || suggest(request))
         .await
         .map_err(|error| error.to_string())?
@@ -201,7 +212,11 @@ fn generate(request: ImageGenerateRequest) -> Result<ImageGenerateResult, String
     let references = validate_references(&request.reference_paths)?;
     // The picked settings travel with the prompt, so each candidate follows them.
     let brief = request.config.brief();
-    let prompt_text = if brief.is_empty() { prompt.to_string() } else { format!("{prompt}\n\n{brief}") };
+    let prompt_text = if brief.is_empty() {
+        prompt.to_string()
+    } else {
+        format!("{prompt}\n\n{brief}")
+    };
 
     let mut images = Vec::new();
     let mut failures = Vec::new();
@@ -225,7 +240,15 @@ fn generate(request: ImageGenerateRequest) -> Result<ImageGenerateResult, String
                 break;
             }
             let output = run_folder.join(format!("{}-{variant}.png", safe_name(&model_name)));
-            match generate_one(&script, &prompt_text, variant, &model_name, &backend, &output, &references) {
+            match generate_one(
+                &script,
+                &prompt_text,
+                variant,
+                &model_name,
+                &backend,
+                &output,
+                &references,
+            ) {
                 Ok(paths) => images.extend(paths.into_iter().map(|path| GeneratedImage {
                     model: model_name.clone(),
                     backend: backend.clone(),
@@ -253,9 +276,14 @@ fn generate(request: ImageGenerateRequest) -> Result<ImageGenerateResult, String
         images,
         failures,
     };
-    let models: Vec<String> = selected_models.iter().map(|model| format!("{}:{}", model.model, model.backend)).collect();
+    let models: Vec<String> = selected_models
+        .iter()
+        .map(|model| format!("{}:{}", model.model, model.backend))
+        .collect();
     // History is best effort: a database error must not hide the images that were just made.
-    if let Err(error) = crate::image_history::record(&result.run_id, prompt, &models, variants, status, &result) {
+    if let Err(error) =
+        crate::image_history::record(&result.run_id, prompt, &models, variants, status, &result)
+    {
         eprintln!("image history not saved: {error}");
     }
     Ok(result)
@@ -282,7 +310,30 @@ fn suggest(request: ImagePromptSuggestRequest) -> Result<ImagePromptSuggestResul
         return Err("choose a prompt suggestion model".to_string());
     }
     let input = suggest_input(prompt, &request.config.brief(), &references);
-    if model.starts_with("claude-") {
+    let provider = request.provider.as_deref().unwrap_or_default();
+    if provider == "antigravity" {
+        return suggest_with_cli(
+            ag_adapters::agent::runner::resolve_binary(
+                &ag_adapters::agent::antigravity::Antigravity::default(),
+            ),
+            &["--print-timeout", "5m", "--model", model, "-p", &input],
+            None,
+            model,
+            "Antigravity",
+        );
+    }
+    if provider == "opencode" {
+        return suggest_with_cli(
+            ag_adapters::agent::runner::resolve_binary(
+                &ag_adapters::agent::opencode::OpenCode::default(),
+            ),
+            &["run", "--standalone", "--model", model],
+            Some(&input),
+            model,
+            "OpenCode",
+        );
+    }
+    if provider == "claude" || model.starts_with("claude-") {
         return suggest_with_claude(&input, model, &references);
     }
 
@@ -338,7 +389,11 @@ fn suggest(request: ImagePromptSuggestRequest) -> Result<ImagePromptSuggestResul
 
 /// Claude writes the suggestions in a one-shot `claude -p` run, the input on stdin as in a chat turn. Reference
 /// images are opened by its Read tool, which this run is allowed to use.
-fn suggest_with_claude(input: &str, model: &str, references: &[PathBuf]) -> Result<ImagePromptSuggestResult, String> {
+fn suggest_with_claude(
+    input: &str,
+    model: &str,
+    references: &[PathBuf],
+) -> Result<ImagePromptSuggestResult, String> {
     use std::io::Write;
 
     let binary = ag_adapters::agent::runner::resolve_binary(&ag_adapters::agent::claude::Claude);
@@ -364,7 +419,9 @@ fn suggest_with_claude(input: &str, model: &str, references: &[PathBuf]) -> Resu
             .write_all(input.as_bytes())
             .map_err(|error| error.to_string())?;
     }
-    let result = child.wait_with_output().map_err(|error| error.to_string())?;
+    let result = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
     if !result.status.success() {
         let detail = String::from_utf8_lossy(&result.stderr).trim().to_string();
         return Err(if detail.is_empty() {
@@ -377,6 +434,63 @@ fn suggest_with_claude(input: &str, model: &str, references: &[PathBuf]) -> Resu
     let (suggestions, keywords) = parse_suggestions(&text);
     if suggestions.is_empty() {
         return Err("Claude returned no suggestions".to_string());
+    }
+    Ok(ImagePromptSuggestResult {
+        model: model.to_string(),
+        suggestions,
+        keywords,
+    })
+}
+
+/// One-shot run of a coding CLI that writes the suggestions: its plain-text answer is read for the JSON object.
+/// `stdin_input` is the prompt for a CLI that reads it from stdin; the others get it in `args`.
+fn suggest_with_cli(
+    binary: std::ffi::OsString,
+    args: &[&str],
+    stdin_input: Option<&str>,
+    model: &str,
+    name: &str,
+) -> Result<ImagePromptSuggestResult, String> {
+    use std::io::Write;
+
+    let mut command = Command::new(binary);
+    command
+        .args(args)
+        .stdin(if stdin_input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not start {name}: {error}"))?;
+    if let (Some(input), Some(mut stdin)) = (stdin_input, child.stdin.take()) {
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|error| error.to_string())?;
+    }
+    let result = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
+    if !result.status.success() {
+        let detail = String::from_utf8_lossy(&result.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("{name} exited with {}", result.status)
+        } else {
+            trim_error(&detail)
+        });
+    }
+    let text = String::from_utf8_lossy(&result.stdout);
+    let (suggestions, keywords) = parse_suggestions(&text);
+    if suggestions.is_empty() {
+        return Err(format!("{name} returned no suggestions"));
     }
     Ok(ImagePromptSuggestResult {
         model: model.to_string(),
@@ -412,7 +526,9 @@ fn parse_suggestions(text: &str) -> (Vec<String>, Vec<SuggestedKeyword>) {
         }
     }
     let prompts = match (text.find('['), text.rfind(']')) {
-        (Some(start), Some(end)) if start < end => serde_json::from_str::<Vec<String>>(&text[start..=end]).unwrap_or_default(),
+        (Some(start), Some(end)) if start < end => {
+            serde_json::from_str::<Vec<String>>(&text[start..=end]).unwrap_or_default()
+        }
         _ => Vec::new(),
     };
     (clean_prompts(prompts), Vec::new())
@@ -497,7 +613,10 @@ fn generate_one(
         ])
         .arg(output)
         .arg("--prompt")
-        .arg(format!("Generate exactly one image. {prompt}\n\n{}", variation_hint(variant)));
+        .arg(format!(
+            "Generate exactly one image. {prompt}\n\n{}",
+            variation_hint(variant)
+        ));
     for reference in references {
         command.arg("--input-ref").arg(reference);
     }
@@ -513,9 +632,15 @@ fn generate_one(
         .spawn()
         .map_err(|error| format!("could not start image generator: {error}"))?;
     let pid = child.id();
-    ACTIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(pid);
+    ACTIVE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(pid);
     let output = child.wait_with_output();
-    ACTIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).retain(|running| *running != pid);
+    ACTIVE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retain(|running| *running != pid);
     let result = output.map_err(|error| format!("image generator failed: {error}"))?;
     if CANCELLED.load(Ordering::SeqCst) {
         return Err("stopped".to_string());

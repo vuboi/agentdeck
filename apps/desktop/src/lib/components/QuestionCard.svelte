@@ -35,6 +35,12 @@
     onsubmit(formatAnswers(questions, answers));
   }
 
+  function skip() {
+    if (done) return;
+    sent = true;
+    onsubmit(formatAnswers(questions, questions.map(() => ({ picked: [], text: '' }))));
+  }
+
   function onkeydown(event: KeyboardEvent) {
     if (done || (event.target as HTMLElement).tagName === 'TEXTAREA') return;
     const number = Number(event.key);
@@ -108,6 +114,7 @@
         {/each}
       </span>
       <span class="flex-1"></span>
+      <ZButton zWave={false} zType="ghost" zSize="sm" onclick={skip}>Skip</ZButton>
       {#if at > 0}<ZButton zWave={false} zType="ghost" zSize="sm" onclick={() => at--}>Back</ZButton>{/if}
       {#if last}
         <ZButton zWave={false} zType="default" zSize="sm" onclick={send}><ZIcon zType={icon('lucideSend')} class="size-3.5" />Send answers</ZButton>

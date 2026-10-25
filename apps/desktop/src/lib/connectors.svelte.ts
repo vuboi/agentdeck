@@ -1,6 +1,7 @@
 import { inTauri } from './history';
 import { getPref, setPref } from './prefs';
 import { toast } from './toast';
+import { requestSystemNotificationPermission, sendSystemNotification } from './system-notifications';
 
 // Settings → Connectors. State and actions for: the agent CLIs (installed? signed in?), the accounts each one can
 // switch between (Codex via `codex-auth`, Claude via `cswap`), the "close to the limit" alerts, and custom / local
@@ -24,6 +25,8 @@ export type Account = {
   status: string | null;
   /** The login ran out (a 401): sign in again; the account cannot be switched to meanwhile. */
   expired: boolean;
+  /** Live count returned by ChatGPT's reset-credit API; absent when that API could not be read. */
+  reset_credits_available?: number;
 };
 export type Accounts = {
   manager: boolean;
@@ -33,6 +36,7 @@ export type Accounts = {
 };
 export type QuotaGroup = { id: string; label: string; windows: UsageWindow[] };
 export type AgyQuota = { observed_at: number | null; groups: QuotaGroup[] };
+export type AgyAccount = { id: string; email: string; active: boolean; expired: boolean; status: string | null };
 export type ProviderKind = 'openai' | 'anthropic' | 'ollama';
 export type CustomProvider = {
   id: string;
@@ -52,11 +56,7 @@ export type CustomProvider = {
 export type Probe = { ok: boolean; models: string[]; ms: number; error: string | null };
 export type LocalServer = { kind: ProviderKind; label: string; base_url: string; models: string[] };
 
-/** Codex "banked" limit resets: redeemed on ChatGPT's usage page, so this is the user's own tally. */
-export type ResetLedger = { left: number; used: number; lastAt: number | null };
-export const RESET_URL = 'https://chatgpt.com/codex/settings/usage';
-
-export type Section = 'connectors' | 'providers' | 'alerts' | 'sync';
+export type Section = 'connectors' | 'providers' | 'alerts' | 'sync' | 'computer';
 
 export const settings = $state({ open: false, section: 'connectors' as Section });
 
@@ -67,7 +67,7 @@ export function openSettings(section: Section = 'connectors') {
 
 export const connectors = $state({
   detected: null as Detected | null,
-  accounts: { claude: null, codex: null } as Record<AccountProvider, Accounts | null>,
+  accounts: { claude: null, codex: null, agy: [] } as Record<AccountProvider, Accounts | null> & { agy: AgyAccount[] },
   /** What is running right now, by key (`install:codex`, `login:claude`, `switch:codex`…), with a label for it. */
   busy: {} as Record<string, string>,
   /** Last lines of an install or sign-in, by connector id. */
@@ -75,10 +75,6 @@ export const connectors = $state({
   /** The last error of an action, by key. */
   errors: {} as Record<string, string>,
   alerts: { enabled: true, threshold: 90, system: false },
-  /** Saved Codex limit resets per account email, counted by hand (OpenAI gives no way to read them). */
-  resets: {} as Record<string, ResetLedger>,
-  /** Email of the account whose redeemed reset is being waited for. */
-  awaitingReset: '',
   custom: [] as CustomProvider[],
   local: [] as LocalServer[],
   /** What agy last reported per model family, read from the file a status-line tool saves. `null`: none saved. */
@@ -116,7 +112,7 @@ let listening = false;
 async function listenToLogs() {
   if (listening || !inTauri()) return;
   listening = true;
-  const { listen } = await import('@tauri-apps/api/event');
+  const { listen } = await import('./tauri-event');
   await listen<{ id: string; line: string }>('connector-log', ({ payload }) => {
     const lines = (connectors.logs[payload.id] ??= []);
     lines.push(payload.line);
@@ -148,7 +144,6 @@ export async function refreshAccounts(provider: AccountProvider, refresh = false
         next.error = `Could not save the current Claude account: ${message(error)}`;
       }
     }
-    if (provider === 'codex') noticeResets(connectors.accounts.codex, next);
     connectors.accounts[provider] = next;
   });
 }
@@ -162,10 +157,37 @@ export async function refreshAgyQuota() {
   }
 }
 
+export async function refreshAgyAccounts() {
+  if (!inTauri()) return;
+  await task('accounts:agy', 'Reading Antigravity accounts', async () => {
+    connectors.accounts.agy = await call<AgyAccount[]>('antigravity_accounts_list');
+  });
+}
+
+/** Saves the currently signed-in Antigravity credential in Windows Credential Manager. */
+export async function addAgyAccount(): Promise<boolean> {
+  await refreshDetect();
+  const ok = await task('add:agy', 'Saving current Antigravity account', () => call('antigravity_account_adopt'));
+  if (ok) {
+    toast.success('Antigravity account saved');
+    await refreshAgyAccounts();
+  }
+  return ok;
+}
+
+export async function switchAgyAccount(account: AgyAccount): Promise<boolean> {
+  const ok = await task('switch:agy', `Switching to ${account.email}`, () => call('antigravity_account_switch', { id: account.id }));
+  if (ok) {
+    toast.success(`Now using ${account.email}`);
+    await Promise.all([refreshAgyAccounts(), refreshDetect(), refreshAgyQuota()]);
+  }
+  return ok;
+}
+
 export async function refreshAll(refresh = false) {
   await refreshDetect();
   void refreshAgyQuota();
-  await Promise.all([refreshAccounts('codex', refresh), refreshAccounts('claude', refresh)]);
+  await Promise.all([refreshAccounts('codex', refresh), refreshAccounts('claude', refresh), refreshAgyAccounts()]);
 }
 
 export async function install(id: string, label: string) {
@@ -177,7 +199,7 @@ export async function install(id: string, label: string) {
   }
 }
 
-export async function login(id: ConnectorId, label: string) {
+export async function login(id: ConnectorId, label: string): Promise<boolean> {
   connectors.logs[id] = [];
   const ok = await task(`login:${id}`, `Waiting for ${label} sign-in`, () => call('connector_login', { id }));
   if (ok) {
@@ -185,6 +207,7 @@ export async function login(id: ConnectorId, label: string) {
     await refreshAll();
     if (id !== 'agy') toast.success(`${label} signed in`);
   }
+  return ok;
 }
 
 export async function addAccount(provider: AccountProvider, label: string) {
@@ -196,12 +219,13 @@ export async function addAccount(provider: AccountProvider, label: string) {
   }
 }
 
-export async function switchAccount(provider: AccountProvider, account: Account) {
+export async function switchAccount(provider: AccountProvider, account: Account): Promise<boolean> {
   const ok = await task(`switch:${provider}`, `Switching to ${account.email}`, () => call('account_switch', { provider, id: account.id }));
   if (ok) {
     toast.success(`Now using ${account.email}`);
     await refreshAll();
   }
+  return ok;
 }
 
 export async function removeAccount(provider: AccountProvider, account: Account) {
@@ -215,6 +239,16 @@ export async function removeAccount(provider: AccountProvider, account: Account)
 export async function setCodexAutoSwitch(enabled: boolean, fiveHour: number, weekly: number) {
   const ok = await task('auto:codex', 'Saving', () => call('codex_auto_switch', { enabled, fiveHour, weekly }));
   if (ok) await refreshAccounts('codex');
+}
+
+/** Redeems one Codex reset credit after the user confirms the action. */
+export async function consumeCodexResetCredit(email: string): Promise<boolean> {
+  const key = `reset:${email}`;
+  const ok = await task(key, 'Redeeming Codex reset', () => call('codex_consume_reset_credit', { email }));
+  if (!ok) return false;
+  toast.success('Codex reset redeemed');
+  await refreshAccounts('codex', true);
+  return true;
 }
 
 // --- Alerts: tell the user before an account runs out -------------------------------------------------------
@@ -254,21 +288,11 @@ function announce(warning: Warning) {
   const hint = warning.better ? `Switch to ${warning.better.email} in Settings.` : 'No other account has room: add one in Settings.';
   const text = `${name} ${warning.window.label} limit at ${Math.round(warning.window.pct)}% on ${warning.account.email}. ${hint}`;
   toast.error(text);
-  if (connectors.alerts.system && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    try {
-      new Notification(`${name} is close to its limit`, { body: text });
-    } catch {
-      // The toast already showed it.
-    }
-  }
+  if (connectors.alerts.system) void sendSystemNotification(`${name} is close to its limit`, text);
 }
 
 export async function allowSystemNotifications(allow: boolean) {
-  connectors.alerts.system = allow;
-  if (allow && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-    const answer = await Notification.requestPermission();
-    if (answer !== 'granted') connectors.alerts.system = false;
-  }
+  connectors.alerts.system = allow && (await requestSystemNotificationPermission());
 }
 
 let watching = false;
@@ -286,65 +310,6 @@ export function startWatching() {
   };
   setTimeout(() => void check(), 20_000);
   setInterval(() => void check(), 5 * 60_000);
-}
-
-// --- Saved limit resets (Codex) ---------------------------------------------------------------------------
-
-/** Starts a tally for a paid Codex account the first time it is seen. 3 is what these plans start with. */
-function trackResets(email: string) {
-  connectors.resets[email] ??= { left: 3, used: 0, lastAt: null };
-}
-
-/**
- * Counts a reset the user redeemed on the ChatGPT page without being asked: a window that had not expired yet
- * suddenly shows far less usage. A window that simply ran out its time does not count.
- */
-function noticeResets(before: Accounts | null, after: Accounts) {
-  const now = Date.now();
-  for (const account of after.accounts) {
-    if (account.plan === 'free') continue;
-    trackResets(account.email);
-    const old = before?.accounts.find((item) => item.email === account.email);
-    if (!old) continue;
-    const dropped = account.usage.some((window) => {
-      const was = old.usage.find((item) => item.label === window.label);
-      return was !== undefined && (was.resets_at === null || was.resets_at * 1000 > now) && was.pct - window.pct >= 25;
-    });
-    const ledger = connectors.resets[account.email];
-    if (dropped && ledger.left > 0) {
-      ledger.left -= 1;
-      ledger.used += 1;
-      ledger.lastAt = now;
-    }
-  }
-}
-
-/**
- * After the user opens the ChatGPT page to redeem a reset: reads the usage every 15 s (for up to 5 minutes) until
- * `noticeResets` has counted it. Counting itself happens in `refreshAccounts`.
- */
-export async function waitForReset(email: string) {
-  const ledger = connectors.resets[email];
-  if (!ledger || connectors.awaitingReset) return;
-  connectors.awaitingReset = email;
-  const startedWith = ledger.used;
-  try {
-    for (let round = 0; round < 20 && connectors.awaitingReset === email; round++) {
-      await new Promise((done) => setTimeout(done, 15_000));
-      await refreshAccounts('codex', true);
-      if (connectors.resets[email]?.used > startedWith) {
-        toast.success(`Reset counted: ${connectors.resets[email].left} left`);
-        return;
-      }
-    }
-    if (connectors.awaitingReset === email) toast.info('No reset seen yet. Use Refresh once you have redeemed it.');
-  } finally {
-    if (connectors.awaitingReset === email) connectors.awaitingReset = '';
-  }
-}
-
-export function stopWaitingForReset() {
-  connectors.awaitingReset = '';
 }
 
 // --- Custom and local providers ----------------------------------------------------------------------------
@@ -379,9 +344,8 @@ export const newProviderId = () => `custom-${Date.now().toString(36)}`;
 // --- Saved settings ---------------------------------------------------------------------------------------
 
 let hydrated = false;
-Promise.all([getPref<CustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts'), getPref<typeof connectors.resets>('connectors.resets')]).then(([custom, alerts, resets]) => {
+Promise.all([getPref<CustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts')]).then(([custom, alerts]) => {
   if (custom) connectors.custom = custom;
-  if (resets) connectors.resets = resets;
   if (alerts) connectors.alerts = { ...connectors.alerts, ...alerts };
   hydrated = true;
 });
@@ -390,10 +354,6 @@ $effect.root(() => {
   $effect(() => {
     const custom = $state.snapshot(connectors.custom);
     if (hydrated) setPref('providers.custom', custom);
-  });
-  $effect(() => {
-    const resets = $state.snapshot(connectors.resets);
-    if (hydrated) setPref('connectors.resets', resets);
   });
   $effect(() => {
     const alerts = { ...connectors.alerts };

@@ -1,24 +1,20 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
+  import { fade, slide } from 'svelte/transition';
   import { ZDrawer, ZIcon, ZPopover, ZSwitch, ZTabs, createVirtualizer, zHoverGlide, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
   import { activeSession, draftImages, workspace, type Attachment } from '../sessions.svelte';
   import {
-    generateImages,
-    listImageHistory,
-    readImageDataUrl,
     revealFile,
     saveAttachment,
-    stopImageGeneration,
-    suggestImagePrompts,
-    type GeneratedImage,
     type ImageHistoryRun,
     type ImageModelChoice,
     type ImageSettings,
     type SuggestedKeyword,
   } from '../agent';
   import { openImages } from '../preview.svelte';
+  import { clearSuggestions, draft, gen, openRun, refreshHistory, runSuggest, startRun, stopRun, type Preview } from '../image-gen.svelte';
   import { findModel, modelCatalog, modelLabel, type ProviderId } from '../models.svelte';
   import { inTauri } from '../history';
   import { toast } from '../toast';
@@ -26,12 +22,25 @@
   import SectionTitle from './SectionTitle.svelte';
 
   type ImageModel = ImageModelChoice & { label: string };
-  type Preview = GeneratedImage & { src: string };
 
   const models: ImageModel[] = [
+    // Only models verified against this flow's Responses or Images backend belong here.
+    { model: 'gpt-6.1-sol', backend: 'responses', label: 'GPT 6.1 Sol' },
+    { model: 'gpt-6-astra', backend: 'responses', label: 'GPT 6 Astra' },
+    { model: 'gpt-6-sol', backend: 'responses', label: 'GPT 6 Sol' },
     { model: 'gpt-6-luna', backend: 'responses', label: 'GPT 6 Luna' },
+    { model: 'gpt-5.6-sol', backend: 'responses', label: 'GPT 5.6 Sol' },
+    { model: 'gpt-5.6-terra', backend: 'responses', label: 'GPT 5.6 Terra' },
+    { model: 'gpt-5.6-luna', backend: 'responses', label: 'GPT 5.6 Luna' },
     { model: 'gpt-image-2', backend: 'images', label: 'GPT Image 2' },
   ];
+  // Match the backend's per-run limit without increasing the default generation workload.
+  const MAX_IMAGE_MODELS = 4;
+  // A panel that opens by growing from its top edge and goes by shrinking and fading, so what is below it never jumps.
+  function fold(node: HTMLElement, { duration = 280 }: { duration?: number } = {}) {
+    const grow = slide(node, { duration });
+    return { ...grow, css: (t: number, u: number) => `${grow.css?.(t, u) ?? ''};opacity:${t}` };
+  }
   const variantTabs = [1, 2, 3, 4].map((count) => ({ value: String(count), label: String(count) }));
   const EFFORT_LABEL: Record<string, string> = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-High', max: 'Max', ultra: 'Ultra' };
   // The settings under the prompt box. An empty value is Auto: nothing is sent for that setting.
@@ -86,12 +95,12 @@
 
   // A picture pasted or dropped into the prompt box: shown above it, sent to the model with the prompt.
   type Reference = { id: string; name: string; mime: string; src: string; path?: string };
-  let references = $state<Reference[]>([]);
-  let settings = $state<Record<SettingKey, string>>({ style: '', domain: '', audience: '', ratio: '', resolution: '' });
+  let references = $state<Reference[]>([...draft.references]);
+  let settings = $state<Record<SettingKey, string>>({ ...draft.settings });
   let settingKey = $state<SettingKey | null>(null);
   let settingAnchor = $state<HTMLElement | null>(null);
   let settingOpen = $state(false);
-  let suggestedKeywords = $state<SuggestedKeyword[]>([]);
+  const suggestedKeywords = $derived(gen.keywords);
   const currentOptions = $derived(SETTINGS.find((item) => item.key === settingKey)?.options ?? []);
   let settingQuery = $state('');
   // The option the arrow keys are on: moved by the arrows and by a new search, picked with Enter.
@@ -103,21 +112,35 @@
     return query ? matches : ['', ...matches];
   });
 
-  let prompt = $state('');
-  let selectedModels = $state<string[]>(models.map((item) => item.model));
-  let variants = $state(2);
-  let fast = $state(true);
-  let effort = $state('medium');
-  let working = $state(false);
-  let stopping = $state(false);
-  let previews = $state<Preview[]>([]);
-  let failureLines = $state<string[]>([]);
+  let prompt = $state(draft.prompt);
+  let selectedModels = $state<string[]>(draft.selectedModels ?? ['gpt-6-luna', 'gpt-image-2']);
+  let variants = $state(draft.variants);
+  let fast = $state(draft.fast);
+  let effort = $state(draft.effort);
   let failuresOpen = $state(false);
+  // The run lives in the store, so it goes on while this panel is closed.
+  const working = $derived(gen.working);
+  const stopping = $derived(gen.stopping);
+  const previews = $derived<Preview[]>(gen.previews);
+  const failureLines = $derived(gen.failureLines);
   // Time of the current or last run, shown beside the history button.
-  let runMs = $state(0);
-  let loadingRun = $state(0);
-  let runStart = 0;
-  let runTimer: ReturnType<typeof setInterval> | undefined;
+  const runMs = $derived(gen.runMs);
+  const loadingRun = $derived(gen.loadingRun);
+  const runSkeleton = $derived(gen.runSkeleton);
+  const history = $derived(gen.history);
+  const activeRunId = $derived(gen.activeRunId);
+
+  // What the inputs hold is kept for the next time the panel opens.
+  $effect(() => {
+    draft.prompt = prompt;
+    draft.selectedModels = [...selectedModels];
+    draft.variants = variants;
+    draft.fast = fast;
+    draft.effort = effort;
+    draft.promptModel = promptModel;
+    draft.settings = { ...settings };
+    draft.references = [...references];
+  });
 
   // Whole seconds only: "43 s", then "1m 05s", then "1h 02m 05s".
   function formatDuration(ms: number) {
@@ -129,11 +152,9 @@
     if (minutes) return `${minutes}m ${seconds}s`;
     return `${total} s`;
   }
-  let history = $state<ImageHistoryRun[]>([]);
-  let activeRunId = $state<string | null>(null);
-  let promptSuggestions = $state<string[]>([]);
-  let promptModel = $state('gpt-6-luna');
-  let suggesting = $state(false);
+  const promptSuggestions = $derived(gen.suggestions);
+  let promptModel = $state(draft.promptModel);
+  const suggesting = $derived(gen.suggesting);
   let settingsOpen = $state(false);
   let settingsTrigger = $state<HTMLElement | null>(null);
   let modelsOpen = $state(false);
@@ -173,8 +194,6 @@
 
   const variantCount = $derived(Math.max(1, Math.min(4, Math.round(variants))));
   const candidateCount = $derived(selectedModels.length * variantCount);
-  // The skeleton of a run is fixed when it starts: changing the settings only shapes the next run.
-  let runSkeleton = $state(2);
   const settingsSummary = $derived(selectedModels.map((value) => models.find((item) => item.model === value)?.label ?? value).join(', ') || 'No model');
   // Models that can write the prompt suggestions, grouped by the CLI they run through.
   const promptGroups = $derived.by(() => {
@@ -212,36 +231,19 @@
   });
 
   onMount(() => {
-    if (inTauri()) void refreshHistory();
+    if (inTauri()) void refreshHistory(true);
   });
-
-  async function refreshHistory() {
-    try {
-      history = await listImageHistory();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  }
 
   function selected() {
     return models.filter((item) => selectedModels.includes(item.model));
   }
 
   function toggleModel(model: string) {
+    if (!selectedModels.includes(model) && selectedModels.length >= MAX_IMAGE_MODELS) {
+      toast.error(`Choose at most ${MAX_IMAGE_MODELS} image models at once`);
+      return;
+    }
     selectedModels = selectedModels.includes(model) ? selectedModels.filter((value) => value !== model) : [...selectedModels, model];
-  }
-
-  async function withPreviews(images: GeneratedImage[]): Promise<Preview[]> {
-    const loaded = await Promise.all(
-      images.map(async (image) => {
-        try {
-          return { ...image, src: await readImageDataUrl(image.path) };
-        } catch {
-          return null;
-        }
-      }),
-    );
-    return loaded.filter((image): image is Preview => image !== null);
   }
 
   /** The picked settings for the backend: null for Auto. */
@@ -270,25 +272,12 @@
       toast.error('Enter an image prompt or add a reference image first');
       return;
     }
-    suggesting = true;
-    promptSuggestions = [];
-    suggestedKeywords = [];
-    try {
-      const result = await suggestImagePrompts({ prompt: prompt.trim(), model: promptModel, referencePaths: await referencePaths(), settings: settingsPayload() });
-      promptSuggestions = result.suggestions;
-      suggestedKeywords = result.keywords;
-      if (!promptSuggestions.length) toast.error('The prompt model returned no suggestions');
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      suggesting = false;
-    }
+    void runSuggest({ prompt: prompt.trim(), model: promptModel, provider: promptProvider, referencePaths, settings: settingsPayload() });
   }
 
   function useSuggestion(value: string) {
     prompt = value;
-    promptSuggestions = [];
-    suggestedKeywords = [];
+    clearSuggestions();
   }
 
   /** A suggested keyword goes to its setting when one of its options fits, otherwise it is added to the prompt. */
@@ -367,6 +356,13 @@
     void addPictures(files);
   }
 
+  function onPromptKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    if (working || suggesting || !prompt.trim() || selectedModels.length === 0) return;
+    generate();
+  }
+
   let fileInput = $state<HTMLInputElement | undefined>();
 
   function onDrop(event: DragEvent) {
@@ -376,11 +372,7 @@
     void addPictures(files);
   }
 
-  async function generate() {
-    if (!inTauri()) {
-      toast.error('Image generation needs the desktop app');
-      return;
-    }
+  function generate() {
     const choices = selected();
     if (!prompt.trim()) {
       toast.error('Write an image prompt first');
@@ -390,57 +382,11 @@
       toast.error('Choose at least one image model');
       return;
     }
-    runSkeleton = Math.max(2, Math.min(6, choices.length * variantCount));
-    working = true;
-    runStart = performance.now();
-    runMs = 0;
-    clearInterval(runTimer);
-    runTimer = setInterval(() => (runMs = performance.now() - runStart), 100);
-    stopping = false;
-    previews = [];
-    failureLines = [];
-    activeRunId = null;
-    try {
-      const result = await generateImages({ prompt, models: choices, variants: variantCount, cwd: projectPath, referencePaths: await referencePaths(), settings: settingsPayload() });
-      activeRunId = result.run_id;
-      failureLines = result.failures.map((failure) => `${failure.model} #${failure.variant}: ${failure.error}`);
-      previews = await withPreviews(result.images);
-      if (!previews.length && failureLines.length) toast.error('No image was generated. Check the details below.');
-      void refreshHistory();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      clearInterval(runTimer);
-      runMs = performance.now() - runStart;
-      working = false;
-      stopping = false;
-    }
+    const project = workspace.projects.find((item) => item.path === projectPath)?.name ?? '';
+    void startRun({ prompt, choices, variants: variantCount, cwd: projectPath, project, referencePaths, settings: settingsPayload() });
   }
 
-  async function stop() {
-    stopping = true;
-    try {
-      await stopImageGeneration();
-    } catch (error) {
-      stopping = false;
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function openRun(run: ImageHistoryRun) {
-    activeRunId = run.id;
-    failureLines = run.failures;
-    previews = [];
-    // Skeletons until the saved files are read back, so the click answers at once.
-    loadingRun = run.images.length;
-    try {
-      previews = await withPreviews(
-        run.images.map((image) => ({ model: image.model, backend: image.backend, path: image.path, variant: image.variant })),
-      );
-    } finally {
-      loadingRun = 0;
-    }
-  }
+  const stop = stopRun;
 
   function openPreview(index: number) {
     openImages(
@@ -565,12 +511,18 @@
   }
 </script>
 
+<!-- A ring that turns around a round button while its work runs, with a soft ripple; both stop for reduced motion. -->
+{#snippet busyRing()}
+  <span class="pointer-events-none absolute -inset-[2px] animate-spin rounded-full [background:conic-gradient(from_0deg,transparent_0_55%,var(--color-primary)_100%)] [mask:radial-gradient(farthest-side,transparent_calc(100%-2px),#000_calc(100%-2px))] motion-reduce:hidden" aria-hidden="true"></span>
+  <span class="pointer-events-none absolute inset-0 animate-ping rounded-full bg-primary/25 [animation-duration:1.8s] motion-reduce:hidden" aria-hidden="true"></span>
+{/snippet}
+
 <div class="flex h-full min-h-0 flex-col" role="tabpanel" aria-label="Image generator">
   <header class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-[13px]">
     <span class="grid size-7 place-items-center rounded-lg bg-primary/12 text-primary"><ZIcon zType="lucideImage" class="size-4" /></span>
     <h2 class="m-0 min-w-0 flex-1 truncate text-xs font-semibold text-foreground">Image candidates</h2>
     {#if runMs > 0}
-      <span class="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground" title="Time of the last run" aria-live="off">{formatDuration(runMs)}</span>
+      <span class="inline-flex h-7 shrink-0 items-center rounded border border-border bg-background px-2.5 text-[11px] font-medium tabular-nums text-muted-foreground" title="Time of the last run" aria-live="off">{formatDuration(runMs)}</span>
     {/if}
     <button
       type="button"
@@ -663,6 +615,7 @@
           bind:value={prompt}
           rows="2"
           aria-label="Image prompt"
+          onkeydown={onPromptKeydown}
           onpaste={onPaste}
           ondragover={(event) => event.preventDefault()}
           ondrop={onDrop}
@@ -712,15 +665,16 @@
           <div class="flex h-8 shrink-0 items-center gap-0.5 rounded-full border border-border bg-background p-0.5" role="group" aria-label="Image actions">
             <button
               type="button"
-              class="grid size-7 cursor-pointer place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+              class="relative grid size-7 cursor-pointer place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
               aria-label="AI suggestions"
               title="AI suggestions"
-              disabled={(!prompt.trim() && references.length === 0) || !promptModel}
+              disabled={(!prompt.trim() && references.length === 0) || !promptModel || working}
               aria-busy={suggesting}
               onclick={() => void suggestPrompts()}
             >
               {#if suggesting}
-                <ZIcon zType="lucideLoaderCircle" class="size-3.5 animate-spin" />
+                {@render busyRing()}
+                <ZIcon zType="lucideWandSparkles" class="relative size-3.5 text-primary" />
               {:else}
                 <ZIcon zType="lucideWandSparkles" class="size-3.5" />
               {/if}
@@ -729,13 +683,14 @@
             {#if working}
               <button
                 type="button"
-                class="grid size-7 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
+                class="relative grid size-7 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
                 aria-label="Stop generating"
                 title="Stop"
                 disabled={stopping}
                 onclick={() => void stop()}
               >
-                <svg class="size-2.5" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
+                {@render busyRing()}
+                <svg class="relative size-2.5" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
               </button>
             {:else}
               <button
@@ -743,8 +698,8 @@
                 class="grid size-7 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
                 aria-label="Generate images"
                 title="Generate {candidateCount} image candidates"
-                disabled={!prompt.trim() || selectedModels.length === 0}
-                onclick={() => void generate()}
+                disabled={!prompt.trim() || selectedModels.length === 0 || suggesting}
+                onclick={generate}
               >
                 <ZIcon zType="lucideArrowUp" class="size-3.5" />
               </button>
@@ -784,7 +739,7 @@
                       aria-haspopup="dialog"
                       aria-expanded={promptModelsOpen && promptSubProvider === group.provider}
                       data-glide-item
-                      class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {activeProvider ? 'bg-primary/10' : ''}"
+                      class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {activeProvider || (promptModelsOpen && promptSubProvider === group.provider) ? 'bg-primary/10' : ''} {promptModelsOpen && promptSubProvider === group.provider ? 'text-primary' : ''}"
                       onpointerenter={(event) => openPromptModels(group.provider, event.currentTarget)}
                       onpointerleave={closeNestedMenusSoon}
                       onfocus={(event) => openPromptModels(group.provider, event.currentTarget)}
@@ -904,7 +859,7 @@
         </ZPopover>
 
         {#if suggesting || promptSuggestions.length}
-          <div class="-mx-3 -mb-2 mt-2 flex flex-col gap-1 border-t border-border px-3 pt-2 pb-2" aria-label="Prompt suggestions">
+          <div transition:fold class="-mx-3 -mb-2 mt-2 flex flex-col gap-1 overflow-hidden border-t border-border px-3 pt-2 pb-2" aria-label="Prompt suggestions">
             <span class="px-1 text-[11px] text-muted-foreground">Suggested prompts · click to use</span>
             {#if suggesting}
               <div class="flex flex-col gap-2 px-1 py-1" role="status" aria-label="Writing prompt suggestions">
@@ -914,7 +869,7 @@
               </div>
             {:else}
               {#each promptSuggestions as suggestion (suggestion)}
-                <button type="button" class="rounded-md bg-muted/50 px-2 py-1.5 text-left text-xs leading-4 text-foreground transition-colors hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:text-primary outline-none" onclick={() => useSuggestion(suggestion)}>
+                <button in:fade={{ duration: 220 }} type="button" class="rounded-md bg-muted/50 px-2 py-1.5 text-left text-xs leading-4 text-foreground transition-colors hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:text-primary outline-none" onclick={() => useSuggestion(suggestion)}>
                   {suggestion}
                 </button>
               {/each}
@@ -999,11 +954,11 @@
             <div class="grid grid-cols-2 gap-2" aria-label="Generated image candidates">
               {#each previews as image, index (image.path)}
                 <article class="group overflow-hidden rounded-lg border border-border bg-background">
-                  <button type="button" class="block w-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Preview {image.model} #{image.variant}" onclick={() => openPreview(index)}>
-                    <img src={image.src} alt="Generated candidate" class="aspect-square w-full object-cover" />
+                  <button type="button" class="block w-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Preview {modelLabel(image.model)} #{image.variant}" onclick={() => openPreview(index)}>
+                    <img src={image.src} alt="{modelLabel(image.model)} candidate #{image.variant}" class="aspect-square w-full object-cover" />
                   </button>
                   <div class="flex items-center gap-1 px-1.5 py-1.5">
-                    <span class="min-w-0 flex-1 truncate text-[10px] text-muted-foreground" title={image.path}>{image.model} · #{image.variant}</span>
+                    <span class="min-w-0 flex-1 truncate text-[10px] text-muted-foreground" title="{modelLabel(image.model)} · #{image.variant} — {image.path}">{modelLabel(image.model)} · #{image.variant}</span>
                     <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Use image in chat" title="Use image in chat" onclick={() => useInChat(image)}>
                       <ZIcon zType="lucideMessageSquarePlus" class="size-3.5" />
                     </button>

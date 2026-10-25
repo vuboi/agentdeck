@@ -1,7 +1,7 @@
 // State and requests of the AgentDeck browser (see src-tauri/src/browser.rs). Every tab is its own webview; a script
 // injected into each page reports console, network and navigation, and answers DOM / screenshot / element requests.
 import { listenToNetwork } from './devtools-net.svelte';
-import { inTauri } from './history';
+import { inTauri, isPreviewCopy } from './history';
 import { layout } from './layout.svelte';
 
 export type Device = 'desktop' | 'tablet' | 'mobile';
@@ -106,7 +106,7 @@ let listening = false;
 export async function listenToPage() {
   if (listening || !inTauri()) return;
   listening = true;
-  const { listen } = await import('@tauri-apps/api/event');
+  const { listen } = await import('./tauri-event');
   void listenToNetwork();
   // The agent asked to open an address (browser_open): the same as a link opened in AgentDeck.
   await listen<{ url: string; newTab?: boolean }>('agent-open', ({ payload }) => openForAgent(payload.url, payload.newTab === true));
@@ -367,7 +367,8 @@ export const hideBrowser = () => call('browser_hide');
 /** The panel is not on screen: the front page keeps running off-screen (a hidden page stops drawing and cannot be photographed). */
 export const parkBrowser = () => call('browser_park').catch(() => {});
 /** At start-up (also after F5): closes the pages a previous load of the window left running above it. */
-export const resetBrowser = () => (inTauri() ? call('browser_reset').catch(() => {}) : Promise.resolve());
+// Not from the Preview's own copy of the app: it would close the very pages it is shown in.
+export const resetBrowser = () => (inTauri() && !isPreviewCopy() ? call('browser_reset').catch(() => {}) : Promise.resolve());
 /** A picture of the front page taken by the engine (PNG data URL). */
 export const capturePage = () => call<string>('browser_capture', { tab: activeTab().id });
 export const zoomBrowser = (factor: number) => call('browser_zoom', { tab: activeTab().id, factor });
@@ -419,11 +420,22 @@ export async function elementAt(x: number, y: number): Promise<PickedElement | n
   return report.element;
 }
 
-/** A PNG of one element of a tab, cut from the page at its box. Undefined when the page cannot be captured. */
+/** A PNG of one element of a tab, cut from the page at its box. Undefined when the page cannot be captured (or does not answer in time): the element is then added without a picture. */
 export async function captureElement(tab: string, box: PickedElement['box']): Promise<string | undefined> {
   try {
     const { invoke } = await import('@tauri-apps/api/core');
-    return await invoke<string>('browser_element_capture', { tab, x: box.x, y: box.y, w: box.w, h: box.h });
+    const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 5000));
+    return await Promise.race([invoke<string>('browser_element_capture', { tab, x: box.x, y: box.y, w: box.w, h: box.h }), timeout]);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A PNG of the whole page as it is now, or undefined when it cannot be captured (or does not answer in time). */
+export async function capturePageIfPossible(): Promise<string | undefined> {
+  try {
+    const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 5000));
+    return await Promise.race([capturePage(), timeout]);
   } catch {
     return undefined;
   }

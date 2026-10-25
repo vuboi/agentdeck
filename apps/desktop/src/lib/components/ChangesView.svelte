@@ -191,7 +191,11 @@
     </div>
   {:else}
     {#if changes.length === 0 && !loaded}
-      <!-- git has not answered yet: nothing to show, and no loading note for a read this short. -->
+      <!-- git has not answered yet: a spinner and a line, centred, so the pane does not look empty or broken meanwhile. -->
+      <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground" role="status" aria-label="Loading changes">
+        <ZIcon zType={icon('lucideLoaderCircle')} zSize="28" class="size-7 animate-spin text-primary" />
+        <p class="m-0">Loading changes…</p>
+      </div>
     {:else if changes.length === 0}
       <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
         <ZIcon zType={icon('lucideGitCompare')} zSize="28" class="size-7 opacity-60" />

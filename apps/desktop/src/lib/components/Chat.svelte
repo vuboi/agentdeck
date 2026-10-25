@@ -3,6 +3,7 @@
   import { revealTab } from '../tab-strip';
   import { customProviderName, modelLabel } from '../models.svelte';
   import { tick, untrack } from 'svelte';
+  import { fly } from 'svelte/transition';
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
   import { layout } from '../layout.svelte';
   import { showSession } from '../content-tabs.svelte';
@@ -12,7 +13,7 @@
   import { copyMessage } from '../attachments';
   import { openSelectionMenu } from '../selection-menu.svelte';
   import FileChip from './FileChip.svelte';
-  import { activeSession, AGENTS, answerPermission, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, newSession, openTranscript, pendingProject, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, answerPermission, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, newSession, openTranscript, pendingProject, releaseReplyRender, replyBlockRendered, workspace } from '../sessions.svelte';
   import { ticker } from '../clock.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
@@ -26,6 +27,23 @@
   import MessageFooter from './MessageFooter.svelte';
   import type { Segment } from '../blocks';
   import type { Message } from '../mock';
+  import { listen } from '../tauri-event';
+
+  type ComputerApproval = { id: string; chat: string; tool: string; summary: string };
+  let computerApprovals = $state<ComputerApproval[]>([]);
+  $effect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<ComputerApproval>('computer-use-approval', (event) => {
+      computerApprovals = [...computerApprovals, event.payload];
+    }).then((stop) => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten?.(); };
+  });
+  async function answerComputerApproval(request: ComputerApproval, allow: boolean) {
+    computerApprovals = computerApprovals.filter((item) => item.id !== request.id);
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('computer_use_approval', { id: request.id, allow }).catch(() => {});
+  }
 
   // Editing one of your messages in place (ChatGPT-style): Send replaces it and what came after it.
   let editingId = $state<string | null>(null);
@@ -68,6 +86,17 @@
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { costParts, estimateCost, shortCount, totalTokens, usd } from '../usage';
   import PermissionCard from './PermissionCard.svelte';
+  import QuestionCard from './QuestionCard.svelte';
+  import { parseQuestions } from '../questions';
+
+  let renderedSession = workspace.activeId;
+  $effect(() => {
+    const current = workspace.activeId;
+    if (current === renderedSession) return;
+    const previous = renderedSession;
+    renderedSession = current;
+    untrack(() => releaseReplyRender(previous));
+  });
   import Composer from './Composer.svelte';
   import ToolbarActions from './ToolbarActions.svelte';
   import FileView from './FileView.svelte';
@@ -317,18 +346,20 @@
   // A chat whose tab was closed and is opened again starts over too: at its end, with only its newest rows.
   const tabOpen = $derived(contentTabs.tabs.some((tab) => tab.kind === 'chat' && tab.sessionId === workspace.activeId));
   const openKey = $derived(`${workspace.activeId}|${workspace.sessions.some((item) => item.id === workspace.activeId) ? 'found' : 'missing'}|${tabOpen ? 'tab' : 'no tab'}`);
-  // Where each chat was being read when it was left (the message at the top of the view, and how far from the top of
-  // the view it sat). Used when coming back from a child chat with the Back button, which must not jump to the end.
-  const readingAt = new Map<string, { id: string; offset: number }>();
+  // Where each chat was being read when it was left (the message at the top of the view, how far from the top of the
+  // view it sat, and whether it was at the end). Kept while the app is open, whatever the chat does meanwhile (running,
+  // stopped, idle): coming back puts the view where it was. A chat left at its end opens at its end again, so the newest
+  // lines show; the Back button of a child chat always returns to the place.
+  const readingAt = new Map<string, { id: string; offset: number; atEnd: boolean }>();
   let shownSession = '';
   let restoreFor = '';
-  let restoreTarget: { id: string; offset: number } | null = null;
+  let restoreTarget: { id: string; offset: number; atEnd: boolean } | null = null;
   function rememberReading(sessionId: string) {
     if (!sessionId || !viewportEl || chat.messages.length === 0) return;
     const top = viewportEl.getBoundingClientRect().top;
     const first = [...viewportEl.querySelectorAll<HTMLElement>('[role="log"] > div[data-index]')].find((row) => row.getBoundingClientRect().bottom > top + 1);
     const message = first ? chat.messages[Number(first.dataset.index)] : undefined;
-    if (first && message) readingAt.set(sessionId, { id: message.id, offset: Math.round(first.getBoundingClientRect().top - top) });
+    if (first && message) readingAt.set(sessionId, { id: message.id, offset: Math.round(first.getBoundingClientRect().top - top), atEnd: following });
   }
   function backToParent(parentId: string) {
     restoreFor = parentId;
@@ -340,7 +371,8 @@
       const id = workspace.activeId;
       if (shownSession && shownSession !== id) rememberReading(shownSession);
       shownSession = id;
-      restoreTarget = restoreFor === id ? (readingAt.get(id) ?? null) : null;
+      const left = readingAt.get(id);
+      restoreTarget = left && (restoreFor === id || !left.atEnd) ? left : null;
       restoreFor = '';
       revealed = false;
       setEagerColour(true);
@@ -393,6 +425,25 @@
       const index = message.blocks.findIndex((block) => block.kind === 'permission' && block.state === 'pending');
       const block = message.blocks[index];
       if (block?.kind === 'permission') return { block, messageId: message.id, index, agent: message.agent ?? activeSession()?.source ?? activeSession()?.agent };
+    }
+    return null;
+  });
+  const pendingQuestion = $derived.by(() => {
+    let lastUser = -1;
+    for (let index = chat.messages.length - 1; index >= 0; index--) {
+      if (chat.messages[index].role === 'user') {
+        lastUser = index;
+        break;
+      }
+    }
+    for (let index = chat.messages.length - 1; index > lastUser; index--) {
+      const message = chat.messages[index];
+      if (message.role !== 'assistant' || message.live) continue;
+      for (const block of message.blocks) {
+        if (block.kind !== 'response') continue;
+        const questions = parseQuestions(block.text).questions;
+        if (questions.length) return { messageId: message.id, questions, agent: message.agent ?? activeSession()?.source ?? activeSession()?.agent };
+      }
     }
     return null;
   });
@@ -480,7 +531,7 @@
 <main class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden" aria-label="Conversation">
   <!-- With tools open, the window controls sit over the tools header, so this row only needs a small inset. -->
   <!-- Above the conversation body: its turn ruler (ZChatNavigator) is taller than the body and must not paint over the tabs. -->
-  <header class="relative z-40 flex h-10 shrink-0 items-center border-b border-border bg-background {layout.toolsVisible ? 'pr-[7px]' : 'pr-[106px]'}" data-tauri-drag-region>
+  <header class="relative z-40 flex h-10 shrink-0 items-center border-b border-border bg-background {layout.toolsVisible ? 'pr-[7px]' : 'pr-[106px]'}" data-tauri-drag-region="deep">
     <!-- Browser-style tabs: chats and files side by side, each with a close button; + starts a new chat.
          No scrollbar: when the tabs overflow, an arrow opens the full list. -->
     {#if layout.sidebarHidden || layout.sidebarCollapsed}
@@ -617,24 +668,28 @@
 
     <!-- Only while scrolled up: at the bottom there is nothing to jump to, running or not. -->
     {#if !atEnd}
-      <ZButton
-        zWave={false}
-        zType="outline"
-        class="group/jump absolute bottom-3 left-1/2 z-20 size-8 -translate-x-1/2 rounded-full bg-card! p-0 shadow-md"
-        aria-label="Scroll to latest"
-        title="Scroll to latest"
-        onclick={() => ((following = true), $virtualizer.scrollToEnd())}
-      >
-        <!-- Own grid so the spinner and the arrow sit dead centre; the button's inline content box drifted down-right. -->
-        <span class="grid size-full place-items-center">
-          {#if running}
-            <span class="group-hover/jump:hidden grid place-items-center"><ZLoading zLoading zSpinner={LOADER.scroll} zSize="xs" zColor="primary" /></span>
-            <ZIcon zType="lucideArrowDown" class="hidden size-4 group-hover/jump:block" />
-          {:else}
-            <ZIcon zType="lucideArrowDown" class="size-4" />
-          {/if}
-        </span>
-      </ZButton>
+      <!-- The wrapper carries the entrance (it rises into place while it fades in, and goes the same way); the button inside keeps its own look. -->
+      <div transition:fly={{ y: 10, duration: 200 }} class="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center">
+        <ZButton
+          zWave={false}
+          zType="outline"
+          class="group/jump pointer-events-auto size-8 rounded-full bg-card! p-0 shadow-md"
+          aria-label="Scroll to latest"
+          title="Scroll to latest"
+          onclick={() => ((following = true), $virtualizer.scrollToEnd())}
+        >
+          <!-- Own grid so the spinner and the arrow sit dead centre; the button's inline content box drifted down-right. -->
+          <span class="grid size-full place-items-center">
+            {#if running}
+              <!-- Both sit in the same cell and trade places on hover: the spinner fades and shrinks out, the arrow grows in. -->
+              <span class="col-start-1 row-start-1 grid place-items-center transition duration-200 ease-out group-hover/jump:scale-50 group-hover/jump:opacity-0 motion-reduce:transition-none"><ZLoading zLoading zSpinner={LOADER.scroll} zSize="xs" zColor="primary" /></span>
+              <ZIcon zType="lucideArrowDown" class="col-start-1 row-start-1 size-4 scale-50 opacity-0 transition duration-200 ease-out group-hover/jump:scale-100 group-hover/jump:opacity-100 motion-reduce:transition-none" />
+            {:else}
+              <ZIcon zType="lucideArrowDown" class="size-4" />
+            {/if}
+          </span>
+        </ZButton>
+      </div>
     {/if}
 
     <!-- Same fade as ShowMore: messages dissolve into the page just above the composer instead of being cut. -->
@@ -749,7 +804,7 @@
                     </div>
                   {:else}
                     {#if words.length > 0}
-                      <div class="flex max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 py-2.5 text-sm {theme.chatLayout === 'split' ? 'rounded-br-md' : 'rounded-bl-md'}">
+                      <div class="flex max-w-[85%] flex-col gap-2 rounded-2xl bg-muted p-3 text-sm {theme.chatLayout === 'split' ? 'rounded-br-md' : 'rounded-bl-md'}">
                         {#each words as block}
                           <ChatBlock {block} fade="var(--muted)" />
                         {/each}
@@ -814,14 +869,14 @@
                         <!-- The newest group of a running reply is the live line; it carries the only loader. -->
                         <!-- Step lines in a row sit close together, like one list. -->
                         <div class="{afterSteps(parts, position) ? '-mt-1.5' : ''} {parts[position + 1]?.kind === 'block' ? '-mb-0.5' : ''}">
-                          <CommandGroup items={segment.items} thoughts={segment.thoughts} live={false} startedAt={message.startedAt} />
+                          <CommandGroup items={segment.items} thoughts={segment.thoughts} live={false} startedAt={message.startedAt} stateKey="{workspace.activeId}:{message.id}:{position}" />
                         </div>
                       {:else if segment.kind === 'plan'}
                         <PlanCard items={segment.items} />
                       {:else if segment.kind === 'tasks'}
                         <TaskCards items={segment.items} />
                       {:else}
-                        <ChatBlock block={segment.block} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} answered={chat.messages.at(-1)?.id !== message.id} />
+                        <ChatBlock block={segment.block} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} onrendered={segment.block.kind === 'response' ? () => replyBlockRendered(workspace.activeId, message.id, message.blocks.indexOf(segment.block)) : undefined} answered={!message.live && pendingQuestion?.messageId !== message.id} showQuestions={!message.live && pendingQuestion?.messageId !== message.id} />
                       {/if}
                     {/each}
                     <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
@@ -855,9 +910,29 @@
     <div class="relative z-30 shrink-0 bg-background px-2 pt-4 pb-2 min-[720px]:px-6">
       <div class="mx-auto w-full min-w-0 max-w-3xl px-0 min-[720px]:min-w-[440px] min-[720px]:pr-6 min-[720px]:pl-12">
         <!-- A pending approval sits right above the input, where the eye already is. -->
+        {#each computerApprovals as request (request.id)}
+          <section class="mb-2 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3" aria-label="Computer use approval request">
+            <div class="flex items-start gap-2">
+              <ZIcon zType="lucideMonitor" class="mt-0.5 size-4 shrink-0 text-amber-500" />
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-semibold">{request.tool} · {request.chat === workspace.activeId ? 'This chat' : 'Another chat'}</div>
+                <p class="mt-1 break-words text-xs text-muted-foreground">{request.summary}</p>
+              </div>
+            </div>
+            <div class="mt-2 flex justify-end gap-2">
+              <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 px-3 text-xs" onclick={() => void answerComputerApproval(request, false)}>Deny</ZButton>
+              <ZButton zWave={false} zType="default" zSize="sm" class="h-7 px-3 text-xs" onclick={() => void answerComputerApproval(request, true)}>Approve once</ZButton>
+            </div>
+          </section>
+        {/each}
         {#if pendingApproval}
           <div class="mb-2">
             <PermissionCard block={pendingApproval.block} agent={pendingApproval.agent} onanswer={(answer) => answerPermission(pendingApproval.messageId, pendingApproval.index, answer)} />
+          </div>
+        {/if}
+        {#if pendingQuestion}
+          <div class="mb-2">
+            <QuestionCard questions={pendingQuestion.questions} from={pendingQuestion.agent ? agentName(pendingQuestion.agent) : ''} onsubmit={(text) => answerQuestions(workspace.activeId, text)} />
           </div>
         {/if}
         <!-- A flow step that needs approval waits in its own chat: say which, and take the user there. -->

@@ -45,7 +45,7 @@ export function useFakeUpdate() {
   updater.error = '';
   updater.status = 'available';
 }
-const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+import { inTauri } from './history';
 
 /** Look for an update. `quiet` keeps a failed check silent (the background checks). Returns true if one is waiting. */
 export async function checkForUpdate(quiet = false): Promise<boolean> {

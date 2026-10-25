@@ -196,6 +196,15 @@
   };
 
   // The inspector: the element under the pointer is outlined live with its tag and size; a click picks it.
+  // The full-screen wrapper of a drawer or dialog (its pane, container or backdrop) is not what anyone points at:
+  // the drawer or dialog itself is picked instead, so its markup comes back, not the whole screen.
+  const inspectable = (element) => {
+    const wrapper = element && element.closest && element.closest('.z-overlay-container, .z-overlay-backdrop, .z-overlay-pane');
+    if (!wrapper || element.closest('[role="dialog"], [role="alertdialog"]')) return element;
+    const panel = (wrapper.closest('.z-overlay-pane') || wrapper).querySelector('[role="dialog"], [role="alertdialog"]');
+    return panel || element;
+  };
+  const under = (x, y) => inspectable(document.elementFromPoint(x, y));
   let picker = null;
   const stopPicking = () => {
     if (!picker) return;
@@ -215,7 +224,7 @@
     document.documentElement.appendChild(overlay);
     let target = null;
     const move = (event) => {
-      target = document.elementFromPoint(event.clientX, event.clientY);
+      target = under(event.clientX, event.clientY);
       if (!target || target === overlay) return;
       const rect = target.getBoundingClientRect();
       Object.assign(overlay.style, { left: rect.x + 'px', top: Math.max(0, rect.y) + 'px', width: rect.width + 'px', height: rect.height + 'px' });
@@ -488,7 +497,7 @@
   const annInUi = (event) => event.target && event.target.closest && event.target.closest('[data-ann-ui]');
   const annAt = (event) => ({ x: event.pageX, y: event.pageY });
   const annElement = (event) => {
-    const target = document.elementFromPoint(event.clientX, event.clientY);
+    const target = under(event.clientX, event.clientY);
     return target && target !== document.documentElement && target !== document.body ? target : null;
   };
   const annRect = (element) => {

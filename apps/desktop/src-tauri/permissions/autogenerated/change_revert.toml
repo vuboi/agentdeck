@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-change-revert"
+description = "Enables the change_revert command without any pre-configured scope."
+commands.allow = ["change_revert"]
+
+[[permission]]
+identifier = "deny-change-revert"
+description = "Denies the change_revert command without any pre-configured scope."
+commands.deny = ["change_revert"]

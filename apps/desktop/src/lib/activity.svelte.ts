@@ -249,7 +249,7 @@ let listeningToLogs: Promise<void> | null = null;
 /** Calls `changed` whenever the log of the server on `port` grows. Returns the function that stops it. */
 export function watchServerLog(port: number, changed: () => void): () => void {
   if (!inTauri()) return () => {};
-  listeningToLogs ??= import('@tauri-apps/api/event').then(async ({ listen }) => {
+  listeningToLogs ??= import('./tauri-event').then(async ({ listen }) => {
     await listen<{ port: number }>('server-log', ({ payload }) => {
       for (const watcher of logWatchers.get(payload.port) ?? []) watcher();
     });
@@ -288,6 +288,21 @@ export function trackRun(sessionId: string, title: string, project: string, inpu
       item.output ||= output;
       record(item);
     });
+  };
+}
+
+/**
+ * An image generation run, which goes on in the background while its panel is closed. It shows as running in the
+ * Tasks panel and, once it ends, is written to the Audit log. Returns the function that ends it.
+ */
+export function trackImageRun(project: string, prompt: string, models: string) {
+  activity.push({ key: `image:${++calls}`, sessionId: '', title: 'Image generator', project, name: 'Image generation', input: `${models}\n${prompt}`.slice(0, 200), background: true, status: 'running', startedAt: Date.now() });
+  const item = activity[activity.length - 1];
+  return (status: 'ok' | 'fail' | 'stopped', output: string) => {
+    item.status = status;
+    item.output = output.slice(0, OUTPUT_CAP);
+    item.endedAt = Date.now();
+    record(item);
   };
 }
 

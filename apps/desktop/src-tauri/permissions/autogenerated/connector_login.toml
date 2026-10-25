@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-connector-login"
+description = "Enables the connector_login command without any pre-configured scope."
+commands.allow = ["connector_login"]
+
+[[permission]]
+identifier = "deny-connector-login"
+description = "Denies the connector_login command without any pre-configured scope."
+commands.deny = ["connector_login"]

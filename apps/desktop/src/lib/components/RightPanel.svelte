@@ -11,7 +11,7 @@
 
 <aside class="relative flex h-full min-w-0 flex-col bg-sidebar" aria-label="Tools panel">
   <!-- Header row: the tool tabs only, left-aligned; the window controls sit over the right edge. -->
-  <div class="flex h-10 shrink-0 items-center border-b border-border pr-33 pl-1.5" data-tauri-drag-region>
+  <div class="flex h-10 shrink-0 items-center border-b border-border pr-33 pl-1.5" data-tauri-drag-region="deep">
     <div class="flex min-w-0 flex-1 justify-start" bind:clientWidth={tabsWidth}>
       <ToolTabs room={tabsWidth ? tabsWidth - 4 : undefined} />
     </div>

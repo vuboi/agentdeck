@@ -8,7 +8,12 @@ use ag_adapters::agent::opencode::OpenCode;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
 use ag_adapters::agent::{AgentEvent, TurnRequest};
 
-async fn turn(provider: &OpenCode, prompt: &str, session: Option<String>, cwd: &std::path::Path) -> Vec<AgentEvent> {
+async fn turn(
+    provider: &OpenCode,
+    prompt: &str,
+    session: Option<String>,
+    cwd: &std::path::Path,
+) -> Vec<AgentEvent> {
     let request = TurnRequest {
         prompt: prompt.into(),
         resume: session.is_some(),
@@ -21,24 +26,39 @@ async fn turn(provider: &OpenCode, prompt: &str, session: Option<String>, cwd: &
         owner: None,
     };
     let mut events = Vec::new();
-    drive_turn(resolve_binary(provider), provider, &request, |event| events.push(event)).await;
+    drive_turn(resolve_binary(provider), provider, &request, |event| {
+        events.push(event)
+    })
+    .await;
     events
 }
 
 fn summary(events: &[AgentEvent]) -> String {
-    let count = |matching: fn(&AgentEvent) -> bool| events.iter().filter(|event| matching(event)).count();
+    let count =
+        |matching: fn(&AgentEvent) -> bool| events.iter().filter(|event| matching(event)).count();
     let text: String = events
         .iter()
-        .filter_map(|event| if let AgentEvent::Delta { text } = event { Some(text.as_str()) } else { None })
+        .filter_map(|event| {
+            if let AgentEvent::Delta { text } = event {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        })
         .collect();
     let calls = count(|event| matches!(event, AgentEvent::ToolCall { .. }));
     let results = count(|event| matches!(event, AgentEvent::ToolResult { .. }));
-    let usage = events.iter().any(|event| matches!(event, AgentEvent::Usage { .. }));
+    let usage = events
+        .iter()
+        .any(|event| matches!(event, AgentEvent::Usage { .. }));
     let session = events.iter().find_map(|event| match event {
         AgentEvent::Done { session_id, .. } => session_id.clone(),
         _ => None,
     });
-    format!("answer {:?}, {calls} call(s), {results} result(s), usage {usage}, session {session:?}", text.trim())
+    format!(
+        "answer {:?}, {calls} call(s), {results} result(s), usage {usage}, session {session:?}",
+        text.trim()
+    )
 }
 
 #[tokio::main]
@@ -47,14 +67,22 @@ async fn main() {
     std::fs::create_dir_all(&cwd).expect("temp folder");
     let provider = OpenCode::default();
     println!("binary: {:?}", resolve_binary(&provider));
-    let models = ag_adapters::models::opencode(&ag_adapters::agent::opencode::models_listing(resolve_binary(&provider)));
+    let models = ag_adapters::models::opencode(&ag_adapters::agent::opencode::models_listing(
+        resolve_binary(&provider),
+    ));
     println!(
         "models: {} (first: {:?})",
         models.len(),
         models.first().map(|model| (&model.value, &model.label))
     );
 
-    let first = turn(&provider, "Remember the word kiwi. Reply only: ok", None, &cwd).await;
+    let first = turn(
+        &provider,
+        "Remember the word kiwi. Reply only: ok",
+        None,
+        &cwd,
+    )
+    .await;
     println!("turn 1: {}", summary(&first));
     let Some(session) = first.iter().find_map(|event| match event {
         AgentEvent::Done { session_id, .. } => session_id.clone(),
@@ -63,6 +91,42 @@ async fn main() {
         panic!("no session id to resume: {first:?}");
     };
 
-    println!("turn 2: {}", summary(&turn(&provider, "What word did I ask you to remember? One word.", Some(session.clone()), &cwd).await));
-    println!("turn 3: {}", summary(&turn(&provider, "Run the shell command 'echo hi' and then say done.", Some(session), &cwd).await));
+    println!(
+        "turn 2: {}",
+        summary(
+            &turn(
+                &provider,
+                "What word did I ask you to remember? One word.",
+                Some(session.clone()),
+                &cwd
+            )
+            .await
+        )
+    );
+    println!(
+        "turn 3: {}",
+        summary(
+            &turn(
+                &provider,
+                "Run the shell command 'echo hi' and then say done.",
+                Some(session.clone()),
+                &cwd
+            )
+            .await
+        )
+    );
+    // Shell characters are the reason the prompt goes in on stdin: as an argument to the Windows `.cmd` shim they
+    // would be re-parsed as a second command.
+    println!(
+        "turn 4: {}",
+        summary(
+            &turn(
+                &provider,
+                "Repeat this line exactly: a & b | c > d",
+                Some(session),
+                &cwd
+            )
+            .await
+        )
+    );
 }

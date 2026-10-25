@@ -57,7 +57,7 @@
       innerW = window.innerWidth;
     };
     let stop: (() => void) | undefined;
-    if ('__TAURI_INTERNALS__' in window) {
+    if (inTauri()) {
       void import('@tauri-apps/api/window').then(({ getCurrentWindow }) =>
         getCurrentWindow()
           .onResized(() => {
@@ -72,7 +72,7 @@
   const narrow = $derived(innerW < 720);
   const showSidebar = $derived(!narrow && !layout.sidebarCollapsed);
   const showZones = $derived(innerW >= 1000);
-  const showTools = $derived(layout.toolsOpen && innerW >= 1000);
+  const showTools = $derived(layout.toolsOpen && !narrow);
 
   $effect(() => {
     layout.toolsVisible = showTools;
@@ -94,7 +94,7 @@
   onMount(() => {
     if (!import.meta.env.DEV || !inTauri()) return;
     let stop: (() => void) | undefined;
-    void import('@tauri-apps/api/event').then(({ listen }) =>
+    void import('../lib/tauri-event').then(({ listen }) =>
       listen<string>('dev-preview', ({ payload }) => {
         const [address, device, then] = payload.split('|');
         if (device === 'mobile' || device === 'tablet') browser.device = device;

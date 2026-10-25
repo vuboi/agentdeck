@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tray-update-recent"
+description = "Enables the tray_update_recent command without any pre-configured scope."
+commands.allow = ["tray_update_recent"]
+
+[[permission]]
+identifier = "deny-tray-update-recent"
+description = "Denies the tray_update_recent command without any pre-configured scope."
+commands.deny = ["tray_update_recent"]

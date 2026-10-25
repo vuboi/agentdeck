@@ -128,6 +128,15 @@
   }
   // App updates: checked in the background; the button next to Settings shows a dot when one is waiting.
   let updateOpen = $state(false);
+  // The recents drawer (folded sidebar, narrow window) goes away once Settings or the update dialog is used. The update
+  // dialog belongs to this sidebar, so the drawer waits until it is closed: closing it earlier would take the dialog along.
+  const closeDrawer = () => (layout.sidebarDrawer = false);
+  let updateWasOpen = false;
+  $effect(() => {
+    const open = updateOpen;
+    if (updateWasOpen && !open) closeDrawer();
+    updateWasOpen = open;
+  });
   $effect(() => startUpdateChecks());
   // `pnpm dev:update`: a pretend release is waiting (the button shows its dot); the dialog opens when the button is clicked.
   $effect(() => {
@@ -142,9 +151,12 @@
       const [found] = await Promise.all([checkForUpdate(), new Promise((resolve) => setTimeout(resolve, 900))]);
       spinning = false;
       if (found) updateOpen = true;
-      else if (updater.status === 'error') toast.error(`Could not check for updates: ${updater.error}`);
-      else if (updater.error === 'none') toast.info('No update has been published yet');
-      else toast.success('AgentDeck is up to date');
+      else {
+        closeDrawer();
+        if (updater.status === 'error') toast.error(`Could not check for updates: ${updater.error}`);
+        else if (updater.error === 'none') toast.info('No update has been published yet');
+        else toast.success('AgentDeck is up to date');
+      }
     } else updateOpen = true;
   }
   function toggleMore(key: string) {
@@ -655,7 +667,7 @@
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 pl-3" data-tauri-drag-region>
     <Logo class="size-5" />
     <span class="text-xs font-semibold" data-tauri-drag-region>AgentDeck</span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-7! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : (layout.sidebarCollapsed = true))}>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-7! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : layout.sidebarCollapsed && layout.sidebarDrawer ? ((layout.sidebarDrawer = false), (layout.sidebarCollapsed = false)) : (layout.sidebarCollapsed = true))}>
       <ZIcon zType={'lucidePanelLeft' as ZIconName} class="size-3.5" />
     </ZButton>
   </div>
@@ -740,8 +752,7 @@
                 onclick={(event) => {
                   event.stopPropagation();
                   if (key === 'projects') void pickProject();
-                  else if (key === 'chats') newSession();
-                  else newChat();
+                  else addSession(NO_PROJECT);
                 }}
               >
                 <ZIcon zType={key === 'projects' ? ('lucideFolderPlus' as ZIconName) : 'lucidePlus'} class="size-3.5" />
@@ -821,7 +832,7 @@
       <ZIcon zType={(turning ? 'lucideLoaderCircle' : 'lucideArrowDownToLine') as ZIconName} class="size-3.5 {turning ? 'animate-spin' : ''}" />
       {#if updater.status === 'available' || updater.status === 'downloading'}<span class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"></span>{/if}
     </ZButton>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="relative h-6 w-6" aria-label="Settings (Ctrl+,)" title="Settings (Ctrl+,)" onclick={() => openSettings()}>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="relative h-6 w-6" aria-label="Settings (Ctrl+,)" title="Settings (Ctrl+,)" onclick={() => (closeDrawer(), openSettings())}>
       <ZIcon zType={'lucideSettings' as ZIconName} class="size-3.5" />
       {#if limitWarnings.length > 0}<span class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-destructive" aria-label="Near a usage limit"></span>{/if}
     </ZButton>

@@ -77,23 +77,47 @@ pub struct McpOverview {
 }
 
 fn strings(value: &Value) -> Vec<String> {
-    value.as_array().map(|list| list.iter().filter_map(|item| item.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+    value
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn pairs(value: &Value) -> BTreeMap<String, String> {
     value
         .as_object()
-        .map(|map| map.iter().map(|(key, value)| (key.clone(), value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string()))).collect())
+        .map(|map| {
+            map.iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        value
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| value.to_string()),
+                    )
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 /// `{ "mcpServers": { name: {...} } }` style maps (Claude's `.claude.json`, agy's `mcp_config.json`, Codex's TOML).
 fn servers_in(map: &Value, agent: &'static str, scope: &str, source: &str) -> Vec<Raw> {
-    let Some(object) = map.as_object() else { return Vec::new() };
+    let Some(object) = map.as_object() else {
+        return Vec::new();
+    };
     object
         .iter()
         .map(|(name, item)| {
-            let url = item["url"].as_str().or_else(|| item["serverUrl"].as_str()).map(str::to_owned);
+            let url = item["url"]
+                .as_str()
+                .or_else(|| item["serverUrl"].as_str())
+                .map(str::to_owned);
             let transport = match item["type"].as_str() {
                 Some(kind) => kind.to_owned(),
                 None if url.is_some() => "http".to_owned(),
@@ -110,7 +134,8 @@ fn servers_in(map: &Value, agent: &'static str, scope: &str, source: &str) -> Ve
                 agent,
                 scope: scope.to_owned(),
                 source: source.to_owned(),
-                disabled: item["disabled"].as_bool().unwrap_or(false) || item["enabled"].as_bool() == Some(false),
+                disabled: item["disabled"].as_bool().unwrap_or(false)
+                    || item["enabled"].as_bool() == Some(false),
             }
         })
         .collect()
@@ -120,35 +145,65 @@ pub(crate) fn read_all() -> Vec<Raw> {
     let mut found = Vec::new();
     if let Ok(home) = crate::home_folder() {
         let claude = home.join(".claude.json");
-        if let Ok(json) = std::fs::read_to_string(&claude).map_err(drop).and_then(|text| serde_json::from_str::<Value>(&text).map_err(drop)) {
+        if let Ok(json) = std::fs::read_to_string(&claude)
+            .map_err(drop)
+            .and_then(|text| serde_json::from_str::<Value>(&text).map_err(drop))
+        {
             let source = claude.to_string_lossy().into_owned();
             found.extend(servers_in(&json["mcpServers"], "claude", "user", &source));
             if let Some(projects) = json["projects"].as_object() {
                 for (path, project) in projects {
-                    found.extend(servers_in(&project["mcpServers"], "claude", &format!("project: {path}"), &source));
+                    found.extend(servers_in(
+                        &project["mcpServers"],
+                        "claude",
+                        &format!("project: {path}"),
+                        &source,
+                    ));
                 }
             }
         }
         let agy = home.join(".gemini").join("config").join("mcp_config.json");
-        if let Ok(json) = std::fs::read_to_string(&agy).map_err(drop).and_then(|text| serde_json::from_str::<Value>(&text).map_err(drop)) {
-            found.extend(servers_in(&json["mcpServers"], "antigravity", "user", &agy.to_string_lossy()));
+        if let Ok(json) = std::fs::read_to_string(&agy)
+            .map_err(drop)
+            .and_then(|text| serde_json::from_str::<Value>(&text).map_err(drop))
+        {
+            found.extend(servers_in(
+                &json["mcpServers"],
+                "antigravity",
+                "user",
+                &agy.to_string_lossy(),
+            ));
         }
     }
     let codex = codex_home().join("config.toml");
     if let Ok(text) = std::fs::read_to_string(&codex) {
-        if let Some(json) = toml::from_str::<toml::Value>(&text).ok().and_then(|value| serde_json::to_value(value).ok()) {
-            found.extend(servers_in(&json["mcp_servers"], "codex", "user", &codex.to_string_lossy()));
+        if let Some(json) = toml::from_str::<toml::Value>(&text)
+            .ok()
+            .and_then(|value| serde_json::to_value(value).ok())
+        {
+            found.extend(servers_in(
+                &json["mcp_servers"],
+                "codex",
+                "user",
+                &codex.to_string_lossy(),
+            ));
         }
     }
     found
 }
 
 fn bridge_url() -> Option<String> {
-    std::env::var("AGENTDECK_BRIDGE").ok().map(|base| format!("{}/mcp", base.trim_end_matches('/')))
+    std::env::var("AGENTDECK_BRIDGE")
+        .ok()
+        .map(|base| format!("{}/mcp", base.trim_end_matches('/')))
 }
 
 fn is_own(raw: &Raw) -> bool {
-    raw.name == "agentdeck" && raw.url.as_deref().is_some_and(|url| url.starts_with("http://127.0.0.1:") && url.ends_with("/mcp"))
+    raw.name == "agentdeck"
+        && raw
+            .url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("http://127.0.0.1:") && url.ends_with("/mcp"))
 }
 
 /// The same server in several agents' configs becomes one row with all of them.
@@ -190,7 +245,10 @@ fn merge(raws: &[Raw]) -> Vec<McpEntry> {
 pub async fn mcp_list() -> McpOverview {
     tauri::async_runtime::spawn_blocking(|| {
         let raws = read_all();
-        let agy_link = raws.iter().find(|raw| raw.agent == "antigravity" && is_own(raw)).and_then(|raw| raw.url.clone());
+        let agy_link = raws
+            .iter()
+            .find(|raw| raw.agent == "antigravity" && is_own(raw))
+            .and_then(|raw| raw.url.clone());
         let mut entries = merge(&raws);
         if let Some(url) = bridge_url() {
             let mut agents = vec!["claude".to_owned(), "codex".to_owned()];
@@ -214,10 +272,20 @@ pub async fn mcp_list() -> McpOverview {
             );
         }
         let agy_auto = !agy_opt_out_file().is_some_and(|marker| marker.exists());
-        McpOverview { bridge: bridge_url(), agy_link, agy_auto, entries }
+        McpOverview {
+            bridge: bridge_url(),
+            agy_link,
+            agy_auto,
+            entries,
+        }
     })
     .await
-    .unwrap_or(McpOverview { bridge: None, agy_link: None, agy_auto: true, entries: Vec::new() })
+    .unwrap_or(McpOverview {
+        bridge: None,
+        agy_link: None,
+        agy_auto: true,
+        entries: Vec::new(),
+    })
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -248,24 +316,48 @@ fn server_name(result: &Value) -> Option<String> {
 }
 
 fn tool_names(result: &Value) -> Vec<String> {
-    result["tools"].as_array().map(|tools| tools.iter().filter_map(|tool| tool["name"].as_str().map(str::to_owned)).collect()).unwrap_or_default()
+    result["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The JSON-RPC message with `id` in a plain JSON body or in the `data:` lines of an event stream.
 pub(crate) fn message_with_id(body: &str, id: i64) -> Option<Value> {
-    let candidates = body.lines().filter_map(|line| line.strip_prefix("data:")).map(str::trim).chain(std::iter::once(body.trim()));
-    candidates.filter_map(|text| serde_json::from_str::<Value>(text).ok()).find(|message| message["id"].as_i64() == Some(id))
+    let candidates = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim)
+        .chain(std::iter::once(body.trim()));
+    candidates
+        .filter_map(|text| serde_json::from_str::<Value>(text).ok())
+        .find(|message| message["id"].as_i64() == Some(id))
 }
 
 pub(crate) fn rpc_error(message: &Value) -> Option<String> {
-    message.get("error").map(|error| error["message"].as_str().map_or_else(|| error.to_string(), str::to_owned))
+    message.get("error").map(|error| {
+        error["message"]
+            .as_str()
+            .map_or_else(|| error.to_string(), str::to_owned)
+    })
 }
 
 async fn test_http(raw: &Raw) -> Result<(Option<String>, Vec<String>), String> {
     let url = raw.url.clone().ok_or("no address")?;
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build().map_err(|error| error.to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| error.to_string())?;
     let post = |body: &Value, session: Option<&str>| {
-        let mut request = client.post(&url).header("Accept", "application/json, text/event-stream").json(body);
+        let mut request = client
+            .post(&url)
+            .header("Accept", "application/json, text/event-stream")
+            .json(body);
         for (key, value) in &raw.headers {
             request = request.header(key.as_str(), value.as_str());
         }
@@ -278,17 +370,41 @@ async fn test_http(raw: &Raw) -> Result<(Option<String>, Vec<String>), String> {
         if !response.status().is_success() {
             return Err(format!("the server answered {}", response.status()));
         }
-        let session = response.headers().get("mcp-session-id").and_then(|value| value.to_str().ok()).map(str::to_owned);
-        Ok((session, response.text().await.map_err(|error| error.to_string())?))
+        let session = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        Ok((
+            session,
+            response.text().await.map_err(|error| error.to_string())?,
+        ))
     };
-    let (session, body) = answer(post(&initialize(), None).send().await.map_err(|error| error.to_string())?).await?;
+    let (session, body) = answer(
+        post(&initialize(), None)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?,
+    )
+    .await?;
     let init = message_with_id(&body, 1).ok_or("no answer to initialize")?;
     if let Some(error) = rpc_error(&init) {
         return Err(error);
     }
-    let _ = post(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }), session.as_deref()).send().await;
+    let _ = post(
+        &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+        session.as_deref(),
+    )
+    .send()
+    .await;
     let (_, body) = answer(
-        post(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }), session.as_deref()).send().await.map_err(|error| error.to_string())?,
+        post(
+            &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+            session.as_deref(),
+        )
+        .send()
+        .await
+        .map_err(|error| error.to_string())?,
     )
     .await?;
     let listed = message_with_id(&body, 2).ok_or("no answer to tools/list")?;
@@ -306,18 +422,29 @@ async fn test_stdio(raw: &Raw) -> Result<(Option<String>, Vec<String>), String> 
     for (key, value) in &raw.env {
         process.env(key, value);
     }
-    let mut child = process.spawn().map_err(|error| format!("could not start {name}: {error}"))?;
+    let mut child = process
+        .spawn()
+        .map_err(|error| format!("could not start {name}: {error}"))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let mut lines = BufReader::new(stdout).lines();
 
     async fn send(stdin: &mut tokio::process::ChildStdin, message: &Value) -> Result<(), String> {
-        stdin.write_all(format!("{message}\n").as_bytes()).await.map_err(|error| error.to_string())?;
+        stdin
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
         stdin.flush().await.map_err(|error| error.to_string())
     }
-    async fn reply(lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>, id: i64) -> Result<Value, String> {
+    async fn reply(
+        lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+        id: i64,
+    ) -> Result<Value, String> {
         while let Some(line) = lines.next_line().await.map_err(|error| error.to_string())? {
-            if let Some(message) = serde_json::from_str::<Value>(&line).ok().filter(|message| message["id"].as_i64() == Some(id)) {
+            if let Some(message) = serde_json::from_str::<Value>(&line)
+                .ok()
+                .filter(|message| message["id"].as_i64() == Some(id))
+            {
                 return match rpc_error(&message) {
                     Some(error) => Err(error),
                     None => Ok(message["result"].clone()),
@@ -329,8 +456,16 @@ async fn test_stdio(raw: &Raw) -> Result<(Option<String>, Vec<String>), String> 
 
     send(&mut stdin, &initialize()).await?;
     let init = reply(&mut lines, 1).await?;
-    send(&mut stdin, &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).await?;
-    send(&mut stdin, &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" })).await?;
+    send(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await?;
+    send(
+        &mut stdin,
+        &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await?;
     let listed = reply(&mut lines, 2).await?;
     Ok((server_name(&init), tool_names(&listed)))
 }
@@ -340,9 +475,19 @@ async fn test_stdio(raw: &Raw) -> Result<(Option<String>, Vec<String>), String> 
 pub async fn mcp_test(id: String) -> TestResult {
     let started = Instant::now();
     let found = if id == "agentdeck|builtin" {
-        bridge_url().map(|url| Raw { name: "agentdeck".into(), transport: "http".into(), url: Some(url), agent: "claude", ..Raw::default() })
+        bridge_url().map(|url| Raw {
+            name: "agentdeck".into(),
+            transport: "http".into(),
+            url: Some(url),
+            agent: "claude",
+            ..Raw::default()
+        })
     } else {
-        tauri::async_runtime::spawn_blocking(read_all).await.unwrap_or_default().into_iter().find(|raw| format!("{}|{}", raw.name, raw.target()) == id)
+        tauri::async_runtime::spawn_blocking(read_all)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|raw| format!("{}|{}", raw.name, raw.target()) == id)
     };
     let outcome = match found {
         None => Err("this server is no longer in any config".to_string()),
@@ -355,13 +500,27 @@ pub async fn mcp_test(id: String) -> TestResult {
                 }
             };
             // `npx` may have to download the server first.
-            tokio::time::timeout(Duration::from_secs(40), work).await.unwrap_or_else(|_| Err("no answer in 40 seconds".to_string()))
+            tokio::time::timeout(Duration::from_secs(40), work)
+                .await
+                .unwrap_or_else(|_| Err("no answer in 40 seconds".to_string()))
         }
     };
     let ms = started.elapsed().as_millis() as u64;
     match outcome {
-        Ok((server, tools)) => TestResult { ok: true, ms, server, tools, error: None },
-        Err(error) => TestResult { ok: false, ms, server: None, tools: Vec::new(), error: Some(error) },
+        Ok((server, tools)) => TestResult {
+            ok: true,
+            ms,
+            server,
+            tools,
+            error: None,
+        },
+        Err(error) => TestResult {
+            ok: false,
+            ms,
+            server: None,
+            tools: Vec::new(),
+            error: Some(error),
+        },
     }
 }
 
@@ -394,18 +553,29 @@ pub struct AgentResult {
 }
 
 fn valid_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 64 && name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
 }
 
 fn valid_env(pair: &str) -> bool {
-    pair.split_once('=').is_some_and(|(key, _)| !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    pair.split_once('=').is_some_and(|(key, _)| {
+        !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 fn check(spec: &AddSpec) -> Result<(), String> {
     if !valid_name(&spec.name) {
         return Err("a name is letters, digits, - _ . (up to 64)".to_string());
     }
-    if spec.agents.is_empty() || spec.agents.iter().any(|agent| !AGENTS.contains(&agent.as_str())) {
+    if spec.agents.is_empty()
+        || spec
+            .agents
+            .iter()
+            .any(|agent| !AGENTS.contains(&agent.as_str()))
+    {
         return Err("pick at least one agent".to_string());
     }
     match spec.transport.as_str() {
@@ -428,12 +598,17 @@ fn check(spec: &AddSpec) -> Result<(), String> {
 fn add_args(agent: &str, spec: &AddSpec) -> Result<Vec<String>, String> {
     let http = spec.transport == "http";
     let mut args: Vec<String> = vec!["mcp".into(), "add".into()];
-    let push = |args: &mut Vec<String>, items: &[&str]| args.extend(items.iter().map(|item| (*item).to_owned()));
+    let push = |args: &mut Vec<String>, items: &[&str]| {
+        args.extend(items.iter().map(|item| (*item).to_owned()))
+    };
     match agent {
         "claude" => {
             push(&mut args, &["-s", "user"]);
             if http {
-                push(&mut args, &["--transport", "http", &spec.name, &spec.target]);
+                push(
+                    &mut args,
+                    &["--transport", "http", &spec.name, &spec.target],
+                );
                 for header in &spec.headers {
                     push(&mut args, &["-H", header]);
                 }
@@ -450,7 +625,9 @@ fn add_args(agent: &str, spec: &AddSpec) -> Result<Vec<String>, String> {
             args.push(spec.name.clone());
             if http {
                 if !spec.headers.is_empty() {
-                    return Err("Codex takes no custom headers (only a bearer-token variable)".to_string());
+                    return Err(
+                        "Codex takes no custom headers (only a bearer-token variable)".to_string(),
+                    );
                 }
                 push(&mut args, &["--url", &spec.target]);
             } else {
@@ -490,13 +667,25 @@ fn binary_of(agent: &str) -> &'static str {
 }
 
 async fn run_cli(agent: &str, args: Vec<String>) -> AgentResult {
-    let result = |ok: bool, message: String| AgentResult { agent: agent.to_owned(), ok, message };
+    let result = |ok: bool, message: String| AgentResult {
+        agent: agent.to_owned(),
+        ok,
+        message,
+    };
     let Some(program) = which(binary_of(agent)) else {
         return result(false, format!("{} is not installed", binary_of(agent)));
     };
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     match capture(&program, &refs, Duration::from_secs(40)).await {
-        Ok(out) if out.ok => result(true, out.stdout.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("done").to_owned()),
+        Ok(out) if out.ok => result(
+            true,
+            out.stdout
+                .lines()
+                .map(str::trim)
+                .rfind(|line| !line.is_empty())
+                .unwrap_or("done")
+                .to_owned(),
+        ),
         Ok(out) => result(false, failure(&out)),
         Err(error) => result(false, error),
     }
@@ -510,7 +699,11 @@ pub async fn mcp_add(spec: AddSpec) -> Result<Vec<AgentResult>, String> {
     for agent in &spec.agents {
         results.push(match add_args(agent, &spec) {
             Ok(args) => run_cli(agent, args).await,
-            Err(message) => AgentResult { agent: agent.clone(), ok: false, message },
+            Err(message) => AgentResult {
+                agent: agent.clone(),
+                ok: false,
+                message,
+            },
         });
     }
     Ok(results)
@@ -523,7 +716,10 @@ pub async fn mcp_remove(name: String, agents: Vec<String>) -> Result<Vec<AgentRe
         return Err("that server cannot be removed here".to_string());
     }
     let mut results = Vec::new();
-    for agent in agents.iter().filter(|agent| AGENTS.contains(&agent.as_str())) {
+    for agent in agents
+        .iter()
+        .filter(|agent| AGENTS.contains(&agent.as_str()))
+    {
         let mut args: Vec<String> = vec!["mcp".into(), "remove".into()];
         if agent == "claude" {
             args.extend(["-s".to_string(), "user".to_string()]);
@@ -536,7 +732,12 @@ pub async fn mcp_remove(name: String, agents: Vec<String>) -> Result<Vec<AgentRe
 
 /// Set when the user turned the AgentDeck browser off for Antigravity: it is then not linked again by itself.
 fn agy_opt_out_file() -> Option<PathBuf> {
-    Some(crate::home_folder().ok()?.join(".agentdeck").join("agy-browser-off"))
+    Some(
+        crate::home_folder()
+            .ok()?
+            .join(".agentdeck")
+            .join("agy-browser-off"),
+    )
 }
 
 /// Gives Antigravity the AgentDeck browser (`enable`) or takes it away. agy has no per-turn config flag, so this
@@ -555,8 +756,11 @@ pub async fn mcp_agy_link(enable: bool) -> Result<AgentResult, String> {
             if let Some(folder) = marker.parent() {
                 let _ = std::fs::create_dir_all(folder);
             }
-            let _ = std::fs::write(marker, "turned off in the MCP tab
-");
+            let _ = std::fs::write(
+                marker,
+                "turned off in the MCP tab
+",
+            );
         }
         vec!["mcp".into(), "remove".into(), "agentdeck".into()]
     };
@@ -577,26 +781,49 @@ pub async fn ensure_agy_link() {
         .find(|raw| raw.agent == "antigravity" && is_own(raw))
         .and_then(|raw| raw.url);
     if current.as_deref() != Some(url.as_str()) {
-        let _ = run_cli("antigravity", vec!["mcp".into(), "add".into(), "agentdeck".into(), url]).await;
+        let _ = run_cli(
+            "antigravity",
+            vec!["mcp".into(), "add".into(), "agentdeck".into(), url],
+        )
+        .await;
     }
     // A headless agy refuses any MCP tool that no rule allows ("a tool required the mcp permission that headless mode cannot prompt for"),
     // so linking alone leaves the tools unusable. This allows the AgentDeck browser's tools and nothing else.
     if let Ok(home) = crate::home_folder() {
-        let settings = home.join(".gemini").join("antigravity-cli").join("settings.json");
-        let _ = ag_adapters::agent::antigravity::add_allow_rules(&settings, &["mcp(agentdeck/*)".to_string()]);
+        let settings = home
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("settings.json");
+        let _ = ag_adapters::agent::antigravity::add_allow_rules(
+            &settings,
+            &["mcp(agentdeck/*)".to_string()],
+        );
     }
 }
 
 /// The MCP servers a custom provider may use in a chat: the ones in the user's Claude, Codex and Antigravity
 /// configs (each name once), minus the disabled ones, AgentDeck's own browser, and other projects' servers.
 pub(crate) fn servers_for(project: Option<&std::path::Path>) -> Vec<Raw> {
-    let here = project.map(|dir| dir.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase());
+    let here = project.map(|dir| {
+        dir.to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_lowercase()
+    });
     let mut seen = std::collections::HashSet::new();
     read_all()
         .into_iter()
         .filter(|raw| !raw.disabled && !is_own(raw))
         .filter(|raw| match raw.scope.strip_prefix("project: ") {
-            Some(path) => here.as_deref() == Some(path.replace('\\', "/").trim_end_matches('/').to_lowercase().as_str()),
+            Some(path) => {
+                here.as_deref()
+                    == Some(
+                        path.replace('\\', "/")
+                            .trim_end_matches('/')
+                            .to_lowercase()
+                            .as_str(),
+                    )
+            }
             None => true,
         })
         .filter(|raw| seen.insert(raw.name.clone()))
@@ -627,15 +854,30 @@ mod tests {
         assert_eq!(raws[0].transport, "http");
         assert_eq!(raws[1].transport, "stdio");
         assert_eq!(raws[1].target(), "npx -y m");
-        let agy = servers_in(&json!({ "z": { "disabled": true, "serverUrl": "http://h/mcp" } }), "antigravity", "user", "f");
+        let agy = servers_in(
+            &json!({ "z": { "disabled": true, "serverUrl": "http://h/mcp" } }),
+            "antigravity",
+            "user",
+            "f",
+        );
         assert!(agy[0].disabled);
         assert_eq!(agy[0].url.as_deref(), Some("http://h/mcp"));
     }
 
     #[test]
     fn the_same_server_in_two_agents_is_one_row_without_secrets() {
-        let one = servers_in(&json!({ "b": { "command": "npx", "args": ["m"], "env": { "KEY": "secret" } } }), "claude", "user", "f");
-        let two = servers_in(&json!({ "b": { "command": "npx", "args": ["m"] } }), "codex", "user", "g");
+        let one = servers_in(
+            &json!({ "b": { "command": "npx", "args": ["m"], "env": { "KEY": "secret" } } }),
+            "claude",
+            "user",
+            "f",
+        );
+        let two = servers_in(
+            &json!({ "b": { "command": "npx", "args": ["m"] } }),
+            "codex",
+            "user",
+            "g",
+        );
         let merged = merge(&[one, two].concat());
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].agents, ["claude", "codex"]);
@@ -645,23 +887,100 @@ mod tests {
 
     #[test]
     fn answers_come_as_json_or_event_stream() {
-        assert_eq!(message_with_id(r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"a"}]}}"#, 2).map(|m| tool_names(&m["result"])), Some(vec!["a".to_string()]));
+        assert_eq!(
+            message_with_id(
+                r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"a"}]}}"#,
+                2
+            )
+            .map(|m| tool_names(&m["result"])),
+            Some(vec!["a".to_string()])
+        );
         let stream = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"s\",\"version\":\"1\"}}}\n\n";
-        assert_eq!(message_with_id(stream, 1).and_then(|m| server_name(&m["result"])), Some("s 1".to_string()));
+        assert_eq!(
+            message_with_id(stream, 1).and_then(|m| server_name(&m["result"])),
+            Some("s 1".to_string())
+        );
         assert_eq!(message_with_id(stream, 9), None);
     }
 
     #[test]
     fn each_cli_gets_its_own_syntax() {
         let stdio = spec("stdio", "npx");
-        assert_eq!(add_args("claude", &stdio).unwrap_or_default(), ["mcp", "add", "-s", "user", "files", "-e", "TOKEN=abc", "--", "npx", "-y", "server"]);
-        assert_eq!(add_args("codex", &stdio).unwrap_or_default(), ["mcp", "add", "files", "--env", "TOKEN=abc", "--", "npx", "-y", "server"]);
-        assert_eq!(add_args("antigravity", &stdio).unwrap_or_default(), ["mcp", "add", "-e", "TOKEN=abc", "files", "--", "npx", "-y", "server"]);
+        assert_eq!(
+            add_args("claude", &stdio).unwrap_or_default(),
+            [
+                "mcp",
+                "add",
+                "-s",
+                "user",
+                "files",
+                "-e",
+                "TOKEN=abc",
+                "--",
+                "npx",
+                "-y",
+                "server"
+            ]
+        );
+        assert_eq!(
+            add_args("codex", &stdio).unwrap_or_default(),
+            [
+                "mcp",
+                "add",
+                "files",
+                "--env",
+                "TOKEN=abc",
+                "--",
+                "npx",
+                "-y",
+                "server"
+            ]
+        );
+        assert_eq!(
+            add_args("antigravity", &stdio).unwrap_or_default(),
+            [
+                "mcp",
+                "add",
+                "-e",
+                "TOKEN=abc",
+                "files",
+                "--",
+                "npx",
+                "-y",
+                "server"
+            ]
+        );
         let mut http = spec("http", "https://x.dev/mcp");
         http.headers = vec!["X-Key: 1".into()];
-        assert_eq!(add_args("claude", &http).unwrap_or_default(), ["mcp", "add", "-s", "user", "--transport", "http", "files", "https://x.dev/mcp", "-H", "X-Key: 1"]);
+        assert_eq!(
+            add_args("claude", &http).unwrap_or_default(),
+            [
+                "mcp",
+                "add",
+                "-s",
+                "user",
+                "--transport",
+                "http",
+                "files",
+                "https://x.dev/mcp",
+                "-H",
+                "X-Key: 1"
+            ]
+        );
         assert!(add_args("codex", &http).is_err());
-        assert_eq!(add_args("antigravity", &http).unwrap_or_default(), ["mcp", "add", "-e", "TOKEN=abc", "-H", "X-Key: 1", "files", "https://x.dev/mcp"]);
+        assert_eq!(
+            add_args("antigravity", &http).unwrap_or_default(),
+            [
+                "mcp",
+                "add",
+                "-e",
+                "TOKEN=abc",
+                "-H",
+                "X-Key: 1",
+                "files",
+                "https://x.dev/mcp"
+            ]
+        );
     }
 
     #[test]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-image-history-list"
+description = "Enables the image_history_list command without any pre-configured scope."
+commands.allow = ["image_history_list"]
+
+[[permission]]
+identifier = "deny-image-history-list"
+description = "Denies the image_history_list command without any pre-configured scope."
+commands.deny = ["image_history_list"]

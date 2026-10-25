@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-antigravity-account-adopt"
+description = "Enables the antigravity_account_adopt command without any pre-configured scope."
+commands.allow = ["antigravity_account_adopt"]
+
+[[permission]]
+identifier = "deny-antigravity-account-adopt"
+description = "Denies the antigravity_account_adopt command without any pre-configured scope."
+commands.deny = ["antigravity_account_adopt"]

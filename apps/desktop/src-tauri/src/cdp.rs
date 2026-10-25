@@ -53,7 +53,13 @@ pub async fn call_for(
     seconds: u64,
 ) -> Result<Value, String> {
     let (sender, receiver) = tokio::sync::oneshot::channel::<Result<Value, String>>();
-    start(view, method.to_string(), params.to_string(), session, sender)?;
+    start(
+        view,
+        method.to_string(),
+        params.to_string(),
+        session,
+        sender,
+    )?;
     match tokio::time::timeout(Duration::from_secs(seconds), receiver).await {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => Err(format!("{method}: the page did not answer")),
@@ -76,32 +82,36 @@ fn start(
     view.with_webview(move |platform| {
         let reply = std::rc::Rc::new(std::cell::RefCell::new(Some(sender)));
         let answer = reply.clone();
-        let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
-            let out = result
-                .map_err(|error| error.to_string())
-                .and_then(|()| serde_json::from_str::<Value>(&json).map_err(|error| error.to_string()));
-            if let Some(sender) = answer.borrow_mut().take() {
-                let _ = sender.send(out);
-            }
-            Ok(())
-        }));
+        let handler =
+            CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+                let out = result.map_err(|error| error.to_string()).and_then(|()| {
+                    serde_json::from_str::<Value>(&json).map_err(|error| error.to_string())
+                });
+                if let Some(sender) = answer.borrow_mut().take() {
+                    let _ = sender.send(out);
+                }
+                Ok(())
+            }));
         // SAFETY: WebView2 calls on the thread that owns the webview, as `with_webview` runs us.
         let started = unsafe {
-            platform.controller().CoreWebView2().and_then(|core| match &session {
-                Some(id) => core.cast::<ICoreWebView2_11>().and_then(|core| {
-                    core.CallDevToolsProtocolMethodForSession(
-                        &HSTRING::from(id.as_str()),
+            platform
+                .controller()
+                .CoreWebView2()
+                .and_then(|core| match &session {
+                    Some(id) => core.cast::<ICoreWebView2_11>().and_then(|core| {
+                        core.CallDevToolsProtocolMethodForSession(
+                            &HSTRING::from(id.as_str()),
+                            &HSTRING::from(method.as_str()),
+                            &HSTRING::from(params.as_str()),
+                            &handler,
+                        )
+                    }),
+                    None => core.CallDevToolsProtocolMethod(
                         &HSTRING::from(method.as_str()),
                         &HSTRING::from(params.as_str()),
                         &handler,
-                    )
-                }),
-                None => core.CallDevToolsProtocolMethod(
-                    &HSTRING::from(method.as_str()),
-                    &HSTRING::from(params.as_str()),
-                    &handler,
-                ),
-            })
+                    ),
+                })
         };
         if let Err(error) = started {
             if let Some(sender) = reply.borrow_mut().take() {
@@ -118,7 +128,7 @@ fn start(
 pub async fn clear_cache(view: &Webview) -> Result<(), String> {
     use webview2_com::ClearBrowsingDataCompletedHandler;
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_13, ICoreWebView2Profile2, COREWEBVIEW2_BROWSING_DATA_KINDS_CACHE_STORAGE,
+        ICoreWebView2Profile2, ICoreWebView2_13, COREWEBVIEW2_BROWSING_DATA_KINDS_CACHE_STORAGE,
         COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE,
     };
     use windows::core::Interface;
@@ -143,7 +153,8 @@ pub async fn clear_cache(view: &Webview) -> Result<(), String> {
                 .and_then(|profile| profile.cast::<ICoreWebView2Profile2>())
                 .and_then(|profile| {
                     profile.ClearBrowsingData(
-                        COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE | COREWEBVIEW2_BROWSING_DATA_KINDS_CACHE_STORAGE,
+                        COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE
+                            | COREWEBVIEW2_BROWSING_DATA_KINDS_CACHE_STORAGE,
                         &handler,
                     )
                 })
@@ -184,7 +195,8 @@ pub fn watch_frames(view: &Webview) {
     subscribe(view, label.clone());
     let view = view.clone();
     tauri::async_runtime::spawn(async move {
-        let params = json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true });
+        let params =
+            json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true });
         if let Err(error) = call(&view, "Target.setAutoAttach", params, None).await {
             eprintln!("frames of {label}: {error}");
         }
@@ -202,19 +214,26 @@ fn subscribe(view: &Webview, label: String) {
             let Ok(core) = platform.controller().CoreWebView2() else {
                 return;
             };
-            for event in ["Target.attachedToTarget", "Target.detachedFromTarget", "Target.targetInfoChanged"] {
-                let Ok(receiver) = core.GetDevToolsProtocolEventReceiver(&HSTRING::from(event)) else {
+            for event in [
+                "Target.attachedToTarget",
+                "Target.detachedFromTarget",
+                "Target.targetInfoChanged",
+            ] {
+                let Ok(receiver) = core.GetDevToolsProtocolEventReceiver(&HSTRING::from(event))
+                else {
                     continue;
                 };
                 let label = label.clone();
-                let handler = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
-                    let Some(args) = args else { return Ok(()) };
-                    let mut text = PWSTR::null();
-                    args.ParameterObjectAsJson(&mut text)?;
-                    let value: Value = serde_json::from_str(&webview2_com::take_pwstr(text)).unwrap_or_default();
-                    remember(&label, event, &value);
-                    Ok(())
-                }));
+                let handler =
+                    DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+                        let Some(args) = args else { return Ok(()) };
+                        let mut text = PWSTR::null();
+                        args.ParameterObjectAsJson(&mut text)?;
+                        let value: Value = serde_json::from_str(&webview2_com::take_pwstr(text))
+                            .unwrap_or_default();
+                        remember(&label, event, &value);
+                        Ok(())
+                    }));
                 let mut token = 0i64;
                 let _ = receiver.add_DevToolsProtocolEventReceived(&handler, &mut token);
             }
@@ -296,18 +315,24 @@ fn subscribe_network(view: &Webview) {
                 return;
             };
             for event in NETWORK_EVENTS {
-                let Ok(receiver) = core.GetDevToolsProtocolEventReceiver(&HSTRING::from(event)) else {
+                let Ok(receiver) = core.GetDevToolsProtocolEventReceiver(&HSTRING::from(event))
+                else {
                     continue;
                 };
                 let (app, label) = (app.clone(), label.clone());
-                let handler = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
-                    let Some(args) = args else { return Ok(()) };
-                    let mut text = PWSTR::null();
-                    args.ParameterObjectAsJson(&mut text)?;
-                    let params: Value = serde_json::from_str(&webview2_com::take_pwstr(text)).unwrap_or_default();
-                    let _ = app.emit("devtools-net", json!({ "label": label, "event": event, "params": params }));
-                    Ok(())
-                }));
+                let handler =
+                    DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+                        let Some(args) = args else { return Ok(()) };
+                        let mut text = PWSTR::null();
+                        args.ParameterObjectAsJson(&mut text)?;
+                        let params: Value = serde_json::from_str(&webview2_com::take_pwstr(text))
+                            .unwrap_or_default();
+                        let _ = app.emit(
+                            "devtools-net",
+                            json!({ "label": label, "event": event, "params": params }),
+                        );
+                        Ok(())
+                    }));
                 let mut token = 0i64;
                 let _ = receiver.add_DevToolsProtocolEventReceived(&handler, &mut token);
             }
@@ -319,12 +344,21 @@ fn subscribe_network(view: &Webview) {
 fn subscribe_network(_view: &Webview) {}
 
 /// Runs a script in the page (or in a frame's session) and returns its value.
-pub async fn evaluate(view: &Webview, script: &str, session: Option<String>) -> Result<Value, String> {
+pub async fn evaluate(
+    view: &Webview,
+    script: &str,
+    session: Option<String>,
+) -> Result<Value, String> {
     evaluate_for(view, script, session, 20).await
 }
 
 /// `evaluate`, letting the script run up to `seconds` (statements, top-level await, the last expression is the value).
-pub async fn evaluate_for(view: &Webview, script: &str, session: Option<String>, seconds: u64) -> Result<Value, String> {
+pub async fn evaluate_for(
+    view: &Webview,
+    script: &str,
+    session: Option<String>,
+    seconds: u64,
+) -> Result<Value, String> {
     // replMode: top-level await works, as in the DevTools console.
     let params = json!({ "expression": script, "returnByValue": true, "awaitPromise": true, "userGesture": true, "replMode": true });
     let answer = call_for(view, "Runtime.evaluate", params, session, seconds).await?;
@@ -394,19 +428,41 @@ async fn show_pointer(view: &Webview, x: f64, y: f64, kind: &str) {
 /// A press at a point of the page (CSS pixels of the viewport), as the browser's own mouse events.
 pub async fn click(view: &Webview, x: f64, y: f64) -> Result<(), String> {
     show_pointer(view, x, y, "click").await;
-    let at = |kind: &str, buttons: u8| {
-        json!({ "type": kind, "x": x, "y": y, "button": "left", "buttons": buttons, "clickCount": 1 })
-    };
-    call(view, "Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": x, "y": y }), None).await?;
-    call(view, "Input.dispatchMouseEvent", at("mousePressed", 1), None).await?;
-    call(view, "Input.dispatchMouseEvent", at("mouseReleased", 0), None).await?;
+    let at = |kind: &str, buttons: u8| json!({ "type": kind, "x": x, "y": y, "button": "left", "buttons": buttons, "clickCount": 1 });
+    call(
+        view,
+        "Input.dispatchMouseEvent",
+        json!({ "type": "mouseMoved", "x": x, "y": y }),
+        None,
+    )
+    .await?;
+    call(
+        view,
+        "Input.dispatchMouseEvent",
+        at("mousePressed", 1),
+        None,
+    )
+    .await?;
+    call(
+        view,
+        "Input.dispatchMouseEvent",
+        at("mouseReleased", 0),
+        None,
+    )
+    .await?;
     Ok(())
 }
 
 /// Moves the mouse over a point (hover menus, tooltips).
 pub async fn hover(view: &Webview, x: f64, y: f64) -> Result<(), String> {
     show_pointer(view, x, y, "hover").await;
-    call(view, "Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": x, "y": y }), None).await?;
+    call(
+        view,
+        "Input.dispatchMouseEvent",
+        json!({ "type": "mouseMoved", "x": x, "y": y }),
+        None,
+    )
+    .await?;
     Ok(())
 }
 
@@ -449,7 +505,8 @@ pub async fn key(view: &Webview, name: &str) -> Result<(), String> {
         " " | "Space" => " ",
         _ => "",
     };
-    let mut down = json!({ "type": "keyDown", "key": key, "code": key, "windowsVirtualKeyCode": code });
+    let mut down =
+        json!({ "type": "keyDown", "key": key, "code": key, "windowsVirtualKeyCode": code });
     if !text.is_empty() {
         down["text"] = json!(text);
     }
@@ -462,7 +519,13 @@ pub async fn key(view: &Webview, name: &str) -> Result<(), String> {
 /// The page as the compositor draws it, PNG bytes.
 pub async fn screenshot(view: &Webview) -> Result<Vec<u8>, String> {
     use base64::Engine;
-    let answer = call(view, "Page.captureScreenshot", json!({ "format": "png" }), None).await?;
+    let answer = call(
+        view,
+        "Page.captureScreenshot",
+        json!({ "format": "png" }),
+        None,
+    )
+    .await?;
     let data = answer["data"].as_str().ok_or("no screenshot data")?;
     base64::engine::general_purpose::STANDARD
         .decode(data)
@@ -470,13 +533,82 @@ pub async fn screenshot(view: &Webview) -> Result<Vec<u8>, String> {
 }
 
 /// Only the given part of the page (CSS pixels), PNG bytes: a picture of one element.
-pub async fn screenshot_clip(view: &Webview, x: f64, y: f64, w: f64, h: f64) -> Result<Vec<u8>, String> {
-    use base64::Engine;
-    let clip = json!({ "x": x, "y": y, "width": w, "height": h, "scale": 1 });
-    let answer = call(view, "Page.captureScreenshot", json!({ "format": "png", "clip": clip }), None).await?;
-    let data = answer["data"].as_str().ok_or("no screenshot data")?;
-    base64::engine::general_purpose::STANDARD
-        .decode(data)
-        .map_err(|error| error.to_string())
-}
+pub async fn screenshot_clip(
+    view: &Webview,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<Vec<u8>, String> {
+    use std::io::Cursor;
 
+    // CDP's `clip` path can resize the compositor surface during capture, which briefly flashes the live page.
+    // Capture the unchanged viewport instead, then crop the returned PNG offscreen.
+    let metrics = call(view, "Page.getLayoutMetrics", json!({}), None).await?;
+    let viewport = metrics
+        .get("cssVisualViewport")
+        .or_else(|| metrics.get("cssLayoutViewport"))
+        .ok_or("page viewport metrics are unavailable")?;
+    let viewport_w = viewport["clientWidth"]
+        .as_f64()
+        .ok_or("page viewport width is unavailable")?;
+    let viewport_h = viewport["clientHeight"]
+        .as_f64()
+        .ok_or("page viewport height is unavailable")?;
+    if viewport_w <= 0.0 || viewport_h <= 0.0 {
+        return Err("page viewport is empty".into());
+    }
+
+    let bytes = screenshot(view).await?;
+    let mut decoder = png::Decoder::new(Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut pixels)
+        .map_err(|error| error.to_string())?;
+    let channels = match info.color_type {
+        png::ColorType::Grayscale => 1,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => 4,
+        png::ColorType::Indexed => {
+            return Err("screenshot has an unsupported indexed color format".into())
+        }
+    };
+
+    let scale_x = f64::from(info.width) / viewport_w;
+    let scale_y = f64::from(info.height) / viewport_h;
+    let left = (x.max(0.0) * scale_x).floor().max(0.0) as u32;
+    let top = (y.max(0.0) * scale_y).floor().max(0.0) as u32;
+    let right = ((x + w).min(viewport_w) * scale_x)
+        .ceil()
+        .min(f64::from(info.width)) as u32;
+    let bottom = ((y + h).min(viewport_h) * scale_y)
+        .ceil()
+        .min(f64::from(info.height)) as u32;
+    if right <= left || bottom <= top {
+        return Err("selected element is outside the visible page".into());
+    }
+
+    let bytes_per_pixel = channels;
+    let row_bytes = info.line_size;
+    let mut cropped =
+        Vec::with_capacity((right - left) as usize * (bottom - top) as usize * bytes_per_pixel);
+    for row in top..bottom {
+        let start = row as usize * row_bytes + left as usize * bytes_per_pixel;
+        let end = row as usize * row_bytes + right as usize * bytes_per_pixel;
+        cropped.extend_from_slice(&pixels[start..end]);
+    }
+
+    let mut output = Vec::new();
+    let mut encoder = png::Encoder::new(&mut output, right - left, bottom - top);
+    encoder.set_color(info.color_type);
+    encoder.set_depth(info.bit_depth);
+    encoder
+        .write_header()
+        .map_err(|error| error.to_string())?
+        .write_image_data(&cropped)
+        .map_err(|error| error.to_string())?;
+    Ok(output)
+}

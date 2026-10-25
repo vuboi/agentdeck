@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-devtools-cdp"
+description = "Enables the devtools_cdp command without any pre-configured scope."
+commands.allow = ["devtools_cdp"]
+
+[[permission]]
+identifier = "deny-devtools-cdp"
+description = "Denies the devtools_cdp command without any pre-configured scope."
+commands.deny = ["devtools_cdp"]

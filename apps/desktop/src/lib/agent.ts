@@ -141,12 +141,13 @@ export async function listImageHistory(limit = 50): Promise<ImageHistoryRun[]> {
 }
 
 /** Asks the authenticated Codex Responses API to improve an image prompt. */
-export async function suggestImagePrompts(args: { prompt: string; model: string; referencePaths?: string[]; settings?: ImageSettings }): Promise<ImagePromptSuggestResult> {
+export async function suggestImagePrompts(args: { prompt: string; model: string; provider?: string; referencePaths?: string[]; settings?: ImageSettings }): Promise<ImagePromptSuggestResult> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<ImagePromptSuggestResult>('image_prompt_suggest', {
     request: {
       prompt: args.prompt,
       model: args.model,
+      provider: args.provider ?? null,
       reference_paths: args.referencePaths ?? [],
       config: args.settings ?? {},
     },
@@ -161,7 +162,7 @@ export async function revealFile(path: string): Promise<void> {
 
 /** Subscribe to every agent event. Returns the unlisten function. */
 export async function listenAgentEvents(onEvent: (envelope: AgentEnvelope) => void): Promise<() => void> {
-  const { listen } = await import('@tauri-apps/api/event');
+  const { listen } = await import('./tauri-event');
   return listen<AgentEnvelope>('agent-event', (event) => onEvent(event.payload));
 }
 
@@ -182,13 +183,13 @@ export type DelegateCall = {
 
 /** Subscribe to the calls of the delegation tools. Answer each with `replyDelegateCall`. */
 export async function listenDelegateCalls(onCall: (call: DelegateCall) => void): Promise<() => void> {
-  const { listen } = await import('@tauri-apps/api/event');
+  const { listen } = await import('./tauri-event');
   return listen<DelegateCall>('agent-delegate', (event) => onCall(event.payload));
 }
 
 /** A blocking delegate_task call that nobody waits for any more (its agent was stopped): its worker should stop. */
 export async function listenDelegateAborts(onAbort: (callId: string) => void): Promise<() => void> {
-  const { listen } = await import('@tauri-apps/api/event');
+  const { listen } = await import('./tauri-event');
   return listen<{ callId: string }>('agent-delegate-abort', (event) => onAbort(event.payload.callId));
 }
 

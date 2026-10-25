@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
-  import { fade, fly, scale } from 'svelte/transition';
+  import { fade, scale } from 'svelte/transition';
   import { ZButton, ZIcon, ZInput, ZModal, ZSelect, ZSlider, ZSwitch } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { ticker } from '../clock.svelte';
   import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
-  import { inTauri } from '../history';
+  import { inTauri, isPreviewCopy } from '../history';
+  import { getPref } from '../prefs';
   import { exportArchive, pullArchive, pushArchive } from '../archive';
   import { syncProviders } from '../sync';
   import { openExternal } from '../browser.svelte';
@@ -13,6 +14,7 @@
     addAccount,
     allowSystemNotifications,
     connectors,
+    consumeCodexResetCredit,
     install,
     installed,
     login,
@@ -20,14 +22,15 @@
     probeProvider,
     providerName,
     refreshAccounts,
+    refreshAgyQuota,
+    refreshAgyAccounts,
+    addAgyAccount,
+    switchAgyAccount,
     refreshAll,
     removeAccount,
     removeProvider,
-    RESET_URL,
     saveProvider,
     scanLocal,
-    stopWaitingForReset,
-    waitForReset,
     setCodexAutoSwitch,
     settings,
     startWatching,
@@ -41,6 +44,7 @@
     type Login,
     type Section,
     type UsageWindow,
+    type AgyAccount,
   } from '../connectors.svelte';
 
   const icon = (name: string) => name as ZIconName;
@@ -50,7 +54,22 @@
     { id: 'providers', label: 'Providers', icon: 'lucideServer', hint: 'Custom and local models' },
     { id: 'alerts', label: 'Limit alerts', icon: 'lucideBell', hint: 'Warn before a limit' },
     { id: 'sync', label: 'Sync', icon: 'lucideCloudUpload', hint: 'History backup (planned)' },
+    { id: 'computer', label: 'Computer use', icon: 'lucideMonitor', hint: 'Windows control via MCP' },
   ];
+
+  let computerUseEnabled = $state(false);
+  void getPref<boolean>('computer_use.enabled').then((value) => {
+    computerUseEnabled = value ?? false;
+    if (inTauri() && !isPreviewCopy()) void import('@tauri-apps/api/core').then(({ invoke }) => invoke('computer_use_set_enabled', { enabled: computerUseEnabled }));
+  });
+  async function setComputerUse(value: boolean) {
+    computerUseEnabled = value;
+    if (isPreviewCopy() || !inTauri()) return;
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('computer_use_set_enabled', { enabled: value });
+    const { setPref } = await import('../prefs');
+    setPref('computer_use.enabled', value);
+  }
 
   type Card = {
     id: ConnectorId;
@@ -282,12 +301,26 @@
 
   $effect(() => {
     if (!settings.open) return;
-    // Reading `busy` inside these calls would make this effect depend on it and loop forever.
+    // Keep the connector data cached between opens. The header Refresh button reloads it on demand;
+    // re-running all CLI/account checks whenever Settings opens makes the list feel like it is loading on scroll.
     untrack(() => {
-      void refreshAll(false);
-      void scanLocal();
+      if (!connectors.detected) {
+        void refreshAll(false);
+        void scanLocal();
+      }
     });
     void tick().then(() => panel?.focus());
+  });
+
+  // The button's icon turns while the CLIs are checked and the usage is read again.
+  const refreshingAll = $derived(Boolean(connectors.busy.detect || connectors.busy['accounts:codex'] || connectors.busy['accounts:claude'] || connectors.busy['accounts:agy']));
+
+  // Antigravity's figures are saved to a file by the status line of agy whenever it runs, not by AgentDeck: while Settings
+  // is open the file is read again every half minute, so new figures show without pressing Refresh.
+  $effect(() => {
+    if (!settings.open) return;
+    const timer = setInterval(() => void refreshAgyQuota(), 60_000);
+    return () => clearInterval(timer);
   });
 
   onMount(() => startWatching());
@@ -338,13 +371,10 @@
       <div class="flex min-w-0 flex-1 flex-col">
         <header class="flex h-12 shrink-0 items-center gap-2 border-b border-border px-5">
           <h2 class="text-sm font-semibold">{NAV.find((item) => item.id === settings.section)?.label}</h2>
-          {#if connectors.busy.detect || connectors.busy['accounts:codex'] || connectors.busy['accounts:claude']}
-            <ZIcon zType={icon('lucideLoaderCircle')} class="size-3.5 animate-spin text-muted-foreground" />
-          {/if}
           <span class="ml-auto"></span>
           {#if settings.section === 'connectors'}
-            <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1.5 px-2 text-xs" title="Check CLIs and reload usage" onclick={() => void refreshAll(true)}>
-              <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5" /> Refresh
+            <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1.5 px-2 text-xs" title="Check CLIs and reload usage" disabled={refreshingAll} onclick={() => void refreshAll(true)}>
+              <ZIcon zType={icon(refreshingAll ? 'lucideLoaderCircle' : 'lucideRefreshCw')} class="size-3.5 {refreshingAll ? 'animate-spin' : ''}" /> Refresh
             </ZButton>
           {/if}
           <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0" aria-label="Close settings" onclick={close}>
@@ -375,7 +405,7 @@
               </div>
             {:else}
             <div class="flex flex-col gap-4">
-              {#each CARDS as card, index (card.id)}
+              {#each CARDS as card (card.id)}
                 {@const info = loginOf(card.id)}
                 {@const path = tool(card.binary)?.path}
                 {@const version = tool(card.binary)?.version}
@@ -383,7 +413,7 @@
                 {@const working = busyOf(`install:${card.id}`, `login:${card.id}`, `add:${card.id}`)}
                 {@const log = lastLog(card.id)}
                 {@const link = urlIn(connectors.logs[card.id] ?? [])}
-                <section class="rounded-xl border border-border bg-card/40" aria-label={card.label} in:fly={{ y: 12, duration: 320, delay: index * 90 }}>
+                <section class="rounded-xl border border-border bg-card/40" aria-label={card.label}>
                   <div class="flex items-start gap-3 p-4">
                     <span class="grid size-10 shrink-0 place-items-center rounded-lg {card.tone}">{#if card.svg}<ZIcon zSvg={card.svg} class="size-5" />{:else}<ZIcon zType={icon(card.brand)} class="size-5" />{/if}</span>
                     <div class="min-w-0 flex-1">
@@ -434,18 +464,44 @@
                     </div>
                   {/if}
 
-                  {#if card.id === 'agy' && info?.logged_in && info.email}
+                  {#if card.id === 'agy'}
                     <div class="border-t border-border/70 px-4 py-3">
-                      <h4 class="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Accounts</h4>
-                      <ul class="grid gap-2 sm:grid-cols-2">
-                        <li class="min-w-0 rounded-lg border border-primary/50 bg-primary/5 p-3">
-                          <span class="flex items-center gap-2">
-                            <span class="truncate text-sm font-medium">{info.email}</span>
-                            <span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">IN USE</span>
-                          </span>
-                          <p class="mt-1.5 text-[11px] text-muted-foreground">agy keeps one login at a time. To use another Google account, press “Sign in again”.</p>
-                        </li>
-                      </ul>
+                      <div class="mb-2 flex items-center gap-2">
+                        <h4 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Antigravity accounts</h4>
+                        <span class="ml-auto"></span>
+                        {#if path}
+                          <ZButton zWave={false} zType={info?.logged_in ? 'outline' : 'default'} zSize="sm" class="h-7 gap-1.5 px-2 text-xs" disabled={Boolean(working)} onclick={() => void login('agy', card.label)}>
+                            <ZIcon zType={icon(connectors.busy['login:agy'] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy['login:agy'] ? 'animate-spin' : ''}" />
+                            {connectors.busy['login:agy'] ? 'Waiting…' : info?.logged_in ? 'Sign in again' : 'Sign in'}
+                          </ZButton>
+                        {/if}
+                        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0" title="Refresh Antigravity accounts" disabled={Boolean(connectors.busy['accounts:agy'])} onclick={() => void refreshAgyAccounts()}>
+                          <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5" />
+                        </ZButton>
+                        <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={!info?.logged_in || !info.email || Boolean(connectors.busy['add:agy'])} title={!info?.logged_in ? 'Sign in to Antigravity first' : 'Save the current Antigravity login'} onclick={() => void addAgyAccount()}>
+                          <ZIcon zType={icon(connectors.busy['add:agy'] ? 'lucideLoaderCircle' : 'lucideUserPlus')} class="size-3.5 {connectors.busy['add:agy'] ? 'animate-spin' : ''}" /> Add account
+                        </ZButton>
+                      </div>
+                      {#if !info?.logged_in || !info.email}
+                        <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">Choose <b class="font-medium text-foreground">Sign in</b> to open Antigravity, then return here and click <b class="font-medium text-foreground">Add account</b> to save that login.</p>
+                      {:else if connectors.accounts.agy.length === 0}
+                        <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">Add the signed-in Google account to AgentDeck. Its credentials are stored in Windows Credential Manager.</p>
+                      {:else}
+                        <ul class="mb-3 grid gap-2 sm:grid-cols-2">
+                          {#each connectors.accounts.agy as account (account.id)}
+                            <li class="min-w-0 rounded-lg border {account.active ? 'border-primary/50 bg-primary/5' : 'border-border bg-background/50'} p-3">
+                              <span class="flex items-center gap-2">
+                                <span class="truncate text-sm font-medium">{account.email}</span>
+                                {#if account.active}<span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">IN USE</span>{/if}
+                              </span>
+                              {#if !account.active}<ZButton zWave={false} zType="outline" zSize="sm" class="mt-2 h-7 px-2.5 text-xs" disabled={Boolean(connectors.busy['switch:agy'])} onclick={() => void switchAgyAccount(account)}>Use this account</ZButton>{/if}
+                            </li>
+                          {/each}
+                        </ul>
+                      {/if}
+                      {#if connectors.errors['accounts:agy'] || connectors.errors['add:agy'] || connectors.errors['switch:agy']}
+                        <p class="mb-3 text-xs text-destructive" role="alert">{connectors.errors['accounts:agy'] ?? connectors.errors['add:agy'] ?? connectors.errors['switch:agy']}</p>
+                      {/if}
                       <h4 class="mt-4 mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                         Usage
                         {#if connectors.agyQuota?.observed_at}
@@ -485,7 +541,7 @@
                           {/each}
                         </div>
                         {#if connectors.agyQuota.observed_at && ticker.min / 1000 - connectors.agyQuota.observed_at > 15 * 60}
-                          <p class="mt-1.5 text-[11px] text-muted-foreground">Figures are older than 15 minutes: they update when agy runs.</p>
+                          <p class="mt-1.5 text-[11px] text-muted-foreground">Figures are older than 15 minutes.</p>
                         {/if}
                       {/if}
                     </div>
@@ -495,7 +551,7 @@
                     {@const provider = card.accounts}
                     {@const manager = card.manager}
                     {@const managerInstalled = installed(manager.id)}
-                    <div class="border-t border-border/70 px-4 py-3" in:fade={{ duration: 260, delay: 150 + index * 90 }}>
+                    <div class="border-t border-border/70 px-4 py-3">
                       <div class="mb-2 flex flex-wrap items-center gap-2">
                         <h4 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Accounts</h4>
                         {#if managerInstalled}
@@ -525,14 +581,16 @@
                         </div>
                       {:else if list?.error}
                         <p class="rounded-lg bg-destructive/10 p-3 text-xs text-destructive" role="alert">{list.error}</p>
+                      {:else if connectors.errors[`accounts:${provider}`]}
+                        <p class="rounded-lg bg-destructive/10 p-3 text-xs text-destructive" role="alert">{connectors.errors[`accounts:${provider}`]}</p>
                       {:else if !list || list.accounts.length === 0}
                         <p class="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">
                           {list ? 'No saved accounts yet. Sign in above, then use “Add account” to save it, or add another one.' : 'Reading accounts…'}
                         </p>
                       {:else}
                         <ul class="grid gap-2 sm:grid-cols-2">
-                          {#each list.accounts as account, row (account.id)}
-                            <li in:fly={{ y: 8, duration: 280, delay: 120 + row * 50 }} class="min-w-0 rounded-lg border p-3 {account.active ? 'border-primary/50 bg-primary/5' : 'border-border'}">
+                          {#each list.accounts as account (account.id)}
+                            <li class="min-w-0 rounded-lg border p-3 {account.active ? 'border-primary/50 bg-primary/5' : 'border-border'}">
                               <div class="flex items-center gap-2">
                                 <span class="min-w-0 flex-1">
                                   <span class="flex items-center gap-2">
@@ -585,24 +643,20 @@
                                 <p class="mt-1.5 text-[11px] text-muted-foreground">{account.status}</p>
                               {/if}
                               {#if provider === 'codex'}
-                                {@const ledger = account.plan === 'free' ? undefined : connectors.resets[account.email]}
-                                {@const waiting = connectors.awaitingReset === account.email}
+                                {@const resetCredits = account.reset_credits_available}
+                                {@const resetBusy = Boolean(connectors.busy[`reset:${account.email}`])}
+                                {@const resetError = connectors.errors[`reset:${account.email}`]}
                                 <div class="mt-2.5 flex items-center gap-2 border-t border-border/60 pt-2.5 text-[11px]">
                                   <ZIcon zType={icon('lucideRotateCcw')} class="size-3 shrink-0 text-muted-foreground" />
                                   <span class="min-w-0 flex-1 truncate text-muted-foreground">
-                                    {#if waiting}Waiting for the reset…{:else if ledger}Free resets: <b class="text-foreground tabular-nums">{ledger.left}</b> left{#if ledger.used > 0}<span>{" · " + ledger.used + " used"}</span>{/if}{:else}No free resets on this plan{/if}
+                                    {#if account.plan === 'free'}No free resets on this plan{:else if resetBusy}Redeeming reset…{:else if resetCredits !== undefined}Free resets: <b class="text-foreground tabular-nums">{resetCredits}</b> left{:else}Reset count unavailable{/if}
                                   </span>
-                                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Refresh usage" title="Reload usage and count a reset" disabled={Boolean(busyOf('accounts:codex'))} onclick={() => { refreshing = account.email; void refreshAccounts('codex', true).finally(() => (refreshing = '')); }}>
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Refresh usage" title="Reload usage and reset credits" disabled={Boolean(busyOf('accounts:codex'))} onclick={() => { refreshing = account.email; void refreshAccounts('codex', true).finally(() => (refreshing = '')); }}>
                                     <ZIcon zType={icon('lucideRefreshCw')} class="size-3 {refreshing === account.email ? 'animate-spin' : ''}" />
                                   </ZButton>
-                                  {#if waiting}
-                                    <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 gap-1 px-2 text-[11px]" onclick={stopWaitingForReset}>
-                                      <ZIcon zType={icon('lucideLoaderCircle')} class="size-3 animate-spin" /> Cancel
-                                    </ZButton>
-                                  {:else}
-                                    <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 px-2 text-[11px]" disabled={!ledger || ledger.left === 0 || Boolean(connectors.awaitingReset)} onclick={() => (resetAsk = account.email)}>Reset limit</ZButton>
-                                  {/if}
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 px-2 text-[11px]" disabled={account.plan === 'free' || resetCredits === undefined || resetCredits < 1 || resetBusy} onclick={() => (resetAsk = account.email)}>Reset limit</ZButton>
                                 </div>
+                                {#if resetError}<p class="mt-1 text-[11px] text-destructive" role="alert">{resetError}</p>{/if}
                               {/if}
                             </li>
                           {/each}
@@ -765,6 +819,19 @@
               </section>
             </div>
 
+          {:else if settings.section === 'computer'}
+            <div class="flex flex-col gap-4" in:fade={{ duration: 200 }}>
+              <section class="flex items-start gap-3 rounded-xl border border-border bg-card/40 p-4">
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold">Allow agents to use this Windows computer</h3>
+                  <p class="mt-1 text-xs text-muted-foreground">Expose shared AgentDeck MCP tools to Claude, Codex and Antigravity for screenshots, clicks and typing.</p>
+                </div>
+                <ZSwitch checked={computerUseEnabled} zSize="sm" zDisabled={isPreviewCopy() || !inTauri()} onChange={(value) => void setComputerUse(value)} />
+              </section>
+              <p class="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">Every screenshot, click, scroll, key press and text entry pauses for approval in the chat before it runs. Turning this off immediately blocks future computer-use calls. Antigravity must also have the AgentDeck MCP server enabled in the MCP settings.</p>
+              {#if computerUseEnabled && !inTauri()}<p class="text-xs text-destructive">This feature is available in the Windows desktop app.</p>{/if}
+            </div>
+
           {:else if settings.section === 'sync'}
             <div class="flex flex-col gap-4" in:fade={{ duration: 200 }}>
               <section class="rounded-xl border border-border p-4">
@@ -828,12 +895,12 @@
                 <div class="mt-1 flex justify-between text-[11px] text-muted-foreground"><span>50% (early)</span><span>99% (last moment)</span></div>
               </section>
 
-              <section class="flex items-start gap-3 rounded-xl border border-border p-4 {connectors.alerts.enabled ? '' : 'opacity-50'}">
+              <section class="flex items-start gap-3 rounded-xl border border-border p-4">
                 <div class="min-w-0 flex-1">
                   <div class="text-sm font-medium">System notification</div>
-                  <p class="mt-0.5 text-xs text-muted-foreground">Also show it as a desktop notification when AgentDeck is in the background.</p>
+                  <p class="mt-0.5 text-xs text-muted-foreground">Show quota warnings and finished session tasks in Windows, macOS, or Linux notifications.</p>
                 </div>
-                <ZSwitch checked={connectors.alerts.system} zSize="sm" zDisabled={!connectors.alerts.enabled} onChange={(value) => void allowSystemNotifications(value)} />
+                <ZSwitch checked={connectors.alerts.system} zSize="sm" onChange={(value) => void allowSystemNotifications(value)} />
               </section>
 
               <section aria-label="Right now">
@@ -866,9 +933,9 @@
   </div>
 {/if}
 
-<ZModal open={resetAsk !== ''} zTitle="Reset limit" zWidth="460px" zBodyClass="min-h-0! py-3" zOkText="Open usage page" zCancelText="Cancel" onOk={() => { const email = resetAsk; resetAsk = ''; void openExternal(RESET_URL); void waitForReset(email); }} onCancel={() => (resetAsk = '')}>
+<ZModal open={resetAsk !== ''} zTitle="Reset Codex limits" zWidth="460px" zBodyClass="min-h-0! py-3" zOkText="Use one reset" zCancelText="Cancel" onOk={() => { const email = resetAsk; resetAsk = ''; void consumeCodexResetCredit(email); }} onCancel={() => (resetAsk = '')}>
   <p class="text-sm text-muted-foreground">
-    Redeem one saved reset for <b class="text-foreground">{resetAsk}</b> on ChatGPT’s usage page. AgentDeck then watches the usage and takes one off the count when it drops.
+    This will redeem one available reset credit for <b class="text-foreground">{resetAsk}</b> and refresh its Codex limits. The credit is consumed immediately.
   </p>
 </ZModal>
 

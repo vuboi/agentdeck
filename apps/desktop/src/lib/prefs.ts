@@ -3,6 +3,8 @@
 // transcripts can be looked at, cleared or migrated without touching the rest. The store is picked from the key.
 // Every call is best-effort: if IndexedDB is missing or blocked, the app just runs on its defaults.
 
+import { isPreviewCopy } from './history';
+
 const DB_NAME = 'agentdeck';
 const DB_VERSION = 3;
 
@@ -110,6 +112,8 @@ export async function listPrefs<T>(prefix: string): Promise<[string, T][]> {
 
 /** Saves a value; `null` (or `undefined`) removes the entry instead of keeping an empty one. */
 export function setPref(key: string, value: unknown): void {
+  // The Preview's copy of the app shares this storage with the real window: it must not overwrite what that one saved.
+  if (isPreviewCopy()) return;
   // Callers pass plain objects of primitives, so structuredClone gives IndexedDB a copy it can store.
   const done =
     value == null

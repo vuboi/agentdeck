@@ -80,7 +80,9 @@ fn index_file(path: &Path) -> Option<HistorySession> {
 
     let model = lines.iter().rev().find_map(|line| {
         let payload = line.get("payload")?;
-        if str_of(line, "type") != "event_msg" || str_of(payload, "type") != "thread_settings_applied" {
+        if str_of(line, "type") != "event_msg"
+            || str_of(payload, "type") != "thread_settings_applied"
+        {
             return None;
         }
         let settings = payload.get("thread_settings")?;
@@ -116,24 +118,41 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
         match str_of(line, "type") {
             // The model each turn ran with.
             "turn_context" => {
-                if let Some(name) = line.get("payload").map(|payload| str_of(payload, "model")).filter(|name| !name.is_empty()) {
+                if let Some(name) = line
+                    .get("payload")
+                    .map(|payload| str_of(payload, "model"))
+                    .filter(|name| !name.is_empty())
+                {
                     model = Some(name.to_owned());
                 }
                 continue;
             }
             // A token count belongs to the answer being written: it is added to the last assistant message.
             "event_msg" => {
-                let Some(payload) = line.get("payload").filter(|payload| str_of(payload, "type") == "token_count") else {
+                let Some(payload) = line
+                    .get("payload")
+                    .filter(|payload| str_of(payload, "type") == "token_count")
+                else {
                     continue;
                 };
-                let total = payload["info"]["total_token_usage"]["total_tokens"].as_u64().unwrap_or(0);
+                let total = payload["info"]["total_token_usage"]["total_tokens"]
+                    .as_u64()
+                    .unwrap_or(0);
                 let last = &payload["info"]["last_token_usage"];
                 if total > seen_total && last.is_object() {
                     seen_total = total;
                     let count = |key: &str| last[key].as_u64().unwrap_or(0);
                     let cached = count("cached_input_tokens");
-                    let usage = HistoryUsage { input: count("input_tokens").saturating_sub(cached), output: count("output_tokens"), cache_read: cached, cache_write: 0 };
-                    if let Some(message) = messages.last_mut().filter(|message| message.role == "assistant") {
+                    let usage = HistoryUsage {
+                        input: count("input_tokens").saturating_sub(cached),
+                        output: count("output_tokens"),
+                        cache_read: cached,
+                        cache_write: 0,
+                    };
+                    if let Some(message) = messages
+                        .last_mut()
+                        .filter(|message| message.role == "assistant")
+                    {
                         HistoryUsage::merge(&mut message.usage, Some(usage));
                     }
                 }
@@ -175,7 +194,10 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
                 };
                 let (command, change) = match (patch, &input) {
                     (Some((name, change)), _) => (format!("{name}  {}", change.path), Some(change)),
-                    (None, Value::String(raw)) => (truncate(&format!("{}  {raw}", str_of(payload, "name")), 240), None),
+                    (None, Value::String(raw)) => (
+                        truncate(&format!("{}  {raw}", str_of(payload, "name")), 240),
+                        None,
+                    ),
                     (None, _) => (describe_tool(str_of(payload, "name"), &input), None),
                 };
                 (
@@ -205,7 +227,11 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
         } else {
             messages.push(HistoryMessage {
                 usage: None,
-                model: if role == "assistant" { model.clone() } else { None },
+                model: if role == "assistant" {
+                    model.clone()
+                } else {
+                    None
+                },
                 id: format!("codex-{index}"),
                 role,
                 time,
@@ -319,15 +345,26 @@ fn patch_change(raw: &str) -> Option<(&'static str, crate::agent::FileChange)> {
         } else if let Some(path) = line.strip_prefix("*** Update File: ") {
             Some((index, "Edit", path.trim()))
         } else {
-            line.strip_prefix("*** Delete File: ").map(|path| (index, "Delete", path.trim()))
+            line.strip_prefix("*** Delete File: ")
+                .map(|path| (index, "Delete", path.trim()))
         }
     })?;
-    let body: Vec<&str> = lines[start + 1..].iter().take_while(|line| !line.starts_with("***")).copied().collect();
+    let body: Vec<&str> = lines[start + 1..]
+        .iter()
+        .take_while(|line| !line.starts_with("***"))
+        .copied()
+        .collect();
     let added = body.iter().filter(|line| line.starts_with('+')).count();
     let removed = body.iter().filter(|line| line.starts_with('-')).count();
     Some((
         name,
-        crate::agent::FileChange { path: path.to_owned(), added, removed, before: String::new(), after: String::new() },
+        crate::agent::FileChange {
+            path: path.to_owned(),
+            added,
+            removed,
+            before: String::new(),
+            after: String::new(),
+        },
     ))
 }
 
@@ -340,7 +377,10 @@ mod patch_tests {
         // exec carries the patch in a script, where its line breaks are the two characters `\n`.
         let script = r#"const patch = "*** Begin Patch\n*** Delete File: E:/z-ui/xin-chao.txt\n*** End Patch"; run(patch)"#;
         let (name, change) = patch_change(script).expect("a delete is found");
-        assert_eq!((name, change.path.as_str()), ("Delete", "E:/z-ui/xin-chao.txt"));
+        assert_eq!(
+            (name, change.path.as_str()),
+            ("Delete", "E:/z-ui/xin-chao.txt")
+        );
     }
 
     #[test]

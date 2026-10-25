@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-park"
+description = "Enables the browser_park command without any pre-configured scope."
+commands.allow = ["browser_park"]
+
+[[permission]]
+identifier = "deny-browser-park"
+description = "Denies the browser_park command without any pre-configured scope."
+commands.deny = ["browser_park"]

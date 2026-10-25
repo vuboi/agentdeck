@@ -16,7 +16,7 @@
 
   // An answer as rich text: headings, lists, tables, quotes, links and code cards with a copy button.
   // Code is coloured once the answer has stopped streaming, so nothing flickers while text arrives.
-  let { text, streaming = false }: { text: string; streaming?: boolean } = $props();
+  let { text, streaming = false, onrendered }: { text: string; streaming?: boolean; onrendered?: () => void } = $props();
 
   // Text arrives in bursts. It is revealed at a steady, time-based pace instead (faster when more is waiting),
   // whole words at a time, and each new word fades in, as in Claude and ChatGPT. A finished answer that was
@@ -82,6 +82,11 @@
 
   const html = $derived(renderMarkdown(text.slice(0, shown)));
   let root: HTMLDivElement | undefined = $state();
+
+  // Notify the chat only after the completed response has been revealed and this DOM update has landed.
+  $effect(() => {
+    if (!streaming && text.length > 0 && shown >= text.length) onrendered?.();
+  });
 
   // The whole answer is re-rendered as HTML on each step, so the fade is kept by offset in its visible text:
   // a word seen before keeps its start time (a negative delay resumes its fade), a new word starts now.

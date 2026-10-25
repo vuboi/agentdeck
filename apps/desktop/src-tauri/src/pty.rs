@@ -56,13 +56,18 @@ struct Kept {
 /// Adds `bytes` to the kept output, dropping the oldest (up to a line break, so a cut does not start mid-line).
 /// Returns how many bytes the shell has printed in all.
 fn keep(scrollback: &Mutex<Kept>, bytes: &[u8]) -> u64 {
-    let Ok(mut guard) = scrollback.lock() else { return 0 };
+    let Ok(mut guard) = scrollback.lock() else {
+        return 0;
+    };
     guard.total += bytes.len() as u64;
     let kept = &mut guard.bytes;
     kept.extend_from_slice(bytes);
     if kept.len() > SCROLLBACK {
         let cut = kept.len() - SCROLLBACK;
-        let end = kept[cut..].iter().position(|byte| *byte == b'\n').map_or(cut, |at| cut + at + 1);
+        let end = kept[cut..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(cut, |at| cut + at + 1);
         kept.drain(..end);
     }
     guard.total
@@ -82,15 +87,29 @@ pub struct Attached {
 #[tauri::command]
 pub fn pty_attach(id: String, cols: u16, rows: u16) -> Result<Option<Attached>, String> {
     let sessions = SESSIONS.lock().map_err(|_| "terminal state is locked")?;
-    let Some(session) = sessions.get(&id) else { return Ok(None) };
+    let Some(session) = sessions.get(&id) else {
+        return Ok(None);
+    };
     let _ = session.master.resize(size(cols, rows));
-    let kept = session.scrollback.lock().map_err(|_| "terminal state is locked")?;
-    Ok(Some(Attached { name: session.name.clone(), replay: base64::engine::general_purpose::STANDARD.encode(&kept.bytes), total: kept.total }))
+    let kept = session
+        .scrollback
+        .lock()
+        .map_err(|_| "terminal state is locked")?;
+    Ok(Some(Attached {
+        name: session.name.clone(),
+        replay: base64::engine::general_purpose::STANDARD.encode(&kept.bytes),
+        total: kept.total,
+    }))
 }
 
 /// The first of `names` found in a PATH-like list of folders.
 fn find_in(path: &std::ffi::OsStr, names: &[&str]) -> Option<PathBuf> {
-    std::env::split_paths(path).find_map(|folder| names.iter().map(|name| folder.join(name)).find(|candidate| candidate.is_file()))
+    std::env::split_paths(path).find_map(|folder| {
+        names
+            .iter()
+            .map(|name| folder.join(name))
+            .find(|candidate| candidate.is_file())
+    })
 }
 
 /// The shell to start and its arguments: PowerShell 7 when it is installed, else Windows PowerShell; `$SHELL` elsewhere.
@@ -98,44 +117,97 @@ fn shell() -> (PathBuf, Vec<&'static str>) {
     if cfg!(windows) {
         let path = std::env::var_os("PATH").unwrap_or_default();
         let found = find_in(&path, &["pwsh.exe"]).or_else(|| find_in(&path, &["powershell.exe"]));
-        return (found.unwrap_or_else(|| PathBuf::from("powershell.exe")), vec!["-NoLogo"]);
+        return (
+            found.unwrap_or_else(|| PathBuf::from("powershell.exe")),
+            vec!["-NoLogo"],
+        );
     }
-    let shell = std::env::var_os("SHELL").map(PathBuf::from).filter(|path| path.is_file()).unwrap_or_else(|| PathBuf::from("/bin/sh"));
+    let shell = std::env::var_os("SHELL")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from("/bin/sh"));
     (shell, vec!["-l"])
 }
 
 fn home() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from)
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
 }
 
 fn size(cols: u16, rows: u16) -> PtySize {
-    PtySize { rows: rows.max(1), cols: cols.max(1), pixel_width: 0, pixel_height: 0 }
+    PtySize {
+        rows: rows.max(1),
+        cols: cols.max(1),
+        pixel_width: 0,
+        pixel_height: 0,
+    }
 }
 
 /// Starts a shell for the tab `id` in `cwd` (the home folder when that is missing) and returns its name.
 #[tauri::command]
-pub fn pty_open(app: AppHandle, id: String, cwd: Option<String>, cols: u16, rows: u16) -> Result<String, String> {
-    if SESSIONS.lock().map_err(|_| "terminal state is locked")?.contains_key(&id) {
+pub fn pty_open(
+    app: AppHandle,
+    id: String,
+    cwd: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<String, String> {
+    if SESSIONS
+        .lock()
+        .map_err(|_| "terminal state is locked")?
+        .contains_key(&id)
+    {
         return Err(format!("terminal {id} is already open"));
     }
-    let pair = native_pty_system().openpty(size(cols, rows)).map_err(|error| error.to_string())?;
+    let pair = native_pty_system()
+        .openpty(size(cols, rows))
+        .map_err(|error| error.to_string())?;
     let (program, args) = shell();
     let mut command = CommandBuilder::new(&program);
     command.args(args);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
-    let folder = cwd.map(PathBuf::from).filter(|path| path.is_dir()).or_else(home);
+    let folder = cwd
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .or_else(home);
     if let Some(folder) = folder.as_deref().filter(|folder| folder.is_dir()) {
         command.cwd(folder);
     }
-    let child = pair.slave.spawn_command(command).map_err(|error| format!("could not start {}: {error}", program.display()))?;
+    let child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|error| format!("could not start {}: {error}", program.display()))?;
     // The slave end stays open in this process only while the shell is being started.
     drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().map_err(|error| error.to_string())?;
-    let writer = pair.master.take_writer().map_err(|error| error.to_string())?;
-    let name = program.file_stem().and_then(|name| name.to_str()).unwrap_or("shell").to_string();
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|error| error.to_string())?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|error| error.to_string())?;
+    let name = program
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("shell")
+        .to_string();
     let scrollback = Arc::new(Mutex::new(Kept::default()));
-    SESSIONS.lock().map_err(|_| "terminal state is locked")?.insert(id.clone(), Session { master: pair.master, writer, child, name: name.clone(), scrollback: Arc::clone(&scrollback) });
+    SESSIONS
+        .lock()
+        .map_err(|_| "terminal state is locked")?
+        .insert(
+            id.clone(),
+            Session {
+                master: pair.master,
+                writer,
+                child,
+                name: name.clone(),
+                scrollback: Arc::clone(&scrollback),
+            },
+        );
 
     // One thread reads the shell (it blocks), one batches what it read and sends it on.
     let (sender, receiver) = mpsc::channel::<Vec<u8>>();
@@ -158,10 +230,20 @@ pub fn pty_open(app: AppHandle, id: String, cwd: Option<String>, cols: u16, rows
                 }
             }
             let end = keep(&scrollback, &bytes);
-            let _ = app.emit("pty-data", Data { id: tab.clone(), data: engine.encode(&bytes), end });
+            let _ = app.emit(
+                "pty-data",
+                Data {
+                    id: tab.clone(),
+                    data: engine.encode(&bytes),
+                    end,
+                },
+            );
         }
         // The shell closed its end: report how it ended (unless the tab was closed and the session is gone).
-        let session = SESSIONS.lock().ok().and_then(|mut sessions| sessions.remove(&tab));
+        let session = SESSIONS
+            .lock()
+            .ok()
+            .and_then(|mut sessions| sessions.remove(&tab));
         if let Some(mut session) = session {
             let code = session.child.wait().ok().map(|status| status.exit_code());
             let _ = app.emit("pty-exit", Exit { id: tab, code });
@@ -174,21 +256,33 @@ pub fn pty_open(app: AppHandle, id: String, cwd: Option<String>, cols: u16, rows
 #[tauri::command]
 pub fn pty_write(id: String, data: String) -> Result<(), String> {
     let mut sessions = SESSIONS.lock().map_err(|_| "terminal state is locked")?;
-    let session = sessions.get_mut(&id).ok_or("that terminal is not running")?;
-    session.writer.write_all(data.as_bytes()).and_then(|_| session.writer.flush()).map_err(|error| error.to_string())
+    let session = sessions
+        .get_mut(&id)
+        .ok_or("that terminal is not running")?;
+    session
+        .writer
+        .write_all(data.as_bytes())
+        .and_then(|_| session.writer.flush())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub fn pty_resize(id: String, cols: u16, rows: u16) -> Result<(), String> {
     let sessions = SESSIONS.lock().map_err(|_| "terminal state is locked")?;
     let session = sessions.get(&id).ok_or("that terminal is not running")?;
-    session.master.resize(size(cols, rows)).map_err(|error| error.to_string())
+    session
+        .master
+        .resize(size(cols, rows))
+        .map_err(|error| error.to_string())
 }
 
 /// Ends the shell of tab `id` (a tab that was closed).
 #[tauri::command]
 pub fn pty_close(id: String) {
-    let session = SESSIONS.lock().ok().and_then(|mut sessions| sessions.remove(&id));
+    let session = SESSIONS
+        .lock()
+        .ok()
+        .and_then(|mut sessions| sessions.remove(&id));
     if let Some(mut session) = session {
         let _ = session.child.kill();
     }
@@ -197,7 +291,9 @@ pub fn pty_close(id: String) {
 /// The folder a new terminal opens in, for the UI to check a path before it asks for it.
 #[tauri::command]
 pub fn pty_default_folder() -> Option<String> {
-    home().filter(|path| Path::new(path).is_dir()).map(|path| path.to_string_lossy().into_owned())
+    home()
+        .filter(|path| Path::new(path).is_dir())
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 /// Ends every shell: they go with the app.
@@ -263,7 +359,9 @@ mod tests {
             }
             let _ = sender.send(String::from_utf8_lossy(&text).into_owned());
         });
-        let output = receiver.recv_timeout(std::time::Duration::from_secs(20)).expect("output in time");
+        let output = receiver
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("output in time");
         assert!(output.contains("pty-works"), "{output:?}");
         pair.master.resize(size(100, 30)).expect("resize");
         let _ = child.kill();
@@ -277,7 +375,11 @@ mod scrollback_tests {
     #[test]
     fn the_kept_output_is_capped_and_starts_on_a_line() {
         let kept = Mutex::new(Kept::default());
-        let line = [b'x'; 99].iter().copied().chain([b'\n']).collect::<Vec<u8>>();
+        let line = [b'x'; 99]
+            .iter()
+            .copied()
+            .chain([b'\n'])
+            .collect::<Vec<u8>>();
         for _ in 0..(SCROLLBACK / 100 + 50) {
             keep(&kept, &line);
         }

@@ -91,7 +91,8 @@
     }
     return groups;
   });
-  const failures = $derived(audit.filter((item) => item.status === 'fail'));
+  // Copy only failures in the current range, project and status view, matching the rows shown below.
+  const failures = $derived(shown.filter((item) => item.status === 'fail'));
 
   const runningCount = $derived(activity.filter(live).length);
   const allFolded = $derived(days.length > 0 && days.every((day) => folded[day.key]));

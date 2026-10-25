@@ -27,7 +27,9 @@ fn command_for(binary: OsString, args: &[String]) -> Command {
         let is_batch = Path::new(&binary)
             .extension()
             .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat"));
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+            });
         if is_batch {
             let mut command = Command::new("cmd");
             command.args(["/D", "/S", "/C"]).arg(binary).args(args);
@@ -145,10 +147,17 @@ fn augmented_path() -> Option<OsString> {
     let mut dirs = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .unwrap_or_default();
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
     let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
-    dirs.extend(common_dirs(std::env::consts::OS, home.as_deref(), local.as_deref(), appdata.as_deref()));
+    dirs.extend(common_dirs(
+        std::env::consts::OS,
+        home.as_deref(),
+        local.as_deref(),
+        appdata.as_deref(),
+    ));
     std::env::join_paths(dirs).ok()
 }
 
@@ -246,7 +255,11 @@ pub async fn drive_turn(
     let mut command = command_for(binary, &args);
     command
         .envs(provider.environment(req))
-        .stdin(if provider.prompt_on_stdin() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if provider.prompt_on_stdin() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);

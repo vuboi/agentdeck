@@ -16,11 +16,20 @@ fn valid_name(name: &str) -> Result<String, String> {
 
 /// Creates an empty file (or a folder) called `name` inside `dir`, a folder of the project. Answers the new path.
 #[tauri::command]
-pub async fn path_create(root: String, dir: String, name: String, folder: bool) -> Result<String, String> {
+pub async fn path_create(
+    root: String,
+    dir: String,
+    name: String,
+    folder: bool,
+) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let name = valid_name(&name)?;
-        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
-        let dir = PathBuf::from(&dir).canonicalize().map_err(|error| error.to_string())?;
+        let root = PathBuf::from(&root)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let dir = PathBuf::from(&dir)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
         if !dir.starts_with(&root) || !dir.is_dir() {
             return Err("that is outside the project folder".to_string());
         }
@@ -31,7 +40,11 @@ pub async fn path_create(root: String, dir: String, name: String, folder: bool) 
         if folder {
             std::fs::create_dir(&target)
         } else {
-            std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map(|_| ())
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
+                .map(|_| ())
         }
         .map_err(|error| error.to_string())?;
         Ok(target.to_string_lossy().into_owned())
@@ -55,15 +68,24 @@ fn fit(hay: &str, needle: &str) -> Option<usize> {
 }
 
 fn relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/")
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 /// Files of the project whose path matches `query` (best first, at most `limit`), as paths relative to `root`
 /// with `/` separators. Honours .gitignore; `.git`, `node_modules` and `target` are skipped.
 #[tauri::command]
-pub async fn project_files(root: String, query: String, limit: Option<usize>) -> Result<Vec<String>, String> {
+pub async fn project_files(
+    root: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
+        let root = PathBuf::from(&root)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
         let needle = query.trim().to_lowercase().replace('\\', "/");
         let limit = limit.unwrap_or(50).clamp(1, 500);
         let mut found: Vec<(usize, usize, String)> = Vec::new();
@@ -95,7 +117,11 @@ pub async fn project_files(root: String, query: String, limit: Option<usize>) ->
             found.push((score, rel.len(), rel));
         }
         found.sort();
-        Ok(found.into_iter().take(limit).map(|(_, _, rel)| rel).collect())
+        Ok(found
+            .into_iter()
+            .take(limit)
+            .map(|(_, _, rel)| rel)
+            .collect())
     })
     .await
     .map_err(|error| error.to_string())?
@@ -106,12 +132,19 @@ pub async fn project_files(root: String, query: String, limit: Option<usize>) ->
 #[tauri::command]
 pub async fn file_write(root: String, path: String, text: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let root = PathBuf::from(&root).canonicalize().map_err(|error| error.to_string())?;
-        let path = PathBuf::from(&path).canonicalize().map_err(|error| error.to_string())?;
+        let root = PathBuf::from(&root)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let path = PathBuf::from(&path)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
         if !path.starts_with(&root) || !path.is_file() {
             return Err("that file is outside the project folder".to_string());
         }
-        let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let temp = path.with_file_name(format!(".{name}.agentdeck-save"));
         let written = (|| {
             std::fs::write(&temp, text.as_bytes())?;

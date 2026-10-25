@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-layer"
+description = "Enables the browser_layer command without any pre-configured scope."
+commands.allow = ["browser_layer"]
+
+[[permission]]
+identifier = "deny-browser-layer"
+description = "Denies the browser_layer command without any pre-configured scope."
+commands.deny = ["browser_layer"]

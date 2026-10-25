@@ -18,7 +18,8 @@ const PREFIX: &str = "browser-";
 static CREATING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// The address each tab asked for, by tab id. A failed load shows the tab's own error page at this address.
-static REQUESTED: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> = std::sync::Mutex::new(None);
+static REQUESTED: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> =
+    std::sync::Mutex::new(None);
 
 /// Marks the error page AgentDeck shows in place of the browser's own (Chromium's `chrome-error://` page).
 const ERROR_MARK: &str = "<!--agentdeck-error-->";
@@ -26,13 +27,19 @@ const ERROR_MARK: &str = "<!--agentdeck-error-->";
 /// How many times a tab's failed page was asked for again, and whether one such retry is running now, by tab id.
 /// More than `RETRIES` means it gave up and shows AgentDeck's error page. A page that loads, or an address the user
 /// asks for, starts the count again.
-static FAILURES: std::sync::Mutex<Option<std::collections::HashMap<String, (u8, bool)>>> = std::sync::Mutex::new(None);
+static FAILURES: std::sync::Mutex<Option<std::collections::HashMap<String, (u8, bool)>>> =
+    std::sync::Mutex::new(None);
 
 /// How often a page the engine could not load is asked for again (after 1 s, 2 s, 4 s) before the error page.
 const RETRIES: u8 = 3;
 
-fn failures<R>(f: impl FnOnce(&mut std::collections::HashMap<String, (u8, bool)>) -> R) -> Option<R> {
-    FAILURES.lock().ok().map(|mut map| f(map.get_or_insert_with(Default::default)))
+fn failures<R>(
+    f: impl FnOnce(&mut std::collections::HashMap<String, (u8, bool)>) -> R,
+) -> Option<R> {
+    FAILURES
+        .lock()
+        .ok()
+        .map(|mut map| f(map.get_or_insert_with(Default::default)))
 }
 
 fn requested(tab: &str) -> Option<String> {
@@ -41,7 +48,8 @@ fn requested(tab: &str) -> Option<String> {
 
 fn remember(tab: &str, url: &str) {
     if let Ok(mut map) = REQUESTED.lock() {
-        map.get_or_insert_with(Default::default).insert(tab.to_string(), url.to_string());
+        map.get_or_insert_with(Default::default)
+            .insert(tab.to_string(), url.to_string());
     }
 }
 
@@ -50,12 +58,18 @@ fn remember(tab: &str, url: &str) {
 /// `agentdeck` scheme (WebView2 does not show `data:` pages here).
 pub(crate) fn error_html(target: &str, reason: &str) -> String {
     let (what, code) = what_happened(target, reason);
-    let shown = target.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
+    let shown = target
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('"', "&quot;");
     let host = tauri::Url::parse(target)
         .ok()
         .and_then(|url| url.host_str().map(str::to_owned))
         .unwrap_or_else(|| shown.clone());
-    let go = target.replace('\\', "\\\\").replace('\'', "\\'").replace('"', "%22");
+    let go = target
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('"', "%22");
     format!(
         "{ERROR_MARK}<!doctype html><html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>{host}</title><style>:root{{color-scheme:light dark;--bg:#ffffff;--fg:#202124;--muted:#5f6368;--accent:#1a73e8}}@media (prefers-color-scheme:dark){{:root{{--bg:#202124;--fg:#e8eaed;--muted:#9aa0a6;--accent:#8ab4f8}}}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--muted);font:15px/1.55 system-ui,'Segoe UI',sans-serif}}main{{max-width:560px;margin:0 auto;padding:18vh 32px 32px}}svg{{width:40px;height:40px;color:var(--accent)}}h1{{margin:24px 0 12px;font-size:22px;font-weight:500;color:var(--fg)}}ul{{margin:8px 0 0;padding-left:22px}}code{{font-size:12px;letter-spacing:.02em}}button{{margin-top:32px;padding:8px 18px;border:0;border-radius:6px;background:var(--accent);color:var(--bg);font:500 14px system-ui,sans-serif;cursor:pointer}}</style><main><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'><path d='M12 21a9 9 0 1 1 9-9'/><path d='M12 7v5l3 2'/></svg><h1>This site can't be reached</h1><p>{what}</p><p>Try:</p><ul><li>Checking that the dev server is running</li><li>Checking the address, and whether it is http or https: <code>{shown}</code></li></ul><p><code>{code}</code></p><button onclick=\"location.replace('{go}')\">Reload</button></main><script>setInterval(()=>fetch('{go}',{{mode:'no-cors',cache:'no-store'}}).then(()=>location.replace('{go}'),()=>{{}}),1500)</script></html>"
     )
@@ -65,8 +79,15 @@ pub(crate) fn error_html(target: &str, reason: &str) -> String {
 /// anything else (it answered, but the page could not be loaded).
 fn what_happened(target: &str, reason: &str) -> (String, &'static str) {
     let url = tauri::Url::parse(target).ok();
-    let host = url.as_ref().and_then(|url| url.host_str()).unwrap_or("this address").replace('<', "&lt;");
-    let local_port = url.as_ref().filter(|url| is_local(url)).and_then(|url| url.port_or_known_default());
+    let host = url
+        .as_ref()
+        .and_then(|url| url.host_str())
+        .unwrap_or("this address")
+        .replace('<', "&lt;");
+    let local_port = url
+        .as_ref()
+        .filter(|url| is_local(url))
+        .and_then(|url| url.port_or_known_default());
     match (reason, local_port) {
         ("closed", Some(port)) => (format!("Nothing answers on port {port} of this machine (<b>{host}</b>). Is the dev server running?"), "ERR_CONNECTION_REFUSED"),
         ("closed", None) => (format!("<b>{host}</b> refused to connect or did not answer."), "ERR_CONNECTION_REFUSED"),
@@ -76,7 +97,11 @@ fn what_happened(target: &str, reason: &str) -> (String, &'static str) {
 
 /// The address of AgentDeck's error page for `target` (`reason`: see `what_happened`).
 fn error_page(target: &str, reason: &str) -> Result<tauri::Url, String> {
-    tauri::Url::parse_with_params(&format!("{}error", base()), &[("url", target), ("reason", reason)]).map_err(|error| error.to_string())
+    tauri::Url::parse_with_params(
+        &format!("{}error", base()),
+        &[("url", target), ("reason", reason)],
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Where the page posts its reports: the custom scheme, which WebView2 serves under a localhost name.
@@ -162,12 +187,18 @@ pub(crate) fn answers(url: &tauri::Url) -> bool {
 
 /// This machine: the names a dev server is opened by.
 fn is_local(url: &tauri::Url) -> bool {
-    matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]" | "::1"))
+    matches!(
+        url.host_str(),
+        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+    )
 }
 
 /// This machine, or a `*.localhost` name (which the browser resolves to it).
 fn is_loopback(url: &tauri::Url) -> bool {
-    is_local(url) || url.host_str().is_some_and(|host| host.ends_with(".localhost"))
+    is_local(url)
+        || url
+            .host_str()
+            .is_some_and(|host| host.ends_with(".localhost"))
 }
 
 /// The same address with the other of http / https, for an address that names its port (without one the port would
@@ -175,7 +206,13 @@ fn is_loopback(url: &tauri::Url) -> bool {
 fn other_scheme(url: &tauri::Url) -> Option<tauri::Url> {
     url.port()?;
     let mut other = url.clone();
-    other.set_scheme(if url.scheme() == "https" { "http" } else { "https" }).ok()?;
+    other
+        .set_scheme(if url.scheme() == "https" {
+            "http"
+        } else {
+            "https"
+        })
+        .ok()?;
     Some(other)
 }
 
@@ -195,7 +232,9 @@ async fn ready_within(url: &tauri::Url, wait: std::time::Duration) -> Option<tau
     }
     let listening = {
         let url = url.clone();
-        tokio::task::spawn_blocking(move || answers(&url)).await.unwrap_or(false)
+        tokio::task::spawn_blocking(move || answers(&url))
+            .await
+            .unwrap_or(false)
     };
     if !listening {
         return None;
@@ -260,7 +299,9 @@ fn navigation_failed(app: &AppHandle, tab: &str) {
                 }
                 None => {
                     // Nothing listens on the port, or the retries are used up and it still would not load.
-                    let down = parsed.as_ref().is_some_and(|url| is_local(url) && !answers(url));
+                    let down = parsed
+                        .as_ref()
+                        .is_some_and(|url| is_local(url) && !answers(url));
                     if let Ok(page) = error_page(&target, if down { "closed" } else { "failed" }) {
                         let _ = view.navigate(page);
                     }
@@ -296,7 +337,8 @@ pub(crate) fn parse(url: &str) -> Result<tauri::Url, String> {
         format!("http://{url}")
     } else if url.contains(char::is_whitespace) || !url.contains('.') {
         // Words, not an address ("zz", "svelte runes"): search for them, as a browser's address bar does.
-        return tauri::Url::parse_with_params("https://www.google.com/search", &[("q", url)]).map_err(|error| error.to_string());
+        return tauri::Url::parse_with_params("https://www.google.com/search", &[("q", url)])
+            .map_err(|error| error.to_string());
     } else {
         format!("https://{url}")
     };
@@ -317,22 +359,40 @@ fn place(view: &Webview, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
 pub(crate) fn set_rect(view: &Webview, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let scale = view.window().scale_factor().map_err(|error| error.to_string())?;
+        let scale = view
+            .window()
+            .scale_factor()
+            .map_err(|error| error.to_string())?;
         let left = (x * scale).round() as i32;
         let top = (y * scale).round() as i32;
         let width = (((x + w) * scale).round() as i32 - left).max(1);
         let height = (((y + h) * scale).round() as i32 - top).max(1);
         view.with_webview(move |platform| {
             use windows::Win32::Foundation::{HWND, RECT};
-            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+            };
             // SAFETY: WebView2 and Win32 calls on the thread that owns the webview, as `with_webview` runs us.
             unsafe {
                 let controller = platform.controller();
                 let mut host = HWND::default();
                 if controller.ParentWindow(&mut host).is_ok() {
-                    let _ = SetWindowPos(host, None, left, top, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
+                    let _ = SetWindowPos(
+                        host,
+                        None,
+                        left,
+                        top,
+                        width,
+                        height,
+                        SWP_NOACTIVATE | SWP_NOZORDER,
+                    );
                 }
-                let _ = controller.SetBounds(RECT { left: 0, top: 0, right: width, bottom: height });
+                let _ = controller.SetBounds(RECT {
+                    left: 0,
+                    top: 0,
+                    right: width,
+                    bottom: height,
+                });
                 let _ = controller.NotifyParentWindowPositionChanged();
             }
         })
@@ -373,45 +433,50 @@ pub async fn browser_show(
         return Ok(());
     }
     let window = app.get_window("main").ok_or("no main window")?;
-    let mut builder = WebviewBuilder::new(label(&tab), WebviewUrl::External(destination(&tab, &url)?))
-        .initialization_script(injected_script(&tab))
-        .on_page_load(|view, payload| {
-            let event = match payload.event() {
-                PageLoadEvent::Started => "started",
-                PageLoadEvent::Finished => "finished",
-            };
-            let tab = view.label().trim_start_matches(PREFIX).to_string();
-            let url = payload.url().to_string();
-            // The browser's own error page (Chromium's chrome-error:// address) is replaced by AgentDeck's, at the same tab.
-            let failed = url.starts_with("chrome-error:");
-            // Our error page is served by the agentdeck scheme; the tab keeps showing the address that was asked for.
-            let ours = url.starts_with(&format!("{}error", base()));
-            if failed {
-                if event == "finished" {
-                    navigation_failed(view.app_handle(), &tab);
+    let mut builder =
+        WebviewBuilder::new(label(&tab), WebviewUrl::External(destination(&tab, &url)?))
+            .initialization_script(injected_script(&tab))
+            .on_page_load(|view, payload| {
+                let event = match payload.event() {
+                    PageLoadEvent::Started => "started",
+                    PageLoadEvent::Finished => "finished",
+                };
+                let tab = view.label().trim_start_matches(PREFIX).to_string();
+                let url = payload.url().to_string();
+                // The browser's own error page (Chromium's chrome-error:// address) is replaced by AgentDeck's, at the same tab.
+                let failed = url.starts_with("chrome-error:");
+                // Our error page is served by the agentdeck scheme; the tab keeps showing the address that was asked for.
+                let ours = url.starts_with(&format!("{}error", base()));
+                if failed {
+                    if event == "finished" {
+                        navigation_failed(view.app_handle(), &tab);
+                    }
+                    return;
                 }
-                return;
-            }
-            if event == "started" && !ours {
-                remember(&tab, &url);
-                crate::bridge::page_started(&tab, &url);
-            }
-            #[cfg(not(windows))]
-            {
-                if !ours {
-                    fallback::page_event(view.app_handle(), view.label(), event, &url);
+                if event == "started" && !ours {
+                    remember(&tab, &url);
+                    crate::bridge::page_started(&tab, &url);
                 }
-            }
-            let shown = if ours { requested(&tab).unwrap_or_else(|| url.clone()) } else { url };
-            let _ = view.app_handle().emit(
-                "browser-load",
-                serde_json::json!({
-                    "label": view.label(),
-                    "event": event,
-                    "url": shown,
-                }),
-            );
-        });
+                #[cfg(not(windows))]
+                {
+                    if !ours {
+                        fallback::page_event(view.app_handle(), view.label(), event, &url);
+                    }
+                }
+                let shown = if ours {
+                    requested(&tab).unwrap_or_else(|| url.clone())
+                } else {
+                    url
+                };
+                let _ = view.app_handle().emit(
+                    "browser-load",
+                    serde_json::json!({
+                        "label": view.label(),
+                        "event": event,
+                        "url": shown,
+                    }),
+                );
+            });
     // Opaque white under the page: while the page's window is resized (the mark-up bar or the developer tools open and
     // shrink the area) the strip not yet painted shows this, not black.
     builder = builder.background_color(tauri::window::Color(255, 255, 255, 255));
@@ -457,13 +522,23 @@ fn layer(view: &Webview, below: bool) {
     #[cfg(windows)]
     let _ = view.with_webview(move |platform| {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_BOTTOM, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_BOTTOM, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        };
         // SAFETY: plain Win32 calls on the window that hosts this webview, on its own thread.
         unsafe {
             let mut host = HWND::default();
             if platform.controller().ParentWindow(&mut host).is_ok() {
                 let order = if below { HWND_BOTTOM } else { HWND_TOP };
-                let _ = SetWindowPos(host, Some(order), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                let _ = SetWindowPos(
+                    host,
+                    Some(order),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
             }
         }
     });
@@ -514,7 +589,9 @@ fn allow_password_saving(_view: &Webview) {}
 #[cfg(windows)]
 fn allow_local_certificates(view: &Webview) {
     let _ = view.with_webview(|platform| {
-        use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2_14, COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW};
+        use webview2_com::Microsoft::Web::WebView2::Win32::{
+            ICoreWebView2_14, COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW,
+        };
         use webview2_com::ServerCertificateErrorDetectedEventHandler;
         use windows::core::{Interface, PWSTR};
         // SAFETY: WebView2 calls on the thread that owns the webview, as `with_webview` runs us.
@@ -525,16 +602,17 @@ fn allow_local_certificates(view: &Webview) {
             let Ok(core) = core.cast::<ICoreWebView2_14>() else {
                 return;
             };
-            let handler = ServerCertificateErrorDetectedEventHandler::create(Box::new(|_, args| {
-                let Some(args) = args else { return Ok(()) };
-                let mut uri = PWSTR::null();
-                args.RequestUri(&mut uri)?;
-                let uri = webview2_com::take_pwstr(uri);
-                if tauri::Url::parse(&uri).is_ok_and(|url| is_loopback(&url)) {
-                    args.SetAction(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW)?;
-                }
-                Ok(())
-            }));
+            let handler =
+                ServerCertificateErrorDetectedEventHandler::create(Box::new(|_, args| {
+                    let Some(args) = args else { return Ok(()) };
+                    let mut uri = PWSTR::null();
+                    args.RequestUri(&mut uri)?;
+                    let uri = webview2_com::take_pwstr(uri);
+                    if tauri::Url::parse(&uri).is_ok_and(|url| is_loopback(&url)) {
+                        args.SetAction(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW)?;
+                    }
+                    Ok(())
+                }));
             let mut token = 0i64;
             let _ = core.add_ServerCertificateErrorDetected(&handler, &mut token);
         }
@@ -564,8 +642,16 @@ pub fn browser_press(app: AppHandle, tab: String, x: f64, y: f64, zoom: f64) -> 
     #[cfg(not(windows))]
     {
         // macOS wants points, X11 pixels.
-        let divide = if cfg!(target_os = "macos") { scale } else { 1.0 };
-        press_at(0, (px / divide).round() as i32, (py / divide).round() as i32);
+        let divide = if cfg!(target_os = "macos") {
+            scale
+        } else {
+            1.0
+        };
+        press_at(
+            0,
+            (px / divide).round() as i32,
+            (py / divide).round() as i32,
+        );
     }
     Ok(())
 }
@@ -638,7 +724,14 @@ pub fn browser_park(app: AppHandle) -> Result<(), String> {
             continue;
         }
         if name == front {
-            let size = view.size().map_err(|error| error.to_string())?.to_logical::<f64>(view.window().scale_factor().map_err(|error| error.to_string())?);
+            let size = view
+                .size()
+                .map_err(|error| error.to_string())?
+                .to_logical::<f64>(
+                    view.window()
+                        .scale_factor()
+                        .map_err(|error| error.to_string())?,
+                );
             set_rect(&view, -20000.0, -20000.0, size.width, size.height)?;
             view.show().map_err(|error| error.to_string())?;
         } else {
@@ -703,7 +796,14 @@ pub async fn browser_capture(app: AppHandle, tab: String) -> Result<String, Stri
 /// A picture of one element of a tab, cut from the page at its box (CSS pixels), as a PNG data URL. Only the
 /// element is sent to the chat: the agent gets this picture next to the element's markup.
 #[tauri::command]
-pub async fn browser_element_capture(app: AppHandle, tab: String, x: f64, y: f64, w: f64, h: f64) -> Result<String, String> {
+pub async fn browser_element_capture(
+    app: AppHandle,
+    tab: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<String, String> {
     use base64::Engine;
     let view = webview(&app, &tab)?;
     let bytes = crate::cdp::screenshot_clip(&view, x, y, w.max(1.0), h.max(1.0)).await?;
@@ -762,8 +862,12 @@ fn capture(
                     }
                     Ok(())
                 }));
-                core.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, &stream, &handler)
-                    .map_err(|e| e.to_string())
+                core.CapturePreview(
+                    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+                    &stream,
+                    &handler,
+                )
+                .map_err(|e| e.to_string())
             }
         })();
         if let Err(error) = started {
@@ -862,11 +966,23 @@ pub fn selftest(app: AppHandle, url: String) {
 /// A DevTools call for the developer tools of the app: response bodies, cookies, storage, IndexedDB, caches. Only the
 /// domains those panels need; the rest of the protocol stays with the agent's tools.
 #[tauri::command]
-pub async fn devtools_cdp(app: AppHandle, tab: String, method: String, params: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
-    const ALLOWED: [&str; 5] = ["Network.", "DOMStorage.", "IndexedDB.", "Storage.", "CacheStorage."];
+pub async fn devtools_cdp(
+    app: AppHandle,
+    tab: String,
+    method: String,
+    params: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    const ALLOWED: [&str; 5] = [
+        "Network.",
+        "DOMStorage.",
+        "IndexedDB.",
+        "Storage.",
+        "CacheStorage.",
+    ];
     // IndexedDB hands back remote objects; turning one into text is a call on it (and letting go of them after).
     const EXACT: [&str; 2] = ["Runtime.callFunctionOn", "Runtime.releaseObjectGroup"];
-    if !ALLOWED.iter().any(|prefix| method.starts_with(prefix)) && !EXACT.contains(&method.as_str()) {
+    if !ALLOWED.iter().any(|prefix| method.starts_with(prefix)) && !EXACT.contains(&method.as_str())
+    {
         return Err(format!("{method} is not available to the developer tools"));
     }
     let view = webview(&app, &tab)?;
@@ -877,7 +993,10 @@ pub async fn devtools_cdp(app: AppHandle, tab: String, method: String, params: O
     let params = params.unwrap_or_else(|| serde_json::json!({}));
     #[cfg(not(windows))]
     {
-        if crate::cdp::call(&view, &method, params.clone(), None).await.is_err() {
+        if crate::cdp::call(&view, &method, params.clone(), None)
+            .await
+            .is_err()
+        {
             return fallback::devtools(&app, &tab, &method, &params).await;
         }
     }
@@ -897,7 +1016,8 @@ mod fallback {
 
     static NEXT: AtomicU64 = AtomicU64::new(1);
     /// Response bodies by (tab, request id), newest last, so the Network tab can show a response afterwards.
-    static BODIES: LazyLock<Mutex<(HashMap<String, String>, VecDeque<String>)>> = LazyLock::new(Default::default);
+    static BODIES: LazyLock<Mutex<(HashMap<String, String>, VecDeque<String>)>> =
+        LazyLock::new(Default::default);
     /// The document request of each page that is loading, by webview label.
     static DOCUMENTS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
 
@@ -909,7 +1029,10 @@ mod fallback {
     }
 
     fn emit(app: &AppHandle, label: &str, event: &str, params: Value) {
-        let _ = app.emit("devtools-net", json!({ "label": label, "event": event, "params": params }));
+        let _ = app.emit(
+            "devtools-net",
+            json!({ "label": label, "event": event, "params": params }),
+        );
     }
 
     /// A page load as the Document request that starts the list again, and its end.
@@ -919,16 +1042,35 @@ mod fallback {
             if let Ok(mut documents) = DOCUMENTS.lock() {
                 documents.insert(label.to_string(), id.clone());
             }
-            emit(app, label, "Network.requestWillBeSent", json!({
-                "requestId": id, "loaderId": id, "type": "Document", "timestamp": now(), "wallTime": now(),
-                "request": { "url": url, "method": "GET", "headers": {} },
-            }));
-        } else if let Some(id) = DOCUMENTS.lock().ok().and_then(|mut documents| documents.remove(label)) {
-            emit(app, label, "Network.responseReceived", json!({
-                "requestId": id, "type": "Document", "timestamp": now(),
-                "response": { "url": url, "status": 200, "statusText": "", "mimeType": "text/html", "headers": {} },
-            }));
-            emit(app, label, "Network.loadingFinished", json!({ "requestId": id, "timestamp": now(), "encodedDataLength": 0 }));
+            emit(
+                app,
+                label,
+                "Network.requestWillBeSent",
+                json!({
+                    "requestId": id, "loaderId": id, "type": "Document", "timestamp": now(), "wallTime": now(),
+                    "request": { "url": url, "method": "GET", "headers": {} },
+                }),
+            );
+        } else if let Some(id) = DOCUMENTS
+            .lock()
+            .ok()
+            .and_then(|mut documents| documents.remove(label))
+        {
+            emit(
+                app,
+                label,
+                "Network.responseReceived",
+                json!({
+                    "requestId": id, "type": "Document", "timestamp": now(),
+                    "response": { "url": url, "status": 200, "statusText": "", "mimeType": "text/html", "headers": {} },
+                }),
+            );
+            emit(
+                app,
+                label,
+                "Network.loadingFinished",
+                json!({ "requestId": id, "timestamp": now(), "encodedDataLength": 0 }),
+            );
         }
     }
 
@@ -937,26 +1079,56 @@ mod fallback {
         let tab = report["tab"].as_str().unwrap_or_default();
         let label = format!("browser-{tab}");
         let id = format!("req-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-        let ended = report["at"].as_f64().map_or_else(now, |millis| millis / 1000.0);
+        let ended = report["at"]
+            .as_f64()
+            .map_or_else(now, |millis| millis / 1000.0);
         let started = ended - report["ms"].as_f64().unwrap_or_default() / 1000.0;
         let status = report["status"].as_i64().unwrap_or_default();
         let kind = report["via"].as_str().unwrap_or("Fetch");
-        let mut request = json!({ "url": report["url"], "method": report["method"], "headers": {} });
+        let mut request =
+            json!({ "url": report["url"], "method": report["method"], "headers": {} });
         if let Some(sent) = report["request"].as_str() {
             request["postData"] = json!(sent);
         }
-        emit(app, &label, "Network.requestWillBeSent", json!({ "requestId": id, "loaderId": "", "type": kind, "timestamp": started, "wallTime": started, "request": request }));
+        emit(
+            app,
+            &label,
+            "Network.requestWillBeSent",
+            json!({ "requestId": id, "loaderId": "", "type": kind, "timestamp": started, "wallTime": started, "request": request }),
+        );
         if status == 0 {
-            emit(app, &label, "Network.loadingFailed", json!({ "requestId": id, "timestamp": ended, "errorText": "failed" }));
+            emit(
+                app,
+                &label,
+                "Network.loadingFailed",
+                json!({ "requestId": id, "timestamp": ended, "errorText": "failed" }),
+            );
             return;
         }
-        let mime = if report["body"].as_str().is_some_and(|body| body.trim_start().starts_with(['{', '['])) { "application/json" } else { "text/plain" };
-        emit(app, &label, "Network.responseReceived", json!({
-            "requestId": id, "type": kind, "timestamp": ended,
-            "response": { "url": report["url"], "status": status, "statusText": "", "mimeType": mime, "headers": {} },
-        }));
+        let mime = if report["body"]
+            .as_str()
+            .is_some_and(|body| body.trim_start().starts_with(['{', '[']))
+        {
+            "application/json"
+        } else {
+            "text/plain"
+        };
+        emit(
+            app,
+            &label,
+            "Network.responseReceived",
+            json!({
+                "requestId": id, "type": kind, "timestamp": ended,
+                "response": { "url": report["url"], "status": status, "statusText": "", "mimeType": mime, "headers": {} },
+            }),
+        );
         let body = report["body"].as_str().unwrap_or_default();
-        emit(app, &label, "Network.loadingFinished", json!({ "requestId": id, "timestamp": ended, "encodedDataLength": body.len() }));
+        emit(
+            app,
+            &label,
+            "Network.loadingFinished",
+            json!({ "requestId": id, "timestamp": ended, "encodedDataLength": body.len() }),
+        );
         if !body.is_empty() {
             if let Ok(mut bodies) = BODIES.lock() {
                 let key = format!("{tab}|{id}");
@@ -981,23 +1153,43 @@ mod fallback {
         serde_json::from_str(text).map_err(|error| error.to_string())
     }
 
-    pub async fn devtools(app: &AppHandle, tab: &str, method: &str, params: &Value) -> Result<Value, String> {
-        let local = params["storageId"]["isLocalStorage"].as_bool().unwrap_or(true);
-        let store = if local { "localStorage" } else { "sessionStorage" };
+    pub async fn devtools(
+        app: &AppHandle,
+        tab: &str,
+        method: &str,
+        params: &Value,
+    ) -> Result<Value, String> {
+        let local = params["storageId"]["isLocalStorage"]
+            .as_bool()
+            .unwrap_or(true);
+        let store = if local {
+            "localStorage"
+        } else {
+            "sessionStorage"
+        };
         match method {
             m if m.ends_with(".enable") => Ok(json!({})),
             "Network.getResponseBody" => {
                 let key = format!("{tab}|{}", params["requestId"].as_str().unwrap_or_default());
-                let body = BODIES.lock().ok().and_then(|bodies| bodies.0.get(&key).cloned());
+                let body = BODIES
+                    .lock()
+                    .ok()
+                    .and_then(|bodies| bodies.0.get(&key).cloned());
                 body.map(|body| json!({ "body": body, "base64Encoded": false }))
                     .ok_or_else(|| "the body of this response was not kept".to_string())
             }
             "DOMStorage.getDOMStorageItems" => {
-                let entries = page_json(app, tab, &format!("JSON.stringify(Object.entries({store}))")).await?;
+                let entries = page_json(
+                    app,
+                    tab,
+                    &format!("JSON.stringify(Object.entries({store}))"),
+                )
+                .await?;
                 Ok(json!({ "entries": entries }))
             }
             "DOMStorage.removeDOMStorageItem" => {
-                let key = serde_json::to_string(&params["key"]).map_err(|error| error.to_string())?;
+                let key =
+                    serde_json::to_string(&params["key"]).map_err(|error| error.to_string())?;
                 page_json(app, tab, &format!("{store}.removeItem({key}); 'null'")).await?;
                 Ok(json!({}))
             }
@@ -1010,14 +1202,21 @@ mod fallback {
                 Ok(json!({ "cookies": page_json(app, tab, script).await? }))
             }
             "Network.deleteCookies" => {
-                let name = serde_json::to_string(&params["name"]).map_err(|error| error.to_string())?;
-                let path = serde_json::to_string(&params["path"]).map_err(|error| error.to_string())?;
+                let name =
+                    serde_json::to_string(&params["name"]).map_err(|error| error.to_string())?;
+                let path =
+                    serde_json::to_string(&params["path"]).map_err(|error| error.to_string())?;
                 let script = format!("document.cookie = {name} + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=' + ({path} || '/'); 'null'");
                 page_json(app, tab, &script).await?;
                 Ok(json!({}))
             }
             "Storage.clearDataForOrigin" => {
-                page_json(app, tab, "localStorage.clear(); sessionStorage.clear(); 'null'").await?;
+                page_json(
+                    app,
+                    tab,
+                    "localStorage.clear(); sessionStorage.clear(); 'null'",
+                )
+                .await?;
                 Ok(json!({}))
             }
             "Network.clearBrowserCache" => Ok(json!({})),
@@ -1055,7 +1254,9 @@ pub async fn browser_favicon(page: String, icon: Option<String>) -> Result<Strin
         if !matches!(url.scheme(), "http" | "https") {
             continue;
         }
-        let Ok(response) = client.get(url).send().await else { continue };
+        let Ok(response) = client.get(url).send().await else {
+            continue;
+        };
         if !response.status().is_success() {
             continue;
         }
@@ -1072,12 +1273,21 @@ pub async fn browser_favicon(page: String, icon: Option<String>) -> Result<Strin
         if kind.starts_with("text/") || kind.contains("json") {
             continue;
         }
-        let Ok(bytes) = response.bytes().await else { continue };
+        let Ok(bytes) = response.bytes().await else {
+            continue;
+        };
         if bytes.is_empty() || bytes.len() > 262_144 {
             continue;
         }
-        let mime = if kind.starts_with("image/") { kind } else { "image/x-icon".to_string() };
-        return Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)));
+        let mime = if kind.starts_with("image/") {
+            kind
+        } else {
+            "image/x-icon".to_string()
+        };
+        return Ok(format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        ));
     }
     Err("no icon".into())
 }
@@ -1089,19 +1299,33 @@ pub async fn browser_suggest(query: String) -> Vec<String> {
     if query.is_empty() || query.len() > 200 {
         return Vec::new();
     }
-    let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(3)).build() else {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    else {
         return Vec::new();
     };
-    let Ok(mut url) = reqwest::Url::parse("https://suggestqueries.google.com/complete/search?client=firefox") else {
+    let Ok(mut url) =
+        reqwest::Url::parse("https://suggestqueries.google.com/complete/search?client=firefox")
+    else {
         return Vec::new();
     };
     url.query_pairs_mut().append_pair("q", query);
-    let Ok(response) = client.get(url).send().await else { return Vec::new() };
-    let Ok(value) = response.json::<serde_json::Value>().await else { return Vec::new() };
+    let Ok(response) = client.get(url).send().await else {
+        return Vec::new();
+    };
+    let Ok(value) = response.json::<serde_json::Value>().await else {
+        return Vec::new();
+    };
     value
         .get(1)
         .and_then(|list| list.as_array())
-        .map(|list| list.iter().filter_map(|item| item.as_str().map(str::to_string)).take(5).collect())
+        .map(|list| {
+            list.iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .take(5)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1135,13 +1359,23 @@ mod tests {
     }
 
     fn url(scheme: &str, port: u16) -> tauri::Url {
-        format!("{scheme}://localhost:{port}/").parse().expect("url")
+        format!("{scheme}://localhost:{port}/")
+            .parse()
+            .expect("url")
     }
 
     #[tokio::test]
     async fn a_port_with_no_server_is_not_ready() {
-        let free = TcpListener::bind(("127.0.0.1", 0)).await.expect("binds").local_addr().expect("address").port();
-        assert_eq!(ready_within(&url("http", free), Duration::from_millis(500)).await, None);
+        let free = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("binds")
+            .local_addr()
+            .expect("address")
+            .port();
+        assert_eq!(
+            ready_within(&url("http", free), Duration::from_millis(500)).await,
+            None
+        );
     }
 
     #[tokio::test]
@@ -1149,7 +1383,11 @@ mod tests {
         for status in [200, 404, 500] {
             let port = server(Some(status)).await;
             let wanted = url("http", port);
-            assert_eq!(ready_within(&wanted, Duration::from_millis(1500)).await, Some(wanted), "status {status}");
+            assert_eq!(
+                ready_within(&wanted, Duration::from_millis(1500)).await,
+                Some(wanted),
+                "status {status}"
+            );
         }
     }
 
@@ -1157,7 +1395,10 @@ mod tests {
     async fn the_scheme_the_server_speaks_is_the_one_returned() {
         // A plain server asked for as https (what an address with the wrong scheme looks like): the http address answers.
         let port = server(Some(200)).await;
-        assert_eq!(ready_within(&url("https", port), Duration::from_millis(1500)).await, Some(url("http", port)));
+        assert_eq!(
+            ready_within(&url("https", port), Duration::from_millis(1500)).await,
+            Some(url("http", port))
+        );
     }
 
     #[tokio::test]
@@ -1166,7 +1407,10 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("binds");
         let port = listener.local_addr().expect("address").port();
         tokio::spawn(async move { while listener.accept().await.is_ok() {} });
-        assert_eq!(ready_within(&url("http", port), Duration::from_millis(500)).await, None);
+        assert_eq!(
+            ready_within(&url("http", port), Duration::from_millis(500)).await,
+            None
+        );
     }
 
     #[tokio::test]
@@ -1174,7 +1418,10 @@ mod tests {
         // A compiling dev server holds the request: the browser would wait too, so the address is kept as it is.
         let port = server(None).await;
         let wanted = url("http", port);
-        assert_eq!(ready_within(&wanted, Duration::from_millis(300)).await, Some(wanted));
+        assert_eq!(
+            ready_within(&wanted, Duration::from_millis(300)).await,
+            Some(wanted)
+        );
     }
 
     #[test]
@@ -1192,14 +1439,26 @@ mod tests {
     #[test]
     fn the_other_scheme_keeps_the_port_and_needs_one() {
         let parsed = |text: &str| -> tauri::Url { text.parse().expect("url") };
-        assert_eq!(other_scheme(&parsed("http://localhost:4205/")), Some(parsed("https://localhost:4205/")));
-        assert_eq!(other_scheme(&parsed("https://localhost:4205/x?y=1")), Some(parsed("http://localhost:4205/x?y=1")));
-        assert_eq!(other_scheme(&parsed("http://localhost/")), None, "without a port the other scheme is another port");
+        assert_eq!(
+            other_scheme(&parsed("http://localhost:4205/")),
+            Some(parsed("https://localhost:4205/"))
+        );
+        assert_eq!(
+            other_scheme(&parsed("https://localhost:4205/x?y=1")),
+            Some(parsed("http://localhost:4205/x?y=1"))
+        );
+        assert_eq!(
+            other_scheme(&parsed("http://localhost/")),
+            None,
+            "without a port the other scheme is another port"
+        );
     }
 
     #[test]
     fn retries_wait_longer_each_time() {
-        let waits: Vec<u64> = (1..=RETRIES).map(|attempt| backoff(attempt).as_millis() as u64).collect();
+        let waits: Vec<u64> = (1..=RETRIES)
+            .map(|attempt| backoff(attempt).as_millis() as u64)
+            .collect();
         assert_eq!(waits, [1000, 2000, 4000]);
     }
 }

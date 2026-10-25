@@ -61,8 +61,10 @@ pub struct HistoryRun {
 fn open() -> Result<Connection, String> {
     let folder = crate::home_folder()?.join(".agentdeck");
     std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
-    let conn = Connection::open(folder.join("image-history.db")).map_err(|error| error.to_string())?;
-    conn.execute_batch(SCHEMA).map_err(|error| error.to_string())?;
+    let conn =
+        Connection::open(folder.join("image-history.db")).map_err(|error| error.to_string())?;
+    conn.execute_batch(SCHEMA)
+        .map_err(|error| error.to_string())?;
     Ok(conn)
 }
 
@@ -76,7 +78,10 @@ fn now_millis() -> i64 {
 fn fingerprint(path: &Path) -> (String, u64) {
     match std::fs::read(path) {
         Ok(bytes) => {
-            let digest: String = Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
+            let digest: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
             (digest, bytes.len() as u64)
         }
         Err(_) => (String::new(), 0),
@@ -84,7 +89,14 @@ fn fingerprint(path: &Path) -> (String, u64) {
 }
 
 /// Saves one run and its candidate files in a single transaction.
-pub fn record(run_id: &str, prompt: &str, models: &[String], variants: u8, status: &str, result: &ImageGenerateResult) -> Result<(), String> {
+pub fn record(
+    run_id: &str,
+    prompt: &str,
+    models: &[String],
+    variants: u8,
+    status: &str,
+    result: &ImageGenerateResult,
+) -> Result<(), String> {
     let mut conn = open()?;
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     let failures: Vec<String> = result
@@ -138,7 +150,9 @@ pub fn list(limit: usize) -> Result<Vec<HistoryRun>, String> {
             })
         })
         .map_err(|error| error.to_string())?;
-    let mut runs = rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+    let mut runs = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
     let mut files_query = conn
         .prepare("SELECT id, model, backend, variant, path, sha256, bytes FROM image_files WHERE run_id = ?1 ORDER BY variant, model")
         .map_err(|error| error.to_string())?;
@@ -156,7 +170,9 @@ pub fn list(limit: usize) -> Result<Vec<HistoryRun>, String> {
                 })
             })
             .map_err(|error| error.to_string())?;
-        run.images = files.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+        run.images = files
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
     }
     Ok(runs)
 }

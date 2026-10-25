@@ -64,9 +64,17 @@ fn tool_name(name: &str) -> &str {
 
 /// One line of what a tool was asked to do: its command or file, else its parameters.
 fn tool_input(parameters: &Value) -> String {
-    let picked = ["CommandLine", "Path", "AbsolutePath", "TargetFile", "Pattern", "Query", "Url"]
-        .iter()
-        .find_map(|key| parameters.get(*key)?.as_str().map(str::to_owned));
+    let picked = [
+        "CommandLine",
+        "Path",
+        "AbsolutePath",
+        "TargetFile",
+        "Pattern",
+        "Query",
+        "Url",
+    ]
+    .iter()
+    .find_map(|key| parameters.get(*key)?.as_str().map(str::to_owned));
     picked.unwrap_or_else(|| super::summarize_tool_input("", parameters))
 }
 
@@ -90,7 +98,9 @@ pub fn add_allow_rules(path: &std::path::Path, rules: &[String]) -> Result<(), S
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::from("{}"),
         Err(error) => return Err(format!("could not read agy's settings: {error}")),
     };
-    let mut settings: Value = serde_json::from_str(&text).map_err(|_| "agy's settings.json is not valid JSON, so the permission was not added".to_string())?;
+    let mut settings: Value = serde_json::from_str(&text).map_err(|_| {
+        "agy's settings.json is not valid JSON, so the permission was not added".to_string()
+    })?;
     let allow = settings
         .as_object_mut()
         .ok_or("agy's settings.json is not an object")?
@@ -120,7 +130,11 @@ pub fn add_allow_rules(path: &std::path::Path, rules: &[String]) -> Result<(), S
         std::fs::copy(path, &backup).map_err(failed)?;
     }
     let scratch = path.with_extension("json.agentdeck.tmp");
-    std::fs::write(&scratch, serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?).map_err(failed)?;
+    std::fs::write(
+        &scratch,
+        serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?,
+    )
+    .map_err(failed)?;
     std::fs::rename(&scratch, path).map_err(failed)
 }
 
@@ -136,7 +150,9 @@ fn mode_flag(permission_mode: &str) -> Option<&'static str> {
 
 /// A model id that already carries its reasoning level (`gemini-3.8-flash-low`) conflicts with `--effort`.
 fn has_effort_suffix(model: &str) -> bool {
-    ["-low", "-medium", "-high", "-xhigh", "-max"].iter().any(|suffix| model.ends_with(suffix))
+    ["-low", "-medium", "-high", "-xhigh", "-max"]
+        .iter()
+        .any(|suffix| model.ends_with(suffix))
 }
 
 impl Provider for Antigravity {
@@ -158,7 +174,12 @@ impl Provider for Antigravity {
         if let Ok(mut turn) = self.turn.lock() {
             *turn = Turn::default();
         }
-        let mut args = vec!["-p".to_string(), req.prompt.clone(), "--output-format".to_string(), "stream-json".to_string()];
+        let mut args = vec![
+            "-p".to_string(),
+            req.prompt.clone(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+        ];
         // `agy` names a new conversation itself (an unknown id only starts a new one with a warning), so an id
         // is passed only to continue one it reported before.
         if let (Some(id), true) = (&req.session_id, req.resume) {
@@ -187,12 +208,25 @@ impl Provider for Antigravity {
     }
 
     fn prepare(&self, req: &TurnRequest) -> Result<(), String> {
-        let rules: Vec<String> = req.allowed_tools.iter().filter_map(|tool| allow_rule(tool)).collect();
+        let rules: Vec<String> = req
+            .allowed_tools
+            .iter()
+            .filter_map(|tool| allow_rule(tool))
+            .collect();
         if rules.is_empty() {
             return Ok(());
         }
-        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).ok_or("no home folder to find agy's settings in")?;
-        add_allow_rules(&home.join(".gemini").join("antigravity-cli").join("settings.json"), &rules)
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+            .ok_or("no home folder to find agy's settings in")?;
+        add_allow_rules(
+            &home
+                .join(".gemini")
+                .join("antigravity-cli")
+                .join("settings.json"),
+            &rules,
+        )
     }
 
     fn parse_line(&self, line: &str) -> Vec<AgentEvent> {
@@ -204,7 +238,10 @@ impl Provider for Antigravity {
         };
         match value["event"].as_str().unwrap_or_default() {
             "init" => {
-                turn.conversation = value["conversation_id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned);
+                turn.conversation = value["conversation_id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned);
                 Vec::new()
             }
             "step_update" => step(&value["step_update"], &mut turn),
@@ -220,16 +257,24 @@ pub fn models_listing(binary: std::ffi::OsString) -> String {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut command = std::process::Command::new(binary);
-        command.arg("models").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        command
+            .arg("models")
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let listing = command.output().map(|out| String::from_utf8_lossy(&out.stdout).into_owned()).unwrap_or_default();
+        let listing = command
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+            .unwrap_or_default();
         let _ = sender.send(listing);
     });
-    receiver.recv_timeout(std::time::Duration::from_secs(20)).unwrap_or_default()
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap_or_default()
 }
 
 /// A `%XX`-escaped path (as in a `file://` address) with the escapes resolved.
@@ -239,7 +284,10 @@ fn percent_decode(text: &str) -> String {
     let mut index = 0;
     while index < bytes.len() {
         let escaped = (bytes[index] == b'%' && index + 2 < bytes.len())
-            .then(|| text.get(index + 1..index + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok()))
+            .then(|| {
+                text.get(index + 1..index + 3)
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            })
             .flatten();
         match escaped {
             Some(byte) => {
@@ -284,7 +332,10 @@ fn offloaded_image_in(output: &str, home: &std::path::Path) -> Option<String> {
         return None;
     }
     let bytes = std::fs::read(&path).ok()?;
-    Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+    Some(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
 }
 
 fn offloaded_image(output: &str) -> Option<String> {
@@ -297,7 +348,10 @@ fn offloaded_image(output: &str) -> Option<String> {
 fn mcp_call(parameters: &Value) -> Option<(String, String)> {
     let server = parameters["ServerName"].as_str()?;
     let tool = parameters["ToolName"].as_str()?;
-    Some((format!("mcp__{server}__{tool}"), super::summarize_tool_input("", &parameters["Arguments"])))
+    Some((
+        format!("mcp__{server}__{tool}"),
+        super::summarize_tool_input("", &parameters["Arguments"]),
+    ))
 }
 
 fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
@@ -305,8 +359,13 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
     match update["step_type"].as_str().unwrap_or_default() {
         "agent_response" => {
             let mut events = Vec::new();
-            if let Some(text) = update["text_delta"].as_str().filter(|text| !text.is_empty()) {
-                events.push(AgentEvent::Delta { text: text.to_string() });
+            if let Some(text) = update["text_delta"]
+                .as_str()
+                .filter(|text| !text.is_empty())
+            {
+                events.push(AgentEvent::Delta {
+                    text: text.to_string(),
+                });
             }
             // The model call ends with its token counts (thinking tokens are output the model paid for).
             if state == "DONE" && update["usage"].is_object() {
@@ -324,19 +383,30 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
         }
         // Some of agy's steps (a command left running, its status, input sent to it) carry another `step_type`
         // but still have a tool: they are shown like any other tool step instead of being dropped.
-        kind if kind == "tool" || (kind != "agent_response" && (update["tool_name"].is_string() || update["tool_info"].is_object())) => {
+        kind if kind == "tool"
+            || (kind != "agent_response"
+                && (update["tool_name"].is_string() || update["tool_info"].is_object())) =>
+        {
             let index = update["step_index"].as_u64().unwrap_or_default();
             let info = &update["tool_info"];
-            let raw_name = update["tool_name"].as_str().or_else(|| info["name"].as_str()).unwrap_or("tool");
+            let raw_name = update["tool_name"]
+                .as_str()
+                .or_else(|| info["name"].as_str())
+                .unwrap_or("tool");
             let (name, input) = match raw_name {
-                "call_mcp_tool" => mcp_call(&info["parameters"]).unwrap_or_else(|| (raw_name.to_string(), tool_input(&info["parameters"]))),
-                _ => (tool_name(raw_name).to_string(), tool_input(&info["parameters"])),
+                "call_mcp_tool" => mcp_call(&info["parameters"])
+                    .unwrap_or_else(|| (raw_name.to_string(), tool_input(&info["parameters"]))),
+                _ => (
+                    tool_name(raw_name).to_string(),
+                    tool_input(&info["parameters"]),
+                ),
             };
             let mut events = Vec::new();
             if name == "Bash" {
                 // A refused command fails with a permission message, or ends without any output at all.
                 let message = info["error"]["message"].as_str().unwrap_or_default();
-                let refused = (state == "ERROR" && message.contains("permission")) || (state == "DONE" && info["output"].is_null());
+                let refused = (state == "ERROR" && message.contains("permission"))
+                    || (state == "DONE" && info["output"].is_null());
                 if refused && !turn.refused.contains(&input) {
                     turn.refused.push(input.clone());
                 }
@@ -355,11 +425,19 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
                 "DONE" => {
                     let output = info["output"].as_str().unwrap_or_default().to_string();
                     let image = offloaded_image(&output);
-                    events.push(AgentEvent::ToolResult { id: index.to_string(), output, is_error: false, image });
+                    events.push(AgentEvent::ToolResult {
+                        id: index.to_string(),
+                        output,
+                        is_error: false,
+                        image,
+                    });
                 }
                 "ERROR" => events.push(AgentEvent::ToolResult {
                     id: index.to_string(),
-                    output: info["error"]["message"].as_str().unwrap_or("the tool failed").to_string(),
+                    output: info["error"]["message"]
+                        .as_str()
+                        .unwrap_or("the tool failed")
+                        .to_string(),
                     is_error: true,
                     image: None,
                 }),
@@ -370,7 +448,15 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
         // Any other step: kept for the Audit log once it has ended, so a step the chat misses can be looked at.
         // (The prompt and system steps carry nothing to see.)
         "user_input" | "system_message" => Vec::new(),
-        kind if matches!(state, "DONE" | "ERROR") => vec![AgentEvent::Raw { source: "agy".into(), label: if kind.is_empty() { "step".into() } else { kind.to_string() }, line: update.to_string() }],
+        kind if matches!(state, "DONE" | "ERROR") => vec![AgentEvent::Raw {
+            source: "agy".into(),
+            label: if kind.is_empty() {
+                "step".into()
+            } else {
+                kind.to_string()
+            },
+            line: update.to_string(),
+        }],
         _ => Vec::new(),
     }
 }
@@ -378,13 +464,22 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
 fn finish(result: &Value, turn: &Turn) -> Vec<AgentEvent> {
     if result["status"].as_str().unwrap_or("SUCCESS") != "SUCCESS" {
         // The error can list every model it would have taken: the first line says what went wrong.
-        let message = result["error"].as_str().and_then(|text| text.lines().next()).unwrap_or("Antigravity failed");
-        return vec![AgentEvent::Error { message: message.to_string() }];
+        let message = result["error"]
+            .as_str()
+            .and_then(|text| text.lines().next())
+            .unwrap_or("Antigravity failed");
+        return vec![AgentEvent::Error {
+            message: message.to_string(),
+        }];
     }
     let mut events = Vec::new();
     // Only refused shell commands can be approved: `agy` names the action, and a command is the one kind whose
     // exact text we know (from its step) and can put in a rule.
-    let asked = result["denied_actions"].as_array().into_iter().flatten().any(|action| action["action"] == "command");
+    let asked = result["denied_actions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|action| action["action"] == "command");
     let denied: Vec<PermissionRequest> = if asked {
         turn.refused
             .iter()
@@ -404,7 +499,11 @@ fn finish(result: &Value, turn: &Turn) -> Vec<AgentEvent> {
         events.push(AgentEvent::PermissionDenied { requests: denied });
     }
     events.push(AgentEvent::Done {
-        session_id: result["conversation_id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned).or_else(|| turn.conversation.clone()),
+        session_id: result["conversation_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .or_else(|| turn.conversation.clone()),
         text: result["response"].as_str().unwrap_or_default().to_string(),
         cost_usd: None,
     });
@@ -431,7 +530,10 @@ mod tests {
 
     fn run(fixture: &str) -> Vec<AgentEvent> {
         let provider = Antigravity::default();
-        fixture.lines().flat_map(|line| provider.parse_line(line)).collect()
+        fixture
+            .lines()
+            .flat_map(|line| provider.parse_line(line))
+            .collect()
     }
 
     fn has(args: &[String], flag: &str) -> bool {
@@ -439,7 +541,10 @@ mod tests {
     }
 
     fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
-        args.iter().position(|arg| arg == flag).and_then(|at| args.get(at + 1)).map(String::as_str)
+        args.iter()
+            .position(|arg| arg == flag)
+            .and_then(|at| args.get(at + 1))
+            .map(String::as_str)
     }
 
     #[test]
@@ -455,7 +560,10 @@ mod tests {
     #[test]
     fn effort_goes_in_its_own_flag_unless_the_model_id_has_it() {
         let args = Antigravity::default().args(&req(false));
-        assert_eq!((after(&args, "--model"), after(&args, "--effort")), (Some("gemini-3.8-flash"), Some("high")));
+        assert_eq!(
+            (after(&args, "--model"), after(&args, "--effort")),
+            (Some("gemini-3.8-flash"), Some("high"))
+        );
         let mut suffixed = req(false);
         suffixed.model = Some("gemini-3.8-flash-low".into());
         assert!(!has(&Antigravity::default().args(&suffixed), "--effort"));
@@ -468,10 +576,16 @@ mod tests {
             request.permission_mode = Some(mode.into());
             Antigravity::default().args(&request)
         };
-        assert_eq!(after(&args_for("acceptEdits"), "--mode"), Some("accept-edits"));
+        assert_eq!(
+            after(&args_for("acceptEdits"), "--mode"),
+            Some("accept-edits")
+        );
         assert_eq!(after(&args_for("plan"), "--mode"), Some("plan"));
         assert_eq!(after(&args_for("auto"), "--mode"), Some("auto"));
-        assert!(has(&args_for("bypassPermissions"), "--dangerously-skip-permissions"));
+        assert!(has(
+            &args_for("bypassPermissions"),
+            "--dangerously-skip-permissions"
+        ));
         let default = args_for("default");
         assert!(!has(&default, "--mode") && !has(&default, "--dangerously-skip-permissions"));
     }
@@ -480,15 +594,32 @@ mod tests {
     fn approving_a_command_never_turns_off_the_prompts() {
         let mut request = req(true);
         request.allowed_tools = vec!["agy:command(echo hi)".into()];
-        assert!(!has(&Antigravity::default().args(&request), "--dangerously-skip-permissions"));
+        assert!(!has(
+            &Antigravity::default().args(&request),
+            "--dangerously-skip-permissions"
+        ));
     }
 
     #[test]
     fn an_approval_becomes_one_exact_rule_and_only_a_safe_one() {
-        assert_eq!(allow_rule("agy:command(echo hi)").as_deref(), Some("command(echo hi)"));
-        assert_eq!(allow_rule("agy:command(git commit -m \"x\")").as_deref(), Some("command(git commit -m \"x\")"));
+        assert_eq!(
+            allow_rule("agy:command(echo hi)").as_deref(),
+            Some("command(echo hi)")
+        );
+        assert_eq!(
+            allow_rule("agy:command(git commit -m \"x\")").as_deref(),
+            Some("command(git commit -m \"x\")")
+        );
         // Not ours, empty, or able to end the rule early or span lines: no rule.
-        for refused in ["Bash(git status)", "agy:command()", "agy:command(  )", "agy:command(echo (a))", "agy:command(a\nb)", "agy:command(echo a", "agy:command"] {
+        for refused in [
+            "Bash(git status)",
+            "agy:command()",
+            "agy:command(  )",
+            "agy:command(echo (a))",
+            "agy:command(a\nb)",
+            "agy:command(echo a",
+            "agy:command",
+        ] {
             assert_eq!(allow_rule(refused), None, "{refused}");
         }
     }
@@ -508,7 +639,10 @@ mod tests {
         add_allow_rules(&path, &rules).unwrap();
         add_allow_rules(&path, &rules).unwrap();
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(saved["permissions"]["allow"], serde_json::json!(["command(ls)", "command(echo hi)"]));
+        assert_eq!(
+            saved["permissions"]["allow"],
+            serde_json::json!(["command(ls)", "command(echo hi)"])
+        );
         assert_eq!(saved["statusLine"]["enabled"], true);
         // The key order of the file is kept, and the original was copied once.
         let keys: Vec<&String> = saved.as_object().unwrap().keys().collect();
@@ -523,7 +657,10 @@ mod tests {
         let path = settings_path("create");
         add_allow_rules(&path, &["command(echo hi)".to_string()]).unwrap();
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(saved["permissions"]["allow"], serde_json::json!(["command(echo hi)"]));
+        assert_eq!(
+            saved["permissions"]["allow"],
+            serde_json::json!(["command(echo hi)"])
+        );
         std::fs::write(&path, "{ not json").unwrap();
         assert!(add_allow_rules(&path, &["command(ls)".to_string()]).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
@@ -534,33 +671,70 @@ mod tests {
     fn a_plain_answer_streams_text_then_finishes() {
         let events = run(include_str!("../../tests/fixtures/agy/plain.jsonl"));
         assert!(matches!(events.first(), Some(AgentEvent::Delta { .. })));
-        let text: String = events.iter().filter_map(|event| if let AgentEvent::Delta { text } = event { Some(text.as_str()) } else { None }).collect();
+        let text: String = events
+            .iter()
+            .filter_map(|event| {
+                if let AgentEvent::Delta { text } = event {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert!(!text.trim().is_empty());
         assert!(events.iter().any(|event| matches!(event, AgentEvent::Usage { input_tokens, new_call: true, .. } if *input_tokens > 0)));
-        let Some(AgentEvent::Done { session_id, .. }) = events.last() else { panic!("no Done: {events:?}") };
+        let Some(AgentEvent::Done { session_id, .. }) = events.last() else {
+            panic!("no Done: {events:?}")
+        };
         assert!(session_id.as_deref().is_some_and(|id| !id.is_empty()));
     }
 
     #[test]
     fn tool_steps_become_a_call_and_a_result_once() {
-        let events = run(include_str!("../../tests/fixtures/agy/edits_and_denied.jsonl"));
+        let events = run(include_str!(
+            "../../tests/fixtures/agy/edits_and_denied.jsonl"
+        ));
         let calls: Vec<(&str, &str)> = events
             .iter()
-            .filter_map(|event| if let AgentEvent::ToolCall { name, input, .. } = event { Some((name.as_str(), input.as_str())) } else { None })
+            .filter_map(|event| {
+                if let AgentEvent::ToolCall { name, input, .. } = event {
+                    Some((name.as_str(), input.as_str()))
+                } else {
+                    None
+                }
+            })
             .collect();
-        assert_eq!(calls.iter().map(|call| call.0).collect::<Vec<_>>(), ["Write", "Edit", "Bash"]);
+        assert_eq!(
+            calls.iter().map(|call| call.0).collect::<Vec<_>>(),
+            ["Write", "Edit", "Bash"]
+        );
         assert!(calls[0].1.ends_with("b.txt"));
-        let results = events.iter().filter(|event| matches!(event, AgentEvent::ToolResult { .. })).count();
+        let results = events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::ToolResult { .. }))
+            .count();
         assert_eq!(results, 3);
     }
 
     #[test]
     fn a_denied_command_asks_for_approval_before_done() {
         let events = run(include_str!("../../tests/fixtures/agy/tool_denied.jsonl"));
-        let at = events.iter().position(|event| matches!(event, AgentEvent::PermissionDenied { .. })).expect("a permission request");
-        let AgentEvent::PermissionDenied { requests } = &events[at] else { unreachable!() };
+        let at = events
+            .iter()
+            .position(|event| matches!(event, AgentEvent::PermissionDenied { .. }))
+            .expect("a permission request");
+        let AgentEvent::PermissionDenied { requests } = &events[at] else {
+            unreachable!()
+        };
         assert_eq!(requests.len(), 1);
-        assert_eq!((requests[0].tool.as_str(), requests[0].summary.as_str(), requests[0].allow.as_str()), ("Bash", "echo hi", "agy:command(echo hi)"));
+        assert_eq!(
+            (
+                requests[0].tool.as_str(),
+                requests[0].summary.as_str(),
+                requests[0].allow.as_str()
+            ),
+            ("Bash", "echo hi", "agy:command(echo hi)")
+        );
         assert!(matches!(events[at + 1], AgentEvent::Done { .. }));
         // The refused tool failed with the reason the CLI gave.
         assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolResult { is_error: true, output, .. } if output.contains("permission"))));
@@ -568,8 +742,15 @@ mod tests {
 
     #[test]
     fn a_command_that_ended_without_output_is_a_refusal_too() {
-        let events = run(include_str!("../../tests/fixtures/agy/edits_and_denied.jsonl"));
-        let Some(AgentEvent::PermissionDenied { requests }) = events.iter().find(|event| matches!(event, AgentEvent::PermissionDenied { .. })) else { panic!("no request: {events:?}") };
+        let events = run(include_str!(
+            "../../tests/fixtures/agy/edits_and_denied.jsonl"
+        ));
+        let Some(AgentEvent::PermissionDenied { requests }) = events
+            .iter()
+            .find(|event| matches!(event, AgentEvent::PermissionDenied { .. }))
+        else {
+            panic!("no request: {events:?}")
+        };
         assert!(requests[0].allow.starts_with("agy:command(Select-String"));
     }
 
@@ -580,23 +761,41 @@ mod tests {
             r#"{"event":"step_update","step_update":{"step_index":2,"state":"ERROR","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"echo (a)"},"error":{"message":"permission check failed"}}}}"#,
             r#"{"event":"result","result":{"conversation_id":"c","status":"SUCCESS","response":"","denied_actions":[{"action":"command","display_name":"RunCommand"}]}}"#,
         ];
-        let events: Vec<AgentEvent> = lines.iter().flat_map(|line| provider.parse_line(line)).collect();
-        assert!(!events.iter().any(|event| matches!(event, AgentEvent::PermissionDenied { .. })), "{events:?}");
+        let events: Vec<AgentEvent> = lines
+            .iter()
+            .flat_map(|line| provider.parse_line(line))
+            .collect();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::PermissionDenied { .. })),
+            "{events:?}"
+        );
         assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
     }
 
     #[test]
     fn a_resumed_turn_keeps_the_conversation_id() {
         let events = run(include_str!("../../tests/fixtures/agy/resumed.jsonl"));
-        let Some(AgentEvent::Done { session_id, text, .. }) = events.last() else { panic!("no Done: {events:?}") };
-        assert_eq!(session_id.as_deref(), Some("d9c2144e-aeae-4bbd-897b-3871fe7122da"));
+        let Some(AgentEvent::Done {
+            session_id, text, ..
+        }) = events.last()
+        else {
+            panic!("no Done: {events:?}")
+        };
+        assert_eq!(
+            session_id.as_deref(),
+            Some("d9c2144e-aeae-4bbd-897b-3871fe7122da")
+        );
         assert_eq!(text.trim(), "b.txt");
     }
 
     #[test]
     fn a_failed_run_reports_only_the_first_line_of_its_error() {
         let events = run(include_str!("../../tests/fixtures/agy/bad_model.jsonl"));
-        let [AgentEvent::Error { message }] = events.as_slice() else { panic!("expected one error: {events:?}") };
+        let [AgentEvent::Error { message }] = events.as_slice() else {
+            panic!("expected one error: {events:?}")
+        };
         assert!(message.starts_with("invalid model selection"));
         assert!(!message.contains('\n'));
     }
@@ -605,18 +804,29 @@ mod tests {
     fn lines_it_does_not_know_give_nothing() {
         let provider = Antigravity::default();
         assert!(provider.parse_line("not json").is_empty());
-        assert!(provider.parse_line(r#"{"event":"something_new"}"#).is_empty());
+        assert!(provider
+            .parse_line(r#"{"event":"something_new"}"#)
+            .is_empty());
         assert!(provider.parse_line(r#"{"event":"step_update","step_update":{"step_type":"system_message","state":"DONE"}}"#).is_empty());
         // A step of a kind it does not know is only kept, as written, for the Audit log, once it has ended.
-        let line = r#"{"event":"step_update","step_update":{"step_type":"something_new","state":"DONE"}}"#;
-        assert!(matches!(provider.parse_line(line).as_slice(), [AgentEvent::Raw { label, .. }] if label == "something_new"));
+        let line =
+            r#"{"event":"step_update","step_update":{"step_type":"something_new","state":"DONE"}}"#;
+        assert!(
+            matches!(provider.parse_line(line).as_slice(), [AgentEvent::Raw { label, .. }] if label == "something_new")
+        );
         assert!(provider.parse_line(r#"{"event":"step_update","step_update":{"step_type":"something_new","state":"ACTIVE"}}"#).is_empty());
     }
 
     #[test]
     fn the_binary_is_looked_up_in_its_own_install_folder() {
         let found = candidates_for("windows", None, Some(PathBuf::from("C:/Local")));
-        assert_eq!(found, [PathBuf::from("C:/Local").join("agy").join("bin").join("agy.exe")]);
+        assert_eq!(
+            found,
+            [PathBuf::from("C:/Local")
+                .join("agy")
+                .join("bin")
+                .join("agy.exe")]
+        );
         let found = candidates_for("linux", Some(PathBuf::from("/home/u")), None);
         assert_eq!(found, [PathBuf::from("/home/u/.local/bin/agy")]);
     }
@@ -625,17 +835,38 @@ mod tests {
     fn a_picture_a_tool_saved_becomes_a_thumbnail_only_from_agys_own_folder() {
         let home = std::env::temp_dir().join(format!("agentdeck-agy-img-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
-        let shots = home.join(".gemini").join("antigravity-cli").join("brain").join("c 1").join("media_0.png");
+        let shots = home
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("brain")
+            .join("c 1")
+            .join("media_0.png");
         std::fs::create_dir_all(shots.parent().expect("has a parent")).expect("makes folders");
         std::fs::write(&shots, [137u8, 80, 78, 71]).expect("writes");
         std::fs::write(home.join("secret.png"), [1u8, 2, 3]).expect("writes");
-        let slashes = shots.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/").replace(' ', "%20");
-        let address = if slashes.starts_with('/') { format!("file://{slashes}") } else { format!("file:///{slashes}") };
+        let slashes = shots
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/")
+            .replace(' ', "%20");
+        let address = if slashes.starts_with('/') {
+            format!("file://{slashes}")
+        } else {
+            format!("file:///{slashes}")
+        };
         let output = format!("{{}}\n[Resource offloaded to {address}]");
         let image = offloaded_image_in(&output, &home).expect("a thumbnail");
         assert!(image.starts_with("data:image/png;base64,iVBORw"), "{image}");
-        let outside = format!("[Resource offloaded to file:///{}]", home.join("secret.png").to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"));
-        assert_eq!(offloaded_image_in(&outside, &home), None, "only files under .gemini are read");
+        let outside = format!(
+            "[Resource offloaded to file:///{}]",
+            home.join("secret.png")
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        );
+        assert_eq!(
+            offloaded_image_in(&outside, &home),
+            None,
+            "only files under .gemini are read"
+        );
         assert_eq!(offloaded_image_in("no picture here", &home), None);
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -646,7 +877,10 @@ mod tests {
         let (name, input) = mcp_call(&call).expect("a call");
         assert_eq!(name, "mcp__agentdeck__browser_click");
         assert!(input.contains("\"x\":90"), "{input}");
-        assert_eq!(mcp_call(&serde_json::json!({ "ServerName": "agentdeck" })), None);
+        assert_eq!(
+            mcp_call(&serde_json::json!({ "ServerName": "agentdeck" })),
+            None
+        );
         assert_eq!(percent_decode("a%20b%2Fc%zz"), "a b/c%zz");
     }
 }

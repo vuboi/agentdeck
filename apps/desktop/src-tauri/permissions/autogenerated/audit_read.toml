@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-audit-read"
+description = "Enables the audit_read command without any pre-configured scope."
+commands.allow = ["audit_read"]
+
+[[permission]]
+identifier = "deny-audit-read"
+description = "Denies the audit_read command without any pre-configured scope."
+commands.deny = ["audit_read"]

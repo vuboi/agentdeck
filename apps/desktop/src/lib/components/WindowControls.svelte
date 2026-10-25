@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { inTauri as hostedInTauri } from '../history';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
 
   let maximized = $state(false);
-  const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  const inTauri = hostedInTauri();
 
   onMount(() => {
     if (!inTauri) return;

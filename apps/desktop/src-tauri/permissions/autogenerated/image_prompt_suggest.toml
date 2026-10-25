@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-image-prompt-suggest"
+description = "Enables the image_prompt_suggest command without any pre-configured scope."
+commands.allow = ["image_prompt_suggest"]
+
+[[permission]]
+identifier = "deny-image-prompt-suggest"
+description = "Denies the image_prompt_suggest command without any pre-configured scope."
+commands.deny = ["image_prompt_suggest"]

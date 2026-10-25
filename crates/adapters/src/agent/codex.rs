@@ -123,7 +123,12 @@ fn version_key(path: &Path) -> Vec<u64> {
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_prefix("@openai+codex@"))
         .and_then(|rest| rest.split('-').next())
-        .map(|version| version.split('.').map(|part| part.parse().unwrap_or(0)).collect())
+        .map(|version| {
+            version
+                .split('.')
+                .map(|part| part.parse().unwrap_or(0))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -143,7 +148,10 @@ fn snapshot(cwd: Option<&Path>, path: &str) -> (String, String) {
                 .arg("-C")
                 .arg(cwd)
                 .arg("show")
-                .arg(format!("HEAD:./{}", rel.to_string_lossy().replace('\\', "/")))
+                .arg(format!(
+                    "HEAD:./{}",
+                    rel.to_string_lossy().replace('\\', "/")
+                ))
                 .output()
                 .ok()
         })
@@ -519,7 +527,8 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("agentdeck-codex-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("agentdeck-codex-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -563,11 +572,15 @@ mod tests {
         .to_string();
         let events = codex.parse_line(&line);
         std::fs::remove_dir_all(&dir).unwrap();
-        assert!(matches!(&events[0], AgentEvent::ToolCall { name, change: Some(change), .. }
+        assert!(
+            matches!(&events[0], AgentEvent::ToolCall { name, change: Some(change), .. }
             if name == "Write" && change.path == "new.txt" && change.added == 2
-                && change.before.is_empty() && change.after == "one\ntwo\n"));
-        assert!(matches!(&events[2], AgentEvent::ToolCall { name, change: Some(change), .. }
-            if name == "Delete" && change.path == "gone.txt" && change.after.is_empty()));
+                && change.before.is_empty() && change.after == "one\ntwo\n")
+        );
+        assert!(
+            matches!(&events[2], AgentEvent::ToolCall { name, change: Some(change), .. }
+            if name == "Delete" && change.path == "gone.txt" && change.after.is_empty())
+        );
     }
 
     #[test]
@@ -584,10 +597,17 @@ mod tests {
             "item": {"id": "m1", "type": "mcp_tool_call", "server": "agentdeck", "tool": "browser_click", "arguments": {"ref": "ref_3"}, "status": "failed", "error": {"message": "no page"}}
         })
         .to_string();
-        let events: Vec<AgentEvent> = [started, completed].iter().flat_map(|line| codex.parse_line(line)).collect();
+        let events: Vec<AgentEvent> = [started, completed]
+            .iter()
+            .flat_map(|line| codex.parse_line(line))
+            .collect();
         assert_eq!(events.len(), 2);
-        assert!(matches!(&events[0], AgentEvent::ToolCall { name, .. } if name == "agentdeck.browser_click"));
-        assert!(matches!(&events[1], AgentEvent::ToolResult { output, is_error: true, .. } if output == "no page"));
+        assert!(
+            matches!(&events[0], AgentEvent::ToolCall { name, .. } if name == "agentdeck.browser_click")
+        );
+        assert!(
+            matches!(&events[1], AgentEvent::ToolResult { output, is_error: true, .. } if output == "no page")
+        );
     }
 
     #[test]
@@ -595,7 +615,8 @@ mod tests {
         let codex = Codex::default();
         let note = codex.parse_line(&json!({"type": "item.completed", "item": {"id": "e1", "type": "error", "message": "rate limited"}}).to_string());
         assert!(matches!(&note[..], [AgentEvent::Delta { text }] if text == "⚠ rate limited"));
-        let failed = codex.parse_line(&json!({"type": "turn.failed", "error": {"message": "quota"}}).to_string());
+        let failed = codex
+            .parse_line(&json!({"type": "turn.failed", "error": {"message": "quota"}}).to_string());
         assert!(matches!(&failed[..], [AgentEvent::Error { message }] if message == "quota"));
         let top = codex.parse_line(&json!({"type": "error", "message": "boom"}).to_string());
         assert!(matches!(&top[..], [AgentEvent::Error { message }] if message == "boom"));
@@ -604,23 +625,56 @@ mod tests {
     #[test]
     fn a_turn_without_usage_or_thread_still_ends_cleanly() {
         let events = Codex::default().parse_line(r#"{"type":"turn.completed"}"#);
-        assert!(matches!(events[0], AgentEvent::Usage { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, .. }));
-        assert!(matches!(&events[1], AgentEvent::Done { session_id: None, .. }));
+        assert!(matches!(
+            events[0],
+            AgentEvent::Usage {
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &events[1],
+            AgentEvent::Done {
+                session_id: None,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn pnpm_installs_list_the_newest_codex_version_first() {
         let local = temp_dir("pnpm");
-        let platform = if std::env::consts::ARCH == "aarch64" { "win32-arm64" } else { "win32-x64" };
+        let platform = if std::env::consts::ARCH == "aarch64" {
+            "win32-arm64"
+        } else {
+            "win32-x64"
+        };
         for version in ["0.9.0", "0.10.0"] {
             let folder = format!("@openai+codex@{version}-{platform}");
-            std::fs::create_dir_all(local.join("pnpm").join("global").join("5").join(".pnpm").join(folder)).unwrap();
+            std::fs::create_dir_all(
+                local
+                    .join("pnpm")
+                    .join("global")
+                    .join("5")
+                    .join(".pnpm")
+                    .join(folder),
+            )
+            .unwrap();
         }
         let found = candidates_for("windows", None, Some(local.clone()), None);
         std::fs::remove_dir_all(&local).unwrap();
-        let newest = found.iter().position(|path| path.to_string_lossy().contains("0.10.0"));
-        let older = found.iter().position(|path| path.to_string_lossy().contains("0.9.0"));
-        assert!(newest.is_some() && older.is_some() && newest < older, "{found:?}");
+        let newest = found
+            .iter()
+            .position(|path| path.to_string_lossy().contains("0.10.0"));
+        let older = found
+            .iter()
+            .position(|path| path.to_string_lossy().contains("0.9.0"));
+        assert!(
+            newest.is_some() && older.is_some() && newest < older,
+            "{found:?}"
+        );
     }
 
     #[test]

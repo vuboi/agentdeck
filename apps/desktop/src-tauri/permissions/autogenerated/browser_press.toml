@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-press"
+description = "Enables the browser_press command without any pre-configured scope."
+commands.allow = ["browser_press"]
+
+[[permission]]
+identifier = "deny-browser-press"
+description = "Denies the browser_press command without any pre-configured scope."
+commands.deny = ["browser_press"]

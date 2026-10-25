@@ -143,7 +143,7 @@ function watchTheme() {
 let listening: Promise<void> | null = null;
 function listenToShells(): Promise<void> {
   listening ??= (async () => {
-    const { listen } = await import('@tauri-apps/api/event');
+    const { listen } = await import('./tauri-event');
     await listen<{ id: string; data: string; end?: number }>('pty-data', ({ payload }) => {
       const session = live.get(payload.id);
       if (!session) return;

@@ -18,6 +18,7 @@ import { trackActivity } from './activity.svelte';
 import { logTalk } from './activity.svelte';
 import { parseQuestions, QUESTION_RULE } from './questions';
 import { attachmentBlocks, splitAttachments } from './attachments';
+import { deleteCommandImages, finishCommandImages, persistCommandImage, restoreCommandImages, stripCommandImageData } from './command-images';
 import { delegateReady, listenDelegateAborts, listenDelegateCalls, listenAgentEvents, replyDelegateCall, saveAttachment, sendAgentTurn, sendCustomTurn, stopAgentTurn, type AgentEvent, type DelegateCall } from './agent';
 import { agentdeckLead, argsOfCall, DELEGATE_HINT, parseHandoff, reportDigest, findAgent, formatAgents, formatTaskResult, handoffOf, isTaskId, kindOfCommand, newTaskId, parseDelegateArgs, pickTask, reasonLine, REPORT_RULE, resolveModel, startedText, toolKindOf, type AgentRow, type HandoffReport, type TaskRecord, type Verdict } from './delegate-task';
 import { elapsed } from './blocks';
@@ -26,11 +27,13 @@ import { getPref, setPref } from './prefs';
 import { estimateCost, recordUsage } from './usage';
 import { customModelId, customProviderName, modelCatalog, modelLabel, parseCustomModel } from './models.svelte';
 import { connectors } from './connectors.svelte';
+import { sendSystemNotification } from './system-notifications';
 import { dequeue, enqueue } from './queue';
 import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from './handback';
 import { joinContinuations } from './continuations';
 import { inputsOf, normalizeGraph, presetOf, stepGroups, type WorkflowPreset, type WorkflowStep } from './workflows.svelte';
 import { agentDisplayName, BUILT_IN_AGENTS } from './provider-registry';
+import { listen } from './tauri-event';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
 export type Agent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'custom';
@@ -55,6 +58,8 @@ export type SessionItem = {
   status: Status;
   /** Set on a fork: the session it was forked from. */
   parentId?: string;
+  /** A fork starts a conversation of its own: what was said before it, put before its first prompt, once. */
+  forkContext?: string;
   /** Imported from Claude Code / Codex history: where the transcript lives on disk. */
   source?: 'claude' | 'codex';
   path?: string;
@@ -430,6 +435,34 @@ export function newChat() {
   newSession(NO_PROJECT);
 }
 
+// Keep the native tray menu in sync with the chats visible in the desktop app. The menu only carries a small recent
+// list; selecting one sends its id back through the tray-action event and this module activates that chat.
+let trayMenuUpdates = Promise.resolve();
+if (inTauri()) {
+  void listen<{ action: string; sessionId?: string }>('tray-action', ({ payload }) => {
+    if (payload.action === 'new-chat') {
+      newSession();
+    } else if (payload.action === 'open-session' && payload.sessionId && workspace.sessions.some((item) => item.id === payload.sessionId)) {
+      workspace.activeId = payload.sessionId;
+    }
+  });
+
+  $effect.root(() => {
+    $effect(() => {
+      const recent = workspace.sessions
+        .filter((item) => !item.draft)
+        .slice()
+        .sort((a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''))
+        .slice(0, 6)
+        .map(({ id, title, agent }) => ({ id, title, agent: agentDisplayName(agent) }));
+      trayMenuUpdates = trayMenuUpdates.then(async () => {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('tray_update_recent', { sessions: recent });
+      }).catch(() => {});
+    });
+  });
+}
+
 /**
  * Said to the agent when a message is about running or opening something. Agents follow the project's own notes
  * (a skill that opens the user's Chrome, a shell command that starts the server), and a server started in the agent's
@@ -474,7 +507,7 @@ function openServedPage(sessionId: string, reply: Message) {
   if (!inTauri()) return;
   // A flow's steps and the turn that writes its final answer only report: an address they mention (an API a search
   // found, a URL in a README) is not a page the user asked to see, and opening it showed a refused connection.
-  if (workspace.sessions.find((item) => item.id === sessionId)?.parentId || delegateRuns.some((run) => run.main === sessionId && !run.endedAt)) return;
+  if (isWorkerChat(sessionId) || delegateRuns.some((run) => run.main === sessionId && !run.endedAt)) return;
   const text = reply.blocks
     .map((block) => (block.kind === 'response' ? block.text : block.kind === 'command' ? `${block.command}\n${block.output}` : ''))
     .join('\n');
@@ -560,11 +593,50 @@ const turns: Record<string, string> = {};
 export type Queued = { text: string; images: Attachment[]; elements: PageElement[]; mentions?: Mention[]; files?: FileAttachment[] };
 export const queued = $state<Record<string, Queued[]>>({});
 
+type SessionWorkBatch = { failed: boolean };
+const sessionWorkBatches: Record<string, SessionWorkBatch> = {};
+
+function beginSessionWork(sessionId: string) {
+  sessionWorkBatches[sessionId] ??= { failed: false };
+}
+
+function failSessionWork(sessionId: string) {
+  const batch = sessionWorkBatches[sessionId];
+  if (batch) batch.failed = true;
+}
+
+function hasOutstandingSessionWork(sessionId: string): boolean {
+  if (replies[sessionId] || hasSideTurn(sessionId) || renderWaiters[sessionId] || needsUserInput(sessionId)) return true;
+  if (delegateRuns.some((run) => run.main === sessionId && !run.endedAt)) return true;
+  if ([...taskRuns.keys()].some((taskId) => delegateTasks[taskId]?.caller === sessionId)) return true;
+  return false;
+}
+
+function notifySessionWorkDone(sessionId: string) {
+  const batch = sessionWorkBatches[sessionId];
+  if (!batch) return;
+  delete sessionWorkBatches[sessionId];
+  if (!connectors.alerts.system) return;
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  const title = batch.failed ? 'Session finished with failures' : 'Session finished';
+  const body = batch.failed
+    ? `${session.title}: at least one task failed. No session work remains.`
+    : `${session.title}: all tasks are done and nothing remains queued.`;
+  void sendSystemNotification(title, body);
+}
+
 /** Whether a chat has a reply in progress (for the send / stop button). */
-export const isRunning = (sessionId: string) => workspace.sessions.find((item) => item.id === sessionId)?.status === 'working';
+export const isRunning = (sessionId: string) => workspace.sessions.find((item) => item.id === sessionId)?.status === 'working' || hasSideTurn(sessionId);
 
 /** Stops the reply of a chat now. What was written so far stays. */
 export function stopTurn(sessionId: string) {
+  for (const [id, side] of sideTurns) {
+    if (side.main !== sessionId) continue;
+    void stopAgentTurn(id).catch(() => {});
+    side.reply.live = false;
+    sideTurns.delete(id);
+  }
   // Work handed to other agents (a flow's steps, `@agent`) stops with the chat that handed it out, all at once.
   for (const run of delegateRuns) {
     if (run.main !== sessionId || run.endedAt || run.handback === 'running') continue;
@@ -583,7 +655,7 @@ export function stopTurn(sessionId: string) {
   if (!replies[sessionId]) {
     // Nothing is running any more but the chat still says so (a lost event): clear it.
     const stuck = workspace.sessions.find((item) => item.id === sessionId);
-    if (stuck?.status === 'working') stuck.status = 'idle';
+    if (stuck?.status === 'working') stuck.status = hasSideTurn(sessionId) ? 'working' : 'idle';
     return;
   }
   const turn = turns[sessionId];
@@ -702,7 +774,8 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
     host.callOutput = 0;
   }
   // A silent turn (the hand-back) has no message of its own: its reply simply follows the message that handed work out.
-  const context = preface + missedTurns(session, list, !silent);
+  const context = preface + (session.forkContext ?? '') + missedTurns(session, list, !silent);
+  session.forkContext = undefined;
   const asked = silent ? undefined : list.at(-1);
   if (!continues) list.push(reply);
   liveReplies[session.id] = list[list.length - 1]; // the stored (reactive) object
@@ -746,11 +819,11 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       return;
     }
     // A flow's step is not told it may open pages: it reports back, the user did not ask to see anything.
-    const openHint = !session.parentId && OPEN_WORDS.test(body) ? AGENTDECK_HINT : '';
+    const openHint = !isWorkerChat(session.id) && OPEN_WORDS.test(body) ? AGENTDECK_HINT : '';
     // How to delegate (DELEGATE_HINT): said when the conversation starts, and once per run of the app for a chat that is
     // resumed, not with every turn: the agent keeps it in its history. Sub chats (workers, flow steps) do not delegate.
     const hintKey = `${session.id}|${session.agent}`;
-    const delegateHint = !session.parentId && (!resume || !delegateHinted.has(hintKey)) ? DELEGATE_HINT : '';
+    const delegateHint = !isWorkerChat(session.id) && (!resume || !delegateHinted.has(hintKey)) ? DELEGATE_HINT : '';
     if (delegateHint) delegateHinted.add(hintKey);
     const hint = agentdeckLead(openHint, delegateHint);
     // Pictures and documents are on disk: the prompt names their paths, which the agent opens with its own tools.
@@ -791,6 +864,7 @@ export function answerPermission(messageId: string, blockIndex: number, answer: 
   if (answer === 'deny') {
     block.state = 'denied';
     persistLocal();
+    sendNextQueued(session.id);
     return;
   }
   block.state = 'allowed';
@@ -859,6 +933,61 @@ function messagesOf(sessionId: string): Message[] {
   return (localMessages[sessionId] ??= []);
 }
 
+/** A queued task must wait while the latest user turn still has a question or permission request to resolve. */
+export function needsUserInput(sessionId: string): boolean {
+  const list = messagesOf(sessionId);
+  const messages = liveReplies[sessionId] && !list.includes(liveReplies[sessionId]) ? [...list, liveReplies[sessionId]] : list;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role === 'user') return false;
+    if (message.blocks.some((block) => block.kind === 'permission' && block.state === 'pending')) return true;
+    if (message.blocks.some((block) => block.kind === 'response' && parseQuestions(block.text).questions.length > 0)) return true;
+  }
+  return false;
+}
+
+/** Dispatches one queued message only after the active turn and all user decisions are complete. */
+function sendNextQueued(sessionId: string) {
+  if (hasOutstandingSessionWork(sessionId)) return;
+  // Let the current event stack finish before taking an item. Ctrl+Enter stops the current turn and
+  // starts the priority message synchronously; taking an item before that message starts would
+  // remove it from the queue, then `send` would reject it because the priority turn is now running.
+  setTimeout(() => {
+    if (hasOutstandingSessionWork(sessionId)) return;
+    const next = dequeue(queued, sessionId);
+    if (next) {
+      send(sessionId, next.text, next.images, next.elements, next.mentions, { files: next.files });
+      return;
+    }
+    if (backlog.get(sessionId)?.length) {
+      flushReports(sessionId, 0);
+      return;
+    }
+    if (hasOutstandingSessionWork(sessionId)) return;
+    notifySessionWorkDone(sessionId);
+  }, 0);
+}
+
+/** A finished reply can still be animating its final Markdown into view; keep its queue behind that render. */
+const renderWaiters: Record<string, { messageId: string; blocks: Set<number> }> = {};
+
+/** Called after a response block's final text has reached the DOM. */
+export function replyBlockRendered(sessionId: string, messageId: string, blockIndex: number) {
+  const waiting = renderWaiters[sessionId];
+  if (!waiting || waiting.messageId !== messageId) return;
+  waiting.blocks.delete(blockIndex);
+  if (waiting.blocks.size) return;
+  delete renderWaiters[sessionId];
+  sendNextQueued(sessionId);
+}
+
+/** If the user leaves the chat before its final animation ends, let its queued work continue in the background. */
+export function releaseReplyRender(sessionId: string) {
+  if (!renderWaiters[sessionId]) return;
+  delete renderWaiters[sessionId];
+  sendNextQueued(sessionId);
+}
+
 /** Apply one agent event to the reply it belongs to. */
 export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: string) {
   if (turn !== undefined && turns[sessionId] !== turn) return; // a run that was stopped or replaced
@@ -880,7 +1009,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
   if (!reply) {
     if (event.kind === 'done' || event.kind === 'error') {
       delete replies[sessionId];
-      session.status = 'idle';
+      session.status = hasSideTurn(sessionId) ? 'working' : 'idle';
     }
     return;
   }
@@ -901,6 +1030,7 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
   if (event.kind === 'done' && event.cost_usd != null) reply.cost = (reply.cost ?? 0) + event.cost_usd;
   const update = applyAgentEvent(reply.blocks, event);
   reply.blocks = update.blocks;
+  if (event.kind === 'tool_result' && event.image) persistCommandImage(sessionId, reply, event.id, event.image);
   // A delegate_task call just showed up: its card follows the task the call starts.
   if (event.kind === 'tool_call' && toolKindOf(event.name) === 'delegate_task') bindTasks(sessionId);
   // The CLI has the conversation once it answers; only then is `--resume` valid for the next turn.
@@ -914,7 +1044,9 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     if (id) (session.agentIds ??= {})[agent] = { id, started: true };
   }
   if (update.finished) {
+    if (event.kind === 'error') failSessionWork(sessionId);
     reply.live = false;
+    void finishCommandImages(sessionId, reply);
     if (session.path && session.source && reply.agent && reply.agent !== session.source) {
       keepOtherTurn(session, reply);
       rememberMixed(session);
@@ -947,16 +1079,18 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
     delete liveReplies[sessionId];
     delete liveAsks[sessionId];
     delete liveHandouts[sessionId];
-    session.status = 'idle';
+    session.status = hasSideTurn(sessionId) ? 'working' : 'idle';
     persistLocal();
     // The CLI wrote the conversation to disk: pick it up so the row gets its path, in place (same id).
     // The cached transcript of this chat is now behind the file: a new time makes the next open read it again.
     session.updatedAt = new Date().toISOString();
     transcripts.delete(sessionId);
     if (!session.path) void importHistory({ refresh: true });
-    // Messages typed while it worked go next, one at a time.
-    const next = dequeue(queued, sessionId);
-    if (next) setTimeout(() => send(sessionId, next.text, next.images, next.elements, next.mentions, { files: next.files }), 0);
+    // The final Markdown animation can outlast the CLI turn. Keep queued work behind the last rendered response.
+    const responseBlocks = reply.blocks.flatMap((block, index) => (block.kind === 'response' && block.text ? [index] : []));
+    if (sessionId === workspace.activeId && responseBlocks.length && !needsUserInput(sessionId)) {
+      renderWaiters[sessionId] = { messageId: reply.id, blocks: new Set(responseBlocks) };
+    } else sendNextQueued(sessionId);
   }
 }
 
@@ -966,7 +1100,10 @@ if (inTauri()) {
   const flush = () => {
     const batch = queue;
     queue = [];
-    for (const { session, turn, event } of batch) handleAgentEvent(session, event, turn);
+    for (const { session, turn, event } of batch) {
+      if (sideTurns.has(session)) handleSideEvent(session, event, turn);
+      else handleAgentEvent(session, event, turn);
+    }
   };
   void listenAgentEvents((envelope) => {
     if (queue.push(envelope) === 1) requestAnimationFrame(flush);
@@ -1179,6 +1316,7 @@ function endCancelled(main: string, run: DelegateRun) {
   if (session && !replies[main]) session.status = 'idle';
   run.handback = 'failed';
   run.endedAt = Date.now();
+  sendNextQueued(main);
 }
 
 // ---------- delegate_task: an agent hands a task to another agent during its own turn ----------
@@ -1222,6 +1360,14 @@ $effect.root(() => {
 
 /** Whether this chat is a worker of a task: it does not delegate further. */
 const isTaskChild = (id: string) => Object.values(delegateTasks).some((item) => item.childId === id);
+/**
+ * A chat that only works for another one: a delegated task's worker or a step of a flow. A fork also sits under its
+ * parent in the tree (`parentId`), but it is a chat of its own: it opens pages and delegates like any other, and its
+ * state is its own.
+ */
+function isWorkerChat(id: string): boolean {
+  return isTaskChild(id) || delegateRuns.some((run) => run.nodes.some((node) => node.childId === id));
+}
 
 /** The chat of a call. A link that names none (Antigravity's stored one) is the chat of that agent running now. */
 function callerOf(chatId: string): SessionItem | undefined {
@@ -1283,7 +1429,10 @@ function startTask(call: DelegateCall, reply: (text: string, isError?: boolean) 
   const rows = agentRows();
   const row = findAgent(rows, wanted);
   if (!row) return reply(`No agent "${wanted}" is available. ${formatAgents(rows)}`, true);
-  const chosen = resolveModel(row.models, wantedModel, row.id === 'claude' ? 'sonnet' : undefined);
+  // A worker of the same provider keeps the model selected in its parent chat unless the caller asked for one.
+  // Different providers cannot run that model id, so they use their own normal default.
+  const inheritedModel = row.id === caller.agent && row.models.some((item) => item.value === caller.model) ? caller.model : undefined;
+  const chosen = resolveModel(row.models, wantedModel ?? inheritedModel, row.id === 'claude' ? 'sonnet' : undefined);
   if ('error' in chosen) return reply(chosen.error, true);
   const agent: Agent = row.id === 'claude' || row.id === 'codex' || row.id === 'antigravity' || row.id === 'opencode' ? row.id : 'custom';
   const model = agent === 'custom' ? customModelId(row.id, chosen.model) : chosen.model;
@@ -1325,6 +1474,7 @@ function finishTask(taskId: string, verdict: Verdict, detail: string, answer: st
   const record = delegateTasks[taskId];
   const run = taskRuns.get(taskId);
   if (!record || !run) return;
+  if (verdict === 'failed' || verdict === 'timed out') failSessionWork(record.caller);
   clearTimeout(run.timer);
   taskRuns.delete(taskId);
   stepWaiters.delete(record.childId);
@@ -1702,6 +1852,7 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
     }
     void runFile(root, runId, 'BOARD.md', boardText(task, preset, ctx, groups));
     // A step that failed ends the chain: the agent is told what happened so far.
+    if (done.some((item) => !item.ok)) failSessionWork(main.id);
     if (run.cancelled || done.some((item) => !item.ok)) break;
     for (const step of active) replanNotes.delete(step.id);
     // A step sent its input back: the steps that fed it run again (and every stage after them), with its reason.
@@ -1746,6 +1897,8 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
     main.status = 'idle';
     run.handback = 'failed';
     run.endedAt = Date.now();
+    failSessionWork(main.id);
+    sendNextQueued(main.id);
     return;
   }
   const notes = await Promise.all(graph.map((step) => runFile(root, runId, `agents/${slugs.get(step.id)}.md`)));
@@ -1807,9 +1960,91 @@ function handBack(batch: DelegateBatch) {
       // handed work out) is the wait state, and the agent's reply follows it as if it were the same turn.
       send(batch.main, '', [], [], [], { prompt, silent: batch.asked });
     }
+    // The chat is busy with something else: the answers are not kept waiting for it, they are worked on at once, beside it.
+    else if (handBackBeside(batch, prompt)) return;
     else if (tries < 900) setTimeout(() => go(tries + 1), 1000);
   };
   go(0);
+}
+
+// ---------- a hand-back that does not wait ----------
+// The agents asked have answered while the chat is busy with another turn. That turn cannot be joined (one CLI
+// conversation runs one turn at a time), so the answers go to a turn of their own, running beside it: it knows the chat so
+// far, has no session and no tab, and its reply sits in the chat as a message (open its steps to see what it did).
+const sideTurns = new Map<string, { main: string; reply: Message; turn: string }>();
+let sideCount = 0;
+
+/** A side hand-back still occupies the main chat until its result arrives. */
+function hasSideTurn(main: string): boolean {
+  for (const side of sideTurns.values()) if (side.main === main) return true;
+  return false;
+}
+
+function handBackBeside(batch: DelegateBatch, prompt: string): boolean {
+  const session = workspace.sessions.find((item) => item.id === batch.main);
+  // A custom provider keeps its conversation in the app: it has no CLI turn to run beside another one.
+  if (!session || session.agent === 'custom' || !inTauri()) return false;
+  const id = `${batch.main}#side${++sideCount}`;
+  const turn = nextId();
+  const list = messagesOf(batch.main);
+  const model = modelFor(session);
+  const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent, model: model ?? session.model };
+  const context = forkDigest(list);
+  list.push(reply);
+  const stored = list[list.length - 1]; // the stored (reactive) object
+  sideTurns.set(id, { main: batch.main, reply: stored, turn });
+  batch.run.handback = 'running';
+  batch.run.handbackAt = Date.now();
+  const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
+  void sendAgentTurn({
+    session: id,
+    turn,
+    agent: session.agent,
+    prompt: context + prompt,
+    // A conversation of its own: Claude takes the id we choose, the others name theirs on the first turn.
+    agentSession: session.agent === 'claude' ? crypto.randomUUID() : null,
+    resume: false,
+    model,
+    permissionMode: PERMISSION_MODE[turnOptions.permission],
+    effort: (session.stepEffort ?? turnOptions.effort) as Effort,
+    allowedTools: [...(approved[batch.main] ?? [])],
+    cwd,
+  }).catch((error: unknown) => handleSideEvent(id, { kind: 'error', message: String(error) }, turn));
+  return true;
+}
+
+/** One event of a turn running beside its chat: it fills that reply, and ends it. */
+function handleSideEvent(id: string, event: AgentEvent, turn: string) {
+  const side = sideTurns.get(id);
+  if (!side || side.turn !== turn || event.kind === 'raw') return;
+  const { reply, main } = side;
+  if (event.kind === 'usage') {
+    reply.tokens ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    if (event.new_call) {
+      reply.tokens.input += event.input_tokens;
+      reply.tokens.cacheRead += event.cache_read_tokens;
+      reply.tokens.cacheWrite += event.cache_write_tokens;
+      reply.callOutput = 0;
+    }
+    reply.tokens.output += Math.max(0, event.output_tokens - (reply.callOutput ?? 0));
+    reply.callOutput = event.output_tokens;
+    return;
+  }
+  if (event.kind === 'done' && event.cost_usd != null) reply.cost = (reply.cost ?? 0) + event.cost_usd;
+  const update = applyAgentEvent(reply.blocks, event);
+  reply.blocks = update.blocks;
+  if (event.kind === 'tool_result' && event.image) persistCommandImage(main, reply, event.id, event.image);
+  if (!update.finished) return;
+  reply.live = false;
+  if (reply.startedAt) reply.ms = Date.now() - reply.startedAt;
+  void finishCommandImages(main, reply);
+  sideTurns.delete(id);
+  const session = workspace.sessions.find((item) => item.id === main);
+  if (session) session.status = replies[main] || hasSideTurn(main) ? 'working' : 'idle';
+  if (session?.path) keepOtherTurn(session, reply);
+  onHandbackDone(main, reply, event.kind === 'error');
+  persistLocal();
+  if (!replies[main] && !hasSideTurn(main)) sendNextQueued(main);
 }
 
 /** Send from the message box. While the agent is busy: wait in line (Enter), or stop it and go first (Ctrl+Enter). */
@@ -1823,8 +2058,13 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
   if (!session || (!text.trim() && images.length === 0 && elements.length === 0 && files.length === 0)) return;
   // A task for another agent needs words to say what the task is.
   if (mentions.some((mention) => mention.kind === 'ai') && !text.trim()) return;
-  if (replies[session.id]) {
+  beginSessionWork(session.id);
+  if (replies[session.id] || isRunning(session.id) || needsUserInput(session.id)) {
     if (whileRunning === 'queue') {
+      enqueue(queued, session.id, { text, images, elements, mentions, files });
+      return;
+    }
+    if (needsUserInput(session.id)) {
       enqueue(queued, session.id, { text, images, elements, mentions, files });
       return;
     }
@@ -1835,6 +2075,7 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
 
 /** Sends a queued message now: the reply running in the chat is stopped (what it wrote stays), and this one goes out. */
 export function steerQueued(sessionId: string, item: Queued) {
+  beginSessionWork(sessionId);
   const rest = (queued[sessionId] ?? []).filter((entry) => entry !== item);
   if (rest.length) queued[sessionId] = rest;
   else delete queued[sessionId];
@@ -1859,6 +2100,7 @@ void getPref<Record<string, string[]>>('chat.hidden').then((saved) => {
 export function editMessage(messageId: string, text: string) {
   const session = activeSession();
   if (!session || !text.trim()) return;
+  beginSessionWork(session.id);
   const list = messagesOf(session.id);
   const index = list.findIndex((message) => message.id === messageId && message.role === 'user');
   if (index === -1) return;
@@ -1953,12 +2195,40 @@ if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', () => persistLocal());
 }
 
+/** What a fork is told of the conversation it came from: the turns so far, newest kept when it is long. */
+function forkDigest(list: Message[]): string {
+  const lines = list
+    .filter((message) => !hiddenPrompt(message))
+    .map((message) => {
+      const text = message.blocks
+        .flatMap((block) => (block.kind === 'response' ? [block.text] : block.kind === 'command' ? [`(ran: ${block.command.slice(0, 160)})`] : []))
+        .join('\n')
+        .trim();
+      return text ? `${message.role === 'user' ? 'User' : 'Assistant'}: ${text.length > 2500 ? `${text.slice(0, 2500)}…` : text}` : '';
+    })
+    .filter(Boolean);
+  if (!lines.length) return '';
+  let digest = lines.join('\n\n');
+  if (digest.length > 16000) digest = `…${digest.slice(-16000)}`;
+  return `This chat is a fork of an earlier conversation. What was said so far:\n\n${digest}\n\n---\nNow the user says:\n`;
+}
+
+/**
+ * A fork is a chat of its own: it gets a copy of the messages on screen, kept with the app's own chats, and no tie to the
+ * parent's transcript file or CLI conversation. Sharing those made the fork show the parent's replies again each time it
+ * was opened, run under the parent's conversation, and disturb the parent's status.
+ */
 export function forkSession(sourceId: string) {
   const source = workspace.sessions.find((item) => item.id === sourceId);
   if (!source) return;
   const id = nextId();
-  workspace.sessions.push({ ...source, id, title: `${source.title} (fork)`, status: 'idle', parentId: source.id });
+  const copy = (JSON.parse(JSON.stringify(messagesOf(sourceId))) as Message[]).map((message) => ({ ...message, live: false }));
+  localMessages[id] = copy;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { path, source: _origin, updatedAt, messageCount, agentSession, agentStarted, agentIds, conversationModel, agentModels, ...rest } = source;
+  workspace.sessions.push({ ...rest, id, title: `${source.title} (fork)`, status: 'idle', parentId: source.id, draft: false, messageCount: copy.length, updatedAt: new Date().toISOString(), forkContext: forkDigest(copy) || undefined });
   workspace.activeId = id;
+  persistLocal();
 }
 
 // ---------- tree: Project > Session > Fork ----------
@@ -2242,12 +2512,12 @@ let transcriptToken = 0;
 // `start` is where the first loaded message sits in the chat's file: above 0, older messages are still on disk.
 type Transcript = { stamp: string; messages: Message[]; start: number };
 const transcripts = new Map<string, Transcript>();
-// The format version leads the stamp: a cached transcript from an older app version is read again (v2: token usage,
-// v3: the file each tool call changed, so a file's +/- counts survive a reload; v4: Codex tokens and model).
-const stampOf = (session: SessionItem) => `v4|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
+// The format version leads the stamp: v5 limits persisted transcript pages to 30 messages.
+const stampOf = (session: SessionItem) => `v5|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
 const MAX_SAVED = 12;
-/** How many of the newest messages of a chat survive a reload in the saved copy. */
-const SAVED_TAIL = 200;
+/** Keep one page in the reload cache; older pages are fetched from the history cursor on demand. */
+const PAGE_LIMIT = 30;
+const SAVED_TAIL = PAGE_LIMIT;
 
 /** Agents and per-agent ids of saved chats that switched agent (the chat files cannot hold them). */
 const mixed: Record<string, Pick<SessionItem, 'agents' | 'agentIds'>> = {};
@@ -2276,7 +2546,8 @@ function keepOtherTurn(session: SessionItem, reply: Message) {
   for (const message of [...asked, reply]) {
     if (!kept.some((item) => item.id === message.id)) kept.push($state.snapshot(message) as Message);
   }
-  setPref('chat.otherTurns', $state.snapshot(otherTurns));
+  const saved = Object.fromEntries(Object.entries(otherTurns).map(([id, list]) => [id, stripCommandImageData($state.snapshot(list) as Message[])]));
+  setPref('chat.otherTurns', saved);
 }
 
 /**
@@ -2290,11 +2561,9 @@ function keepHandout(mainId: string, asked: Message) {
   const index = kept.findIndex((item) => item.id === asked.id);
   if (index >= 0) kept[index] = copy;
   else kept.push(copy);
-  setPref('chat.otherTurns', $state.snapshot(otherTurns));
+  const saved = Object.fromEntries(Object.entries(otherTurns).map(([id, list]) => [id, stripCommandImageData($state.snapshot(list) as Message[])]));
+  setPref('chat.otherTurns', saved);
 }
-
-/** Messages shown per read of the chat's file: the newest ones on open, the ones before them when scrolling up. */
-const PAGE_LIMIT = 80;
 
 /** Pictures and files a saved prompt named by path (see `splitAttachments`), as blocks; the words lose those lists. */
 async function userAttachments(message: HistoryMessage): Promise<Block[]> {
@@ -2348,7 +2617,10 @@ function assemble(session: SessionItem, own: Message[], lower?: string, upper?: 
 async function fetchTranscript(session: SessionItem): Promise<{ messages: Message[]; start: number }> {
   const page = await loadHistoryPage(session.source!, session.path!, null, PAGE_LIMIT);
   const own = await toMessages(session, page.messages);
-  return { messages: assemble(session, own, page.start > 0 ? own[0]?.at : undefined), start: page.start };
+  const assembled = assemble(session, own, page.start > 0 ? own[0]?.at : undefined);
+  const messages = assembled.slice(-PAGE_LIMIT);
+  const removedBefore = messages.length < assembled.length ? page.messages.filter((message) => message.time < (messages[0]?.at ?? '')).length : 0;
+  return { messages: await restoreCommandImages(session.id, messages), start: page.start + removedBefore };
 }
 
 /** Reads the page of messages before the first one on screen and puts it in front. Returns how many it added. */
@@ -2359,7 +2631,7 @@ export async function loadOlder(session: SessionItem | undefined): Promise<numbe
     const page = await loadHistoryPage(session.source, session.path, chat.older, PAGE_LIMIT);
     if (workspace.activeId !== session.id) return 0;
     const own = await toMessages(session, page.messages);
-    const added = assemble(session, own, page.start > 0 ? own[0]?.at : undefined, chat.messages[0]?.at);
+    const added = await restoreCommandImages(session.id, assemble(session, own, page.start > 0 ? own[0]?.at : undefined, chat.messages[0]?.at));
     chat.messages = [...added, ...chat.messages];
     chat.older = page.start;
     const cached = transcripts.get(session.id);
@@ -2377,14 +2649,14 @@ function remember(session: SessionItem, messages: Message[], start: number) {
   const entry = { stamp: stampOf(session), messages, start };
   transcripts.set(session.id, entry);
   // The most recently opened few also survive a reload (F5 shows the chat at once).
-  // Cloning a long chat is slow, so it waits for an idle moment and keeps only the newest messages: F5 then shows
-  // the end at once, and the full file is read again right after.
+  // Cloning a long chat is slow, so it waits for an idle moment and keeps only the newest page: F5 then shows
+  // the end at once, and a fresh page is read from the history file right after.
   const persist = () =>
     void getPref<string[]>('transcripts.keys').then((keys = []) => {
       const next = [session.id, ...keys.filter((key) => key !== session.id)];
       for (const old of next.slice(MAX_SAVED)) setPref(`transcript.${old}`, null);
       setPref('transcripts.keys', next.slice(0, MAX_SAVED));
-      const tail = { stamp: '', messages: messages.slice(-SAVED_TAIL), start: start + Math.max(0, messages.length - SAVED_TAIL) };
+      const tail = { stamp: '', messages: stripCommandImageData(messages.slice(-SAVED_TAIL)), start: start + Math.max(0, messages.length - SAVED_TAIL) };
       setPref(`transcript.${session.id}`, JSON.parse(JSON.stringify(tail)));
     });
   if (typeof requestIdleCallback === 'function') requestIdleCallback(persist, { timeout: 3000 });
@@ -2416,7 +2688,8 @@ export async function openTranscript(session: SessionItem | undefined) {
     return;
   }
   if (!session.path || !session.source) {
-    chat.messages = localMessages[session.id] ?? (mockIds.has(session.id) ? mockMessages : []);
+    const messages = await restoreCommandImages(session.id, localMessages[session.id] ?? (mockIds.has(session.id) ? mockMessages : []));
+    if (token === transcriptToken) chat.messages = messages;
     return;
   }
   // Show the empty chat with its skeleton first and let it paint: reading the saved copy and mounting a long chat
@@ -2429,12 +2702,18 @@ export async function openTranscript(session: SessionItem | undefined) {
   if (!cached) {
     const saved = await getPref<Transcript>(`transcript.${session.id}`);
     if (token !== transcriptToken) return;
-    if (saved?.messages) transcripts.set(session.id, (cached = saved));
+    if (saved?.messages) {
+      // Older versions kept up to 200 messages in IndexedDB. Bound this first paint too, before the fresh page arrives.
+      const removed = Math.max(0, saved.messages.length - PAGE_LIMIT);
+      cached = removed ? { ...saved, messages: saved.messages.slice(-PAGE_LIMIT), start: saved.start + removed } : saved;
+      transcripts.set(session.id, cached);
+    }
   }
   if (cached) {
     // Show what we have right away; a stale copy is replaced as soon as the fresh one arrives.
-    chat.messages = withLive(session.id, cached.messages);
-    chat.older = cached.start ?? 0;
+    chat.messages = await restoreCommandImages(session.id, withLive(session.id, cached.messages));
+    if (token !== transcriptToken) return;
+    chat.older = cached.stamp === stampOf(session) ? cached.start ?? 0 : 0;
     chat.loading = false;
     if (cached.stamp === stampOf(session)) return;
   } else {
@@ -2489,6 +2768,7 @@ export async function deleteSession(id: string) {
   delete draftFiles[id];
   delete draftElements[id];
   delete localMessages[id];
+  deleteCommandImages(id);
   patchCache((list) => list.filter((item) => item.id !== id));
   if (workspace.activeId === id) {
     const next = workspace.sessions.find((item) => item.projectId === session.projectId) ?? workspace.sessions[0];

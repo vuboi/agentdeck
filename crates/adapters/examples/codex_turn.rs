@@ -19,7 +19,10 @@ async fn turn(prompt: &str, thread: Option<String>, cwd: &std::path::Path) -> Ve
         owner: None,
     };
     let mut events = Vec::new();
-    drive_turn(resolve_binary(&codex), &codex, &request, |event| events.push(event)).await;
+    drive_turn(resolve_binary(&codex), &codex, &request, |event| {
+        events.push(event)
+    })
+    .await;
     events
 }
 
@@ -27,7 +30,12 @@ async fn turn(prompt: &str, thread: Option<String>, cwd: &std::path::Path) -> Ve
 async fn main() {
     println!("binary: {:?}", resolve_binary(&Codex::default()));
     let cwd = std::env::temp_dir();
-    let first = turn("Run the shell command `echo agentdeck` and then say the single word: ready", None, &cwd).await;
+    let first = turn(
+        "Run the shell command `echo agentdeck` and then say the single word: ready",
+        None,
+        &cwd,
+    )
+    .await;
     for event in &first {
         println!("1> {event:?}");
     }
@@ -36,7 +44,12 @@ async fn main() {
         _ => None,
     });
     println!("thread: {thread:?}");
-    let second = turn("What single word did you say last time? Answer with it only.", thread, &cwd).await;
+    let second = turn(
+        "What single word did you say last time? Answer with it only.",
+        thread,
+        &cwd,
+    )
+    .await;
     for event in &second {
         println!("2> {event:?}");
     }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-zoom"
+description = "Enables the browser_zoom command without any pre-configured scope."
+commands.allow = ["browser_zoom"]
+
+[[permission]]
+identifier = "deny-browser-zoom"
+description = "Denies the browser_zoom command without any pre-configured scope."
+commands.deny = ["browser_zoom"]

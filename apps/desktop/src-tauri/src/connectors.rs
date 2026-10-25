@@ -6,13 +6,16 @@
 //!   no tokens); only changes go through the CLI.
 //! - Claude Code: `cswap` (`claude-swap`, installed with `uv tool`). Its `--json` output is parsed.
 //!
-//! Nothing here reads or prints a token. Every external command runs without a shell, with the arguments given
-//! separately, and without a console window.
+//! Provider account tokens stay in their existing credential stores. Antigravity account snapshots use Windows
+//! Credential Manager; the on-disk account index contains emails only. External commands run without a shell.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use reqwest::header::{ACCEPT, AUTHORIZATION, REFERER, USER_AGENT};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
@@ -49,7 +52,11 @@ fn search_path() -> Vec<PathBuf> {
 
 /// The first `<dir>/<name>` that exists, trying the executable suffixes of the platform.
 pub(crate) fn which(name: &str) -> Option<PathBuf> {
-    let suffixes: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ".bat"] } else { &[""] };
+    let suffixes: &[&str] = if cfg!(windows) {
+        &[".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
     search_path().into_iter().find_map(|dir| {
         suffixes
             .iter()
@@ -61,6 +68,23 @@ pub(crate) fn which(name: &str) -> Option<PathBuf> {
 /// A command with no console window and no stdin, whose PATH also holds the well-known tool folders (the `.cmd`
 /// shims of npm tools need `node` on it).
 pub(crate) fn command(program: &Path) -> Command {
+    #[cfg(windows)]
+    let mut command = {
+        let is_batch = program
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+            });
+        if is_batch {
+            let mut command = Command::new("cmd");
+            command.args(["/D", "/S", "/C"]).arg(program);
+            command
+        } else {
+            Command::new(program)
+        }
+    };
+    #[cfg(not(windows))]
     let mut command = Command::new(program);
     command
         .stdin(Stdio::null())
@@ -81,14 +105,24 @@ pub(crate) struct Captured {
     pub stderr: String,
 }
 
-pub(crate) async fn capture(program: &Path, args: &[&str], limit: Duration) -> Result<Captured, String> {
+pub(crate) async fn capture(
+    program: &Path,
+    args: &[&str],
+    limit: Duration,
+) -> Result<Captured, String> {
     let child = command(program)
         .args(args)
         .spawn()
         .map_err(|error| format!("could not start {}: {error}", program.display()))?;
     let output = tokio::time::timeout(limit, child.wait_with_output())
         .await
-        .map_err(|_| format!("{} took longer than {}s", program.display(), limit.as_secs()))?
+        .map_err(|_| {
+            format!(
+                "{} took longer than {}s",
+                program.display(),
+                limit.as_secs()
+            )
+        })?
         .map_err(|error| error.to_string())?;
     Ok(Captured {
         ok: output.status.success(),
@@ -99,9 +133,18 @@ pub(crate) async fn capture(program: &Path, args: &[&str], limit: Duration) -> R
 
 /// The first non-empty line of a tool's `--version`.
 async fn version_of(program: &Path) -> Option<String> {
-    let out = capture(program, &["--version"], Duration::from_secs(8)).await.ok()?;
-    let text = if out.stdout.trim().is_empty() { out.stderr } else { out.stdout };
-    text.lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_owned)
+    let out = capture(program, &["--version"], Duration::from_secs(8))
+        .await
+        .ok()?;
+    let text = if out.stdout.trim().is_empty() {
+        out.stderr
+    } else {
+        out.stdout
+    };
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
 }
 
 /// A line of an install or sign-in that is running, for the log under the button.
@@ -116,26 +159,51 @@ async fn pump<R: AsyncRead + Unpin>(app: AppHandle, id: String, stream: R) {
     while let Ok(Some(line)) = lines.next_line().await {
         let line = line.trim_end().to_owned();
         if !line.is_empty() {
-            let _ = app.emit("connector-log", LogLine { id: id.clone(), line });
+            let _ = app.emit(
+                "connector-log",
+                LogLine {
+                    id: id.clone(),
+                    line,
+                },
+            );
         }
     }
 }
 
 /// Runs a command to its end, sending each output line to the UI as `connector-log`.
-async fn run_logged(app: &AppHandle, id: &str, program: &Path, args: &[&str], limit: Duration) -> Result<(), String> {
+async fn run_logged(
+    app: &AppHandle,
+    id: &str,
+    program: &Path,
+    args: &[&str],
+    limit: Duration,
+) -> Result<(), String> {
     let _ = app.emit(
         "connector-log",
         LogLine {
             id: id.to_owned(),
-            line: format!("$ {} {}", program.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(), args.join(" ")),
+            line: format!(
+                "$ {} {}",
+                program
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                args.join(" ")
+            ),
         },
     );
     let mut child = command(program)
         .args(args)
         .spawn()
         .map_err(|error| format!("could not start {}: {error}", program.display()))?;
-    let out = child.stdout.take().map(|stream| tauri::async_runtime::spawn(pump(app.clone(), id.to_owned(), stream)));
-    let err = child.stderr.take().map(|stream| tauri::async_runtime::spawn(pump(app.clone(), id.to_owned(), stream)));
+    let out = child
+        .stdout
+        .take()
+        .map(|stream| tauri::async_runtime::spawn(pump(app.clone(), id.to_owned(), stream)));
+    let err = child
+        .stderr
+        .take()
+        .map(|stream| tauri::async_runtime::spawn(pump(app.clone(), id.to_owned(), stream)));
     let status = tokio::time::timeout(limit, child.wait())
         .await
         .map_err(|_| format!("timed out after {} minutes", limit.as_secs() / 60))?
@@ -178,7 +246,16 @@ pub struct Detected {
     opencode: Login,
 }
 
-const TOOLS: [&str; 8] = ["claude", "codex", "agy", "opencode", "codex-auth", "cswap", "uv", "npm"];
+const TOOLS: [&str; 8] = [
+    "claude",
+    "codex",
+    "agy",
+    "opencode",
+    "codex-auth",
+    "cswap",
+    "uv",
+    "npm",
+];
 
 pub(crate) fn codex_home() -> PathBuf {
     std::env::var_os("CODEX_HOME")
@@ -189,9 +266,17 @@ pub(crate) fn codex_home() -> PathBuf {
 
 fn claude_login(status: &str) -> Login {
     let Ok(json) = serde_json::from_str::<Value>(status) else {
-        return Login { logged_in: Some(false), ..Login::default() };
+        return Login {
+            logged_in: Some(false),
+            ..Login::default()
+        };
     };
-    let text = |key: &str| json[key].as_str().filter(|value| !value.is_empty()).map(str::to_owned);
+    let text = |key: &str| {
+        json[key]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
     Login {
         logged_in: Some(json["loggedIn"].as_bool().unwrap_or(false)),
         email: text("email"),
@@ -202,10 +287,21 @@ fn claude_login(status: &str) -> Login {
 
 fn codex_login() -> Login {
     let home = codex_home();
-    if let Some(account) = read_codex_registry(&home).ok().and_then(|(accounts, _)| accounts.into_iter().find(|a| a.active)) {
-        return Login { logged_in: Some(true), email: Some(account.email), plan: account.plan, detail: None };
+    if let Some(account) = read_codex_registry(&home)
+        .ok()
+        .and_then(|(accounts, _)| accounts.into_iter().find(|a| a.active))
+    {
+        return Login {
+            logged_in: Some(true),
+            email: Some(account.email),
+            plan: account.plan,
+            detail: None,
+        };
     }
-    Login { logged_in: Some(home.join("auth.json").is_file()), ..Login::default() }
+    Login {
+        logged_in: Some(home.join("auth.json").is_file()),
+        ..Login::default()
+    }
 }
 
 /// Antigravity has no status command and keeps its login in the OS credential store, so the state is read from its
@@ -225,13 +321,18 @@ fn antigravity_state(log_tail: &str) -> Option<bool> {
 fn antigravity_email(log_tail: &str) -> Option<String> {
     const MARK: &str = "authenticated successfully as ";
     let rest = &log_tail[log_tail.rfind(MARK)? + MARK.len()..];
-    let email: String = rest.chars().take_while(|c| !c.is_whitespace() && *c != ',').collect();
+    let email: String = rest
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != ',')
+        .collect();
     email.contains('@').then_some(email)
 }
 
 fn tail_of(path: &Path) -> String {
     use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut file) = std::fs::File::open(path) else { return String::new() };
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return String::new();
+    };
     let length = file.metadata().map_or(0, |meta| meta.len());
     let _ = file.seek(SeekFrom::Start(length.saturating_sub(512 * 1024)));
     let mut bytes = Vec::new();
@@ -240,7 +341,9 @@ fn tail_of(path: &Path) -> String {
 }
 
 fn antigravity_login() -> Login {
-    let Ok(home) = crate::home_folder() else { return Login::default() };
+    let Ok(home) = crate::home_folder() else {
+        return Login::default();
+    };
     let folder = home.join(".gemini").join("antigravity-cli").join("log");
     let mut logs: Vec<_> = std::fs::read_dir(folder)
         .ok()
@@ -251,11 +354,21 @@ fn antigravity_login() -> Login {
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
         .collect();
     logs.sort_by_key(|entry| std::cmp::Reverse(entry.0));
-    let Some((_, newest)) = logs.first() else { return Login::default() };
+    let Some((_, newest)) = logs.first() else {
+        return Login::default();
+    };
     let logged_in = antigravity_state(&tail_of(newest));
     // The sign-in line is written once per sign-in, so it may sit in an older log.
-    let email = logs.iter().take(8).find_map(|(_, path)| antigravity_email(&tail_of(path)));
-    Login { logged_in, email, ..Login::default() }
+    let email = agy_saved_active_email().or_else(|| {
+        logs.iter()
+            .take(8)
+            .find_map(|(_, path)| antigravity_email(&tail_of(path)))
+    });
+    Login {
+        logged_in,
+        email,
+        ..Login::default()
+    }
 }
 
 /// Which CLIs are installed (with versions) and whether each is signed in. Reads no tokens.
@@ -270,7 +383,11 @@ pub async fn connectors_detect() -> Detected {
                     Some(path) => version_of(path).await,
                     None => None,
                 };
-                Tool { id, path: found.map(|path| path.to_string_lossy().into_owned()), version }
+                Tool {
+                    id,
+                    path: found.map(|path| path.to_string_lossy().into_owned()),
+                    version,
+                }
             })
         })
         .collect();
@@ -288,13 +405,29 @@ pub async fn connectors_detect() -> Detected {
         None => Login::default(),
     };
     let opencode = match which("opencode") {
-        Some(path) => match capture(&path, &["auth", "list", "--format", "json"], Duration::from_secs(10)).await {
-            Ok(out) => Login { logged_in: Some(out.ok), detail: (!out.stdout.trim().is_empty()).then_some("OpenCode auth available".into()), ..Login::default() },
+        Some(path) => match capture(
+            &path,
+            &["auth", "list", "--format", "json"],
+            Duration::from_secs(10),
+        )
+        .await
+        {
+            Ok(out) => Login {
+                logged_in: Some(out.ok),
+                detail: (!out.stdout.trim().is_empty()).then_some("OpenCode auth available".into()),
+                ..Login::default()
+            },
             Err(_) => Login::default(),
         },
         None => Login::default(),
     };
-    Detected { tools, claude, codex: codex_login(), antigravity: antigravity_login(), opencode }
+    Detected {
+        tools,
+        claude,
+        codex: codex_login(),
+        antigravity: antigravity_login(),
+        opencode,
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -318,13 +451,19 @@ pub async fn connector_install(app: AppHandle, id: String) -> Result<(), String>
         "opencode" => node_tool("@opencode/cli")?,
         "codex-auth" => node_tool("@loongphy/codex-auth")?,
         "cswap" => {
-            let uv = which("uv").ok_or("`uv` is needed for claude-swap: install it from docs.astral.sh/uv first")?;
-            (uv, vec!["tool".into(), "install".into(), "claude-swap".into()])
+            let uv = which("uv")
+                .ok_or("`uv` is needed for claude-swap: install it from docs.astral.sh/uv first")?;
+            (
+                uv,
+                vec!["tool".into(), "install".into(), "claude-swap".into()],
+            )
         }
         "claude" => {
             // Anthropic's own installer script.
             if cfg!(windows) {
-                let shell = which("pwsh").or_else(|| which("powershell")).ok_or("PowerShell was not found")?;
+                let shell = which("pwsh")
+                    .or_else(|| which("powershell"))
+                    .ok_or("PowerShell was not found")?;
                 (
                     shell,
                     vec![
@@ -337,16 +476,39 @@ pub async fn connector_install(app: AppHandle, id: String) -> Result<(), String>
                 )
             } else {
                 let shell = which("bash").ok_or("bash was not found")?;
-                (shell, vec!["-c".into(), "curl -fsSL https://claude.ai/install.sh | bash".into()])
+                (
+                    shell,
+                    vec![
+                        "-c".into(),
+                        "curl -fsSL https://claude.ai/install.sh | bash".into(),
+                    ],
+                )
             }
         }
         "agy" => {
             if cfg!(windows) {
-                let shell = which("pwsh").or_else(|| which("powershell")).ok_or("PowerShell was not found")?;
-                (shell, vec!["-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-Command".into(), "irm https://antigravity.google/cli/install.ps1 | iex".into()])
+                let shell = which("pwsh")
+                    .or_else(|| which("powershell"))
+                    .ok_or("PowerShell was not found")?;
+                (
+                    shell,
+                    vec![
+                        "-NoProfile".into(),
+                        "-ExecutionPolicy".into(),
+                        "Bypass".into(),
+                        "-Command".into(),
+                        "irm https://antigravity.google/cli/install.ps1 | iex".into(),
+                    ],
+                )
             } else {
                 let shell = which("bash").ok_or("bash was not found")?;
-                (shell, vec!["-c".into(), "curl -fsSL https://antigravity.google/cli/install.sh | bash".into()])
+                (
+                    shell,
+                    vec![
+                        "-c".into(),
+                        "curl -fsSL https://antigravity.google/cli/install.sh | bash".into(),
+                    ],
+                )
             }
         }
         other => return Err(format!("do not know how to install `{other}`")),
@@ -374,7 +536,14 @@ pub async fn connector_login(app: AppHandle, id: String) -> Result<(), String> {
             let opencode = which("opencode").ok_or("OpenCode is not installed")?;
             // AgentDeck has no interactive TTY. Passing the OpenAI integration skips OpenCode's provider picker, and
             // the method is named explicitly: without a TTY OpenCode refuses to choose one by itself ("Pass --method").
-            run_logged(&app, &id, &opencode, &["auth", "login", "openai", "--method", "chatgpt-browser"], limit).await
+            run_logged(
+                &app,
+                &id,
+                &opencode,
+                &["auth", "login", "openai", "--method", "chatgpt-browser"],
+                limit,
+            )
+            .await
         }
         "agy" => {
             // No headless sign-in: start `agy` in its own window, where it asks.
@@ -419,6 +588,9 @@ pub struct Account {
     status: Option<String>,
     /// The login has expired (the usage call answered 401): the account must sign in again and cannot be switched to.
     expired: bool,
+    /// Reset credits reported by ChatGPT's reset-credits API. `None` means the API could not be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reset_credits_available: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -449,8 +621,8 @@ fn window_label(minutes: i64) -> String {
 }
 
 /// Emails `codex-auth list` last showed with a 401 (signed out). The registry keeps no trace of that, only the table
-/// the tool prints, so the answer of the latest refresh is remembered here.
-static CODEX_EXPIRED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// the tool prints, so the answer of the latest refresh is remembered here. `None` means it has not been checked yet.
+static CODEX_EXPIRED: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
 
 /// Rows of the `codex-auth list` table whose usage columns say `401`.
 fn expired_in_list(table: &str) -> Vec<String> {
@@ -465,11 +637,188 @@ fn expired_in_list(table: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether `codex-auth list` returned any account rows that can be matched to its registry.
+fn has_account_rows_in_list(table: &str) -> bool {
+    table.lines().any(|line| {
+        let mut words = line.split_whitespace();
+        words
+            .next()
+            .is_some_and(|number| number.parse::<u32>().is_ok())
+            && words.next().is_some_and(|email| email.contains('@'))
+    })
+}
+
 /// Accounts of `codex-auth`, from its registry file (no tokens in it).
 fn read_codex_registry(codex_home: &Path) -> Result<(Vec<Account>, Option<AutoSwitch>), String> {
     let path = codex_home.join("accounts").join("registry.json");
-    let text = std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     parse_codex_registry(&text)
+}
+
+const CODEX_RESET_CREDITS_URL: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const CODEX_RESET_CREDITS_CONSUME_URL: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
+
+fn codex_account_auth(codex_home: &Path, email: &str) -> Result<(String, Option<String>), String> {
+    let registry_path = codex_home.join("accounts").join("registry.json");
+    let registry_text = std::fs::read_to_string(&registry_path)
+        .map_err(|error| format!("Could not read Codex account registry: {error}"))?;
+    let registry: Value = serde_json::from_str(&registry_text)
+        .map_err(|error| format!("Could not parse Codex account registry: {error}"))?;
+    let account_key = registry["accounts"]
+        .as_array()
+        .and_then(|accounts| {
+            accounts.iter().find_map(|account| {
+                (account["email"].as_str() == Some(email))
+                    .then(|| account["account_key"].as_str())
+                    .flatten()
+            })
+        })
+        .ok_or_else(|| "Codex account was not found in codex-auth registry".to_string())?;
+    let auth_path = codex_home
+        .join("accounts")
+        .join(format!("{}.auth.json", URL_SAFE_NO_PAD.encode(account_key)));
+    let auth_text = std::fs::read_to_string(&auth_path)
+        .map_err(|error| format!("Could not read saved Codex account credentials: {error}"))?;
+    let auth: Value = serde_json::from_str(&auth_text)
+        .map_err(|error| format!("Could not parse saved Codex account credentials: {error}"))?;
+    if auth["auth_mode"].as_str() == Some("apikey")
+        || auth["OPENAI_API_KEY"]
+            .as_str()
+            .is_some_and(|key| !key.is_empty())
+    {
+        return Err("API key accounts do not support Codex reset credits".to_string());
+    }
+    let access_token = auth["tokens"]["access_token"]
+        .as_str()
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| "Saved Codex account has no access token; sign in again".to_string())?
+        .to_owned();
+    let account_id = auth["tokens"]["account_id"].as_str().map(str::to_owned);
+    Ok((access_token, account_id))
+}
+
+fn codex_reset_headers(
+    access_token: &str,
+    account_id: Option<&str>,
+    target_path: &str,
+) -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        ACCEPT,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        REFERER,
+        reqwest::header::HeaderValue::from_static("https://chatgpt.com/"),
+    );
+    headers.insert(
+        USER_AGENT,
+        reqwest::header::HeaderValue::from_static(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+        ),
+    );
+    if let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        headers.insert(AUTHORIZATION, value);
+    }
+    if let Ok(value) = reqwest::header::HeaderValue::from_str(target_path) {
+        headers.insert("x-openai-target-path", value.clone());
+        headers.insert("x-openai-target-route", value);
+    }
+    if let Some(account_id) = account_id {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(account_id) {
+            headers.insert("ChatGPT-Account-Id", value);
+        }
+    }
+    headers
+}
+
+async fn fetch_codex_reset_credits(codex_home: &Path, email: &str) -> Result<i64, String> {
+    let (access_token, account_id) = codex_account_auth(codex_home, email)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("Could not create Codex reset credits client: {error}"))?;
+    let response = client
+        .get(CODEX_RESET_CREDITS_URL)
+        .headers(codex_reset_headers(
+            &access_token,
+            account_id.as_deref(),
+            "/backend-api/wham/rate-limit-reset-credits",
+        ))
+        .send()
+        .await
+        .map_err(|error| format!("Could not fetch Codex reset credits: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("Codex reset credits API returned HTTP {status}"));
+    }
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|error| format!("Could not parse Codex reset credits response: {error}"))?;
+    payload
+        .get("available_count")
+        .or_else(|| payload.get("availableCount"))
+        .or_else(|| {
+            payload.get("data").and_then(|data| {
+                data.get("available_count")
+                    .or_else(|| data.get("availableCount"))
+            })
+        })
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            payload
+                .get("credits")
+                .or_else(|| payload.get("data").and_then(|data| data.get("credits")))
+                .and_then(Value::as_array)
+                .map(|credits| {
+                    credits
+                        .iter()
+                        .filter(|credit| {
+                            let status = credit["status"].as_str().unwrap_or("available");
+                            !matches!(
+                                status.to_ascii_lowercase().as_str(),
+                                "redeemed" | "used" | "consumed" | "expired"
+                            )
+                        })
+                        .count() as i64
+                })
+        })
+        .ok_or_else(|| "Codex reset credits response has no available count".to_string())
+}
+
+#[tauri::command]
+pub async fn codex_consume_reset_credit(email: String) -> Result<(), String> {
+    let available = fetch_codex_reset_credits(&codex_home(), &email).await?;
+    if available < 1 {
+        return Err("No Codex reset credits are available for this account".to_string());
+    }
+    let (access_token, account_id) = codex_account_auth(&codex_home(), &email)?;
+    let target_path = "/backend-api/wham/rate-limit-reset-credits/consume";
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| format!("Could not create Codex reset client: {error}"))?;
+    let response = client
+        .post(CODEX_RESET_CREDITS_CONSUME_URL)
+        .headers(codex_reset_headers(
+            &access_token,
+            account_id.as_deref(),
+            target_path,
+        ))
+        .json(&serde_json::json!({ "redeem_request_id": uuid::Uuid::new_v4().to_string() }))
+        .send()
+        .await
+        .map_err(|error| format!("Could not redeem Codex reset credit: {error}"))?;
+    let status = response.status();
+    if status.is_success() {
+        Ok(())
+    } else {
+        Err(format!("Codex reset API returned HTTP {status}"))
+    }
 }
 
 fn parse_codex_registry(text: &str) -> Result<(Vec<Account>, Option<AutoSwitch>), String> {
@@ -493,7 +842,12 @@ fn parse_codex_registry(text: &str) -> Result<(Vec<Account>, Option<AutoSwitch>)
                             })
                         })
                         .collect();
-                    let text = |name: &str| item[name].as_str().filter(|value| !value.is_empty()).map(str::to_owned);
+                    let text = |name: &str| {
+                        item[name]
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                    };
                     Some(Account {
                         expired: false,
                         id: text("email").unwrap_or_else(|| key.to_owned()),
@@ -501,9 +855,12 @@ fn parse_codex_registry(text: &str) -> Result<(Vec<Account>, Option<AutoSwitch>)
                         alias: text("alias"),
                         plan: text("plan"),
                         active: key == active,
-                        status: windows.is_empty().then(|| "no usage figures yet".to_string()),
+                        status: windows
+                            .is_empty()
+                            .then(|| "no usage figures yet".to_string()),
                         usage: windows,
                         observed_at: item["last_usage_at"].as_i64(),
+                        reset_credits_available: None,
                     })
                 })
                 .collect()
@@ -537,7 +894,9 @@ fn parse_iso(text: &str) -> Option<i64> {
 fn parse_cswap(text: &str) -> Result<Vec<Account>, String> {
     let json: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
     if let Some(error) = json.get("error") {
-        return Err(error["message"].as_str().map_or_else(|| error.to_string(), str::to_owned));
+        return Err(error["message"]
+            .as_str()
+            .map_or_else(|| error.to_string(), str::to_owned));
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -559,17 +918,24 @@ fn parse_cswap(text: &str) -> Result<Vec<Account>, String> {
                             })
                         })
                         .collect();
-                    let status = item["usageStatus"].as_str().filter(|status| *status != "ok").map(str::to_owned);
+                    let status = item["usageStatus"]
+                        .as_str()
+                        .filter(|status| *status != "ok")
+                        .map(str::to_owned);
                     Some(Account {
                         expired: status.as_deref() == Some("expired"),
                         id: number.to_string(),
                         email: item["email"].as_str().unwrap_or("(unknown)").to_owned(),
-                        alias: item["alias"].as_str().filter(|alias| !alias.is_empty()).map(str::to_owned),
+                        alias: item["alias"]
+                            .as_str()
+                            .filter(|alias| !alias.is_empty())
+                            .map(str::to_owned),
                         plan: item["plan"].as_str().map(str::to_owned),
                         active: item["active"].as_bool().unwrap_or(false),
                         observed_at: (!windows.is_empty()).then_some(now),
                         usage: windows,
                         status,
+                        reset_credits_available: None,
                     })
                 })
                 .collect()
@@ -584,25 +950,68 @@ pub async fn accounts_list(provider: String, refresh: bool) -> Result<Accounts, 
     match provider.as_str() {
         "codex" => {
             let manager = which("codex-auth");
-            if refresh {
+            let status_not_checked = CODEX_EXPIRED
+                .lock()
+                .map(|known| known.is_none())
+                .unwrap_or(true);
+            if refresh || status_not_checked {
                 if let Some(auth) = &manager {
-                    // `list` refreshes the usage figures in the registry as a side effect.
-                    if let Ok(out) = capture(auth, &["list"], Duration::from_secs(40)).await {
-                        if let Ok(mut known) = CODEX_EXPIRED.lock() {
-                            *known = expired_in_list(&out.stdout);
-                        }
+                    // `list` refreshes usage and is the only source for 401 status, which is absent from the registry.
+                    // On Windows `command()` routes `.cmd` shims through cmd.exe. Do not show stale registry rows as
+                    // switchable if the first status check failed.
+                    let out = capture(auth, &["list"], Duration::from_secs(40)).await?;
+                    if !out.ok {
+                        return Err(
+                            "codex-auth list failed while checking account status".to_string()
+                        );
+                    }
+                    if !has_account_rows_in_list(&out.stdout) {
+                        return Err(
+                            "codex-auth list returned no account rows to verify".to_string()
+                        );
+                    }
+                    if let Ok(mut known) = CODEX_EXPIRED.lock() {
+                        *known = Some(expired_in_list(&out.stdout));
                     }
                 }
             }
             match read_codex_registry(&codex_home()) {
                 Ok((mut accounts, auto_switch)) => {
-                    let known = CODEX_EXPIRED.lock().map(|known| known.clone()).unwrap_or_default();
-                    for account in accounts.iter_mut().filter(|account| known.contains(&account.email)) {
+                    let known = CODEX_EXPIRED
+                        .lock()
+                        .map(|known| known.clone().unwrap_or_default())
+                        .unwrap_or_default();
+                    for account in accounts
+                        .iter_mut()
+                        .filter(|account| known.contains(&account.email))
+                    {
                         account.expired = true;
                         account.usage.clear();
                         account.status = Some("signed out (401)".to_string());
                     }
-                    Ok(Accounts { manager: manager.is_some(), accounts, auto_switch, error: None })
+                    let mut reset_queries = tokio::task::JoinSet::new();
+                    for account in accounts.iter().filter(|account| {
+                        !account.expired && account.plan.as_deref() != Some("free")
+                    }) {
+                        let email = account.email.clone();
+                        let home = codex_home();
+                        reset_queries.spawn(async move {
+                            let credits = fetch_codex_reset_credits(&home, &email).await.ok();
+                            (email, credits)
+                        });
+                    }
+                    while let Some(Ok((email, credits))) = reset_queries.join_next().await {
+                        if let Some(account) = accounts.iter_mut().find(|item| item.email == email)
+                        {
+                            account.reset_credits_available = credits;
+                        }
+                    }
+                    Ok(Accounts {
+                        manager: manager.is_some(),
+                        accounts,
+                        auto_switch,
+                        error: None,
+                    })
                 }
                 Err(error) => Ok(Accounts {
                     manager: manager.is_some(),
@@ -614,14 +1023,34 @@ pub async fn accounts_list(provider: String, refresh: bool) -> Result<Accounts, 
         }
         "claude" => {
             let Some(cswap) = which("cswap") else {
-                return Ok(Accounts { manager: false, accounts: Vec::new(), auto_switch: None, error: None });
+                return Ok(Accounts {
+                    manager: false,
+                    accounts: Vec::new(),
+                    auto_switch: None,
+                    error: None,
+                });
             };
             match capture(&cswap, &["list", "--json"], Duration::from_secs(40)).await {
                 Ok(out) => match parse_cswap(&out.stdout) {
-                    Ok(accounts) => Ok(Accounts { manager: true, accounts, auto_switch: None, error: None }),
-                    Err(error) => Ok(Accounts { manager: true, accounts: Vec::new(), auto_switch: None, error: Some(error) }),
+                    Ok(accounts) => Ok(Accounts {
+                        manager: true,
+                        accounts,
+                        auto_switch: None,
+                        error: None,
+                    }),
+                    Err(error) => Ok(Accounts {
+                        manager: true,
+                        accounts: Vec::new(),
+                        auto_switch: None,
+                        error: Some(error),
+                    }),
                 },
-                Err(error) => Ok(Accounts { manager: true, accounts: Vec::new(), auto_switch: None, error: Some(error) }),
+                Err(error) => Ok(Accounts {
+                    manager: true,
+                    accounts: Vec::new(),
+                    auto_switch: None,
+                    error: Some(error),
+                }),
             }
         }
         other => Err(format!("`{other}` has no account list")),
@@ -637,8 +1066,16 @@ fn safe_arg(value: &str) -> Result<&str, String> {
 }
 
 pub(crate) fn failure(out: &Captured) -> String {
-    let text = if out.stderr.trim().is_empty() { &out.stdout } else { &out.stderr };
-    text.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("the command failed").to_owned()
+    let text = if out.stderr.trim().is_empty() {
+        &out.stdout
+    } else {
+        &out.stderr
+    };
+    text.lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .unwrap_or("the command failed")
+        .to_owned()
 }
 
 /// Makes `id` the account the CLI uses from now on. A turn already running keeps the account it started with.
@@ -671,7 +1108,14 @@ pub async fn account_add(app: AppHandle, provider: String) -> Result<(), String>
             let cswap = which("cswap").ok_or("`cswap` is not installed")?;
             let claude = which("claude").ok_or("Claude Code is not installed")?;
             // Sign in as the new account first; the switcher then saves whoever is signed in.
-            run_logged(&app, "claude", &claude, &["auth", "login"], Duration::from_secs(300)).await?;
+            run_logged(
+                &app,
+                "claude",
+                &claude,
+                &["auth", "login"],
+                Duration::from_secs(300),
+            )
+            .await?;
             run_logged(&app, "claude", &cswap, &["add"], Duration::from_secs(60)).await
         }
         other => Err(format!("`{other}` has no accounts to add")),
@@ -712,11 +1156,21 @@ pub async fn codex_auto_switch(enabled: bool, five_hour: u8, weekly: u8) -> Resu
     let auth = which("codex-auth").ok_or("`codex-auth` is not installed")?;
     let five = five_hour.min(99).to_string();
     let week = weekly.min(99).to_string();
-    let thresholds = capture(&auth, &["config", "auto", "--5h", &five, "--weekly", &week], Duration::from_secs(20)).await?;
+    let thresholds = capture(
+        &auth,
+        &["config", "auto", "--5h", &five, "--weekly", &week],
+        Duration::from_secs(20),
+    )
+    .await?;
     if !thresholds.ok {
         return Err(failure(&thresholds));
     }
-    let toggle = capture(&auth, &["config", "auto", if enabled { "enable" } else { "disable" }], Duration::from_secs(20)).await?;
+    let toggle = capture(
+        &auth,
+        &["config", "auto", if enabled { "enable" } else { "disable" }],
+        Duration::from_secs(20),
+    )
+    .await?;
     if toggle.ok {
         Ok(())
     } else {
@@ -750,9 +1204,15 @@ fn parse_agy_quota(text: &str) -> Option<AgyQuota> {
     let mut groups: Vec<QuotaGroup> = Vec::new();
     for (key, entry) in quota {
         let (group, window) = key.rsplit_once('-')?;
-        let Some(remaining) = entry["remaining_fraction"].as_f64() else { continue };
+        let Some(remaining) = entry["remaining_fraction"].as_f64() else {
+            continue;
+        };
         let window = UsageWindow {
-            label: if window == "weekly" { "7d".to_string() } else { window.to_string() },
+            label: if window == "weekly" {
+                "7d".to_string()
+            } else {
+                window.to_string()
+            },
             pct: ((1.0 - remaining) * 100.0).clamp(0.0, 100.0),
             resets_at: entry["reset_time"].as_str().and_then(parse_iso),
         };
@@ -773,14 +1233,357 @@ fn parse_agy_quota(text: &str) -> Option<AgyQuota> {
     for group in &mut groups {
         group.windows.sort_by_key(|window| window.label != "5h");
     }
-    Some(AgyQuota { observed_at: json["fetchedAt"].as_i64().map(|ms| ms / 1000), groups })
+    Some(AgyQuota {
+        observed_at: json["fetchedAt"].as_i64().map(|ms| ms / 1000),
+        groups,
+    })
 }
 
-/// The last quota figures agy reported, if a tool saved them. `None` when nothing is there.
-#[tauri::command]
-pub fn antigravity_quota() -> Option<AgyQuota> {
-    let path = crate::home_folder().ok()?.join(".gemini").join("antigravity-cli").join("ai-quota-tray").join("usage-cache.json");
+/// The last quota figures agy saved to a file (its status line does it, when it runs). `None` when nothing is there.
+fn saved_agy_quota() -> Option<AgyQuota> {
+    let path = crate::home_folder()
+        .ok()?
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("ai-quota-tray")
+        .join("usage-cache.json");
     parse_agy_quota(&std::fs::read_to_string(path).ok()?)
+}
+
+/// What a secret of the system store holds (Windows Credential Manager), as text.
+#[cfg(windows)]
+fn stored_secret(target: &str) -> Option<String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Security::Credentials::{
+        CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
+    };
+
+    let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut found: *mut CREDENTIALW = std::ptr::null_mut();
+    // SAFETY: `CredReadW` fills `found` with a credential it allocates; it is read once, copied, and given back to `CredFree`.
+    let bytes = unsafe {
+        CredReadW(PCWSTR(wide.as_ptr()), CRED_TYPE_GENERIC, None, &mut found).ok()?;
+        let credential = &*found;
+        let bytes = if credential.CredentialBlob.is_null() {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(
+                credential.CredentialBlob,
+                credential.CredentialBlobSize as usize,
+            )
+            .to_vec()
+        };
+        CredFree(found.cast());
+        bytes
+    };
+    // Stored as UTF-8 text, or as UTF-16 by some writers.
+    match String::from_utf8(bytes.clone()) {
+        Ok(text) if text.trim_start().starts_with('{') => Some(text),
+        _ => {
+            let units: Vec<u16> = bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect();
+            String::from_utf16(&units).ok()
+        }
+    }
+}
+
+/// Writes a JSON credential into Windows Credential Manager; tokens never enter the account index file.
+#[cfg(windows)]
+fn write_secret(target: &str, secret: &str) -> Result<(), String> {
+    use windows::core::PWSTR;
+    use windows::Win32::Security::Credentials::{
+        CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+    };
+
+    let mut target_wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut bytes = secret.as_bytes().to_vec();
+    let credential = CREDENTIALW {
+        Type: CRED_TYPE_GENERIC,
+        TargetName: PWSTR(target_wide.as_mut_ptr()),
+        CredentialBlobSize: u32::try_from(bytes.len()).map_err(|error| error.to_string())?,
+        CredentialBlob: bytes.as_mut_ptr(),
+        Persist: CRED_PERSIST_LOCAL_MACHINE,
+        ..Default::default()
+    };
+    // SAFETY: the target and blob stay alive for the duration of CredWriteW; the API copies both values.
+    unsafe { CredWriteW(&credential, 0).map_err(|error| error.to_string()) }
+}
+
+fn agy_accounts_path() -> Result<PathBuf, String> {
+    crate::home_folder().map(|home| home.join(".agentdeck").join("antigravity-accounts.json"))
+}
+
+#[cfg(windows)]
+fn agy_secret_target(email: &str) -> String {
+    let suffix: String = email
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("AgentDeck Antigravity {suffix}")
+}
+
+#[derive(Serialize, serde::Deserialize, Clone)]
+pub struct AgyAccount {
+    id: String,
+    email: String,
+    active: bool,
+    #[serde(default)]
+    expired: bool,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+/// Reports only problems that can be checked from the saved credential without making a network request.
+fn agy_credential_status(email: &str) -> (bool, Option<String>) {
+    #[cfg(windows)]
+    {
+        let Some(secret) = stored_secret(&agy_secret_target(email)) else {
+            return (true, Some("Saved credentials are missing".to_string()));
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&secret) else {
+            return (true, Some("Saved login is invalid".to_string()));
+        };
+        let token = &value["token"];
+        if token["access_token"].as_str().is_none_or(str::is_empty) {
+            return (true, Some("Access token is missing".to_string()));
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs() as i64);
+        if token["expiry"]
+            .as_str()
+            .and_then(parse_iso)
+            .is_some_and(|expiry| expiry <= now + 30)
+        {
+            return (true, Some("Access token expired".to_string()));
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = email;
+
+    (false, None)
+}
+
+fn read_agy_accounts() -> Vec<AgyAccount> {
+    agy_accounts_path()
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<Vec<AgyAccount>>(&text).ok())
+        .unwrap_or_default()
+}
+
+fn write_agy_accounts(accounts: &[AgyAccount]) -> Result<(), String> {
+    let path = agy_accounts_path()?;
+    let parent = path
+        .parent()
+        .ok_or("could not find the AgentDeck data folder")?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let text = serde_json::to_string_pretty(accounts).map_err(|error| error.to_string())?;
+    std::fs::write(path, text).map_err(|error| error.to_string())
+}
+
+/// The sign-in of Antigravity (`{"token": {"access_token", "refresh_token", "expiry"}}`), read and never written: the
+/// system store first, then the file agy falls back to when it has no system store.
+fn agy_sign_in() -> Option<Value> {
+    #[cfg(windows)]
+    if let Some(value) = stored_secret("gemini:antigravity")
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+    {
+        return Some(value);
+    }
+    let file = crate::home_folder()
+        .ok()?
+        .join(".gemini")
+        .join("jetski-standalone-oauth-token");
+    serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
+}
+
+/// Saved Antigravity accounts. The JSON index stores emails only; each OAuth token is held by Windows Credential Manager.
+#[tauri::command]
+pub async fn antigravity_accounts_list() -> Vec<AgyAccount> {
+    let active = agy_saved_active_email().or_else(|| antigravity_login().email);
+    read_agy_accounts()
+        .into_iter()
+        .map(|mut account| {
+            account.active = active.as_deref() == Some(account.email.as_str());
+            (account.expired, account.status) = agy_credential_status(&account.email);
+            account
+        })
+        .collect()
+}
+
+fn agy_saved_active_email() -> Option<String> {
+    #[cfg(not(windows))]
+    return None;
+
+    #[cfg(windows)]
+    {
+        let current = agy_sign_in()?;
+        read_agy_accounts().into_iter().find_map(|account| {
+            let saved = stored_secret(&agy_secret_target(&account.email))?;
+            let saved: Value = serde_json::from_str(&saved).ok()?;
+            (saved == current).then_some(account.email)
+        })
+    }
+}
+
+/// Saves the Antigravity account currently signed in on this machine. Call after signing in with `agy`.
+#[tauri::command]
+pub async fn antigravity_account_adopt() -> Result<(), String> {
+    #[cfg(not(windows))]
+    return Err(
+        "Antigravity account switching currently requires Windows Credential Manager".to_string(),
+    );
+
+    #[cfg(windows)]
+    {
+        let sign_in = agy_sign_in().ok_or("no Antigravity sign-in was found")?;
+        if sign_in["token"]["access_token"]
+            .as_str()
+            .is_none_or(str::is_empty)
+        {
+            return Err("the current Antigravity login has no access token".to_string());
+        }
+        let email = antigravity_login()
+            .email
+            .ok_or("could not read the signed-in Antigravity email from its CLI log")?;
+        let serialized = serde_json::to_string(&sign_in).map_err(|error| error.to_string())?;
+        write_secret(&agy_secret_target(&email), &serialized)?;
+        let mut accounts = read_agy_accounts();
+        if let Some(account) = accounts.iter_mut().find(|account| account.email == email) {
+            account.active = true;
+        } else {
+            accounts.push(AgyAccount {
+                id: email.clone(),
+                email,
+                active: true,
+                expired: false,
+                status: None,
+            });
+        }
+        write_agy_accounts(&accounts)
+    }
+}
+
+/// Makes a previously saved Antigravity account the active login used by agy and quota refresh.
+#[tauri::command]
+pub async fn antigravity_account_switch(id: String) -> Result<(), String> {
+    #[cfg(not(windows))]
+    return Err(
+        "Antigravity account switching currently requires Windows Credential Manager".to_string(),
+    );
+
+    #[cfg(windows)]
+    {
+        let id = safe_arg(&id)?;
+        let account = read_agy_accounts()
+            .into_iter()
+            .find(|account| account.id == id)
+            .ok_or("Antigravity account was not found")?;
+        let secret = stored_secret(&agy_secret_target(&account.email))
+            .ok_or("saved Antigravity credentials are missing")?;
+        let sign_in: Value = serde_json::from_str(&secret)
+            .map_err(|_| "saved Antigravity credentials are invalid")?;
+        fetch_agy_summary(&sign_in).await?;
+        write_secret("gemini:antigravity", &secret)?;
+        let mut accounts = read_agy_accounts();
+        for saved in &mut accounts {
+            saved.active = saved.id == id;
+        }
+        write_agy_accounts(&accounts)
+    }
+}
+
+/// The quota as Antigravity's own servers say it now: the buckets (`<model group>-<window>`, e.g. `gemini-5h`) with the
+/// fraction left and when each resets. Uses the access token agy already holds; it is not renewed here, so one that ran
+/// out is reported, and agy renews it the next time it runs.
+async fn fetch_agy_summary(sign_in: &Value) -> Result<(i64, Value), String> {
+    let token = &sign_in["token"];
+    let access = token["access_token"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or("the Antigravity sign-in has no access token")?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as i64);
+    if token["expiry"]
+        .as_str()
+        .and_then(parse_iso)
+        .is_some_and(|expiry| expiry <= now + 30)
+    {
+        return Err("the Antigravity sign-in has expired: run agy once to renew it".to_string());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .post("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
+        .bearer_auth(access)
+        .header(
+            reqwest::header::USER_AGENT,
+            "antigravity/2.25.0 (aidev_client; os_type=windows; arch=amd64; cl=1003475615)",
+        )
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Antigravity's servers answered {}",
+            response.status()
+        ));
+    }
+    let summary: Value = response.json().await.map_err(|error| error.to_string())?;
+    Ok((now, summary))
+}
+
+async fn fetch_agy_quota_for_sign_in(sign_in: &Value) -> Result<AgyQuota, String> {
+    let (now, summary) = fetch_agy_summary(sign_in).await?;
+    let mut quota = serde_json::Map::new();
+    for group in summary["groups"].as_array().into_iter().flatten() {
+        for bucket in group["buckets"].as_array().into_iter().flatten() {
+            let (Some(id), Some(fraction)) = (
+                bucket["bucketId"].as_str(),
+                bucket["remainingFraction"].as_f64(),
+            ) else {
+                continue;
+            };
+            if !id.contains('-') {
+                continue;
+            }
+            quota.insert(id.to_string(), serde_json::json!({ "remaining_fraction": fraction, "reset_time": bucket["resetTime"] }));
+        }
+    }
+    let figures = serde_json::json!({ "fetchedAt": now * 1000, "quota": quota });
+    parse_agy_quota(&figures.to_string())
+        .filter(|found| !found.groups.is_empty())
+        .ok_or_else(|| "Antigravity's servers sent no quota buckets".to_string())
+}
+
+async fn fetch_agy_quota() -> Result<AgyQuota, String> {
+    let sign_in = agy_sign_in().ok_or("no Antigravity sign-in was found on this machine")?;
+    fetch_agy_quota_for_sign_in(&sign_in).await
+}
+
+/// The quota of Antigravity: live from its servers; when that is not possible (no sign-in, an expired one, no network),
+/// the figures agy last saved to a file, which carry their own time.
+#[tauri::command]
+pub async fn antigravity_quota() -> Option<AgyQuota> {
+    match fetch_agy_quota().await {
+        Ok(live) => Some(live),
+        Err(error) => {
+            tracing_note(&error);
+            saved_agy_quota()
+        }
+    }
+}
+
+fn tracing_note(error: &str) {
+    eprintln!("antigravity quota: {error}");
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -802,22 +1605,49 @@ pub struct AgyModes {
 /// `~/.agentdeck/agy-modes.json`, so it is asked again only after an update (or with `force`).
 #[tauri::command]
 pub async fn agy_modes(force: bool) -> AgyModes {
-    let Some(agy) = which("agy") else { return AgyModes::default() };
+    let Some(agy) = which("agy") else {
+        return AgyModes::default();
+    };
     let version = version_of(&agy).await.unwrap_or_default();
-    let cache = crate::home_folder().ok().map(|home| home.join(".agentdeck").join("agy-modes.json"));
+    let cache = crate::home_folder()
+        .ok()
+        .map(|home| home.join(".agentdeck").join("agy-modes.json"));
     if !force {
-        let saved = cache.as_ref().and_then(|path| std::fs::read_to_string(path).ok()).and_then(|text| serde_json::from_str::<Value>(&text).ok());
-        if let Some(saved) = saved.filter(|saved| saved["version"].as_str() == Some(version.as_str())) {
-            let unavailable = saved["unavailable"].as_array().map(|list| list.iter().filter_map(|item| item.as_str().map(str::to_owned)).collect()).unwrap_or_default();
+        let saved = cache
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        if let Some(saved) =
+            saved.filter(|saved| saved["version"].as_str() == Some(version.as_str()))
+        {
+            let unavailable = saved["unavailable"]
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|item| item.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
             return AgyModes { unavailable };
         }
     }
     let probe = |mode: &'static str| {
         let agy = agy.clone();
         async move {
-            let args = ["-p", ".", "--mode", mode, "--print-timeout", "3s", "--output-format", "text"];
+            let args = [
+                "-p",
+                ".",
+                "--mode",
+                mode,
+                "--print-timeout",
+                "3s",
+                "--output-format",
+                "text",
+            ];
             match capture(&agy, &args, Duration::from_secs(30)).await {
-                Ok(out) if mode_unavailable(&format!("{}{}", out.stdout, out.stderr)) => Some(mode.to_owned()),
+                Ok(out) if mode_unavailable(&format!("{}{}", out.stdout, out.stderr)) => {
+                    Some(mode.to_owned())
+                }
                 _ => None,
             }
         }
@@ -828,7 +1658,10 @@ pub async fn agy_modes(force: bool) -> AgyModes {
         if let Some(folder) = path.parent() {
             let _ = std::fs::create_dir_all(folder);
         }
-        let _ = std::fs::write(path, serde_json::json!({ "version": version, "unavailable": unavailable }).to_string());
+        let _ = std::fs::write(
+            path,
+            serde_json::json!({ "version": version, "unavailable": unavailable }).to_string(),
+        );
     }
     AgyModes { unavailable }
 }
@@ -854,13 +1687,28 @@ fn models_url(kind: &str, base: &str) -> String {
 }
 
 fn parse_models(kind: &str, json: &Value) -> Vec<String> {
-    let (list, key) = if kind == "ollama" { (&json["models"], "name") } else { (&json["data"], "id") };
+    let (list, key) = if kind == "ollama" {
+        (&json["models"], "name")
+    } else {
+        (&json["data"], "id")
+    };
     list.as_array()
-        .map(|items| items.iter().filter_map(|item| item[key].as_str().map(str::to_owned)).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item[key].as_str().map(str::to_owned))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
-async fn probe(kind: &str, base: &str, key: Option<&str>, key_env: Option<&str>, limit: Duration) -> Probe {
+async fn probe(
+    kind: &str,
+    base: &str,
+    key: Option<&str>,
+    key_env: Option<&str>,
+    limit: Duration,
+) -> Probe {
     let started = Instant::now();
     let done = |models: Vec<String>, error: Option<String>| Probe {
         ok: error.is_none(),
@@ -869,7 +1717,10 @@ async fn probe(kind: &str, base: &str, key: Option<&str>, key_env: Option<&str>,
         error,
     };
     if !(base.starts_with("http://") || base.starts_with("https://")) {
-        return done(Vec::new(), Some("the address must start with http:// or https://".to_string()));
+        return done(
+            Vec::new(),
+            Some("the address must start with http:// or https://".to_string()),
+        );
     }
     let client = match reqwest::Client::builder().timeout(limit).build() {
         Ok(client) => client,
@@ -877,25 +1728,45 @@ async fn probe(kind: &str, base: &str, key: Option<&str>, key_env: Option<&str>,
     };
     let mut request = client.get(models_url(kind, base));
     // The key typed in the settings wins; otherwise the environment variable the user named.
-    let key = match (key.filter(|key| !key.is_empty()), key_env.filter(|name| !name.is_empty())) {
+    let key = match (
+        key.filter(|key| !key.is_empty()),
+        key_env.filter(|name| !name.is_empty()),
+    ) {
         (Some(key), _) => Some(key.to_owned()),
         (None, Some(name)) => match std::env::var(name) {
             Ok(key) => Some(key),
-            Err(_) => return done(Vec::new(), Some(format!("environment variable {name} is not set"))),
+            Err(_) => {
+                return done(
+                    Vec::new(),
+                    Some(format!("environment variable {name} is not set")),
+                )
+            }
         },
         (None, None) => None,
     };
     if let Some(key) = key {
-        request = if kind == "anthropic" { request.header("x-api-key", key).header("anthropic-version", "2023-06-01") } else { request.bearer_auth(key) };
+        request = if kind == "anthropic" {
+            request
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01")
+        } else {
+            request.bearer_auth(key)
+        };
     }
     match request.send().await {
         Ok(response) if response.status().is_success() => match response.json::<Value>().await {
             Ok(json) => done(parse_models(kind, &json), None),
             Err(error) => done(Vec::new(), Some(format!("not a model list: {error}"))),
         },
-        Ok(response) => done(Vec::new(), Some(format!("the server answered {}", response.status()))),
+        Ok(response) => done(
+            Vec::new(),
+            Some(format!("the server answered {}", response.status())),
+        ),
         Err(error) if error.is_timeout() => done(Vec::new(), Some("no answer in time".to_string())),
-        Err(error) if error.is_connect() => done(Vec::new(), Some("could not connect: is the server running?".to_string())),
+        Err(error) if error.is_connect() => done(
+            Vec::new(),
+            Some("could not connect: is the server running?".to_string()),
+        ),
         Err(error) => done(Vec::new(), Some(error.to_string())),
     }
 }
@@ -903,8 +1774,20 @@ async fn probe(kind: &str, base: &str, key: Option<&str>, key_env: Option<&str>,
 /// Asks a provider's endpoint for its models: the "Test connection" button. The key, if any, is read from the
 /// environment variable the user named and never leaves this function except as a request header.
 #[tauri::command]
-pub async fn provider_probe(kind: String, base_url: String, api_key: Option<String>, key_env: Option<String>) -> Probe {
-    probe(&kind, &base_url, api_key.as_deref(), key_env.as_deref(), Duration::from_secs(6)).await
+pub async fn provider_probe(
+    kind: String,
+    base_url: String,
+    api_key: Option<String>,
+    key_env: Option<String>,
+) -> Probe {
+    probe(
+        &kind,
+        &base_url,
+        api_key.as_deref(),
+        key_env.as_deref(),
+        Duration::from_secs(6),
+    )
+    .await
 }
 
 #[derive(Serialize)]
@@ -929,7 +1812,12 @@ pub async fn local_scan() -> Vec<LocalServer> {
         .map(|(kind, label, base_url)| {
             tauri::async_runtime::spawn(async move {
                 let found = probe(kind, base_url, None, None, limit).await;
-                found.ok.then_some(LocalServer { kind, label, base_url, models: found.models })
+                found.ok.then_some(LocalServer {
+                    kind,
+                    label,
+                    base_url,
+                    models: found.models,
+                })
             })
         })
         .collect();
@@ -964,8 +1852,22 @@ mod tests {
         assert_eq!(accounts.len(), 3);
         assert!(!accounts[0].active && accounts[1].active);
         assert_eq!(accounts[0].alias, None);
-        assert_eq!(accounts[0].usage, vec![UsageWindow { label: "30d".into(), pct: 93.0, resets_at: Some(1_788_172_584) }]);
-        assert_eq!(accounts[1].usage.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(), ["5h", "7d"]);
+        assert_eq!(
+            accounts[0].usage,
+            vec![UsageWindow {
+                label: "30d".into(),
+                pct: 93.0,
+                resets_at: Some(1_788_172_584)
+            }]
+        );
+        assert_eq!(
+            accounts[1]
+                .usage
+                .iter()
+                .map(|w| w.label.as_str())
+                .collect::<Vec<_>>(),
+            ["5h", "7d"]
+        );
         assert_eq!(accounts[2].status.as_deref(), Some("no usage figures yet"));
         let auto = auto.expect("auto switch");
         assert!(auto.enabled && auto.five_hour == 12 && auto.weekly == 6);
@@ -1007,7 +1909,9 @@ mod tests {
 
     #[test]
     fn claude_status_is_read() {
-        let login = claude_login(r#"{"loggedIn":true,"authMethod":"claude.ai","email":"me@x.com","orgName":"Org"}"#);
+        let login = claude_login(
+            r#"{"loggedIn":true,"authMethod":"claude.ai","email":"me@x.com","orgName":"Org"}"#,
+        );
         assert_eq!(login.logged_in, Some(true));
         assert_eq!(login.email.as_deref(), Some("me@x.com"));
         assert_eq!(login.detail.as_deref(), Some("Org"));
@@ -1018,7 +1922,10 @@ mod tests {
     fn model_lists_follow_each_kind() {
         assert_eq!(models_url("ollama", "http://h:1/"), "http://h:1/api/tags");
         assert_eq!(models_url("openai", "http://h/v1"), "http://h/v1/models");
-        assert_eq!(models_url("anthropic", "https://api.x.com"), "https://api.x.com/v1/models");
+        assert_eq!(
+            models_url("anthropic", "https://api.x.com"),
+            "https://api.x.com/v1/models"
+        );
         let tags: Value = serde_json::json!({"models": [{"name": "llama3"}]});
         assert_eq!(parse_models("ollama", &tags), ["llama3"]);
         let data: Value = serde_json::json!({"data": [{"id": "m1"}, {"id": "m2"}]});
@@ -1062,7 +1969,14 @@ mod tests {
         let quota = parse_agy_quota(text).expect("parses");
         assert_eq!(quota.observed_at, Some(1_792_739_564));
         assert_eq!(quota.groups[0].id, "gemini");
-        assert_eq!(quota.groups[0].windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(), ["5h", "7d"]);
+        assert_eq!(
+            quota.groups[0]
+                .windows
+                .iter()
+                .map(|w| w.label.as_str())
+                .collect::<Vec<_>>(),
+            ["5h", "7d"]
+        );
         assert!((quota.groups[0].windows[1].pct - 43.41406).abs() < 0.001);
         assert_eq!(quota.groups[1].label, "Claude and GPT-OSS models");
         assert_eq!(quota.groups[1].windows[0].pct, 0.0);
@@ -1072,7 +1986,9 @@ mod tests {
     #[test]
     fn agy_says_when_a_mode_is_not_for_this_account() {
         assert!(mode_unavailable("warning: --mode auto is not available for this account; continuing in the default mode."));
-        assert!(!mode_unavailable("[agy] print timeout after 3s with turn in progress"));
+        assert!(!mode_unavailable(
+            "[agy] print timeout after 3s with turn in progress"
+        ));
     }
 
     #[test]

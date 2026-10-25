@@ -229,7 +229,10 @@ pub(super) fn load(path: &Path) -> std::io::Result<Vec<HistoryMessage>> {
         let time = str_of(&entry.value, "timestamp").to_owned();
         if role == "assistant" {
             let message = entry.value.get("message");
-            let call = message.and_then(|m| m.get("id")).and_then(Value::as_str).unwrap_or_default();
+            let call = message
+                .and_then(|m| m.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             if let Some(usage) = message.and_then(|m| m.get("usage")) {
                 if call.is_empty() || counted.insert(call.to_owned()) {
                     let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);

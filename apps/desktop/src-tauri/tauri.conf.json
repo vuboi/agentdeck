@@ -14,7 +14,7 @@
       { "label": "main", "title": "AgentDeck", "width": 1280, "height": 800, "minWidth": 320, "minHeight": 480, "center": true, "decorations": false, "transparent": true }
     ],
     "security": {
-      "capabilities": ["default"],
+      "capabilities": ["default", "debug-preview"],
       "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; font-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; connect-src 'self' blob: data: ipc: http://ipc.localhost https://cdn.jsdelivr.net https://thesvg.org ws://127.0.0.1:*",
       "devCsp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; font-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; connect-src 'self' blob: data: ipc: http://ipc.localhost https://cdn.jsdelivr.net https://thesvg.org http://127.0.0.1:1420 ws://127.0.0.1:* ws://127.0.0.1:1420"
     }

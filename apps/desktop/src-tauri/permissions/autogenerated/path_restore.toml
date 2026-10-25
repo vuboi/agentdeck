@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-path-restore"
+description = "Enables the path_restore command without any pre-configured scope."
+commands.allow = ["path_restore"]
+
+[[permission]]
+identifier = "deny-path-restore"
+description = "Denies the path_restore command without any pre-configured scope."
+commands.deny = ["path_restore"]

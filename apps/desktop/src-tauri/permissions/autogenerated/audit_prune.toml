@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-audit-prune"
+description = "Enables the audit_prune command without any pre-configured scope."
+commands.allow = ["audit_prune"]
+
+[[permission]]
+identifier = "deny-audit-prune"
+description = "Denies the audit_prune command without any pre-configured scope."
+commands.deny = ["audit_prune"]

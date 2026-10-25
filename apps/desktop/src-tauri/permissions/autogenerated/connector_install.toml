@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-connector-install"
+description = "Enables the connector_install command without any pre-configured scope."
+commands.allow = ["connector_install"]
+
+[[permission]]
+identifier = "deny-connector-install"
+description = "Denies the connector_install command without any pre-configured scope."
+commands.deny = ["connector_install"]

@@ -132,6 +132,20 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M2.8 1.5 5.2 4 2.8 6.5' fill='none' stroke='%238b8b93' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
+/* The sessions drawer (a narrow window) has less room: its list gets the same slim scrollbar as the rest of the
+   app's lists, with no arrow buttons, so the thumb does not crowd the rows. */
+[data-testid='z-drawer'] *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+[data-testid='z-drawer'] *::-webkit-scrollbar-thumb {
+  border-width: 2px;
+  border-radius: 4px;
+}
+[data-testid='z-drawer'] *::-webkit-scrollbar-button:single-button {
+  display: none;
+}
+
 /* z-tree's indent guides run 1px past the last row, which made short trees show a scrollbar.
    Clipping the row container at its own height removes the overflow; real scrolling is untouched. */
 .z-tree > .relative.w-full {

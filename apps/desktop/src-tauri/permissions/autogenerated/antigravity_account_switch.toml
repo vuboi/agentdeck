@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-antigravity-account-switch"
+description = "Enables the antigravity_account_switch command without any pre-configured scope."
+commands.allow = ["antigravity_account_switch"]
+
+[[permission]]
+identifier = "deny-antigravity-account-switch"
+description = "Denies the antigravity_account_switch command without any pre-configured scope."
+commands.deny = ["antigravity_account_switch"]

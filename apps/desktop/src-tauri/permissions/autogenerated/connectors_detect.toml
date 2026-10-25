@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-connectors-detect"
+description = "Enables the connectors_detect command without any pre-configured scope."
+commands.allow = ["connectors_detect"]
+
+[[permission]]
+identifier = "deny-connectors-detect"
+description = "Denies the connectors_detect command without any pre-configured scope."
+commands.deny = ["connectors_detect"]

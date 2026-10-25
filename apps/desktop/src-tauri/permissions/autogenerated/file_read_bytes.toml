@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-file-read-bytes"
+description = "Enables the file_read_bytes command without any pre-configured scope."
+commands.allow = ["file_read_bytes"]
+
+[[permission]]
+identifier = "deny-file-read-bytes"
+description = "Denies the file_read_bytes command without any pre-configured scope."
+commands.deny = ["file_read_bytes"]

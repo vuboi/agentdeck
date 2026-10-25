@@ -98,7 +98,7 @@
           {#if card.childId && needsApproval(card.childId)}<span class="shrink-0 rounded-full bg-warning/15 px-1.5 py-px text-[10px] font-medium text-warning">Open its chat to approve</span>{/if}
         </button>
         {#if live(card.state) && card.taskId}
-          <button type="button" class="my-1 mr-1 inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[11px] text-muted-foreground outline-none transition-colors hover:border-destructive/50 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring/60" aria-label="Stop the task for {nameOf(card, record)}" title="Stop this task: its agent is stopped and the caller is told" onclick={() => stopDelegateTask(card.taskId!)}>
+          <button type="button" class="my-1 mr-0.5 inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border-0 px-2 text-[11px] text-muted-foreground outline-none transition-colors hover:bg-destructive/15 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring/60" aria-label="Stop the task for {nameOf(card, record)}" title="Stop this task: its agent is stopped and the caller is told" onclick={() => stopDelegateTask(card.taskId!)}>
             <ZIcon zType="lucideSquare" class="size-3 fill-current" /> Stop
           </button>
         {/if}
