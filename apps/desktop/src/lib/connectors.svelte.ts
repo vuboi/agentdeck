@@ -150,10 +150,19 @@ export async function refreshAccounts(provider: AccountProvider, refresh = false
 
 export async function refreshAgyQuota() {
   if (!inTauri()) return;
+  // The local status-line cache is immediate; do not leave the Usage cards blank while the live API request waits.
+  if (!connectors.agyQuota) {
+    try {
+      connectors.agyQuota = await call<AgyQuota | null>('antigravity_quota_cached');
+    } catch {
+      // Keep going: the live request may still return current figures.
+    }
+  }
   try {
-    connectors.agyQuota = await call<AgyQuota | null>('antigravity_quota');
+    const live = await call<AgyQuota | null>('antigravity_quota');
+    if (live) connectors.agyQuota = live;
   } catch {
-    connectors.agyQuota = null;
+    // Preserve saved figures when the live quota endpoint is unavailable.
   }
 }
 

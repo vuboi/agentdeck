@@ -2248,6 +2248,7 @@ export type TreeData = {
   count?: number;
   group?: string;
   open?: boolean;
+  done?: boolean;
 };
 
 /** How the sidebar lists chats: by folder (Recents, This computer, Projects), by date, or one plain list. */
@@ -2257,12 +2258,13 @@ export type TreeOptions = {
   view: SidebarView;
   /** Heading keys that are folded. */
   collapsed: string[];
-  /** Lists showing every row instead of the first few ("Show more" pressed). */
-  showAll: string[];
+  /** Number of 20-row pages loaded after each list's initial rows. */
+  showPages: Record<string, number>;
 };
 /** Rows a list shows before its "Show more". */
 const LIST_LIMIT = 5;
 const PROJECT_LIMIT = 10;
+const LIST_PAGE_SIZE = 20;
 
 /** The project of the open chat while it is still an empty new session: its row shows where the chat will go. */
 export function pendingProject(): string | undefined {
@@ -2270,7 +2272,7 @@ export function pendingProject(): string | undefined {
   return active && isEmptyDraft(active) ? active.projectId : undefined;
 }
 
-export function buildTree({ view, collapsed, showAll }: TreeOptions = { view: DEFAULT_VIEW, collapsed: [], showAll: [] }): ZTreeNode<TreeData>[] {
+export function buildTree({ view, collapsed, showPages }: TreeOptions = { view: DEFAULT_VIEW, collapsed: [], showPages: {} }): ZTreeNode<TreeData>[] {
   // A session with no time yet is new: it goes first.
   const newest = (a: SessionItem, b: SessionItem) => {
     if (!a.updatedAt || !b.updatedAt) return Number(!b.updatedAt) - Number(!a.updatedAt);
@@ -2307,18 +2309,21 @@ export function buildTree({ view, collapsed, showAll }: TreeOptions = { view: DE
     const sorted = [...list].sort(view.sortBy === 'name' ? (x, y) => x.title.localeCompare(y.title) : newest);
     return view.order === 'asc' ? sorted.reverse() : sorted;
   };
-  // The first rows of a long list, then "Show more" (or every row and "Show less").
+  // The first rows of a long list, then one 20-row page per "Show more" click.
   const limited = <T>(key: string, list: T[], limit: number, row: (item: T) => ZTreeNode<TreeData>) => {
-    if (list.length <= limit) return list.map(row);
-    const open = showAll.includes(key);
+    const page = showPages[key] ?? 0;
+    const visibleCount = Math.min(list.length, limit + page * LIST_PAGE_SIZE);
+    const done = list.length <= visibleCount;
+    if (done && page === 0) return list.map(row);
+    const open = page > 0;
     const more: ZTreeNode<TreeData> = {
       id: `more:${key}`,
-      label: open ? 'Show less' : `Show ${list.length - limit} more`,
+      label: done ? 'Show less' : `Show ${list.length - visibleCount} more`,
       isLeaf: true,
       children: [],
-      data: { kind: 'more', group: key, open },
+      data: { kind: 'more', group: key, open, done },
     };
-    return [...(open ? list : list.slice(0, limit)).map(row), more];
+    return [...list.slice(0, visibleCount).map(row), more];
   };
 
   const projectNode = (project: Project): ZTreeNode<TreeData> => ({
@@ -2384,7 +2389,7 @@ export function buildTree({ view, collapsed, showAll }: TreeOptions = { view: DE
   if (view.order === 'asc') projects.reverse();
   return [
     ...pins,
-    ...section('recents', 'Recents', limited('recents', latest.slice(0, 15), LIST_LIMIT, (item) => flatNode(item, 'recent'))),
+    ...section('recents', 'Recents', limited('recents', latest, LIST_LIMIT, (item) => flatNode(item, 'recent'))),
     ...section('computer', 'This computer', limited('computer', ordered(computer), LIST_LIMIT, (item) => flatNode(item)), true),
     ...section('projects', 'Projects', limited('projects', projects, PROJECT_LIMIT, projectNode), true),
   ];
@@ -2516,7 +2521,7 @@ const transcripts = new Map<string, Transcript>();
 const stampOf = (session: SessionItem) => `v5|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
 const MAX_SAVED = 12;
 /** Keep one page in the reload cache; older pages are fetched from the history cursor on demand. */
-const PAGE_LIMIT = 30;
+const PAGE_LIMIT = 20;
 const SAVED_TAIL = PAGE_LIMIT;
 
 /** Agents and per-agent ids of saved chats that switched agent (the chat files cannot hold them). */

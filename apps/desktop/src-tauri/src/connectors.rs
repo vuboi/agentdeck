@@ -354,10 +354,18 @@ fn antigravity_login() -> Login {
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
         .collect();
     logs.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    let credential_present = agy_sign_in().is_some();
     let Some((_, newest)) = logs.first() else {
-        return Login::default();
+        return Login {
+            logged_in: credential_present.then_some(true),
+            email: agy_saved_active_email(),
+            ..Login::default()
+        };
     };
-    let logged_in = antigravity_state(&tail_of(newest));
+    // The current OAuth credential is authoritative; CLI logs can lag behind a successful sign-in.
+    let logged_in = credential_present
+        .then_some(true)
+        .or_else(|| antigravity_state(&tail_of(newest)));
     // The sign-in line is written once per sign-in, so it may sit in an older log.
     let email = agy_saved_active_email().or_else(|| {
         logs.iter()
@@ -1248,6 +1256,12 @@ fn saved_agy_quota() -> Option<AgyQuota> {
         .join("ai-quota-tray")
         .join("usage-cache.json");
     parse_agy_quota(&std::fs::read_to_string(path).ok()?)
+}
+
+/// The last locally saved quota, returned before the live request so Settings can show it immediately.
+#[tauri::command]
+pub fn antigravity_quota_cached() -> Option<AgyQuota> {
+    saved_agy_quota()
 }
 
 /// What a secret of the system store holds (Windows Credential Manager), as text.

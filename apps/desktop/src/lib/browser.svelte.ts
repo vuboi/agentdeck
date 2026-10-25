@@ -2,7 +2,7 @@
 // injected into each page reports console, network and navigation, and answers DOM / screenshot / element requests.
 import { listenToNetwork } from './devtools-net.svelte';
 import { inTauri, isPreviewCopy } from './history';
-import { layout } from './layout.svelte';
+import { layout, setToolsOpen } from './layout.svelte';
 
 export type Device = 'desktop' | 'tablet' | 'mobile';
 export const DEVICES: Record<Device, { label: string; name: string; w: number; h: number; ua?: string }> = {
@@ -116,7 +116,7 @@ export async function listenToPage() {
     browser.device = payload.device;
     browser.landscape = payload.landscape === true;
     layout.activeTool = 'Preview';
-    layout.toolsOpen = true;
+    setToolsOpen(true);
   });
   await listen<Report>('browser-report', ({ payload }) => {
     if (payload.id && waiting.has(payload.id)) {
@@ -505,7 +505,7 @@ export function openInPreview(url: string, mode: 'auto' | 'current' | 'new' = 'a
   }
   browser.autostart = url;
   layout.activeTool = 'Preview';
-  layout.toolsOpen = true;
+  setToolsOpen(true);
 }
 
 /**

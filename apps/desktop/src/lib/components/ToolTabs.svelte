@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ZButton, ZDropdownMenu, ZIcon } from '@shival99/z-ui-svelte';
-  import { layout } from '../layout.svelte';
+  import { layout, setToolsOpen } from '../layout.svelte';
   import { TOOLS } from '../tools';
 
   // Tabs that do not fit fold into a hamburger dropdown instead of squeezing the title.
@@ -21,11 +21,11 @@
   // Toggle: the open tool's button closes the panel; any other button opens the panel on that tool.
   function select(value: string) {
     if (layout.toolsOpen && layout.activeTool === value) {
-      layout.toolsOpen = false;
+      setToolsOpen(false);
       return;
     }
     layout.activeTool = value;
-    layout.toolsOpen = true;
+    setToolsOpen(true);
   }
 
   // Standard z-ui dropdown: icon + text rows, check on the current tool, library focus handling and animation.

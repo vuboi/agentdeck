@@ -41,6 +41,34 @@ export const layout = $state({
   sidebarDrawer: false,
   /** The user folded the sidebar away (wide window). Kept between runs. */
   sidebarCollapsed: false,
+  /** Keep the sidebar instance mounted while folded so its tree state survives. */
+  sidebarWidthAnimating: false,
+  /** Keep the tools panel mounted while its desktop slide animation runs. */
+  toolsWidthAnimating: false,
+});
+
+/** Shared expansion state for the desktop sidebar and its narrow-window drawer. */
+export const sidebarTree = $state({
+  expanded: [] as string[],
+  hydrated: false,
+  hasSavedState: false,
+  initialized: false,
+});
+
+getPref<string[]>('sidebar.treeExpanded').then((saved) => {
+  if (Array.isArray(saved)) {
+    sidebarTree.expanded = saved;
+    sidebarTree.hasSavedState = true;
+  }
+  sidebarTree.hydrated = true;
+});
+
+$effect.root(() => {
+  $effect(() => {
+    const initialized = sidebarTree.initialized;
+    const expanded = [...sidebarTree.expanded];
+    if (initialized) setPref('sidebar.treeExpanded', expanded);
+  });
 });
 
 export type DockZone = 'sidebar' | 'left' | 'right' | 'top' | 'bottom';
@@ -74,6 +102,16 @@ $effect.root(() => {
     if (collapsedHydrated) setPref('layout.sidebarCollapsed', collapsed);
   });
 });
+
+let sidebarAnimationTimer: ReturnType<typeof setTimeout> | undefined;
+/** Fold or restore the desktop sidebar with a short slide animation. */
+export function setSidebarCollapsed(collapsed: boolean): void {
+  if (layout.sidebarCollapsed === collapsed) return;
+  clearTimeout(sidebarAnimationTimer);
+  layout.sidebarWidthAnimating = true;
+  layout.sidebarCollapsed = collapsed;
+  sidebarAnimationTimer = setTimeout(() => (layout.sidebarWidthAnimating = false), 260);
+}
 
 let sizesHydrated = false;
 getPref<typeof layout.sizes>('layout.sizes').then((saved) => {
@@ -110,8 +148,18 @@ $effect.root(() => {
   });
 });
 
+let toolsAnimationTimer: ReturnType<typeof setTimeout> | undefined;
+/** Open or fold the tools panel with a short slide animation. */
+export function setToolsOpen(open: boolean): void {
+  if (layout.toolsOpen === open) return;
+  clearTimeout(toolsAnimationTimer);
+  layout.toolsWidthAnimating = true;
+  layout.toolsOpen = open;
+  toolsAnimationTimer = setTimeout(() => (layout.toolsWidthAnimating = false), 260);
+}
+
 export function toggleTools() {
-  layout.toolsOpen = !layout.toolsOpen;
+  setToolsOpen(!layout.toolsOpen);
 }
 
 export function toggleThemePanel() {
@@ -165,7 +213,7 @@ export function dockTool(tool: string, zone: Zone = 'tools') {
   removeFromZones(tool);
   if (zone === 'tools') {
     layout.activeTool = tool;
-    layout.toolsOpen = true;
+    setToolsOpen(true);
   } else {
     layout.docked[zone].push(tool);
   }

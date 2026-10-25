@@ -699,7 +699,7 @@
 
 <svelte:window onkeydown={onWindowKey} />
 
-<div class="flex h-full min-h-0 flex-1 flex-col" aria-label="Browser">
+<div class="flex h-full w-full min-h-0 flex-1 flex-col" aria-label="Browser">
   {#if !inTauri()}
     <div class="grid flex-1 place-items-center p-6 text-center text-xs text-muted-foreground">The browser runs in the AgentDeck desktop app.</div>
   {:else}

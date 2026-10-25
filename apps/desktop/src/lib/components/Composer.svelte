@@ -389,6 +389,7 @@
   }
 
   const DOC_MAX = 25 * 1024 * 1024; // the backend refuses larger ones too
+  const LONG_PASTE_CHARS = 10_000;
 
   async function addFiles(files: File[]) {
     const isPicture = (file: File) => /^image\/(png|jpeg|gif|webp)$/.test(file.type);
@@ -506,7 +507,14 @@
       return;
     }
     const files = [...(event.clipboardData?.files ?? [])];
-    if (files.length === 0) return; // plain text pastes as usual
+    if (files.length === 0) {
+      const text = event.clipboardData?.getData('text/plain') ?? '';
+      if (text.length <= LONG_PASTE_CHARS) return; // short plain text pastes as usual
+      event.preventDefault();
+      // Long text travels as a regular file chip, so it stays out of the prompt until the agent reads the attachment.
+      void addDocuments([new File([text], 'Pasted text.txt', { type: 'text/plain' })], sessionId);
+      return;
+    }
     event.preventDefault();
     void addFiles(files);
   }

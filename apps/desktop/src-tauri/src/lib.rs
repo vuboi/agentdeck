@@ -1170,6 +1170,7 @@ pub fn run() {
             mcp_manage::mcp_remove,
             mcp_manage::mcp_agy_link,
             connectors::antigravity_quota,
+            connectors::antigravity_quota_cached,
             connectors::antigravity_accounts_list,
             connectors::antigravity_account_adopt,
             connectors::antigravity_account_switch,

@@ -5,7 +5,7 @@
   import { tick, untrack } from 'svelte';
   import { fly } from 'svelte/transition';
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
-  import { layout } from '../layout.svelte';
+  import { layout, setSidebarCollapsed } from '../layout.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { LOADER } from '../loaders';
   import { toast } from '../toast';
@@ -114,7 +114,7 @@
   function railClick() {
     clearTimeout(railTimer);
     layout.sidebarDrawer = false;
-    layout.sidebarCollapsed = false;
+    setSidebarCollapsed(false);
   }
   // While the hover drawer covers the folded button, a press on the button still brings the sidebar back: the drawer
   // would otherwise take the press as a click outside it.

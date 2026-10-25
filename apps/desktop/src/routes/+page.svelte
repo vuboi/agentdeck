@@ -17,7 +17,7 @@
   import Splitter from '../lib/components/Splitter.svelte';
   import { slide } from 'svelte/transition';
   import { slideWidth } from '../lib/transitions';
-  import { layout, type DockZone as Zone } from '../lib/layout.svelte';
+  import { layout, setSidebarCollapsed, setToolsOpen, type DockZone as Zone } from '../lib/layout.svelte';
   import { terminal, handleTerminalShortcut } from '../lib/terminal.svelte';
   import { browser } from '../lib/browser.svelte';
   import { inTauri } from '../lib/history';
@@ -73,9 +73,17 @@
   const showSidebar = $derived(!narrow && !layout.sidebarCollapsed);
   const showZones = $derived(innerW >= 1000);
   const showTools = $derived(layout.toolsOpen && !narrow);
+  const toolsAvailableWidth = $derived.by(() => {
+    const sidebar = showSidebar ? Math.max(180, layout.sizes.sidebar) + 1 : 0;
+    const left = showZones && shows('left') ? Math.max(MIN.left, layout.sizes.left) + 1 : 0;
+    const right = showZones && shows('right') ? Math.max(MIN.right, layout.sizes.right) + 1 : 0;
+    const toolsSplitter = showTools || layout.toolsWidthAnimating ? 1 : 0;
+    return Math.max(0, innerW - 280 - sidebar - left - right - toolsSplitter);
+  });
+  const toolsPanelWidth = $derived(Math.min(layout.sizes.tools, Math.max(MIN.tools, toolsAvailableWidth)));
 
   $effect(() => {
-    layout.toolsVisible = showTools;
+    layout.toolsVisible = showTools && toolsPanelWidth > 0;
   });
 
   $effect(() => {
@@ -100,7 +108,7 @@
         if (device === 'mobile' || device === 'tablet') browser.device = device;
         browser.autostart = address;
         layout.activeTool = 'Preview';
-        layout.toolsOpen = true;
+        setToolsOpen(true);
         // `|menu`: open the page menu once the page is up, to check menus drawn over it.
         if (then === 'menu') setTimeout(() => document.querySelector<HTMLElement>('[data-page-menu] button')?.click(), 6000);
         if (then === 'search') setTimeout(() => document.querySelector<HTMLElement>('[aria-label^="Search chats"]')?.click(), 6000);
@@ -116,7 +124,7 @@
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'b') {
       event.preventDefault();
       if (narrow) layout.sidebarDrawer = !layout.sidebarDrawer;
-      else layout.sidebarCollapsed = !layout.sidebarCollapsed;
+      else setSidebarCollapsed(!layout.sidebarCollapsed);
     }
     // Ctrl+, (Cmd+,): Settings.
     if ((event.ctrlKey || event.metaKey) && event.key === ',') {
@@ -137,15 +145,25 @@
 <svelte:window bind:innerWidth={innerW} onkeydown={onKey} />
 
 <div class="relative flex h-screen overflow-x-hidden overflow-y-hidden bg-background text-foreground min-[720px]:overflow-x-auto">
-  {#if showSidebar}
-    <div transition:slideWidth class="flex h-full min-w-[180px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.sidebar}px" data-sidebar>
+  {#if !narrow}
+    <div
+      class="sidebar-shell flex h-full {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1"
+      class:sidebar-shell-animating={layout.sidebarWidthAnimating}
+      class:sidebar-shell-visible={showSidebar}
+      style:width="{showSidebar ? layout.sizes.sidebar : 0}px"
+      style:minWidth={showSidebar ? '180px' : '0px'}
+      style:opacity={showSidebar ? 1 : 0}
+      aria-hidden={!showSidebar}
+      inert={!showSidebar}
+      data-sidebar
+    >
       <Sidebar />
     </div>
-    <Splitter axis="x" label="Resize sidebar" onDelta={grow('sidebar', 1, MIN.sidebar, maxW)} />
+    {#if showSidebar}<Splitter axis="x" label="Resize sidebar" onDelta={grow('sidebar', 1, MIN.sidebar, maxW)} />{/if}
   {/if}
 
   <!-- Workspace: left zone | conversation column | right zone -->
-  <div class="flex h-full min-w-0 flex-1 min-[720px]:min-w-[480px]" data-workspace>
+  <div class="flex h-full min-w-0 flex-1 min-[720px]:min-w-[280px]" data-workspace>
     {#if showZones && shows('left')}
       <div transition:slideWidth class="flex h-full min-w-[200px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.left}px">
         <DockZone zone="left" />
@@ -188,10 +206,21 @@
     {/if}
   </div>
 
-  {#if showTools}
-    <Splitter axis="x" label="Resize tools panel" onDelta={grow('tools', -1, MIN.tools, maxW)} />
-    <div transition:slideWidth class="flex h-full min-w-[240px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.tools}px">
-      <RightPanel />
+  {#if !narrow}
+    {#if showTools && toolsPanelWidth >= MIN.tools}<Splitter axis="x" label="Resize tools panel" onDelta={grow('tools', -1, MIN.tools, () => toolsAvailableWidth)} />{/if}
+    <div
+      class="tools-shell flex h-full min-w-0 shrink-0 overflow-hidden [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1"
+      class:tools-shell-animating={layout.toolsWidthAnimating}
+      class:tools-shell-visible={showTools && toolsPanelWidth > 0}
+      style:width="{showTools ? toolsPanelWidth : 0}px"
+      style:minWidth="{showTools ? Math.min(MIN.tools, toolsPanelWidth) : 0}px"
+      style:opacity={showTools && toolsPanelWidth > 0 ? 1 : 0}
+      aria-hidden={!showTools || toolsPanelWidth === 0}
+      inert={!showTools || toolsPanelWidth === 0}
+    >
+      {#if (showTools && toolsPanelWidth > 0) || layout.toolsWidthAnimating}
+        <RightPanel />
+      {/if}
     </div>
   {/if}
 

@@ -132,8 +132,7 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M2.8 1.5 5.2 4 2.8 6.5' fill='none' stroke='%238b8b93' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
-/* The sessions drawer (a narrow window) has less room: its list gets the same slim scrollbar as the rest of the
-   app's lists, with no arrow buttons, so the thumb does not crowd the rows. */
+/* The narrow sessions drawer uses a compact native scrollbar while keeping the shared arrow buttons. */
 [data-testid='z-drawer'] *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -141,9 +140,6 @@ body {
 [data-testid='z-drawer'] *::-webkit-scrollbar-thumb {
   border-width: 2px;
   border-radius: 4px;
-}
-[data-testid='z-drawer'] *::-webkit-scrollbar-button:single-button {
-  display: none;
 }
 
 /* z-tree's indent guides run 1px past the last row, which made short trees show a scrollbar.
@@ -154,6 +150,28 @@ body {
 
 /* Resize dividers: a quiet hairline that lights up at its centre on hover or drag and tapers to
    nothing at both ends. */
+.sidebar-shell-animating {
+  overflow: hidden;
+  transition:
+    width 240ms cubic-bezier(0.33, 1, 0.68, 1),
+    min-width 240ms cubic-bezier(0.33, 1, 0.68, 1);
+}
+.sidebar-shell:not(.sidebar-shell-visible) {
+  pointer-events: none;
+}
+.tools-shell-animating {
+  overflow: hidden;
+  transition:
+    width 240ms cubic-bezier(0.33, 1, 0.68, 1),
+    min-width 240ms cubic-bezier(0.33, 1, 0.68, 1);
+}
+.tools-shell:not(.tools-shell-visible) {
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-shell-animating,
+  .tools-shell-animating { transition: none !important; }
+}
 .agent-divider {
   position: relative;
 }
@@ -346,15 +364,13 @@ body {
 /* The overlay scrollbars of z-ui (dialogs, settings, drawers): an 8px track with a 4px thumb, no arrows. */
 .os-theme-z.os-theme-z { --os-size: 8px; --os-padding-perpendicular: 2px; }
 
-/* The tree scrolls natively (its own overflow-y-auto), so it is drawn like the overlay one above: 8px track,
- * 4px thumb, no arrows. Without this it takes the 12px global scrollbar and looks heavier than the dialogs. */
-.z-tree::-webkit-scrollbar { width: 8px; height: 8px; }
+/* ZTree owns native scrolling, including in the recent drawer; match the chat's 12px track. */
+.z-tree::-webkit-scrollbar { width: 12px; height: 12px; }
 .z-tree::-webkit-scrollbar-track { background: transparent; }
 .z-tree::-webkit-scrollbar-thumb {
   background-color: color-mix(in oklab, var(--muted-foreground) 30%, transparent);
-  border: 2px solid transparent;
-  border-radius: 4px;
+  border: 3px solid transparent;
+  border-radius: 6px;
   background-clip: padding-box;
 }
 .z-tree::-webkit-scrollbar-thumb:hover { background-color: color-mix(in oklab, var(--muted-foreground) 50%, transparent); }
-.z-tree::-webkit-scrollbar-button { display: none; }

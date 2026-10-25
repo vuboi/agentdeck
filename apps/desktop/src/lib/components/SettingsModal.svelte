@@ -442,7 +442,7 @@
                         <ZButton zWave={false} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={Boolean(working)} onclick={() => void install(card.id, card.label)}>
                           <ZIcon zType={icon(working ? 'lucideLoaderCircle' : 'lucideDownload')} class="size-3.5 {working ? 'animate-spin' : ''}" /> Install
                         </ZButton>
-                      {:else if path}
+                      {:else if path && (card.id !== 'agy' || info?.logged_in !== true)}
                         <ZButton zWave={false} zType={info?.logged_in ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={Boolean(working)} onclick={() => void login(card.id, card.label)}>
                           <ZIcon zType={icon(connectors.busy[`login:${card.id}`] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy[`login:${card.id}`] ? 'animate-spin' : ''}" />
                           {connectors.busy[`login:${card.id}`] ? 'Waiting…' : info?.logged_in ? 'Sign in again' : 'Sign in'}
@@ -469,15 +469,14 @@
                       <div class="mb-2 flex items-center gap-2">
                         <h4 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Antigravity accounts</h4>
                         <span class="ml-auto"></span>
-                        {#if path}
-                          <ZButton zWave={false} zType={info?.logged_in ? 'outline' : 'default'} zSize="sm" class="h-7 gap-1.5 px-2 text-xs" disabled={Boolean(working)} onclick={() => void login('agy', card.label)}>
-                            <ZIcon zType={icon(connectors.busy['login:agy'] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy['login:agy'] ? 'animate-spin' : ''}" />
-                            {connectors.busy['login:agy'] ? 'Waiting…' : info?.logged_in ? 'Sign in again' : 'Sign in'}
-                          </ZButton>
-                        {/if}
                         <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0" title="Refresh Antigravity accounts" disabled={Boolean(connectors.busy['accounts:agy'])} onclick={() => void refreshAgyAccounts()}>
                           <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5" />
                         </ZButton>
+                        {#if info?.logged_in === true}
+                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={!path || Boolean(connectors.busy['login:agy'])} title="Open Antigravity to sign in with another Google account" onclick={() => void login('agy', card.label)}>
+                            <ZIcon zType={icon(connectors.busy['login:agy'] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy['login:agy'] ? 'animate-spin' : ''}" /> Sign in another account
+                          </ZButton>
+                        {/if}
                         <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={!info?.logged_in || !info.email || Boolean(connectors.busy['add:agy'])} title={!info?.logged_in ? 'Sign in to Antigravity first' : 'Save the current Antigravity login'} onclick={() => void addAgyAccount()}>
                           <ZIcon zType={icon(connectors.busy['add:agy'] ? 'lucideLoaderCircle' : 'lucideUserPlus')} class="size-3.5 {connectors.busy['add:agy'] ? 'animate-spin' : ''}" /> Add account
                         </ZButton>
@@ -487,6 +486,7 @@
                       {:else if connectors.accounts.agy.length === 0}
                         <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">Add the signed-in Google account to AgentDeck. Its credentials are stored in Windows Credential Manager.</p>
                       {:else}
+                        <p class="mb-3 text-xs text-muted-foreground">To add another account, sign in with it in Antigravity, then click <b class="font-medium text-foreground">Add account</b> here. Use <b class="font-medium text-foreground">Use this account</b> to switch between saved accounts.</p>
                         <ul class="mb-3 grid gap-2 sm:grid-cols-2">
                           {#each connectors.accounts.agy as account (account.id)}
                             <li class="min-w-0 rounded-lg border {account.active ? 'border-primary/50 bg-primary/5' : 'border-border bg-background/50'} p-3">

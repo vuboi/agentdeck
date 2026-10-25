@@ -11,7 +11,7 @@
   import SearchPalette from './SearchPalette.svelte';
   import DockZone from './DockZone.svelte';
   import Splitter from './Splitter.svelte';
-  import { layout } from '../layout.svelte';
+  import { layout, setSidebarCollapsed, sidebarTree } from '../layout.svelte';
   import { getPref, setPref } from '../prefs';
   import { appInfo, checkForUpdate, FAKE_UPDATE, installUpdate, startUpdateChecks, updater, useFakeUpdate } from '../updater.svelte';
   import Markdown from './Markdown.svelte';
@@ -42,10 +42,10 @@
     type TreeData,
   } from '../sessions.svelte';
 
-  // How chats are grouped and sorted, and which headings are folded: both kept. "Show more" lasts until reload.
+  // How chats are grouped and sorted, and which headings are folded: both kept. Loaded list pages last until reload.
   const view = $state<SidebarView>({ ...DEFAULT_VIEW });
   let collapsed = $state<string[]>([]);
-  let showAll = $state<string[]>([]);
+  let showPages = $state<Record<string, number>>({});
   void getPref<SidebarView>('sidebar.view').then((saved) => {
     if (saved && typeof saved === 'object') Object.assign(view, saved);
   });
@@ -67,18 +67,21 @@
     clearTimeout(glideTimer);
     glideTimer = setTimeout(() => treeWrap?.classList.remove('sidebar-glide'), 320);
   }
-  const visibleIds = (list: ZTreeNode<TreeData>[], open: string[] = expanded): string[] =>
+  const visibleIds = (list: ZTreeNode<TreeData>[], open: string[] = sidebarTree.expanded): string[] =>
     list.flatMap((node) => [node.id, ...(node.children?.length && open.includes(node.id) ? visibleIds(node.children, open) : [])]);
   const rowAt = (index: number) => treeWrap?.querySelector<HTMLElement>(`[role="treeitem"][data-index="${index}"]`);
   const MOVING_ROWS = 30;
+  const MAX_ANIMATED_ROWS = 6;
 
-  /** Applies a change to what the tree shows, with the rows that leave or arrive animated. */
-  function animateChange(next: { collapsed?: string[]; showAll?: string[]; expanded?: string[] }, apply: () => void) {
+  /** Applies a change to what the tree shows, animating only small changes to avoid a large-list reflow hitch. */
+  function animateChange(next: { collapsed?: string[]; showPages?: Record<string, number>; expanded?: string[] }, apply: () => void) {
     if (reduced || !treeWrap) return apply();
     const before = visibleIds(nodes);
-    const after = visibleIds(buildTree({ view, collapsed: next.collapsed ?? collapsed, showAll: next.showAll ?? showAll }), next.expanded ?? expanded);
+    const after = visibleIds(buildTree({ view, collapsed: next.collapsed ?? collapsed, showPages: next.showPages ?? showPages }), next.expanded ?? sidebarTree.expanded);
     const stays = new Set(after);
-    const leaving = before.flatMap((id, index) => (stays.has(id) ? [] : [index])).slice(0, MOVING_ROWS);
+    const leavingAll = before.flatMap((id, index) => (stays.has(id) ? [] : [index]));
+    if (leavingAll.length > MAX_ANIMATED_ROWS) return apply();
+    const leaving = leavingAll.slice(0, MOVING_ROWS);
     if (leaving.length) {
       // As the tree itself does for a folder: the rows that go are cloned at their old place and fade out there while
       // the tree already shows the new list (the rows below glide up), and its height holds until that is over.
@@ -105,7 +108,9 @@
       return;
     }
     const known = new Set(before);
-    const arriving = after.flatMap((id, index) => (known.has(id) ? [] : [index])).slice(0, MOVING_ROWS);
+    const arrivingAll = after.flatMap((id, index) => (known.has(id) ? [] : [index]));
+    if (arrivingAll.length > MAX_ANIMATED_ROWS) return apply();
+    const arriving = arrivingAll.slice(0, MOVING_ROWS);
     glide();
     apply();
     void tick().then(() => {
@@ -159,31 +164,30 @@
       }
     } else updateOpen = true;
   }
-  function toggleMore(key: string) {
-    const next = showAll.includes(key) ? showAll.filter((item) => item !== key) : [...showAll, key];
-    animateChange({ showAll: next }, () => (showAll = next));
+  function toggleMore(key: string, done = false) {
+    const next = { ...showPages };
+    if (done) delete next[key];
+    else next[key] = (next[key] ?? 0) + 1;
+    animateChange({ showPages: next }, () => (showPages = next));
   }
   const sectionKey = (nodeId: string) => nodeId.replace(/^section:/, '');
 
-  const nodes = $derived(buildTree({ view, collapsed, showAll }));
+  const nodes = $derived(buildTree({ view, collapsed, showPages }));
 
   // The tree is the only scroller (wheel, keyboard and virtualisation all work on it), sized to the space left.
   let treeHeight = $state(400);
 
-  // Everything starts open; a fork opens its parent so the new row is visible.
-  let expanded = $state<string[]>([
-    ...workspace.projects.map((project) => `project:${project.id}`),
-    ...workspace.sessions.map((item) => `session:${item.id}`),
-  ]);
-
-  // Everything stays open: the tree is virtualised, so a long list costs nothing.
+  // Use one shared expansion state so desktop collapse and the narrow drawer cannot reset folders.
   $effect(() => {
-    if (!history.imported) return;
+    if (!history.imported || !sidebarTree.hydrated || sidebarTree.initialized) return;
     untrack(() => {
-      expanded = [
-        ...workspace.projects.map((project) => `project:${project.id}`),
-        ...workspace.sessions.filter((item) => workspace.sessions.some((child) => child.parentId === item.id)).map((item) => `session:${item.id}`),
-      ];
+      if (!sidebarTree.hasSavedState) {
+        sidebarTree.expanded = [
+          ...workspace.projects.map((project) => `project:${project.id}`),
+          ...workspace.sessions.filter((item) => workspace.sessions.some((child) => child.parentId === item.id)).map((item) => `session:${item.id}`),
+        ];
+      }
+      sidebarTree.initialized = true;
     });
   });
 
@@ -198,8 +202,8 @@
         cursor = workspace.sessions.find((item) => item.id === cursor)?.parentId;
         if (ancestors.length > 50) break;
       }
-      const missing = ancestors.filter((id) => !expanded.includes(id));
-      if (missing.length) expanded = [...expanded, ...missing];
+      const missing = ancestors.filter((id) => !sidebarTree.expanded.includes(id));
+      if (missing.length) sidebarTree.expanded = [...sidebarTree.expanded, ...missing];
     });
   });
 
@@ -242,7 +246,7 @@
       showSession(node.data.session.id);
     }
     else if (node.data?.kind === 'section' && node.data.count) toggleSection(sectionKey(node.id));
-    else if (node.data?.kind === 'more' && node.data.group) toggleMore(node.data.group);
+    else if (node.data?.kind === 'more' && node.data.group) toggleMore(node.data.group, node.data.done);
     if (node.data?.kind !== 'session') selected = selection();
   }
 
@@ -271,7 +275,7 @@
 
   function openProject(path: string) {
     const project = addProject(path);
-    expanded = [...new Set([...expanded, `project:${project.id}`])];
+    sidebarTree.expanded = [...new Set([...sidebarTree.expanded, `project:${project.id}`])];
   }
 
   function trustAndAdd() {
@@ -294,8 +298,8 @@
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('main[aria-label="Conversation"] form textarea')?.focus());
   }
   function toggleNode(id: string) {
-    const next = expanded.includes(id) ? expanded.filter((item) => item !== id) : [...expanded, id];
-    animateChange({ expanded: next }, () => (expanded = next));
+    const next = sidebarTree.expanded.includes(id) ? sidebarTree.expanded.filter((item) => item !== id) : [...sidebarTree.expanded, id];
+    animateChange({ expanded: next }, () => (sidebarTree.expanded = next));
     // A click leaves the row focused, and a focused row keeps its hover buttons on after the mouse has gone.
     requestAnimationFrame(() => {
       const active = document.activeElement;
@@ -305,7 +309,7 @@
 
   function fork(sessionId: string) {
     forkSession(sessionId);
-    expanded = [...new Set([...expanded, `session:${sessionId}`])];
+    sidebarTree.expanded = [...new Set([...sidebarTree.expanded, `session:${sessionId}`])];
   }
 
   // ---------- row menu: right click, or the three dots that replace the agent tag on hover ----------
@@ -667,7 +671,7 @@
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 pl-3" data-tauri-drag-region>
     <Logo class="size-5" />
     <span class="text-xs font-semibold" data-tauri-drag-region>AgentDeck</span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-7! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : layout.sidebarCollapsed && layout.sidebarDrawer ? ((layout.sidebarDrawer = false), (layout.sidebarCollapsed = false)) : (layout.sidebarCollapsed = true))}>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-7! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : layout.sidebarCollapsed && layout.sidebarDrawer ? ((layout.sidebarDrawer = false), setSidebarCollapsed(false)) : setSidebarCollapsed(true))}>
       <ZIcon zType={'lucidePanelLeft' as ZIconName} class="size-3.5" />
     </ZButton>
   </div>
@@ -690,7 +694,7 @@
 
   <!-- Full width, so the tree's own scrollbar sits flush against the sidebar border. -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div bind:clientHeight={treeHeight} bind:this={treeBox} class="relative mt-1.5 min-h-0 flex-1" oncontextmenu={onTreeContextMenu}>
+  <div bind:clientHeight={treeHeight} bind:this={treeBox} class="relative min-h-0 flex-1" oncontextmenu={onTreeContextMenu}>
     {#if history.loading && workspace.sessions.length === 0}
       <!-- First load: centred in the list, where the chats will appear. -->
       <div class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground" role="status">
@@ -706,7 +710,7 @@
       zSelectable
       zMaxHeight={treeHeight}
       zLabel="Projects and sessions"
-      bind:expanded
+      bind:expanded={sidebarTree.expanded}
       bind:selected
       {onSelect}
     >
@@ -898,6 +902,7 @@
   /* The scrollbar has its own lane, so rows do not shift sideways when it appears or goes. */
   aside :global(.z-tree) {
     scrollbar-gutter: stable;
+    padding-top: 4px;
     /* The empty lane is 10px on the right: a little on the left keeps the rows from looking pushed to one side. */
     padding-left: 6px;
   }
