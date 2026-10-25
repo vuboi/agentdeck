@@ -1,12 +1,13 @@
 import type { ZIconName } from '@shival99/z-ui-svelte';
 import { inTauri } from './history';
 import { connectors } from './connectors.svelte';
+import { agentProfile } from './provider-registry';
 
 // Model catalogue for the picker, per provider. It starts from a small built-in list and is replaced at start-up
 // by what each CLI keeps on disk (Rust `models_list`): Codex's cached catalogue with each model's reasoning
 // levels, and Claude Code's current tiers plus the extra models the account is offered.
 
-export type ProviderId = 'claude' | 'codex' | 'antigravity' | 'custom';
+export type ProviderId = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'custom';
 export type ModelOption = {
   value: string;
   label: string;
@@ -28,6 +29,7 @@ export type ModelSource = {
 };
 
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const THINKING = ['off', 'low', 'medium', 'high'];
 
 /** The lists the picker reads. Reactive: a component showing them updates when the live lists arrive. */
 const catalog = $state<Record<ProviderId, ModelOption[]>>({
@@ -42,6 +44,18 @@ const catalog = $state<Record<ProviderId, ModelOption[]>>({
   ],
   // Antigravity has no built-in list: it is read from `agy models` at start-up.
   antigravity: [],
+  opencode: [
+    { value: 'opencode/big-pickle-free', label: 'Big Pickle (Free)', efforts: THINKING, defaultEffort: 'medium' },
+    { value: 'opencode/glm-5.3-flash-free', label: 'GLM 5.3 Flash (Free)', efforts: THINKING, defaultEffort: 'medium' },
+    { value: 'opencode/deepseek-v4.1-flash-free', label: 'DeepSeek V4.1 Flash (Free)', efforts: THINKING, defaultEffort: 'medium' },
+    { value: 'opencode/beam-free', label: 'Beam (Free)', efforts: THINKING, defaultEffort: 'medium' },
+    { value: 'opencode/flint-40b-free', label: 'Flint 40B (Free)', efforts: THINKING, defaultEffort: 'medium' },
+    { value: 'opencode/mimo-v2.6-flash-free', label: 'MiMo V2.6 Flash (Free)', efforts: THINKING, defaultEffort: 'medium' },
+    { value: 'opencode/nemotron-3-ultra-free', label: 'Nemotron 3 Ultra (Free)', efforts: THINKING, defaultEffort: 'medium' },
+    { value: 'opencode/nemotron-3.5-lightning-free', label: 'Nemotron 3.5 Lightning (Free)', efforts: THINKING, defaultEffort: 'medium' },
+    { value: 'opencode/nemotron-3.5-super-vl-free', label: 'Nemotron 3.5 Super VL (Free)', efforts: THINKING, defaultEffort: 'medium' },
+    { value: 'opencode/jev-1.13-free', label: 'Jev 1.13 (Free)', efforts: THINKING, defaultEffort: 'medium' },
+  ],
   // Every model of every enabled custom provider: filled from the saved providers (see below).
   custom: [],
 });
@@ -55,8 +69,6 @@ export function parseCustomModel(value: string | null | undefined) {
 }
 
 /** What a local model's thinking can be set to: off, or a level (sent as `reasoning_effort`). */
-const THINKING = ['off', 'low', 'medium', 'high'];
-
 const chattable = () => connectors.custom.filter((provider) => provider.enabled && provider.kind !== 'anthropic');
 
 $effect.root(() => {
@@ -68,10 +80,13 @@ $effect.root(() => {
   });
 });
 
+// The provider icons come from the registry, the same as every other surface.
+const iconOf = (id: string) => (agentProfile(id)?.icon ?? 'lucideServer') as ZIconName;
 const builtIn: ModelSource[] = [
-  { key: 'claude', provider: 'claude', label: 'Claude', icon: 'brandClaude' as ZIconName, models: () => catalog.claude },
-  { key: 'codex', provider: 'codex', label: 'Codex', icon: 'brandOpenai' as ZIconName, models: () => catalog.codex },
-  { key: 'antigravity', provider: 'antigravity', label: 'Antigravity', icon: 'brandGemini' as ZIconName, models: () => catalog.antigravity },
+  { key: 'claude', provider: 'claude', label: 'Claude', icon: iconOf('claude'), models: () => catalog.claude },
+  { key: 'codex', provider: 'codex', label: 'Codex', icon: iconOf('codex'), models: () => catalog.codex },
+  { key: 'antigravity', provider: 'antigravity', label: 'Antigravity', icon: iconOf('antigravity'), models: () => catalog.antigravity },
+  { key: 'opencode', provider: 'opencode', label: 'OpenCode', icon: iconOf('opencode'), models: () => catalog.opencode },
 ];
 
 /** The rows of the model picker: the three CLIs, then one per enabled custom provider. Reactive. */

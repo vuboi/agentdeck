@@ -20,6 +20,25 @@ fn executable_suffixes(os: &str) -> &'static [&'static str] {
     }
 }
 
+/// Windows cannot start a `.cmd`/`.bat` file through `CreateProcess` with arguments directly.
+fn command_for(binary: OsString, args: &[String]) -> Command {
+    #[cfg(windows)]
+    {
+        let is_batch = Path::new(&binary)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat"));
+        if is_batch {
+            let mut command = Command::new("cmd");
+            command.args(["/D", "/S", "/C"]).arg(binary).args(args);
+            return command;
+        }
+    }
+    let mut command = Command::new(binary);
+    command.args(args);
+    command
+}
+
 /// First existing `<dir>/<name><suffix>` for the directories of a PATH-like list.
 fn find_in(dirs: impl Iterator<Item = PathBuf>, name: &str, os: &str) -> Option<PathBuf> {
     dirs.flat_map(|dir| {
@@ -76,6 +95,12 @@ fn common_dirs(
             for dir in versions(under(appdata, &["nvm"]), &[]) {
                 push(Some(dir));
             }
+            // mise installs Node itself under LOCALAPPDATA, and npm -g puts command shims
+            // beside that Node executable. A GUI-launched Tauri process does not inherit mise's
+            // shell shim PATH, so include every installed Node version here as well.
+            for dir in versions(under(local, &["mise", "installs", "node"]), &[]) {
+                push(Some(dir));
+            }
         }
         _ => {
             push(under(home, &[".local", "bin"]));
@@ -112,6 +137,19 @@ fn common_dirs(
         }
     }
     dirs
+}
+
+/// Adds the same well-known CLI folders used for resolution to the child process PATH. This matters
+/// for npm shims such as `opencode.cmd`: the shim may need its matching `node` executable on PATH.
+fn augmented_path() -> Option<OsString> {
+    let mut dirs = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
+    dirs.extend(common_dirs(std::env::consts::OS, home.as_deref(), local.as_deref(), appdata.as_deref()));
+    std::env::join_paths(dirs).ok()
 }
 
 /// The PATH a login shell gives: what the user's terminal sees, which a GUI app on macOS and Linux does not inherit
@@ -204,13 +242,17 @@ pub async fn drive_turn(
     if let Err(message) = provider.prepare(req) {
         return emit(AgentEvent::Error { message });
     }
-    let mut command = Command::new(binary);
+    let args = provider.args(req);
+    let mut command = command_for(binary, &args);
     command
-        .args(provider.args(req))
+        .envs(provider.environment(req))
         .stdin(if provider.prompt_on_stdin() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(path) = augmented_path() {
+        command.env("PATH", path);
+    }
     // A folder that is gone (or an empty path, for chats without a project) would make the spawn itself fail.
     if let Some(dir) = req.cwd.as_deref().filter(|dir| dir.is_dir()) {
         command.current_dir(dir);
@@ -220,8 +262,13 @@ pub async fn drive_turn(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
+            let hint = if provider.id() == "opencode" {
+                " Open Settings → Connectors → Install OpenCode, then retry."
+            } else {
+                " Check that its CLI is installed in Settings → Connectors."
+            };
             return emit(AgentEvent::Error {
-                message: format!("could not start {}: {error}", provider.binary()),
+                message: format!("could not start {}: {error}.{hint}", provider.binary()),
             });
         }
     };
@@ -260,6 +307,10 @@ pub async fn drive_turn(
         child.wait().await
     };
     if !finished {
+        if let Some(event) = provider.finish(req) {
+            emit(event);
+            return;
+        }
         let mut stderr = String::new();
         if let Some(mut err) = child.stderr.take() {
             use tokio::io::AsyncReadExt;

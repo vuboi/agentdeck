@@ -32,6 +32,9 @@ fn extra_dirs() -> Vec<PathBuf> {
     if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
         dirs.push(local.join("pnpm"));
         dirs.push(local.join("agy").join("bin"));
+        if let Ok(versions) = std::fs::read_dir(local.join("mise").join("installs").join("node")) {
+            dirs.extend(versions.flatten().map(|entry| entry.path()));
+        }
     }
     if let Some(roaming) = std::env::var_os("APPDATA").map(PathBuf::from) {
         dirs.push(roaming.join("npm"));
@@ -172,9 +175,10 @@ pub struct Detected {
     claude: Login,
     codex: Login,
     antigravity: Login,
+    opencode: Login,
 }
 
-const TOOLS: [&str; 7] = ["claude", "codex", "agy", "codex-auth", "cswap", "uv", "npm"];
+const TOOLS: [&str; 8] = ["claude", "codex", "agy", "opencode", "codex-auth", "cswap", "uv", "npm"];
 
 pub(crate) fn codex_home() -> PathBuf {
     std::env::var_os("CODEX_HOME")
@@ -283,7 +287,14 @@ pub async fn connectors_detect() -> Detected {
         },
         None => Login::default(),
     };
-    Detected { tools, claude, codex: codex_login(), antigravity: antigravity_login() }
+    let opencode = match which("opencode") {
+        Some(path) => match capture(&path, &["auth", "list", "--format", "json"], Duration::from_secs(10)).await {
+            Ok(out) => Login { logged_in: Some(out.ok), detail: (!out.stdout.trim().is_empty()).then_some("OpenCode auth available".into()), ..Login::default() },
+            Err(_) => Login::default(),
+        },
+        None => Login::default(),
+    };
+    Detected { tools, claude, codex: codex_login(), antigravity: antigravity_login(), opencode }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -304,6 +315,7 @@ pub async fn connector_install(app: AppHandle, id: String) -> Result<(), String>
     };
     let (program, args): (PathBuf, Vec<String>) = match id.as_str() {
         "codex" => node_tool("@openai/codex")?,
+        "opencode" => node_tool("@opencode/cli")?,
         "codex-auth" => node_tool("@loongphy/codex-auth")?,
         "cswap" => {
             let uv = which("uv").ok_or("`uv` is needed for claude-swap: install it from docs.astral.sh/uv first")?;
@@ -328,7 +340,15 @@ pub async fn connector_install(app: AppHandle, id: String) -> Result<(), String>
                 (shell, vec!["-c".into(), "curl -fsSL https://claude.ai/install.sh | bash".into()])
             }
         }
-        "agy" => return Err("Antigravity is installed from antigravity.google (the app puts `agy` on PATH)".to_string()),
+        "agy" => {
+            if cfg!(windows) {
+                let shell = which("pwsh").or_else(|| which("powershell")).ok_or("PowerShell was not found")?;
+                (shell, vec!["-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-Command".into(), "irm https://antigravity.google/cli/install.ps1 | iex".into()])
+            } else {
+                let shell = which("bash").ok_or("bash was not found")?;
+                (shell, vec!["-c".into(), "curl -fsSL https://antigravity.google/cli/install.sh | bash".into()])
+            }
+        }
         other => return Err(format!("do not know how to install `{other}`")),
     };
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -350,6 +370,12 @@ pub async fn connector_login(app: AppHandle, id: String) -> Result<(), String> {
             (None, Some(codex)) => run_logged(&app, &id, &codex, &["login"], limit).await,
             (None, None) => Err("Codex is not installed".to_string()),
         },
+        "opencode" => {
+            let opencode = which("opencode").ok_or("OpenCode is not installed")?;
+            // AgentDeck has no interactive TTY. Passing the OpenAI integration skips OpenCode's provider picker, and
+            // the method is named explicitly: without a TTY OpenCode refuses to choose one by itself ("Pass --method").
+            run_logged(&app, &id, &opencode, &["auth", "login", "openai", "--method", "chatgpt-browser"], limit).await
+        }
         "agy" => {
             // No headless sign-in: start `agy` in its own window, where it asks.
             let agy = which("agy").ok_or("Antigravity is not installed")?;

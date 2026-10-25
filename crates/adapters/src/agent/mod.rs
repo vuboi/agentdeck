@@ -6,6 +6,7 @@
 pub mod antigravity;
 pub mod claude;
 pub mod codex;
+pub mod opencode;
 pub mod runner;
 
 use serde::Serialize;
@@ -128,6 +129,10 @@ pub trait Provider: Send + Sync {
     fn prepare(&self, _req: &TurnRequest) -> Result<(), String> {
         Ok(())
     }
+    /// Environment additions for CLIs whose configuration is supplied per turn (for example MCP).
+    fn environment(&self, _req: &TurnRequest) -> Vec<(String, String)> { Vec::new() }
+    /// Emits a terminal event when a CLI exits without one in its stream.
+    fn finish(&self, _req: &TurnRequest) -> Option<AgentEvent> { None }
 }
 
 /// A plan tool's list (Claude `TodoWrite` `todos`, Codex `update_plan` `plan`) as `[{"content","status"}]` JSON, whole:

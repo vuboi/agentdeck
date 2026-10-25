@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AgentLogo from '../AgentLogo.svelte';
   import { Handle, Position, type NodeProps, useUpdateNodeInternals } from '@xyflow/svelte';
   import { onMount, tick } from 'svelte';
   import { ZIcon } from '@shival99/z-ui-svelte';
@@ -80,7 +81,7 @@
   <Handle type="target" position={across ? Position.Left : Position.Top} class="flow-handle" />
   <div class="flex items-center gap-2.5 px-3 pt-3">
     <span class="grid size-9 shrink-0 place-items-center rounded-xl {TINT[step.agent] ?? 'bg-muted'}">
-      <ZIcon zType={AGENT_ICON[step.agent]} class="size-[18px] {AGENT_TEXT[step.agent]}" />
+      <AgentLogo agent={step.agent} class="size-[18px] {AGENT_TEXT[step.agent]}" />
     </span>
     <span class="min-w-0 flex-1">
       <span class="block truncate text-[13px] leading-tight font-semibold text-foreground">{step.name || 'Untitled step'}</span>

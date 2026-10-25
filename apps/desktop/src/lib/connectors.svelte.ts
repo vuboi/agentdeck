@@ -6,12 +6,12 @@ import { toast } from './toast';
 // switch between (Codex via `codex-auth`, Claude via `cswap`), the "close to the limit" alerts, and custom / local
 // model providers. The work itself is in Rust (`connectors.rs`); this file holds what the screen shows.
 
-export type ConnectorId = 'claude' | 'codex' | 'agy';
+export type ConnectorId = 'claude' | 'codex' | 'agy' | 'opencode';
 export type AccountProvider = 'claude' | 'codex';
 
 export type Tool = { id: string; path: string | null; version: string | null };
 export type Login = { logged_in: boolean | null; email: string | null; plan: string | null; detail: string | null };
-export type Detected = { tools: Tool[]; claude: Login; codex: Login; antigravity: Login };
+export type Detected = { tools: Tool[]; claude: Login; codex: Login; antigravity: Login; opencode: Login };
 export type UsageWindow = { label: string; pct: number; resets_at: number | null };
 export type Account = {
   id: string;

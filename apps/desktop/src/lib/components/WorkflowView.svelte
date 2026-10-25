@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AgentLogo from './AgentLogo.svelte';
   import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
   import { fade } from 'svelte/transition';
   import type { ZIconName } from '@shival99/z-ui-svelte';
@@ -129,7 +130,7 @@
   >
     {#if state === 'running'}<span class="node-bar" aria-hidden="true"></span>{/if}
     <span class="flex min-w-0 items-center gap-2">
-      <ZIcon zType={AGENT_ICON[agent]} class="size-4 shrink-0 {AGENT_TEXT[agent]}" />
+      <AgentLogo agent={agent} class="size-4 shrink-0 {AGENT_TEXT[agent]}" />
       <span class="min-w-0 flex-1">
         <span class="block truncate text-xs font-medium text-foreground">{title}</span>
         <span class="block truncate text-[11px] text-muted-foreground">{sub}</span>

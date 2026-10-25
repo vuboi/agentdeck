@@ -22,6 +22,7 @@ mod slash_commands;
 use ag_adapters::agent::antigravity::Antigravity;
 use ag_adapters::agent::claude::Claude;
 use ag_adapters::agent::codex::Codex;
+use ag_adapters::agent::opencode::OpenCode;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
 use ag_adapters::agent::{AgentEvent, Provider, TurnRequest};
 use ag_adapters::history::{self, HistoryMessage, HistoryPage, HistorySession, Roots, Source};
@@ -813,6 +814,7 @@ fn provider_for(agent: &str) -> Result<Box<dyn Provider>, String> {
         "claude" => Ok(Box::new(Claude)),
         "codex" => Ok(Box::new(Codex::default())),
         "antigravity" => Ok(Box::new(Antigravity::default())),
+        "opencode" => Ok(Box::new(OpenCode::default())),
         other => Err(format!("no agent provider for `{other}` yet")),
     }
 }
@@ -1088,6 +1090,7 @@ pub fn run() {
             browser::devtools_cdp,
             browser::browser_close,
             browser::browser_capture,
+            browser::browser_element_capture,
             browser::browser_press,
             browser::open_external,
             browser::browser_favicon,

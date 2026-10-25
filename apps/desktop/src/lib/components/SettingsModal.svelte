@@ -4,7 +4,7 @@
   import { ZButton, ZIcon, ZInput, ZModal, ZSelect, ZSlider, ZSwitch } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { ticker } from '../clock.svelte';
-  import { OPENAI_SVG } from '../brand-icons';
+  import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
   import { inTauri } from '../history';
   import { exportArchive, pullArchive, pushArchive } from '../archive';
   import { syncProviders } from '../sync';
@@ -94,6 +94,15 @@
       brand: 'brandGemini',
       tone: 'bg-sky-500/12 text-sky-500',
       note: 'Google’s agent CLI (agy). Its sign-in runs in its own window. It has its own browser tools: AgentDeck’s are off for it.',
+    },
+    {
+      id: 'opencode',
+      label: 'OpenCode',
+      binary: 'opencode',
+      brand: 'lucideTerminal',
+      svg: OPENCODE_SVG,
+      tone: 'bg-foreground/10 text-foreground',
+      note: 'Open-source coding agent. Sign-in opens the OpenCode provider chooser.',
     },
   ];
 

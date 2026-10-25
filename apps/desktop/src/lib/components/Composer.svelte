@@ -27,6 +27,7 @@
     type Queued,
     sendMessage,
     stopTurn,
+    AGENT_ICON as agentIcon,
     turnOptions,
     workspace,
     type Agent,
@@ -194,13 +195,6 @@
       }
     });
   });
-
-  const agentIcon: Record<Agent, ZIconName> = {
-    claude: 'brandClaude' as ZIconName,
-    codex: 'brandOpenai' as ZIconName,
-    antigravity: 'brandGemini' as ZIconName,
-    custom: 'lucideServer' as ZIconName,
-  };
 
   // ---------- slash commands ----------
   // The agent's own commands and skills, plus AgentDeck's: read for the agent and project of this chat.
@@ -563,6 +557,7 @@
         <div class="group/chip relative" bind:this={chipAnchors[item.id]}>
           <button type="button" class="flex h-8 max-w-60 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 font-mono text-[11px] text-muted-foreground outline-none hover:bg-muted" aria-label="Details of {item.selector}" onclick={() => (detail = detail === item.id ? null : item.id)}>
             <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 shrink-0 text-primary" />
+            {#if item.picture}<img src={item.picture} alt="" class="size-5 shrink-0 rounded-sm border border-border object-cover" />{:else}<ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 shrink-0 text-primary" />{/if}
             <span class="truncate">&lt;{item.tag} /&gt; {item.text}</span>
           </button>
           <button type="button" class="absolute -top-3 -right-2.5 flex size-5.5 cursor-pointer items-center justify-center rounded-full border border-border bg-popover text-popover-foreground shadow-md opacity-0 transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100" aria-label="Remove element" onclick={() => (draftElements[sessionId] = elements.filter((entry) => entry !== item))}>
@@ -574,7 +569,7 @@
     {#each elements.filter((item) => item.id === detail) as item (item.id)}
       <ZPopover anchor={chipAnchors[item.id]} open={true} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={360} onClose={() => (detail = null)}>
         {#snippet children()}
-          <ElementCard tag={item.tag} text={item.text} selector={item.selector} url={item.url} note={item.note} box={item.box} style={item.style} />
+          <ElementCard tag={item.tag} text={item.text} selector={item.selector} url={item.url} note={item.note} box={item.box} style={item.style} picture={item.picture} />
         {/snippet}
       </ZPopover>
     {/each}
@@ -638,7 +633,7 @@
   ></textarea>
 
   <div class="flex min-w-0 items-center justify-between gap-2">
-    <div class="flex min-w-0 items-center gap-1">
+    <div class="flex min-w-0 flex-1 items-center gap-1">
       <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Attach files" title="Attach files (or paste / drop)" onclick={() => fileInput?.click()}>
         <ZIcon zType="lucidePaperclip" class="size-3.5" />
       </ZButton>

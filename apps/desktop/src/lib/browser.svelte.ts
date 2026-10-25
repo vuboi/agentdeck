@@ -419,6 +419,16 @@ export async function elementAt(x: number, y: number): Promise<PickedElement | n
   return report.element;
 }
 
+/** A PNG of one element of a tab, cut from the page at its box. Undefined when the page cannot be captured. */
+export async function captureElement(tab: string, box: PickedElement['box']): Promise<string | undefined> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<string>('browser_element_capture', { tab, x: box.x, y: box.y, w: box.w, h: box.h });
+  } catch {
+    return undefined;
+  }
+}
+
 /** Lets the user click an element in the live page; resolves with it (and where it is), or null when cancelled. */
 export async function pickElement(): Promise<{ element: PickedElement; url: string; title: string } | null> {
   browser.picking = true;

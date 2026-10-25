@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AgentLogo from './AgentLogo.svelte';
   import { ZIcon } from '@shival99/z-ui-svelte';
   import { customProviderName } from '../models.svelte';
   import { AGENT_ICON, AGENT_TEXT, AGENTS, type Agent } from '../sessions.svelte';
@@ -19,7 +20,7 @@
 <span class="flex shrink-0 items-center -space-x-1" role="img" aria-label="Agents: {names}" title={names}>
   {#each shown as agent (agent)}
     <span class="grid size-4.5 place-items-center rounded-full bg-background">
-      <ZIcon zType={AGENT_ICON[agent]} class="size-3 {AGENT_TEXT[agent]}" />
+      <AgentLogo agent={agent} class="size-3 {AGENT_TEXT[agent]}" />
     </span>
   {/each}
   {#if extra > 0}

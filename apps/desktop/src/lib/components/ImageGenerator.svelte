@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
-  import { ZDrawer, ZIcon, ZPopover, ZSwitch, ZTabs, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZDrawer, ZIcon, ZPopover, ZSwitch, ZTabs, createVirtualizer, zHoverGlide, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { OPENAI_SVG } from '../brand-icons';
+  import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
   import { activeSession, draftImages, workspace, type Attachment } from '../sessions.svelte';
   import {
     generateImages,
@@ -81,6 +81,8 @@
   const SETTING_CATEGORY: Record<string, SettingKey> ={ style: 'style', domain: 'domain', audience: 'audience', age: 'audience', ratio: 'ratio', resolution: 'resolution' };
   const MAX_REFERENCES = 5;
   const PICTURE = /^image\/(png|jpeg|gif|webp)$/;
+  // One highlight box glides between the hovered rows of a menu, as in the chat's model picker.
+  const glide = () => zHoverGlide({ class: 'bg-primary/10 rounded-md', exclude: '[aria-checked="true"]' });
 
   // A picture pasted or dropped into the prompt box: shown above it, sent to the model with the prompt.
   type Reference = { id: string; name: string; mime: string; src: string; path?: string };
@@ -136,8 +138,10 @@
   let settingsTrigger = $state<HTMLElement | null>(null);
   let modelsOpen = $state(false);
   let modelsRow = $state<HTMLElement | null>(null);
-  let suggestOpen = $state(false);
-  let suggestRow = $state<HTMLElement | null>(null);
+  let promptModelsOpen = $state(false);
+  let promptModelsAnchor = $state<HTMLElement | null>(null);
+  let promptSubProvider = $state('codex');
+  let nestedCloseTimer: ReturnType<typeof setTimeout> | undefined;
   let historyOpen = $state(false);
 
   // The full prompt of a history row that is cut off, shown in a popover while the pointer rests on the row.
@@ -181,8 +185,9 @@
       { provider: 'codex', label: 'Codex', items: [...codex].map((value) => ({ value, label: modelLabel(value) })) },
       { provider: 'claude', label: 'Claude', icon: 'brandClaude' as ZIconName, items: catalog.claude.map((item) => ({ value: item.value, label: item.label })) },
       { provider: 'antigravity', label: 'Antigravity', icon: 'brandGemini' as ZIconName, items: catalog.antigravity.map((item) => ({ value: item.value, label: item.label })) },
+      { provider: 'opencode', label: 'OpenCode', icon: 'lucideTerminal' as ZIconName, items: catalog.opencode.map((item) => ({ value: item.value, label: item.label })) },
     ];
-    return groups.filter((group) => group.items.length);
+    return groups;
   });
   const promptModels = $derived(promptGroups.flatMap((group) => group.items));
   // The effort levels follow the model that writes the suggestions, as they do in the chat picker.
@@ -195,7 +200,7 @@
     const levels = effortTabs.map((item) => item.value);
     if (!levels.includes(effort)) effort = findModel(promptProvider, promptModel)?.defaultEffort ?? levels[Math.min(1, levels.length - 1)];
   });
-  const suggestLabel = $derived(promptModels.find((item) => item.value === promptModel)?.label ?? promptModel);
+  const promptModelLabel = $derived(promptModels.find((item) => item.value === promptModel)?.label ?? promptModel);
 
   $effect(() => {
     if (!promptModels.some((item) => item.value === promptModel)) promptModel = promptModels[0]?.value ?? '';
@@ -499,10 +504,32 @@
   });
   const historyRows = $derived($historyVirtualizer.getVirtualItems());
 
-  // The nested menus open on hover of their row, one at a time; closing the settings closes them too.
-  function openSub(which: 'models' | 'suggest') {
+  // One nested list at a time. Opening one closes the other directly: the pending close of the other row's leave
+  // timer is cleared here, so it could not close it.
+  function openSub(which: 'models') {
+    clearTimeout(nestedCloseTimer);
+    promptModelsOpen = false;
     modelsOpen = which === 'models';
-    suggestOpen = which === 'suggest';
+  }
+
+  function openPromptModels(provider: string, row: HTMLElement) {
+    clearTimeout(nestedCloseTimer);
+    modelsOpen = false;
+    promptSubProvider = provider;
+    promptModelsAnchor = row;
+    promptModelsOpen = true;
+  }
+
+  function closeNestedMenusSoon() {
+    clearTimeout(nestedCloseTimer);
+    nestedCloseTimer = setTimeout(() => {
+      modelsOpen = false;
+      promptModelsOpen = false;
+    }, 120);
+  }
+
+  function keepNestedMenusOpen() {
+    clearTimeout(nestedCloseTimer);
   }
 
   // Opening the settings only opens the settings: the nested menus wait for the pointer to reach their row.
@@ -520,8 +547,9 @@
     if (settingsOpen) {
       settingsOpenedAt = performance.now();
     } else {
+      clearTimeout(nestedCloseTimer);
       modelsOpen = false;
-      suggestOpen = false;
+      promptModelsOpen = false;
     }
   });
 
@@ -724,39 +752,57 @@
           </div>
         </div>
 
-        <ZPopover anchor={settingsTrigger} bind:open={settingsOpen} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={260}>
+        <ZPopover anchor={settingsTrigger} bind:open={settingsOpen} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={300}>
           {#snippet children()}
-            <div class="flex w-full flex-col gap-4 overflow-y-auto px-2.5 py-2.5 text-xs" role="menu" aria-label="Image settings">
+            <div class="flex w-full flex-col gap-4 overflow-y-auto px-2.5 py-2.5 text-xs" role="menu" aria-label="Image settings" {@attach glide()}>
               <section aria-label="Image models">
                 <SectionTitle label="MODEL" />
                 <button
                   bind:this={modelsRow}
                   type="button"
+                  data-glide-item
                   role="menuitem"
                   aria-haspopup="menu"
                   aria-expanded={modelsOpen}
                   class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {modelsOpen ? 'bg-primary/10 text-primary' : ''}"
                   onpointerenter={() => hoverOpens() && openSub('models')}
+                  onpointerleave={closeNestedMenusSoon}
                 >
                   <span class="min-w-0 flex-1 truncate" {@attach zTooltip({ content: settingsSummary, position: 'right', autoDetect: true })}>{settingsSummary}</span>
                   <ZIcon zType="lucideChevronRight" class="size-3.5 shrink-0 text-muted-foreground" />
                 </button>
               </section>
 
-              <section aria-label="Prompt suggestions">
-                <SectionTitle label="PROMPT" />
-                <button
-                  bind:this={suggestRow}
-                  type="button"
-                  role="menuitem"
-                  aria-haspopup="menu"
-                  aria-expanded={suggestOpen}
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {suggestOpen ? 'bg-primary/10 text-primary' : ''}"
-                  onpointerenter={() => hoverOpens() && openSub('suggest')}
-                >
-                  <span class="min-w-0 flex-1 truncate" {@attach zTooltip({ content: `Suggest with ${suggestLabel}`, position: 'right', autoDetect: true })}>Suggest with {suggestLabel}</span>
-                  <ZIcon zType="lucideChevronRight" class="size-3.5 shrink-0 text-muted-foreground" />
-                </button>
+              <section aria-label="Prompt model">
+                <SectionTitle label="PROMPT MODEL" />
+                <div class="flex flex-col gap-0.5">
+                  {#each promptGroups as group (group.provider)}
+                    {@const activeProvider = promptProvider === group.provider}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      aria-haspopup="dialog"
+                      aria-expanded={promptModelsOpen && promptSubProvider === group.provider}
+                      data-glide-item
+                      class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {activeProvider ? 'bg-primary/10' : ''}"
+                      onpointerenter={(event) => openPromptModels(group.provider, event.currentTarget)}
+                      onpointerleave={closeNestedMenusSoon}
+                      onfocus={(event) => openPromptModels(group.provider, event.currentTarget)}
+                      onclick={(event) => openPromptModels(group.provider, event.currentTarget)}
+                    >
+                      {#if group.provider === 'codex'}
+                        <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
+                      {:else if group.provider === 'opencode'}
+                        <ZIcon zSvg={OPENCODE_SVG} class="size-3.5 shrink-0 text-foreground" />
+                      {:else}
+                        <ZIcon zType={group.icon} class="size-3.5 shrink-0 text-muted-foreground" />
+                      {/if}
+                      <span class="flex-1 truncate">{group.label}</span>
+                      {#if activeProvider}<span class="max-w-32 truncate text-[11px] text-muted-foreground" {@attach zTooltip({ content: promptModelLabel, position: 'right', autoDetect: true })}>{promptModelLabel}</span>{/if}
+                      <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
+                    </button>
+                  {/each}
+                </div>
               </section>
 
               <section aria-label="Variants per model">
@@ -803,13 +849,14 @@
           {/snippet}
         </ZPopover>
 
-        <ZPopover anchor={modelsRow} bind:open={modelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={160}>
+        <ZPopover anchor={modelsRow} bind:open={modelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={148}>
           {#snippet children()}
-            <div class="flex w-full flex-col gap-0.5 p-1.5 text-xs" role="menu" aria-label="Image models">
+            <div class="flex w-full flex-col gap-0.5 p-1.5 text-xs" role="menu" aria-label="Image models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
               {#each models as item (item.model)}
                 {@const active = selectedModels.includes(item.model)}
                 <button
                   type="button"
+                  data-glide-item
                   role="menuitemcheckbox"
                   aria-checked={active}
                   class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : ''}"
@@ -825,37 +872,32 @@
           {/snippet}
         </ZPopover>
 
-        <ZPopover anchor={suggestRow} bind:open={suggestOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={160}>
+        <ZPopover anchor={promptModelsAnchor} bind:open={promptModelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={168}>
           {#snippet children()}
-            <div class="flex max-h-80 w-full flex-col gap-0.5 overflow-y-auto py-1.5 pl-1.5 text-xs" role="menu" aria-label="Suggestion model">
-              {#each promptGroups as group, groupIndex (group.provider)}
-                {#if groupIndex > 0}<div class="mt-2 mb-0.5 h-px bg-border" role="separator"></div>{/if}
-                <div class="flex items-center gap-1.5 px-1.5 pt-0 pb-2.5" role="presentation">
-                  {#if group.provider === 'codex'}
-                    <ZIcon zSvg={OPENAI_SVG} class="size-3 shrink-0 text-foreground" />
-                  {:else}
-                    <ZIcon zType={group.icon} class="size-3 shrink-0 text-muted-foreground" />
-                  {/if}
-                  <span class="shrink-0 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">{group.label}</span>
-                  <span class="h-px flex-1 bg-border" aria-hidden="true"></span>
+            {@const selectedGroup = promptGroups.find((group) => group.provider === promptSubProvider)}
+            <div class="flex w-full flex-col gap-0.5 overflow-y-auto py-1 pl-1 text-xs" style:max-height="320px" role="radiogroup" aria-label="Prompt models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
+              {#if !selectedGroup?.items.length}
+                <!-- The same empty state as the chat's model picker: the provider listed no models. -->
+                <div class="flex w-full flex-col items-center gap-1.5 px-3 py-4 text-center">
+                  <ZIcon zType="lucideShieldAlert" class="size-5 text-muted-foreground" />
+                  <div class="text-xs font-medium">No AI models</div>
+                  <p class="m-0 text-[11px] leading-snug text-muted-foreground">{selectedGroup?.label ?? 'This provider'} returned no models, or its provider has an error. Check it in Settings.</p>
                 </div>
-                {#each group.items as item (item.value)}
-                  {@const active = item.value === promptModel}
-                  <button
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={active}
-                    class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : ''}"
-                    onclick={() => {
-                      promptModel = item.value;
-                      suggestOpen = false;
-                    }}
-                    {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}
-                  >
-                    <span class="min-w-0 flex-1 truncate">{item.label}</span>
-                    {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
-                  </button>
-                {/each}
+              {/if}
+              {#each selectedGroup?.items ?? [] as item (item.value)}
+                {@const active = item.value === promptModel}
+                <button
+                  type="button"
+                  data-glide-item
+                  role="radio"
+                  aria-checked={active}
+                  class="mr-1 flex cursor-pointer items-center justify-between rounded-md px-2 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : ''}"
+                  onclick={() => { promptModel = item.value; promptModelsOpen = false; }}
+                  {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}
+                >
+                  <span class="min-w-0 truncate">{item.label}</span>
+                  {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
+                </button>
               {/each}
             </div>
           {/snippet}

@@ -1,7 +1,7 @@
 /** A file a tool wrote: lines added and removed, and the text for a small diff. `create` once the result says so. */
 export type FileChange = { path: string; added: number; removed: number; before: string; after: string; create?: boolean };
 
-export type Agent = 'claude' | 'codex' | 'antigravity' | 'custom';
+export type Agent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'custom';
 export type Session = { id: string; title: string; agent: Agent; status: 'working' | 'idle' | 'waiting' };
 
 export type Block =
@@ -14,7 +14,7 @@ export type Block =
   | { kind: 'image'; src: string; name: string }
   /** A document attached to the message: it stays on disk, the agent is given its path. */
   | { kind: 'file'; name: string; path: string; size?: number }
-  | { kind: 'element'; tag: string; text: string; selector: string; /** What the chat keeps of the element: for its card, and to send it again when the message is edited. */ url?: string; title?: string; note?: string; html?: string; around?: string; box?: { x?: number; y?: number; w: number; h: number }; style?: Record<string, string> }
+  | { kind: 'element'; tag: string; text: string; selector: string; /** What the chat keeps of the element: for its card, and to send it again when the message is edited. */ url?: string; title?: string; note?: string; html?: string; around?: string; box?: { x?: number; y?: number; w: number; h: number }; style?: Record<string, string>; /** A PNG of the element, for its chip. */ picture?: string }
   | { kind: 'permission'; requests: { id: string; tool: string; summary: string; allow: string }[]; state: 'pending' | 'allowed' | 'denied' };
 
 export type Message = {

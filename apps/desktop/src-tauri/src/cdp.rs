@@ -469,3 +469,14 @@ pub async fn screenshot(view: &Webview) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Only the given part of the page (CSS pixels), PNG bytes: a picture of one element.
+pub async fn screenshot_clip(view: &Webview, x: f64, y: f64, w: f64, h: f64) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    let clip = json!({ "x": x, "y": y, "width": w, "height": h, "scale": 1 });
+    let answer = call(view, "Page.captureScreenshot", json!({ "format": "png", "clip": clip }), None).await?;
+    let data = answer["data"].as_str().ok_or("no screenshot data")?;
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|error| error.to_string())
+}
+

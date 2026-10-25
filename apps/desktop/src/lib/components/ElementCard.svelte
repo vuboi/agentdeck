@@ -12,11 +12,13 @@
     note = '',
     box,
     style,
-  }: { tag: string; text: string; selector: string; url?: string; note?: string; box?: { w: number; h: number }; style?: Record<string, string> } = $props();
+    picture = '',
+  }: { tag: string; text: string; selector: string; url?: string; note?: string; box?: { w: number; h: number }; style?: Record<string, string>; picture?: string } = $props();
 </script>
 
 <div class="flex max-h-[min(60vh,420px)] w-full flex-col gap-2 overflow-y-auto p-3 text-xs">
   <div class="flex items-center gap-1.5 font-medium"><ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 text-primary" />Included with your message</div>
+  {#if picture}<img src={picture} alt="" class="max-h-40 w-full rounded-md border border-border bg-muted/30 object-contain" />{/if}
   <dl class="m-0 grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1.5">
     <dt class="text-muted-foreground">Element</dt><dd class="m-0 font-mono">&lt;{tag} /&gt;</dd>
     {#if note}<dt class="text-muted-foreground">Note</dt><dd class="m-0">{note}</dd>{/if}

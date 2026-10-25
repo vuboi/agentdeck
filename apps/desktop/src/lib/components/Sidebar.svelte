@@ -579,6 +579,7 @@
     claude: 'bg-orange-500/15 text-orange-500',
     codex: 'bg-emerald-500/15 text-emerald-500',
     antigravity: 'bg-sky-500/15 text-sky-500',
+    opencode: 'bg-foreground/10 text-foreground',
     custom: 'bg-violet-500/15 text-violet-500',
   } as const;
   import { openSettings, warnings } from '../connectors.svelte';

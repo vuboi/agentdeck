@@ -48,6 +48,7 @@
     stop,
     tabsFull,
     zoomBrowser,
+    captureElement,
     type Device,
     type Rect,
   } from '../browser.svelte';
@@ -511,7 +512,9 @@
       if (!picked) return;
       const { element, url, title } = picked;
       const id = workspace.activeId;
-      draftElements[id] = [...(draftElements[id] ?? []), { id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url, title }];
+      // A picture of the element alone, so the agent sees it next to its markup.
+      const picture = await captureElement(browser.activeId, element.box);
+      draftElements[id] = [...(draftElements[id] ?? []), { id: crypto.randomUUID(), picture, tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url, title }];
       toast.success('Element added to the message');
     } catch (error) {
       browser.error = String(error);

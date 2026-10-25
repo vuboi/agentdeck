@@ -700,6 +700,19 @@ pub async fn browser_capture(app: AppHandle, tab: String) -> Result<String, Stri
     ))
 }
 
+/// A picture of one element of a tab, cut from the page at its box (CSS pixels), as a PNG data URL. Only the
+/// element is sent to the chat: the agent gets this picture next to the element's markup.
+#[tauri::command]
+pub async fn browser_element_capture(app: AppHandle, tab: String, x: f64, y: f64, w: f64, h: f64) -> Result<String, String> {
+    use base64::Engine;
+    let view = webview(&app, &tab)?;
+    let bytes = crate::cdp::screenshot_clip(&view, x, y, w.max(1.0), h.max(1.0)).await?;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
 #[cfg(windows)]
 fn capture(
     view: &Webview,

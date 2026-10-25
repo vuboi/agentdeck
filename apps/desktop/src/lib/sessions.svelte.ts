@@ -30,9 +30,10 @@ import { dequeue, enqueue } from './queue';
 import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from './handback';
 import { joinContinuations } from './continuations';
 import { inputsOf, normalizeGraph, presetOf, stepGroups, type WorkflowPreset, type WorkflowStep } from './workflows.svelte';
+import { agentDisplayName, BUILT_IN_AGENTS } from './provider-registry';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
-export type Agent = 'claude' | 'codex' | 'antigravity' | 'custom';
+export type Agent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'custom';
 export type Status = 'working' | 'idle' | 'waiting';
 /** Reasoning effort and the approval modes shared by the agent CLIs. */
 export type Effort = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -82,6 +83,7 @@ export const AGENT_TEXT: Record<Agent, string> = {
   claude: 'text-orange-500',
   codex: 'text-emerald-500 [&_path]:fill-current',
   antigravity: 'text-sky-500',
+  opencode: BUILT_IN_AGENTS.find((item) => item.id === 'opencode')?.tone ?? 'text-foreground',
   custom: 'text-violet-500',
 };
 
@@ -90,13 +92,12 @@ export const AGENT_ICON: Record<Agent, ZIconName> = {
   claude: 'brandClaude' as ZIconName,
   codex: 'brandOpenai' as ZIconName,
   antigravity: 'brandGemini' as ZIconName,
+  opencode: BUILT_IN_AGENTS.find((item) => item.id === 'opencode')?.icon ?? ('lucideTerminal' as ZIconName),
   custom: 'lucideServer' as ZIconName,
 };
 
 export const AGENTS: { value: Agent; label: string }[] = [
-  { value: 'claude', label: 'Claude' },
-  { value: 'codex', label: 'Codex' },
-  { value: 'antigravity', label: 'Antigravity' },
+  ...BUILT_IN_AGENTS.map(({ id, label }) => ({ value: id as Agent, label })),
 ];
 
 /** Models per agent, from the catalogue in models.ts. */
@@ -143,7 +144,7 @@ export type FileAttachment = { id: string; name: string; path: string; size: num
 export const draftFiles = $state<Record<string, FileAttachment[]>>({});
 
 /** A part of a web page picked in the AgentDeck browser, waiting to go with the next message. */
-export type PageElement = { id: string; tag: string; text: string; selector: string; html: string; /** Its place among its neighbours. */ around?: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string>; url: string; title: string; /** What was written about it while marking up the page. */ note?: string };
+export type PageElement = { id: string; tag: string; text: string; selector: string; html: string; /** Its place among its neighbours. */ around?: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string>; url: string; title: string; /** What was written about it while marking up the page. */ note?: string; /** A PNG of the element alone (a data URL), taken when it was picked. */ picture?: string };
 export const draftElements = $state<Record<string, PageElement[]>>({});
 /** Messages of sessions that live only in this app (new chats), by session id. */
 const localMessages: Record<string, Message[]> = {};
@@ -605,7 +606,7 @@ function modelFor(session: SessionItem): string | null {
   return fallback;
 }
 
-const agentLabel = (agent?: Agent, model?: string | null) => (agent === 'custom' && customProviderName(model)) || (agent === 'codex' ? 'Codex' : agent === 'antigravity' ? 'Antigravity' : agent === 'custom' ? 'Custom provider' : 'Claude');
+const agentLabel = (agent?: Agent, model?: string | null) => (agent === 'custom' && customProviderName(model)) || (agent === 'custom' ? 'Custom provider' : agentDisplayName(agent ?? 'claude'));
 
 /**
  * A user message that is only the hand-back prompt (or, in a chat saved by an older version, its stand-in
@@ -1234,7 +1235,7 @@ function callerOf(chatId: string): SessionItem | undefined {
 function agentRows(): AgentRow[] {
   const installed = (tool: string) => connectors.detected?.tools.find((item) => item.id === tool)?.path !== null;
   const rows: AgentRow[] = [];
-  for (const [id, tool] of [['claude', 'claude'], ['codex', 'codex'], ['antigravity', 'agy']] as const) {
+  for (const [id, tool] of [['claude', 'claude'], ['codex', 'codex'], ['antigravity', 'agy'], ['opencode', 'opencode']] as const) {
     const models = (MODELS[id] ?? []).map((item) => ({ value: item.value, label: item.label, description: item.description }));
     if (models.length && installed(tool)) rows.push({ id, label: agentLabel(id), models });
   }
@@ -1284,7 +1285,7 @@ function startTask(call: DelegateCall, reply: (text: string, isError?: boolean) 
   if (!row) return reply(`No agent "${wanted}" is available. ${formatAgents(rows)}`, true);
   const chosen = resolveModel(row.models, wantedModel, row.id === 'claude' ? 'sonnet' : undefined);
   if ('error' in chosen) return reply(chosen.error, true);
-  const agent: Agent = row.id === 'claude' || row.id === 'codex' || row.id === 'antigravity' ? row.id : 'custom';
+  const agent: Agent = row.id === 'claude' || row.id === 'codex' || row.id === 'antigravity' || row.id === 'opencode' ? row.id : 'custom';
   const model = agent === 'custom' ? customModelId(row.id, chosen.model) : chosen.model;
   let taskId = newTaskId();
   while (delegateTasks[taskId]) taskId = newTaskId();
@@ -1812,8 +1813,13 @@ function handBack(batch: DelegateBatch) {
 }
 
 /** Send from the message box. While the agent is busy: wait in line (Enter), or stop it and go first (Ctrl+Enter). */
+/** The picture of each picked element, sent with the message as an image next to its markup. */
+const elementPictures = (elements: PageElement[]): Attachment[] =>
+  elements.flatMap((item) => (item.picture ? [{ id: crypto.randomUUID(), name: `${item.tag}.png`, mime: 'image/png', src: item.picture }] : []));
+
 export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = [], mentions: Mention[] = [], whileRunning: 'queue' | 'interrupt' = 'queue', files: FileAttachment[] = []) {
   const session = activeSession();
+  images = [...images, ...elementPictures(elements)];
   if (!session || (!text.trim() && images.length === 0 && elements.length === 0 && files.length === 0)) return;
   // A task for another agent needs words to say what the task is.
   if (mentions.some((mention) => mention.kind === 'ai') && !text.trim()) return;
@@ -1899,7 +1905,7 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
   const files = extra.files ?? [];
   if (!session || replies[sessionId]) return;
   const messages = messagesOf(sessionId);
-  if (extra.silent && extra.prompt && inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'custom')) {
+  if (extra.silent && extra.prompt && inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'opencode' || session.agent === 'custom')) {
     startTurn(session, extra.prompt, [], [], extra.preface ?? '', [], extra.silent);
     if (!session.path) localMessages[session.id] = messages;
     persistLocal();
@@ -1912,7 +1918,7 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
     blocks: [
       ...images.map((image) => ({ kind: 'image' as const, src: image.src, name: image.name })),
       ...files.map((file) => ({ kind: 'file' as const, name: file.name, path: file.path, size: file.size })),
-      ...elements.map((item) => ({ kind: 'element' as const, tag: item.tag, text: item.text, selector: item.selector, url: item.url, title: item.title, note: item.note, html: item.html, around: item.around, box: { ...item.box }, style: { ...item.style } })),
+      ...elements.map((item) => ({ kind: 'element' as const, tag: item.tag, text: item.text, selector: item.selector, url: item.url, title: item.title, note: item.note, html: item.html, around: item.around, box: { ...item.box }, style: { ...item.style }, picture: item.picture })),
       ...(body ? [{ kind: 'response' as const, text: body }] : []),
     ],
     at: new Date().toISOString(),
@@ -1922,7 +1928,7 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
   const preset = presetOf(sessionId);
   if (inTauri() && targets.length > 0 && body) delegate(session, messages[messages.length - 1], body, targets, preface, images, elements, files);
   else if (inTauri() && preset && preset.steps.length > 0 && body && !extra.prompt && !extra.preface) void runWorkflow(session, messages[messages.length - 1], preset, body, preface, images, elements, files);
-  else if (inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'custom')) startTurn(session, withElements(extra.prompt ?? body, elements), images, [], preface, files);
+  else if (inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'opencode' || session.agent === 'custom')) startTurn(session, withElements(extra.prompt ?? body, elements), images, [], preface, files);
   else if (inTauri()) {
     messages.push({
       id: nextId(),

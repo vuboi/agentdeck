@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AgentLogo from '../AgentLogo.svelte';
   import { untrack } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
@@ -121,7 +122,7 @@
     {#if item.agent === 'codex'}
       <ZIcon zSvg={OPENAI_SVG} class="size-4 shrink-0 text-foreground" />
     {:else}
-      <ZIcon zType={AGENT_ICON[item.agent]} class="size-4 shrink-0 {AGENT_TEXT[item.agent]}" />
+      <AgentLogo agent={item.agent} class="size-4 shrink-0 {AGENT_TEXT[item.agent]}" />
     {/if}
     <span class="truncate">{item.label.split(' · ')[0]}</span>
     <span class="truncate text-muted-foreground">{item.model}</span>

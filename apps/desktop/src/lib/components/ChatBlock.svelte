@@ -96,11 +96,12 @@
   <!-- Click for what was sent with the message, in a card (the native tooltip ran off the window with the long selector). -->
   <button type="button" bind:this={chip} class="block-in inline-flex max-w-full cursor-pointer items-center gap-1.5 self-start rounded-md border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground outline-none hover:bg-muted {cardOpen ? 'bg-muted' : ''}" aria-label="Details of {block.selector}" aria-expanded={cardOpen} onclick={() => (cardOpen = !cardOpen)}>
     <ZIcon zType="lucideMousePointerClick" class="size-3 shrink-0 text-primary" />
+    {#if block.picture}<img src={block.picture} alt="" class="size-5 shrink-0 rounded-sm border border-border object-cover" />{/if}
     <span class="truncate">&lt;{block.tag} /&gt; {block.text}</span>
   </button>
   <ZPopover anchor={chip} bind:open={cardOpen} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={360}>
     {#snippet children()}
-      <ElementCard tag={block.tag} text={block.text} selector={block.selector} url={block.url} note={block.note} box={block.box} style={block.style} />
+      <ElementCard tag={block.tag} text={block.text} selector={block.selector} url={block.url} note={block.note} box={block.box} style={block.style} picture={block.picture} />
     {/snippet}
   </ZPopover>
 {:else if block.kind === 'image'}

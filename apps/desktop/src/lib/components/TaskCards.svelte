@@ -3,13 +3,14 @@
   import { ZIcon, ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { LOADER } from '../loaders';
-  import { OPENAI_SVG } from '../brand-icons';
+  import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
   import { elapsed, type CommandBlock } from '../blocks';
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { connectors } from '../connectors.svelte';
   import { cardOf, parseTaskResult, type CardState } from '../delegate-task';
   import { modelLabel } from '../models.svelte';
+  import { agentDisplayName } from '../provider-registry';
   import { delegateTasks, liveStats, needsApproval, stopDelegateTask, workspace } from '../sessions.svelte';
 
   // The calls of the delegate_task tool in a reply: the agent handed a task to another agent during its own turn. One
@@ -29,9 +30,9 @@
   function nameOf(card: ReturnType<typeof cardOf>, record: ReturnType<typeof recordOf>): string {
     if (record) return record.label;
     const wanted = card.agent ?? 'an agent';
-    const known = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' }[wanted.toLowerCase()];
+    const known = agentDisplayName(wanted.toLowerCase());
     const provider = connectors.custom.find((item) => item.id === wanted);
-    const name = known ?? provider?.name ?? wanted;
+    const name = known !== wanted.toLowerCase() ? known : provider?.name ?? wanted;
     return card.model ? `${name} · ${modelLabel(card.model) || card.model}` : name;
   }
   const kindOf = (card: ReturnType<typeof cardOf>, record: ReturnType<typeof recordOf>) => (record?.agent ?? card.agent ?? '').toLowerCase();
@@ -71,6 +72,8 @@
             <ZIcon zType="brandClaude" class="size-3.5 shrink-0" />
           {:else if kind === 'antigravity'}
             <ZIcon zType="brandGemini" class="size-3.5 shrink-0" />
+          {:else if kind === 'opencode'}
+            <ZIcon zSvg={OPENCODE_SVG} class="size-3.5 shrink-0 text-foreground" />
           {:else}
             <ZIcon zType={'lucideServer' as ZIconName} class="size-3.5 shrink-0 text-violet-500" />
           {/if}
