@@ -87,6 +87,21 @@
     layout.sidebarDrawer = false;
     layout.sidebarCollapsed = false;
   }
+  // While the hover drawer covers the folded button, a press on the button still brings the sidebar back: the drawer
+  // would otherwise take the press as a click outside it.
+  let railButton = $state<HTMLButtonElement | undefined>();
+  $effect(() => {
+    if (!layout.sidebarDrawer || !layout.sidebarCollapsed) return;
+    const onPress = (event: PointerEvent) => {
+      const box = railButton?.getBoundingClientRect();
+      if (!box || event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) return;
+      event.preventDefault();
+      event.stopPropagation();
+      railClick();
+    };
+    document.addEventListener('pointerdown', onPress, true);
+    return () => document.removeEventListener('pointerdown', onPress, true);
+  });
 
   // Right click on a tab: close it, the others, or all of them.
   let tabMenu = $state<{ x: number; y: number; id: string } | null>(null);
@@ -470,6 +485,7 @@
          No scrollbar: when the tabs overflow, an arrow opens the full list. -->
     {#if layout.sidebarHidden || layout.sidebarCollapsed}
       <button
+        bind:this={railButton}
         type="button"
         class="ml-2 grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
         aria-label={layout.sidebarHidden ? 'Open sessions' : 'Show sidebar (Ctrl+B)'}
