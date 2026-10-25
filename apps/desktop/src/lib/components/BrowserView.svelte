@@ -690,7 +690,7 @@
     <div class="grid flex-1 place-items-center p-6 text-center text-xs text-muted-foreground">The browser runs in the AgentDeck desktop app.</div>
   {:else}
     <!-- Tabs -->
-    <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2" role="tablist" aria-label="Browser tabs">
+    <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-1" role="tablist" aria-label="Browser tabs">
       <div class="relative flex min-w-0 shrink items-center">
       <div bind:this={tabStrip} bind:clientWidth={tabStripWidth} class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
         {#each browser.tabs as item (item.id)}
