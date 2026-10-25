@@ -531,11 +531,11 @@
           <ZIcon zType={'lucideGripVertical' as ZIconName} class="hidden size-3.5 group-hover/handle:block" />
         </span>
         <span class="min-w-0 flex-1 truncate text-foreground">{item.text || (item.images.length ? 'Image' : item.files?.length ? 'File' : 'Element')}</span>
+        <span class="flex shrink-0 items-center gap-0.5">
         <button type="button" class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => steerQueued(sessionId, item)}>
           <ZIcon zType={'lucideArrowRight' as ZIconName} class="size-3" />
           <span>Steer</span>
         </button>
-        <span class="flex shrink-0 items-center">
         <button type="button" class="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Edit in the message box" {@attach zTooltip({ content: 'Edit', position: 'top' })} onclick={() => editQueued(item)}>
           <ZIcon zType={'lucideSquarePen' as ZIconName} zSize="13" class="size-[13px]" />
         </button>
