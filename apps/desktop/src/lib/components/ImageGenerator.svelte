@@ -44,7 +44,7 @@
     { key: 'resolution', label: 'Resolution', options: ['SD (640×480)', 'HD (1280×720)', 'Full HD (1920×1080)', '2K (2560×1440)', '4K (3840×2160)'] },
   ];
   const SETTING_CATEGORY: Record<string, SettingKey> = { style: 'style', domain: 'domain', audience: 'audience', age: 'audience', ratio: 'ratio', resolution: 'resolution' };
-  const MAX_REFERENCES = 4;
+  const MAX_REFERENCES = 5;
   const PICTURE = /^image\/(png|jpeg|gif|webp)$/;
 
   // A picture pasted or dropped into the prompt box: shown above it, sent to the model with the prompt.
@@ -297,6 +297,8 @@
     event.preventDefault();
     void addPictures(files);
   }
+
+  let fileInput = $state<HTMLInputElement | undefined>();
 
   function onDrop(event: DragEvent) {
     const files = [...(event.dataTransfer?.files ?? [])];
@@ -577,6 +579,7 @@
         ></textarea>
 
         <div class="flex min-w-0 items-center justify-between gap-2">
+          <div class="flex min-w-0 items-center gap-1">
           <button
             bind:this={settingsTrigger}
             type="button"
@@ -591,6 +594,28 @@
             <span class="hidden shrink-0 text-muted-foreground min-[720px]:inline">· {variantCount}×</span>
             <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 text-muted-foreground" />
           </button>
+          <button
+            type="button"
+            class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-40"
+            aria-label="Attach images"
+            title="Attach images (up to {MAX_REFERENCES}, or paste / drop)"
+            disabled={references.length >= MAX_REFERENCES}
+            onclick={() => fileInput?.click()}
+          >
+            <ZIcon zType="lucidePaperclip" class="size-3.5" />
+          </button>
+          <input
+            bind:this={fileInput}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            multiple
+            hidden
+            onchange={(event) => {
+              void addPictures([...(event.currentTarget.files ?? [])]);
+              event.currentTarget.value = '';
+            }}
+          />
+          </div>
 
           <div class="flex h-8 shrink-0 items-center gap-0.5 rounded-full border border-border bg-background p-0.5" role="group" aria-label="Image actions">
             <button
