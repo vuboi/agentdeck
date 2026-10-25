@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,13 @@ use serde::{Deserialize, Serialize};
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 /// Process ids of the generator runs in progress, so `image_stop` can end them.
 static ACTIVE: LazyLock<Mutex<Vec<u32>>> = LazyLock::new(Default::default);
+/// The app's resource folder: the codex-imagen script is bundled there (see `tauri.conf.json`).
+static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Called once at start-up with Tauri's resource folder.
+pub fn set_resource_dir(dir: PathBuf) {
+    let _ = RESOURCE_DIR.set(dir);
+}
 
 const DEFAULT_VARIANTS: u8 = 1;
 const MAX_VARIANTS: u8 = 4;
@@ -429,6 +436,9 @@ fn imagen_script() -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
     if let Some(path) = std::env::var_os("AGENTDECK_CODEX_IMAGEN_SCRIPT") {
         candidates.push(PathBuf::from(path));
+    }
+    if let Some(dir) = RESOURCE_DIR.get() {
+        candidates.push(dir.join("codex-imagen").join("codex-imagen.mjs"));
     }
     if let Ok(current) = std::env::current_dir() {
         candidates.extend(current.ancestors().map(|root| root.join(relative)));

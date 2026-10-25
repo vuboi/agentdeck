@@ -26,7 +26,7 @@ use ag_adapters::agent::runner::{drive_turn, resolve_binary};
 use ag_adapters::agent::{AgentEvent, Provider, TurnRequest};
 use ag_adapters::history::{self, HistoryMessage, HistoryPage, HistorySession, Roots, Source};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 fn roots() -> Result<Roots, String> {
     let home = std::env::var_os("USERPROFILE")
@@ -979,6 +979,9 @@ pub fn run() {
         })
         .setup(|app| {
             bridge::start(app.handle().clone());
+            if let Ok(dir) = app.path().resource_dir() {
+                image_gen::set_resource_dir(dir);
+            }
             let handle = app.handle().clone();
             servers::init(move |port| {
                 let _ = handle.emit("server-log", serde_json::json!({ "port": port }));

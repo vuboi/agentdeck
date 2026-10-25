@@ -24,6 +24,9 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico", "icons/icon.png"],
+    "resources": {
+      "../../../.codex/skills/codex-imagen/scripts/codex-imagen.mjs": "codex-imagen/codex-imagen.mjs"
+    },
     "windows": {
       "nsis": { "installerIcon": "icons/icon.ico", "template": "windows/installer.nsi" }
     }
