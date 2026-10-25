@@ -46,7 +46,8 @@
         <div class="px-3 pb-2">
           <!-- Short reasoning is shown as is: the show-more box keeps room for its button even when it has none. -->
           {#if thinkingText.length > 600}
-            <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="var(--background)" moreLabel="Show more" lessLabel="Show less">
+            <!-- Match the card surface so the fade fully covers the clipped text without showing a background seam. -->
+            <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="color-mix(in oklab, var(--muted) 30%, transparent)" moreLabel="Show more" lessLabel="Show less">
               <p class="m-0 whitespace-pre-wrap leading-relaxed">{thinkingText}</p>
             </ZShowMore>
           {:else}

@@ -85,9 +85,12 @@ impl Provider for OpenCode {
         if matches!(req.permission_mode.as_deref(), Some("auto") | Some("bypassPermissions")) { args.push("--auto".into()); }
         // Effort is not a flag here: OpenCode takes a model variant (`provider/model#variant`) and publishes no list
         // of them, so a chosen effort stays with whatever the model does by default.
-        args.push(req.prompt.clone());
         args
     }
+    /// The prompt goes in on stdin: OpenCode reads it when no message argument is given, which keeps a Windows
+    /// `.cmd` shim from re-parsing the text (a `&` or `|` in a message would otherwise start a second command) and
+    /// takes the 32k command-line limit out of the way for a long paste.
+    fn prompt_on_stdin(&self) -> bool { true }
     fn environment(&self, req: &TurnRequest) -> Vec<(String, String)> {
         let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") else { return Vec::new() };
         let url = super::mcp_url(&bridge, req.owner.as_deref(), req.cwd.as_deref());
@@ -219,13 +222,16 @@ mod tests {
     fn args_carry_the_model_the_session_and_auto_only_when_asking_is_off() {
         let provider = OpenCode::default();
         let mut req = request("say hi");
-        assert_eq!(provider.args(&req), vec!["run", "--standalone", "--format", "json", "--thinking", "say hi"]);
+        assert_eq!(provider.args(&req), vec!["run", "--standalone", "--format", "json", "--thinking"]);
+        // The prompt is not an argument at all: it is written to stdin, so shell characters in it stay text.
+        assert!(!provider.args(&req).iter().any(|arg| arg.contains("say hi")));
+        assert!(provider.prompt_on_stdin());
 
         req.session_id = Some("ses_9".into());
         req.model = Some("opencode/big-pickle".into());
         // A session id is only continued when the caller resumes it; a new chat that falls back to the old id must
         // not silently continue the old conversation.
-        assert_eq!(provider.args(&req), vec!["run", "--standalone", "--format", "json", "--thinking", "--model", "opencode/big-pickle", "say hi"]);
+        assert_eq!(provider.args(&req), vec!["run", "--standalone", "--format", "json", "--thinking", "--model", "opencode/big-pickle"]);
         req.resume = true;
         let args = provider.args(&req);
         assert_eq!((args.contains(&"--session".to_string()), args.contains(&"ses_9".to_string())), (true, true));

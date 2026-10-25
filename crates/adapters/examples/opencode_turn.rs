@@ -47,6 +47,12 @@ async fn main() {
     std::fs::create_dir_all(&cwd).expect("temp folder");
     let provider = OpenCode::default();
     println!("binary: {:?}", resolve_binary(&provider));
+    let models = ag_adapters::models::opencode(&ag_adapters::agent::opencode::models_listing(resolve_binary(&provider)));
+    println!(
+        "models: {} (first: {:?})",
+        models.len(),
+        models.first().map(|model| (&model.value, &model.label))
+    );
 
     let first = turn(&provider, "Remember the word kiwi. Reply only: ok", None, &cwd).await;
     println!("turn 1: {}", summary(&first));

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { ZIcon, ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
+  import { ZIcon, ZLoading, ZShowMore, ZShimmerText } from '@shival99/z-ui-svelte';
   import { ticker } from '../clock.svelte';
   import { argOf, describeStep, elapsed, liveState, summarize, toolOf, totalChange, type CommandBlock, type Counts, type ThinkingBlock } from '../blocks';
   import { openImages } from '../preview.svelte';
@@ -104,7 +104,15 @@
             </button>
             <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {thinkingOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
               <div class="min-h-0 overflow-hidden">
-                <p class="m-0 max-h-72 overflow-auto px-3 pt-1 pb-3 leading-relaxed whitespace-pre-wrap text-muted-foreground">{thinkingText}</p>
+                <div class="px-3 pt-1 pb-3 text-muted-foreground">
+                  {#if thinkingText.length > 600}
+                    <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="var(--background)" moreLabel="Show more" lessLabel="Show less">
+                      <p class="m-0 whitespace-pre-wrap leading-relaxed">{thinkingText}</p>
+                    </ZShowMore>
+                  {:else}
+                    <p class="m-0 whitespace-pre-wrap leading-relaxed">{thinkingText}</p>
+                  {/if}
+                </div>
               </div>
             </div>
           </div>
