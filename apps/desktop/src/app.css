@@ -329,7 +329,18 @@ body {
 .xterm .xterm-scrollable-element > .scrollbar.vertical { width: 12px !important; }
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider { width: 7px !important; left: 3px !important; border-radius: 3px; }
 
-
-/* The overlay scrollbars of z-ui (sidebar lists, drawers, dialogs, scroll areas): the same slim thumb as the
- * native ones above (a 12px track with a 6px thumb inset by 3px), so floating panels do not look heavier. */
+/* The overlay scrollbars of z-ui (dialogs, settings, drawers): an 8px track with a 4px thumb, no arrows. */
 .os-theme-z.os-theme-z { --os-size: 8px; --os-padding-perpendicular: 2px; }
+
+/* The tree scrolls natively (its own overflow-y-auto), so it is drawn like the overlay one above: 8px track,
+ * 4px thumb, no arrows. Without this it takes the 12px global scrollbar and looks heavier than the dialogs. */
+.z-tree::-webkit-scrollbar { width: 8px; height: 8px; }
+.z-tree::-webkit-scrollbar-track { background: transparent; }
+.z-tree::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--muted-foreground) 30%, transparent);
+  border: 2px solid transparent;
+  border-radius: 4px;
+  background-clip: padding-box;
+}
+.z-tree::-webkit-scrollbar-thumb:hover { background-color: color-mix(in oklab, var(--muted-foreground) 50%, transparent); }
+.z-tree::-webkit-scrollbar-button { display: none; }
