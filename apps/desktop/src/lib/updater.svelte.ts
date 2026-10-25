@@ -16,6 +16,35 @@ export const updater = $state({
 });
 
 let pending: Update | null = null;
+
+// Developer aid: `pnpm dev:update` starts the app with a pretend update, so its dialog (changelog, progress) can be seen
+// and styled without publishing a release.
+export const FAKE_UPDATE = import.meta.env.DEV && import.meta.env.VITE_FAKE_UPDATE === '1';
+const FAKE_NOTES = `### What's new
+
+- **Files open in an editor:** the file viewer is editable, with Ctrl+S to save and a dot on the tab while there are unsaved edits.
+- **Git changes in the gutter:** green for added lines, blue for changed lines, red where lines were removed.
+- **Attachments:** attach any file; PDF, Word, Excel and PowerPoint open in the same viewer as pictures.
+
+### Fixes
+
+- **Running commands no longer vanish on reload (F5):** the entry keeps its start time and live output.
+- **Terminal opened in the wrong folder:** commands from a chat code block now start in the project's folder (\`nx\` was not found before).
+- A long line such as \`pnpm exec nx serve project-hub --configuration=local\` wraps instead of running off the card.
+- Another fix with enough text to make the changelog scroll: the list of background processes now keeps a card for every command, whether it was started from the Preview or from the Terminal.
+
+### Install
+
+Windows: \`.exe\` or \`.msi\`. macOS: \`.dmg\` (Apple silicon or Intel). Linux: \`.AppImage\`, \`.deb\` or \`.rpm\`.
+`;
+/** Pretends an update is waiting (see FAKE_UPDATE). */
+export function useFakeUpdate() {
+  updater.version = '9.9.9';
+  updater.notes = FAKE_NOTES;
+  updater.progress = 0;
+  updater.error = '';
+  updater.status = 'available';
+}
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 /** Look for an update. `quiet` keeps a failed check silent (the background checks). Returns true if one is waiting. */
@@ -47,6 +76,15 @@ export async function checkForUpdate(quiet = false): Promise<boolean> {
 
 /** Download and install the waiting update, then restart into it. */
 export async function installUpdate() {
+  if (FAKE_UPDATE && updater.status !== 'downloading') {
+    updater.status = 'downloading';
+    for (let step = 1; step <= 20; step++) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      updater.progress = step / 20;
+    }
+    useFakeUpdate();
+    return;
+  }
   if (!pending || updater.status === 'downloading') return;
   updater.status = 'downloading';
   updater.progress = 0;

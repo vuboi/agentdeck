@@ -1,7 +1,7 @@
 <script lang="ts">
   import { customProviderName } from '../models.svelte';
   import { tick, untrack } from 'svelte';
-  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZTree, zModalService, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZScrollArea, ZTree, zModalService, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import Logo from './Logo.svelte';
   import { toast } from '../toast';
@@ -12,7 +12,8 @@
   import Splitter from './Splitter.svelte';
   import { layout } from '../layout.svelte';
   import { getPref, setPref } from '../prefs';
-  import { appInfo, checkForUpdate, installUpdate, startUpdateChecks, updater } from '../updater.svelte';
+  import { appInfo, checkForUpdate, FAKE_UPDATE, installUpdate, startUpdateChecks, updater, useFakeUpdate } from '../updater.svelte';
+  import Markdown from './Markdown.svelte';
   import {
     addProject,
     buildTree,
@@ -127,6 +128,12 @@
   // App updates: checked in the background; the button next to Settings shows a dot when one is waiting.
   let updateOpen = $state(false);
   $effect(() => startUpdateChecks());
+  // `pnpm dev:update`: open the update dialog with a pretend release.
+  $effect(() => {
+    if (!FAKE_UPDATE) return;
+    useFakeUpdate();
+    updateOpen = true;
+  });
   // The icon turns while a check runs, and for at least a moment so a quick answer is still seen.
   let spinning = $state(false);
   const turning = $derived(spinning || updater.status === 'checking' || updater.status === 'downloading');
@@ -802,17 +809,20 @@
 
 <SearchPalette bind:open={searchOpen} />
 
-<ZModal bind:open={updateOpen} zTitle={updater.status === 'error' ? 'Update failed' : `AgentDeck ${updater.version} is available`} zWidth="460px" zBodyClass="min-h-0! py-3" zOkText={updater.status === 'downloading' ? 'Downloading…' : updater.status === 'error' ? 'Try again' : 'Download and restart'} zCancelText="Later" onOk={installUpdate}>
-  <div class="flex flex-col gap-3 text-xs">
+<ZModal bind:open={updateOpen} zTitle={updater.status === 'error' ? 'Update failed' : `AgentDeck ${updater.version} is available`} zWidth="460px" zBodyClass="min-h-0! p-0" zOkText={updater.status === 'downloading' ? 'Downloading…' : updater.status === 'error' ? 'Try again' : 'Download and restart'} zCancelText="Later" onOk={installUpdate}>
+  <div class="flex flex-col text-xs">
     {#if updater.status === 'error'}
-      <p class="text-destructive">{updater.error}</p>
+      <p class="m-0 px-6 py-3 text-destructive">{updater.error}</p>
     {:else}
-      {#if updater.notes}<p class="max-h-40 overflow-auto whitespace-pre-wrap text-muted-foreground">{updater.notes}</p>{/if}
-      {#if updater.status === 'downloading'}
-        <div class="h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full bg-primary transition-[width]" style:width="{Math.max(updater.progress, 0.03) * 100}%"></div></div>
-      {:else}
-        <p class="text-muted-foreground">The update is downloaded and installed, then AgentDeck restarts.</p>
-      {/if}
+      <!-- z-ui's own slim overlay scrollbar, on the modal's edge: the padding is inside the scroller. -->
+      {#if updater.notes}<ZScrollArea class="max-h-72"><div class="px-6 py-3"><Markdown text={updater.notes} /></div></ZScrollArea>{/if}
+      <div class="px-6 pb-3 {updater.notes ? '' : 'pt-3'}">
+        {#if updater.status === 'downloading'}
+          <div class="h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full bg-primary transition-[width]" style:width="{Math.max(updater.progress, 0.03) * 100}%"></div></div>
+        {:else}
+          <p class="m-0 text-muted-foreground">The update is downloaded and installed, then AgentDeck restarts.</p>
+        {/if}
+      </div>
     {/if}
   </div>
 </ZModal>
