@@ -45,6 +45,31 @@ fn preview_capability(commands: &[String]) -> String {
     )
 }
 
+/// Grants the main window the app commands registered by `generate_handler!` in every build profile.
+fn default_capability(commands: &[String]) -> Result<String, String> {
+    let source = fs::read_to_string("capabilities/default.json")
+        .map_err(|error| format!("could not read the default capability: {error}"))?;
+    let mut capability: serde_json::Value = serde_json::from_str(&source)
+        .map_err(|error| format!("could not parse the default capability: {error}"))?;
+    let permissions = capability
+        .get_mut("permissions")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or("the default capability has no permissions array")?;
+
+    for command in commands {
+        let permission = format!("allow-{}", command.replace('_', "-"));
+        if !permissions
+            .iter()
+            .any(|entry| entry.as_str() == Some(&permission))
+        {
+            permissions.push(serde_json::Value::String(permission));
+        }
+    }
+
+    serde_json::to_string_pretty(&capability)
+        .map_err(|error| format!("could not serialize the default capability: {error}"))
+}
+
 fn main() {
     // The Windows taskbar icon is embedded in the executable. Make Cargo rebuild when it changes.
     println!("cargo:rerun-if-changed=icons/icon.ico");
@@ -52,13 +77,10 @@ fn main() {
     println!("cargo:rerun-if-changed=capabilities/default.json");
 
     let debug = env::var("PROFILE").is_ok_and(|profile| profile == "debug");
-    let commands = if debug {
-        handler_commands()
-    } else {
-        Vec::new()
-    };
-    // A handler list that was not read would lock the whole app out in a debug build: stop instead.
-    if debug && commands.len() < 10 {
+    let commands = handler_commands();
+    let preview_commands = if debug { commands.as_slice() } else { &[] };
+    // A handler list that was not read would lock the app out: stop instead.
+    if commands.len() < 10 {
         eprintln!("build.rs: could not read the command list of generate_handler! in src/lib.rs");
         std::process::exit(1);
     }
@@ -67,11 +89,15 @@ fn main() {
     let out =
         PathBuf::from(env::var("OUT_DIR").unwrap_or_else(|_| ".".into())).join("capabilities");
     let written = fs::create_dir_all(&out)
-        .and_then(|()| fs::copy("capabilities/default.json", out.join("default.json")).map(|_| ()))
+        .and_then(|()| {
+            default_capability(&commands)
+                .map_err(std::io::Error::other)
+                .and_then(|capability| fs::write(out.join("default.json"), capability))
+        })
         .and_then(|()| {
             fs::write(
                 out.join("debug-preview.json"),
-                preview_capability(&commands),
+                preview_capability(preview_commands),
             )
         });
     if let Err(error) = written {
@@ -83,14 +109,12 @@ fn main() {
     );
 
     let mut attributes = tauri_build::Attributes::new().capabilities_path_pattern(pattern);
-    if debug {
-        let names: Vec<&'static str> = commands
-            .into_iter()
-            .map(|name| &*Box::leak(name.into_boxed_str()))
-            .collect();
-        let names: &'static [&'static str] = Box::leak(names.into_boxed_slice());
-        attributes = attributes.app_manifest(tauri_build::AppManifest::new().commands(names));
-    }
+    let names: Vec<&'static str> = commands
+        .into_iter()
+        .map(|name| &*Box::leak(name.into_boxed_str()))
+        .collect();
+    let names: &'static [&'static str] = Box::leak(names.into_boxed_slice());
+    attributes = attributes.app_manifest(tauri_build::AppManifest::new().commands(names));
     if let Err(error) = tauri_build::try_build(attributes) {
         eprintln!("build.rs: {error}");
         std::process::exit(1);
