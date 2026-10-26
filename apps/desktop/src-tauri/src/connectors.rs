@@ -1609,7 +1609,7 @@ pub async fn antigravity_account_adopt() -> Result<(), String> {
     }
 }
 
-/// Saves the current credential before clearing the shared sign-in, then waits for `agy` to finish a fresh OAuth login.
+/// Saves the current credential before clearing the shared sign-in, then waits for the desktop app to finish OAuth.
 async fn antigravity_sign_in_another_account() -> Result<(), String> {
     #[cfg(not(windows))]
     return Err(
@@ -1626,7 +1626,19 @@ async fn antigravity_sign_in_another_account() -> Result<(), String> {
             save_agy_account(sign_in, email)?;
         }
 
-        let agy = which("agy").ok_or("Antigravity is not installed")?;
+        let local_app_data = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .ok_or("could not locate the Antigravity desktop app")?;
+        let antigravity = local_app_data
+            .join("Programs")
+            .join("Antigravity")
+            .join("Antigravity.exe");
+        if !antigravity.is_file() {
+            return Err(format!(
+                "Antigravity desktop app was not found at {}",
+                antigravity.display()
+            ));
+        }
         let token_file = crate::home_folder()?
             .join(".gemini")
             .join("jetski-standalone-oauth-token");
@@ -1637,8 +1649,7 @@ async fn antigravity_sign_in_another_account() -> Result<(), String> {
         }
         delete_secret("gemini:antigravity")?;
 
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "Antigravity sign-in", &agy.to_string_lossy()])
+        std::process::Command::new(&antigravity)
             .spawn()
             .map_err(|error| error.to_string())?;
 

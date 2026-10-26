@@ -42,13 +42,6 @@
         : false,
   );
   const canOpenAccountMenu = $derived(canQuickSwitch || canQuickAdd);
-  const addBusy = $derived(
-    accountProvider === 'agy'
-      ? Boolean(connectors.busy['login:agy'])
-      : accountProvider
-        ? Boolean(connectors.busy[`add:${accountProvider}`])
-        : false,
-  );
   let lastAccountProvider: AccountProvider | 'agy' | null | undefined;
   $effect(() => {
     const selected = accountProvider;
@@ -72,7 +65,7 @@
   const entryKey = (entry: QuickAccount) => `${entry.provider}:${entry.account.id}`;
   const labelFor = (provider: AccountProvider | 'agy') => (provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : 'Antigravity');
   async function addQuickAccount() {
-    if (!accountProvider || !canQuickAdd || addBusy) return;
+    if (!accountProvider || !canQuickAdd) return;
     if (accountProvider === 'agy') {
       if (await login('agy', 'Antigravity')) await refreshAgyAccounts();
       return;
@@ -390,8 +383,8 @@
           <AgentLogo agent={accountProvider === 'agy' ? 'antigravity' : accountProvider ?? 'antigravity'} class="size-3.5 shrink-0" />
           <span class="min-w-0 flex-1">{labelFor(accountProvider ?? 'agy')} accounts</span>
           {#if canQuickAdd}
-            <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Add {labelFor(accountProvider ?? 'agy')} account" title="Add account" disabled={addBusy} onclick={() => void addQuickAccount()}>
-              <ZIcon zType={icon(addBusy ? 'lucideLoaderCircle' : 'lucidePlus')} class="size-3.5 {addBusy ? 'animate-spin' : ''}" />
+            <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Add {labelFor(accountProvider ?? 'agy')} account" title="Add account" onclick={() => void addQuickAccount()}>
+              <ZIcon zType={icon('lucidePlus')} class="size-3.5" />
             </ZButton>
           {/if}
         </div>

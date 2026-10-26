@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-file-open-options"
+description = "Enables the file_open_options command without any pre-configured scope."
+commands.allow = ["file_open_options"]
+
+[[permission]]
+identifier = "deny-file-open-options"
+description = "Denies the file_open_options command without any pre-configured scope."
+commands.deny = ["file_open_options"]

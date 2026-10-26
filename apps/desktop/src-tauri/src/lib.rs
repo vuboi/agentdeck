@@ -827,6 +827,355 @@ async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileOpenOption {
+    id: String,
+    label: String,
+}
+
+/// Returns installed applications that make sense for this file type, plus the OS app chooser.
+#[tauri::command]
+fn file_open_options(path: String) -> Result<Vec<FileOpenOption>, String> {
+    if !Path::new(&path).is_file() {
+        return Err("file does not exist".to_string());
+    }
+    let extension = Path::new(&path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let text = matches!(
+        extension.as_str(),
+        "txt"
+            | "md"
+            | "rs"
+            | "ts"
+            | "tsx"
+            | "js"
+            | "jsx"
+            | "svelte"
+            | "json"
+            | "toml"
+            | "yaml"
+            | "yml"
+            | "html"
+            | "css"
+            | "scss"
+            | "py"
+            | "go"
+            | "java"
+            | "cs"
+            | "sql"
+            | "sh"
+            | "ps1"
+            | "log"
+            | "xml"
+            | "csv"
+    );
+    let image = matches!(
+        extension.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico"
+    );
+    let pdf = extension == "pdf";
+    let mut options = Vec::new();
+    #[cfg(windows)]
+    {
+        let mut candidates: Vec<(&str, &str, Vec<PathBuf>)> = vec![];
+        let local = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let programs = std::env::var_os("ProgramFiles")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        if text {
+            candidates.extend([
+                (
+                    "code",
+                    "Visual Studio Code",
+                    vec![local.join("Programs/Microsoft VS Code/Code.exe")],
+                ),
+                ("zed", "Zed", vec![local.join("Programs/Zed/Zed.exe")]),
+                (
+                    "cursor",
+                    "Cursor",
+                    vec![local.join("Programs/Cursor/Cursor.exe")],
+                ),
+                (
+                    "notepadpp",
+                    "Notepad++",
+                    vec![programs.join("Notepad++/notepad++.exe")],
+                ),
+                ("notepad", "Notepad", vec![PathBuf::from("notepad.exe")]),
+            ]);
+        }
+        if image {
+            candidates.extend([
+                ("paint", "Paint", vec![PathBuf::from("mspaint.exe")]),
+                (
+                    "photos",
+                    "Photos",
+                    vec![local.join("Microsoft/WindowsApps/Photos.exe")],
+                ),
+            ]);
+        }
+        if pdf {
+            candidates.extend([
+                (
+                    "edge",
+                    "Microsoft Edge",
+                    vec![
+                        programs.join("Microsoft/Edge/Application/msedge.exe"),
+                        PathBuf::from("msedge.exe"),
+                    ],
+                ),
+                (
+                    "acrobat",
+                    "Adobe Acrobat",
+                    vec![programs.join("Adobe/Acrobat DC/Acrobat/Acrobat.exe")],
+                ),
+            ]);
+        }
+        for (id, label, paths) in candidates {
+            if paths.iter().any(|candidate| candidate.is_file()) || which_app(id).is_some() {
+                options.push(FileOpenOption {
+                    id: id.to_string(),
+                    label: label.to_string(),
+                });
+            }
+        }
+        options.push(FileOpenOption {
+            id: "system".to_string(),
+            label: "Choose another app…".to_string(),
+        });
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let candidates: &[(&str, &str, &str)] = if text {
+            &[
+                ("code", "Visual Studio Code", "Visual Studio Code"),
+                ("zed", "Zed", "Zed"),
+                ("cursor", "Cursor", "Cursor"),
+                ("textedit", "TextEdit", "TextEdit"),
+            ]
+        } else if image {
+            &[
+                ("preview", "Preview", "Preview"),
+                ("photos", "Photos", "Photos"),
+            ]
+        } else if pdf {
+            &[
+                ("preview", "Preview", "Preview"),
+                ("chrome", "Google Chrome", "Google Chrome"),
+            ]
+        } else {
+            &[]
+        };
+        for (id, label, app_name) in candidates {
+            if std::process::Command::new("open")
+                .args(["-Ra", app_name])
+                .status()
+                .is_ok_and(|status| status.success())
+            {
+                options.push(FileOpenOption {
+                    id: (*id).to_string(),
+                    label: (*label).to_string(),
+                });
+            }
+        }
+        options.push(FileOpenOption {
+            id: "system".to_string(),
+            label: "Open with system app".to_string(),
+        });
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let candidates: &[(&str, &str)] = if text {
+            &[
+                ("code", "Visual Studio Code"),
+                ("zed", "Zed"),
+                ("cursor", "Cursor"),
+                ("gedit", "Text Editor"),
+            ]
+        } else if image {
+            &[("gimp", "GIMP"), ("eog", "Image Viewer")]
+        } else if pdf {
+            &[
+                ("evince", "Document Viewer"),
+                ("okular", "Okular"),
+                ("firefox", "Firefox"),
+            ]
+        } else {
+            &[]
+        };
+        for (id, label) in candidates {
+            if which_app(id).is_some() {
+                options.push(FileOpenOption {
+                    id: (*id).to_string(),
+                    label: (*label).to_string(),
+                });
+            }
+        }
+        options.push(FileOpenOption {
+            id: "system".to_string(),
+            label: "Open with system app".to_string(),
+        });
+    }
+    Ok(options)
+}
+
+/// Finds an application binary on PATH (including common Windows executable suffixes).
+fn which_app(name: &str) -> Option<PathBuf> {
+    let suffixes: &[&str] = if cfg!(windows) { &[".exe", ""] } else { &[""] };
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).find_map(|dir| {
+        suffixes
+            .iter()
+            .map(|suffix| dir.join(format!("{name}{suffix}")))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+/// Opens a file in a detected application or the operating system's app chooser.
+#[tauri::command]
+fn file_open_with(path: String, app_id: String) -> Result<(), String> {
+    if !Path::new(&path).is_file() {
+        return Err("file does not exist".to_string());
+    }
+    #[cfg(windows)]
+    let result = {
+        if app_id == "system" {
+            std::process::Command::new("rundll32.exe")
+                .args(["shell32.dll,OpenAs_RunDLL", &path])
+                .spawn()
+        } else {
+            let options = file_open_options(path.clone())?;
+            if !options
+                .iter()
+                .any(|option| option.id == app_id && app_id != "system")
+            {
+                return Err("application is not available for this file".to_string());
+            }
+            let local = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            let programs = std::env::var_os("ProgramFiles")
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            let candidates = match app_id.as_str() {
+                "code" => vec![
+                    local.join("Programs/Microsoft VS Code/Code.exe"),
+                    PathBuf::from("code.exe"),
+                ],
+                "zed" => vec![local.join("Programs/Zed/Zed.exe"), PathBuf::from("zed.exe")],
+                "cursor" => vec![
+                    local.join("Programs/Cursor/Cursor.exe"),
+                    PathBuf::from("cursor.exe"),
+                ],
+                "notepadpp" => vec![
+                    programs.join("Notepad++/notepad++.exe"),
+                    PathBuf::from("notepad++.exe"),
+                ],
+                "notepad" => vec![PathBuf::from("notepad.exe")],
+                "paint" => vec![PathBuf::from("mspaint.exe")],
+                "photos" => vec![local.join("Microsoft/WindowsApps/Photos.exe")],
+                "edge" => vec![
+                    programs.join("Microsoft/Edge/Application/msedge.exe"),
+                    PathBuf::from("msedge.exe"),
+                ],
+                "acrobat" => vec![programs.join("Adobe/Acrobat DC/Acrobat/Acrobat.exe")],
+                _ => return Err("unsupported application".to_string()),
+            };
+            let program = candidates
+                .into_iter()
+                .find(|candidate| candidate.is_file())
+                .or_else(|| which_app(&app_id))
+                .ok_or("application is not installed")?;
+            std::process::Command::new(program).arg(&path).spawn()
+        }
+    };
+    #[cfg(target_os = "macos")]
+    let result = {
+        let app = match app_id.as_str() {
+            "system" => None,
+            "code" => Some("Visual Studio Code"),
+            "zed" => Some("Zed"),
+            "cursor" => Some("Cursor"),
+            "textedit" => Some("TextEdit"),
+            "preview" => Some("Preview"),
+            "photos" => Some("Photos"),
+            "chrome" => Some("Google Chrome"),
+            _ => return Err("unsupported application".to_string()),
+        };
+        let mut command = std::process::Command::new("open");
+        if let Some(app) = app {
+            command.args(["-a", app]);
+        }
+        command.arg(&path).spawn()
+    };
+    #[cfg(target_os = "linux")]
+    let result = {
+        if app_id == "system" {
+            std::process::Command::new("xdg-open").arg(&path).spawn()
+        } else {
+            let app = match app_id.as_str() {
+                "code" => "code",
+                "zed" => "zed",
+                "cursor" => "cursor",
+                "gedit" => "gedit",
+                "gimp" => "gimp",
+                "eog" => "eog",
+                "evince" => "evince",
+                "okular" => "okular",
+                "firefox" => "firefox",
+                _ => return Err("unsupported application".to_string()),
+            };
+            let program = which_app(app).ok_or("application is not installed")?;
+            std::process::Command::new(program).arg(&path).spawn()
+        }
+    };
+    result.map(|_| ()).map_err(|error| error.to_string())
+}
+
+/// Copies a project file to a destination chosen with the native Save As dialog.
+#[tauri::command]
+async fn file_save_as(
+    app: AppHandle,
+    root: String,
+    path: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(root)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let source = PathBuf::from(path)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if !source.starts_with(&root) || !source.is_file() {
+            return Err("file is outside the project folder".to_string());
+        }
+        let name = source
+            .file_name()
+            .ok_or("file has no name")?
+            .to_string_lossy()
+            .to_string();
+        let destination = app
+            .dialog()
+            .file()
+            .set_title("Save file as")
+            .set_file_name(name)
+            .blocking_save_file();
+        let Some(destination) = destination else {
+            return Ok(None);
+        };
+        let destination = destination.into_path().map_err(|error| error.to_string())?;
+        std::fs::copy(&source, &destination).map_err(|error| error.to_string())?;
+        Ok(Some(destination.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Opens a folder in the system file manager (Explorer, Finder, or the desktop's own).
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
@@ -1195,6 +1544,9 @@ pub fn run() {
             audit_image_read,
             folder_list,
             reveal_path,
+            file_open_options,
+            file_open_with,
+            file_save_as,
             audit_prune,
             pick_folder,
             path_rename,

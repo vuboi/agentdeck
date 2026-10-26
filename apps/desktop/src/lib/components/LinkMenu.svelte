@@ -8,6 +8,9 @@
   import { fileWrites } from '../activity.svelte';
   import { toast } from '../toast';
 
+  type FileOpenOption = { id: string; label: string };
+  let openWithOptions = $state<FileOpenOption[]>([]);
+
   // The right-click menu of any link in an answer: a web address (where to open it, or copy it), or a file of the
   // project (open it, copy its path, or delete it to the trash).
   let key = $state(0);
@@ -16,11 +19,56 @@
 
   $effect(() => {
     if (!linkMenu.open) return;
+    const file = linkMenu.file;
     linkMenu.open = false;
     open = false;
     key++;
-    void tick().then(() => (open = true));
+    openWithOptions = [];
+    void (async () => {
+      if (file) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          openWithOptions = await invoke<FileOpenOption[]>('file_open_options', { path: file });
+        } catch (error) {
+          toast.error(String(error));
+        }
+      }
+      await tick();
+      open = true;
+    })();
   });
+
+  function openWith(appId: string) {
+    void (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('file_open_with', { path: linkMenu.file, appId });
+      } catch (error) {
+        toast.error(String(error));
+      }
+    })();
+  }
+
+  async function saveAs() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const saved = await invoke<string | null>('file_save_as', { root: linkMenu.root, path: linkMenu.file });
+      if (saved) toast.success('File saved');
+    } catch (error) {
+      toast.error(String(error));
+    }
+  }
+
+  async function copyContents() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const contents = await invoke<string>('file_read', { root: linkMenu.root, path: linkMenu.file });
+      await navigator.clipboard.writeText(contents);
+      toast.success('File contents copied');
+    } catch (error) {
+      toast.error(String(error));
+    }
+  }
 
   async function deleteFile() {
     const file = linkMenu.file;
@@ -49,8 +97,11 @@
 
   const fileItems = $derived<ZDropdownMenuItem[]>([
     { label: 'Open file', icon: 'lucideFile', iconSize: '12', class: 'text-xs! py-1', onClick: () => openFileTab(linkMenu.file, linkMenu.root) },
+    { label: 'Open with', icon: 'lucideExternalLink', iconSize: '12', class: 'text-xs! py-1', submenu: openWithOptions.map((option) => ({ label: option.label, class: 'text-xs! py-1', onClick: () => openWith(option.id) })) },
+    { label: 'Save as…', icon: 'lucideDownload', iconSize: '12', class: 'text-xs! py-1', onClick: () => void saveAs() },
+    { label: 'Copy file contents', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => void copyContents() },
     {
-      label: 'Reveal in File Explorer',
+      label: 'Open containing folder',
       icon: 'lucideFolder',
       iconSize: '12',
       class: 'text-xs! py-1',

@@ -15,6 +15,7 @@
   // Outside the desktop app (the web preview) a small mock listing stands in.
   type File = { name: string; children?: File[] };
   type Entry = { name: string; dir: boolean };
+  type FileOpenOption = { id: string; label: string };
   const mockFiles: Record<string, File[]> = {
     agentdeck: [
       { name: 'apps', children: [{ name: 'desktop', children: [{ name: 'src', children: [{ name: 'lib', children: [{ name: 'components' }, { name: 'sessions.svelte.ts' }] }, { name: 'routes' }] }, { name: 'package.json' }] }] },
@@ -137,6 +138,7 @@
   // ---------- right click: rename, delete ----------
   let menu = $state<{ x: number; y: number; id: string } | null>(null);
   let menuOpen = $state(false);
+  let openWithOptions = $state<FileOpenOption[]>([]);
   $effect(() => closeOnScroll(() => menuOpen, () => (menuOpen = false)));
   let menuKey = $state(0);
   let selected = $state<string[]>([]);
@@ -152,6 +154,35 @@
     menuKey++;
     menu = { x: event.clientX, y: event.clientY, id };
     menuOpen = true;
+    openWithOptions = [];
+    if (id && !listing[parentOf(id)]?.find((item) => item.name === nameOf(id))?.dir) {
+      void call<FileOpenOption[]>('file_open_options', { path: `${root}${id}` }).then((options) => {
+        if (menu?.id === id) openWithOptions = options;
+      }).catch((error) => toast.error(String(error)));
+    }
+  }
+
+  function openWith(id: string, appId: string) {
+    void call('file_open_with', { path: `${root}${id}`, appId }).catch((error) => toast.error(String(error)));
+  }
+
+  async function saveAs(id: string) {
+    try {
+      const saved = await call<string | null>('file_save_as', { root, path: `${root}${id}` });
+      if (saved) toast.success('File saved');
+    } catch (error) {
+      toast.error(String(error));
+    }
+  }
+
+  async function copyContents(id: string) {
+    try {
+      const contents = await call<string>('file_read', { root, path: `${root}${id}` });
+      await navigator.clipboard.writeText(contents);
+      toast.success('File contents copied');
+    } catch (error) {
+      toast.error(String(error));
+    }
   }
 
   // Reveal the folder (or the folder holding the file) in the system file manager, as the sidebar does for projects.
@@ -179,6 +210,10 @@
     { label: 'New file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && askCreate(folderFor(menu.id), false) },
     { label: 'New folder', icon: 'lucideFolderPlus', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && askCreate(folderFor(menu.id), true) },
     { label: 'Rename', icon: 'lucidePencil', iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => menu && askRename(menu.id) },
+    { label: 'Open file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && openFileTab(`${root}${menu.id}`, root) },
+    { label: 'Open with', icon: 'lucideExternalLink', iconSize: 12, class: 'text-xs! py-1', submenu: openWithOptions.map((option) => ({ label: option.label, class: 'text-xs! py-1', onClick: () => menu && openWith(menu.id, option.id) })) },
+    { label: 'Save as…', icon: 'lucideDownload', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && void saveAs(menu.id) },
+    { label: 'Copy file contents', icon: 'lucideCopy', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && void copyContents(menu.id) },
     { label: 'Reveal in File Explorer', icon: 'lucideFolder', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && void reveal(menu.id) },
     {
       label: 'Copy path',
