@@ -276,6 +276,13 @@ export function installTabShortcuts() {
       waiting = 0;
       if (key === 'w') closeAllTabs();
       else if (active) closeOtherTabs(active);
+      return;
+    }
+    // Ctrl+W: the tab in front closes (the menu of a tab has said so all along). Not inside the terminal, which uses keys
+    // of its own.
+    if (mod && !event.shiftKey && !event.altKey && key === 'w' && contentTabs.active && !(event.target as HTMLElement | null)?.closest?.('.xterm')) {
+      event.preventDefault();
+      closeTab(contentTabs.active);
     }
   };
   window.addEventListener('keydown', onKey);

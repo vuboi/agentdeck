@@ -12,6 +12,7 @@ mod connectors;
 mod custom_chat;
 mod delegate;
 mod detect;
+mod devtools;
 mod fs_ops;
 mod image_gen;
 mod image_history;
@@ -19,6 +20,7 @@ mod index;
 mod mcp;
 mod mcp_client;
 mod mcp_manage;
+mod privacy;
 mod pty;
 mod servers;
 mod slash_commands;
@@ -1652,6 +1654,120 @@ async fn file_save_as(
     .map_err(|error| error.to_string())?
 }
 
+/// Saves an edited screenshot (a PNG, base64 without a prefix) where the user picks, with the native Save As dialog.
+/// Answers the chosen path, or `None` when the dialog was cancelled.
+#[tauri::command]
+async fn image_save_as(app: AppHandle, name: String, data: String) -> Result<Option<String>, String> {
+    use base64::Engine;
+    use tauri_plugin_dialog::DialogExt;
+    const MAX_BYTES: usize = 100 * 1024 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .map_err(|error| error.to_string())?;
+        if bytes.len() > MAX_BYTES {
+            return Err("the image is larger than 100 MB".to_string());
+        }
+        let destination = app
+            .dialog()
+            .file()
+            .set_title("Save screenshot")
+            .set_file_name(name)
+            .add_filter("PNG image", &["png"])
+            .blocking_save_file();
+        let Some(destination) = destination else {
+            return Ok(None);
+        };
+        let destination = destination.into_path().map_err(|error| error.to_string())?;
+        std::fs::write(&destination, bytes).map_err(|error| error.to_string())?;
+        Ok(Some(destination.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Copies a file an agent made (a sound, a video, a document) to where the user picks, with the native Save As dialog.
+/// Answers the chosen path, or `None` when the dialog was cancelled.
+#[tauri::command]
+async fn file_copy_as(app: AppHandle, path: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = PathBuf::from(&path);
+        if !source.is_file() {
+            return Err(format!("{path} is not a file"));
+        }
+        let name = source
+            .file_name()
+            .ok_or("file has no name")?
+            .to_string_lossy()
+            .to_string();
+        let destination = app
+            .dialog()
+            .file()
+            .set_title("Save file as")
+            .set_file_name(name)
+            .blocking_save_file();
+        let Some(destination) = destination else {
+            return Ok(None);
+        };
+        let destination = destination.into_path().map_err(|error| error.to_string())?;
+        std::fs::copy(&source, &destination).map_err(|error| error.to_string())?;
+        Ok(Some(destination.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Saves an export of AgentDeck's settings (JSON text) where the user picks, with the native Save As dialog.
+/// Answers the chosen path, or `None` when the dialog was cancelled.
+#[tauri::command]
+async fn settings_export(app: AppHandle, name: String, text: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    tauri::async_runtime::spawn_blocking(move || {
+        let destination = app
+            .dialog()
+            .file()
+            .set_title("Export AgentDeck data")
+            .set_file_name(name)
+            .add_filter("AgentDeck export", &["json"])
+            .blocking_save_file();
+        let Some(destination) = destination else {
+            return Ok(None);
+        };
+        let destination = destination.into_path().map_err(|error| error.to_string())?;
+        std::fs::write(&destination, text).map_err(|error| error.to_string())?;
+        Ok(Some(destination.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Reads an export the user picks with the native Open dialog. `None` when the dialog was cancelled.
+#[tauri::command]
+async fn settings_import(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    const MAX_BYTES: u64 = 50 * 1024 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = app
+            .dialog()
+            .file()
+            .set_title("Import AgentDeck data")
+            .add_filter("AgentDeck export", &["json"])
+            .blocking_pick_file();
+        let Some(source) = source else {
+            return Ok(None);
+        };
+        let source = source.into_path().map_err(|error| error.to_string())?;
+        let size = std::fs::metadata(&source).map_err(|error| error.to_string())?.len();
+        if size > MAX_BYTES {
+            return Err("the file is larger than 50 MB: it is not an AgentDeck export".to_string());
+        }
+        std::fs::read_to_string(&source).map(Some).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Opens a folder in the system file manager (Explorer, Finder, or the desktop's own).
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
@@ -1877,6 +1993,7 @@ pub fn run() {
             connectors::account_remove,
             connectors::codex_auto_switch,
             connectors::provider_probe,
+            connectors::provider_quota,
             connectors::local_scan,
             audit_append,
             audit_read,
@@ -1888,6 +2005,10 @@ pub fn run() {
             file_open_options,
             file_open_with,
             file_save_as,
+            image_save_as,
+            file_copy_as,
+            settings_export,
+            settings_import,
             audit_prune,
             pick_folder,
             file_pick_app,

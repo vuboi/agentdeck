@@ -4,11 +4,10 @@
   import { ZButton, ZIcon, ZPopover, ZSwitch, ZTabs, zHoverGlide, zTooltip } from '@shival99/z-ui-svelte';
   import { listHeight } from '../popover';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
   import { agyBlocks, agyModes } from '../agy-modes.svelte';
-  import { AGENT_ICON, AGENT_TEXT, turnOptions, workspace, type Agent, type Effort, type Permission } from '../sessions.svelte';
+  import { AGENT_TEXT, turnOptions, workspace, type Agent, type Effort, type Permission } from '../sessions.svelte';
   import { allPresets, assignPreset, createFlow, presetOf } from '../workflows.svelte';
-  import { findModel, modelSources } from '../models.svelte';
+  import { findModel, freeFirst, modelSources } from '../models.svelte';
   import SectionTitle from './SectionTitle.svelte';
 
   let {
@@ -77,6 +76,8 @@
   const sources = $derived(modelSources());
   const sourceOf = (key: string) => sources.find((source) => source.key === key) ?? sources[0];
   const modelsOf = (key: string) => sourceOf(key).models();
+  // Free models first, the paid ones after a divider (models.svelte.ts).
+  const subList = $derived.by(() => freeFirst(modelsOf(subProvider)));
   // The row the chosen model belongs to: a custom provider has its own, the CLIs are found by agent.
   const currentSource = $derived(sources.find((source) => source.provider === agent && source.models().some((item) => item.value === model)) ?? sources.find((source) => source.provider === agent) ?? sources[0]);
   const modelName = (provider: Agent, value: string) => findModel(provider, value)?.label ?? value;
@@ -197,13 +198,13 @@
     <span class="flex shrink-0 items-center -space-x-1">
       {#each flowAgents as flowAgent (flowAgent)}
         <span class="grid size-4 place-items-center rounded-full border border-background bg-muted">
-          {#if flowAgent === 'codex'}<ZIcon zSvg={OPENAI_SVG} class="size-2.5 text-foreground" />{:else}<AgentLogo agent={flowAgent} class="size-2.5 {AGENT_TEXT[flowAgent]}" />{/if}
+          <AgentLogo agent={flowAgent} class="size-2.5" />
         </span>
       {/each}
     </span>
     <span class="min-w-0 flex-1 truncate" {@attach zTooltip({ content: flow.name, position: 'top', autoDetect: true })}>{flow.name}</span>
   {:else}
-    {#if currentSource.logo}<img src={currentSource.logo} alt="" class="size-3 shrink-0 rounded-sm object-contain" />{:else if agent === 'codex'}<ZIcon zSvg={OPENAI_SVG} class="size-3 shrink-0 text-foreground" />{:else}<AgentLogo agent={agent} class="size-3 shrink-0 {tone(agent)}" />{/if}
+    <AgentLogo agent={currentSource.provider} model={currentSource.provider === 'custom' ? model : undefined} class="size-3 shrink-0" />
     <span class="min-w-0 flex-1 truncate" {@attach zTooltip({ content: modelLabel, position: 'top', autoDetect: true })}>{modelLabel}</span>
     <span class="hidden shrink-0 text-muted-foreground min-[720px]:inline">· {effortLabel}</span>
   {/if}
@@ -242,9 +243,10 @@
               onpointerleave={leaveSub}
               onfocus={(event) => openSub(source.key, event.currentTarget)}
             >
-              {#if source.logo}<img src={source.logo} alt="" class="size-3.5 shrink-0 rounded-sm object-contain" />{:else if source.provider === 'codex'}<ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />{:else}<AgentLogo agent={source.provider} class="size-3.5 shrink-0 {tone(source.provider)}" />{/if}
-              <span class="flex-1 truncate">{source.label}</span>
-              {#if current}<span class="truncate text-[11px] text-muted-foreground" {@attach zTooltip({ content: current, position: 'right', autoDetect: true, offset: 6 })}>{current}</span>{/if}
+              <AgentLogo agent={source.provider} model={source.provider === 'custom' ? source.models()[0]?.value : undefined} class="size-3.5 shrink-0" />
+              <!-- The provider's name has priority and stays whole; the chosen model takes what room is left and is cut. -->
+              <span class="truncate {current ? 'max-w-[60%] shrink-0' : 'min-w-0 flex-1'}">{source.label}</span>
+              {#if current}<span class="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground" {@attach zTooltip({ content: current, position: 'right', autoDetect: true, offset: 6 })}>{current}</span>{/if}
               <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
             </button>
           {/each}
@@ -341,7 +343,7 @@
   zTrigger="manual"
   zPosition="right-top"
   zOffset={6}
-  zWidth={168}
+  zWidth={173}
 >
   {#snippet children()}
     {#if subProvider === FLOW}
@@ -383,8 +385,9 @@
       </div>
     {:else}
       <div class="flex w-full flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1" style:max-height="{subMax}px" role="radiogroup" tabindex="-1" aria-label="{sourceOf(subProvider).label} models" onpointerenter={keepSub} onpointerleave={leaveSub} {@attach glide()}>
-        {#each modelsOf(subProvider) as item (item.value)}
+        {#each subList.items as item, index (item.value)}
           {@const selected = agent === sourceOf(subProvider).provider && model === item.value}
+          {#if index === subList.paidAt}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Paid</span><span class="h-px flex-1 bg-border"></span></div>{/if}
           <button
             type="button"
             role="radio"

@@ -4,7 +4,7 @@
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { modelLabel } from '../models.svelte';
   import { workspace } from '../sessions.svelte';
-  import { onUsage, shortCount, totalTokens, usageLog, usd, type UsageRecord } from '../usage';
+  import { estimateCost, onPrices, onUsage, setModelPrice, shortCount, totalTokens, usageLog, usd, type UsageRecord } from '../usage';
 
   // What the agents used: tokens and cost of every finished reply (kept by recordUsage), by day, kind of token,
   // model, agent and project. Costs the CLI did not report are estimates from list prices and are marked with ≈.
@@ -54,13 +54,47 @@
   const rows = $derived(inRange.filter((item) => chosen === null || (item.projectId ?? '') === chosen));
   const projectName = (id: string) => (id === '' ? 'No project' : (workspace.projects.find((item) => item.id === id)?.name ?? id));
 
-  const costOf = (list: UsageRecord[]) => list.reduce((sum, item) => sum + (item.cost ?? 0), 0);
+  // A reply the CLI gave no cost for (Codex, Gemini...) is priced here from the model's price, the built-in one or the one
+  // typed under "Models without a price"; `version` makes the figures follow a price as it is typed.
+  let version = $state(0);
+  $effect(() => onPrices(() => version++));
+  function worth(item: UsageRecord): { cost: number | null; estimated: boolean } {
+    void version;
+    if (item.cost !== null) return { cost: item.cost, estimated: item.estimated };
+    const cost = estimateCost(item.tokens, item.model);
+    return { cost, estimated: cost !== null };
+  }
+  const costOf = (list: UsageRecord[]) => list.reduce((sum, item) => sum + (worth(item).cost ?? 0), 0);
+  const pricedCount = $derived(rows.filter((item) => worth(item).cost !== null).length);
+  const unpriced = $derived.by(() => {
+    const map = new Map<string, { model: string; replies: number; tokens: number }>();
+    for (const item of rows) {
+      if (worth(item).cost !== null || !item.model) continue;
+      const line = map.get(item.model) ?? { model: item.model, replies: 0, tokens: 0 };
+      line.replies += 1;
+      line.tokens += totalTokens(item.tokens);
+      map.set(item.model, line);
+    }
+    return [...map.values()].sort((a, b) => b.tokens - a.tokens);
+  });
+  const draftPrice = $state<Record<string, { input: string; output: string; cacheRead: string }>>({});
+  function savePrice(model: string) {
+    const draft = draftPrice[model];
+    if (!draft || draft.input === '' || draft.output === '') return;
+    const input = Number(draft.input);
+    const output = Number(draft.output);
+    if (!(input >= 0) || !(output >= 0)) return;
+    const cache = draft.cacheRead === '' ? input * 0.1 : Number(draft.cacheRead);
+    setModelPrice(model, { input, output, cacheRead: cache >= 0 ? cache : input * 0.1 });
+  }
   const tokensOf = (list: UsageRecord[]) => list.reduce((sum, item) => sum + totalTokens(item.tokens), 0);
-  const anyEstimated = $derived(rows.some((item) => item.estimated && item.cost !== null));
+  const anyEstimated = $derived(rows.some((item) => worth(item).estimated && worth(item).cost !== null));
   const approx = $derived(anyEstimated ? '≈ ' : '');
 
   const total = $derived({
     cost: costOf(rows),
+    priced: pricedCount,
+    output: rows.reduce((sum, item) => sum + item.tokens.output, 0),
     tokens: tokensOf(rows),
     replies: rows.length,
     avgMs: rows.filter((item) => item.ms).length ? rows.reduce((sum, item) => sum + (item.ms ?? 0), 0) / rows.filter((item) => item.ms).length : 0,
@@ -69,6 +103,12 @@
     KINDS.map((kind) => ({ ...kind, count: rows.reduce((sum, item) => sum + item.tokens[kind.key], 0) })),
   );
   const kindsTotal = $derived(kinds.reduce((sum, kind) => sum + kind.count, 0));
+  /** The share of the prompt that came from the cache: read / (read + paid in full). */
+  const cacheHit = $derived.by(() => {
+    const read = kinds.find((kind) => kind.key === 'cacheRead')?.count ?? 0;
+    const paid = kinds.find((kind) => kind.key === 'input')?.count ?? 0;
+    return read + paid > 0 ? read / (read + paid) : null;
+  });
 
   const pad = (value: number) => String(value).padStart(2, '0');
   const dayKey = (time: number) => {
@@ -102,7 +142,7 @@
         const monday = new Date(time.getFullYear(), time.getMonth(), time.getDate() - ((time.getDay() + 6) % 7));
         bar = make(dayKey(monday.getTime()), `${monday.getDate()}/${monday.getMonth() + 1}`);
       } else bar = make(dayKey(time.getTime()), `${time.getDate()}/${time.getMonth() + 1}`);
-      const cost = item.cost ?? 0;
+      const cost = worth(item).cost ?? 0;
       bar.cost += cost;
       bar.byAgent[item.agent] = (bar.byAgent[item.agent] ?? 0) + cost;
     }
@@ -119,8 +159,8 @@
     for (const item of rows) {
       const key = by(item);
       const line = map.get(key) ?? { key, name: name(key), cost: 0, priced: false, tokens: 0, replies: 0 };
-      line.cost += item.cost ?? 0;
-      if (item.cost !== null) line.priced = true;
+      line.cost += worth(item).cost ?? 0;
+      if (worth(item).cost !== null) line.priced = true;
       line.tokens += totalTokens(item.tokens);
       line.replies += 1;
       map.set(key, line);
@@ -162,8 +202,17 @@
   {:else}
     <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-3">
       <div class="grid grid-cols-2 gap-2">
-        {#each [{ label: 'Cost', value: money(total.cost) }, { label: 'Tokens', value: shortCount(total.tokens) }, { label: 'Replies', value: String(total.replies) }, { label: 'Avg reply time', value: total.avgMs ? seconds(total.avgMs) : '–' }] as card (card.label)}
-          <div class="rounded-lg border border-border bg-muted/20 px-3 py-2">
+        {#each [
+          { label: 'Cost', value: total.priced ? money(total.cost) : '–', hint: total.priced ? (total.priced < total.replies ? `Counts ${total.priced} of ${total.replies} replies: the others are of models without a price (below).` : undefined) : 'No reply here has a price: Codex, Gemini and local models report none. Type one under "Models without a price".' },
+          { label: 'Tokens', value: shortCount(total.tokens) },
+          { label: 'Replies', value: String(total.replies) },
+          { label: 'Avg tokens / reply', value: shortCount(Math.round(total.tokens / Math.max(total.replies, 1))) },
+          { label: 'Cache hit', value: cacheHit === null ? '–' : `${Math.round(cacheHit * 100)}%`, hint: 'Share of the prompt read from the provider cache instead of paid in full: higher means cheaper and faster. 0% can mean the provider does not report it.' },
+          { label: 'Avg reply time', value: total.avgMs ? seconds(total.avgMs) : '–' },
+          { label: 'Output tokens', value: shortCount(total.output), hint: 'What the models wrote, apart from what they read.' },
+          { label: 'Cost / reply', value: total.priced ? money(total.cost / total.priced) : '–' },
+        ] as card (card.label)}
+          <div class="rounded-lg border border-border bg-muted/20 px-3 py-2" title={card.hint}>
             <div class="text-[11px] text-muted-foreground">{card.label}</div>
             <div class="mt-0.5 text-base font-semibold tabular-nums">{card.value}</div>
           </div>
@@ -227,6 +276,29 @@
           </section>
         {/if}
       {/each}
+
+      {#if unpriced.length > 0}
+        <section>
+          <h3 class="m-0 mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Models without a price</h3>
+          <p class="m-0 mb-2 leading-normal text-muted-foreground">These models report no cost. Type their price in USD per million tokens and every reply, old ones too, is counted. A subscription is not charged by the token: leave it empty to count tokens only.</p>
+          <ul class="m-0 flex list-none flex-col gap-2 p-0">
+            {#each unpriced as line (line.model)}
+              {@const draft = (draftPrice[line.model] ??= { input: '', output: '', cacheRead: '' })}
+              <li class="rounded-lg border border-border px-2.5 py-2">
+                <div class="flex items-baseline gap-2">
+                  <span class="min-w-0 flex-1 truncate font-medium" title={line.model}>{modelLabel(line.model)}</span>
+                  <span class="text-muted-foreground tabular-nums">{line.replies} {line.replies === 1 ? 'reply' : 'replies'} · {shortCount(line.tokens)}</span>
+                </div>
+                <div class="mt-1.5 grid grid-cols-3 gap-1.5">
+                  <label class="flex flex-col gap-0.5 text-[10px] text-muted-foreground">Input $/M<input type="number" min="0" step="any" inputmode="decimal" bind:value={draft.input} onchange={() => savePrice(line.model)} class="h-7 min-w-0 rounded-md border border-border bg-background px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary" placeholder="0.00" /></label>
+                  <label class="flex flex-col gap-0.5 text-[10px] text-muted-foreground">Output $/M<input type="number" min="0" step="any" inputmode="decimal" bind:value={draft.output} onchange={() => savePrice(line.model)} class="h-7 min-w-0 rounded-md border border-border bg-background px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary" placeholder="0.00" /></label>
+                  <label class="flex flex-col gap-0.5 text-[10px] text-muted-foreground">Cache $/M<input type="number" min="0" step="any" inputmode="decimal" bind:value={draft.cacheRead} onchange={() => savePrice(line.model)} class="h-7 min-w-0 rounded-md border border-border bg-background px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary" placeholder="auto" /></label>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
 
       {#if anyEstimated}
         <p class="m-0 text-[11px] leading-normal text-muted-foreground">≈ Some costs are estimates from list prices; a reply's exact cost is used when the CLI reports it. Replies of models without a known price count tokens only.</p>

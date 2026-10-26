@@ -17,11 +17,12 @@
   } from '../agent';
   import { openImages } from '../preview.svelte';
   import { clearSuggestions, draft, gen, openRun, refreshHistory, runSuggest, startRun, stopRun, type Preview } from '../image-gen.svelte';
-  import { findModel, modelCatalog, modelLabel, type ProviderId } from '../models.svelte';
+  import { findModel, freeFirst, modelCatalog, modelLabel, type ProviderId } from '../models.svelte';
   import { inTauri } from '../history';
   import { toast } from '../toast';
   import DevEmpty from './DevEmpty.svelte';
   import SectionTitle from './SectionTitle.svelte';
+  import ImageDeveloping from './ImageDeveloping.svelte';
 
   type ImageModel = ImageModelChoice & { label: string };
 
@@ -784,7 +785,7 @@
           {/snippet}
         </ZPopover>
 
-        <ZPopover anchor={modelsRow} bind:open={modelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={168}>
+        <ZPopover anchor={modelsRow} bind:open={modelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={173}>
           {#snippet children()}
             <div class="flex w-full flex-col gap-0.5 p-1.5 text-xs" role="menu" aria-label="Image models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
               {#each models as item (item.model)}
@@ -807,9 +808,10 @@
           {/snippet}
         </ZPopover>
 
-        <ZPopover anchor={promptModelsAnchor} bind:open={promptModelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={168}>
+        <ZPopover anchor={promptModelsAnchor} bind:open={promptModelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={173}>
           {#snippet children()}
             {@const selectedGroup = promptGroups.find((group) => group.provider === promptSubProvider)}
+            {@const sorted = freeFirst(selectedGroup?.items ?? [])}
             <div class="flex w-full flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1 text-xs" style:max-height="320px" role="radiogroup" aria-label="Prompt models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
               {#if !selectedGroup?.items.length}
                 <!-- The same empty state as the chat's model picker: the provider listed no models. -->
@@ -819,8 +821,9 @@
                   <p class="m-0 text-[11px] leading-snug text-muted-foreground">{selectedGroup?.label ?? 'This provider'} returned no models, or its provider has an error. Check it in Settings.</p>
                 </div>
               {/if}
-              {#each selectedGroup?.items ?? [] as item (item.value)}
+              {#each sorted.items as item, index (item.value)}
                 {@const active = item.value === promptModel}
+                {#if index === sorted.paidAt}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Paid</span><span class="h-px flex-1 bg-border"></span></div>{/if}
                 <button
                   type="button"
                   data-glide-item
@@ -901,7 +904,7 @@
         empty="No option matches"
         position="bottom-left"
         size="sm"
-        width={230}
+        width={210}
         onpick={(item) => pickSetting(item.data)}
         onclose={() => (settingQuery = '')}
       />
@@ -911,14 +914,8 @@
           {#if working || loadingRun}
             <div class="grid grid-cols-2 gap-2" role="status" aria-label="Generating image candidates">
               {#each Array.from({ length: working ? runSkeleton : loadingRun }) as _, index (index)}
-                <div class="overflow-hidden rounded-lg border border-border bg-background shadow-sm">
-                  <div class="relative aspect-square overflow-hidden bg-muted/60">
-                    <div class="absolute inset-0 animate-pulse bg-gradient-to-br from-muted via-primary/10 to-muted"></div>
-                  </div>
-                  <div class="flex items-center gap-2 px-2 py-2">
-                    <div class="h-2.5 w-2/5 animate-pulse rounded-full bg-muted"></div>
-                  </div>
-                </div>
+                {@const tile = working ? gen.runTiles[index] : undefined}
+                <ImageDeveloping {index} label={tile?.label ?? ''} variant={tile?.variant ?? 0} ms={working ? runMs : null} />
               {/each}
             </div>
           {:else if previews.length}

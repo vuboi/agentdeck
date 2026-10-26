@@ -148,6 +148,7 @@ pub(crate) async fn custom_send(
     allowed_tools: Vec<String>,
     cwd: Option<String>,
     effort: Option<String>,
+    restricted: Option<bool>,
 ) -> Result<(), String> {
     let config = custom_chat::Turn {
         kind,
@@ -159,6 +160,7 @@ pub(crate) async fn custom_send(
         allowed: allowed_tools,
         chat: session.clone(),
         effort,
+        restricted: restricted.unwrap_or(false),
     };
     let (chat, this_turn) = (session.clone(), turn.clone());
     let handle = tauri::async_runtime::spawn(async move {

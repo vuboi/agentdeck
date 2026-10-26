@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
   import { createVirtualizer } from '@shival99/z-ui-svelte';
+  import { observedMeasure } from '../virtual';
   import { highlightTokens, type Token } from '../highlight';
   import { theme } from '../theme.svelte';
 
@@ -48,7 +49,7 @@
   const numberClass = (added: boolean, cut: boolean, mod: boolean) =>
     mod ? 'font-bold text-blue-500 shadow-[inset_2px_0_0_var(--color-blue-500)]' : added ? 'font-bold text-emerald-500 shadow-[inset_2px_0_0_var(--color-emerald-500)]' : cut ? 'font-bold text-red-500 shadow-[inset_2px_0_0_var(--color-red-500)]' : 'text-muted-foreground/60';
   const ROW = 20; // px, equals leading-5
-  const CHUNK = 240; // lines per tokenizer call
+  const CHUNK = 80; // lines per tokenizer call: small, so one call never holds a frame for long
   const MAX_MATCHES = 20_000;
   const lines = $derived(text.split('\n'));
 
@@ -96,16 +97,19 @@
   let version = $state(0);
   let generation = 0;
 
+  // Wrapped rows are measured from the ResizeObserver, not by reading offsetHeight as each one mounts (virtual.ts).
+  const sizing = observedMeasure(() => ROW);
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
     getScrollElement: () => scroller ?? null,
     estimateSize: () => ROW,
+    measureElement: sizing.measureElement,
     overscan: 30,
   });
 
   $effect(() => {
     const count = lines.length;
-    untrack(() => $virtualizer.setOptions({ count, getScrollElement: () => scroller ?? null, estimateSize: () => ROW, overscan: 30 }));
+    untrack(() => $virtualizer.setOptions({ count, getScrollElement: () => scroller ?? null, estimateSize: () => ROW, measureElement: sizing.measureElement, overscan: 30 }));
   });
 
   // Folded rows have a height of their own: measured once mounted (see `measure`).
@@ -114,7 +118,11 @@
   }
   $effect(() => {
     void wrap;
-    untrack(() => $virtualizer.measure());
+    void text;
+    untrack(() => {
+      sizing.reset();
+      $virtualizer.measure();
+    });
   });
 
   // New file or theme: drop the old colours and start again.

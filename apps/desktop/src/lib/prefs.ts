@@ -110,6 +110,42 @@ export async function listPrefs<T>(prefix: string): Promise<[string, T][]> {
   }
 }
 
+/** Every entry of whole collections, for an export (data-export.ts). A collection that cannot be read comes back empty. */
+export async function dumpStores(names: readonly StoreName[]): Promise<Partial<Record<StoreName, [string, unknown][]>>> {
+  const out: Partial<Record<StoreName, [string, unknown][]>> = {};
+  const db = await openDb();
+  for (const name of names) {
+    out[name] = await new Promise<[string, unknown][]>((resolve) => {
+      const found: [string, unknown][] = [];
+      const request = db.transaction(name, 'readonly').objectStore(name).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return resolve(found);
+        found.push([String(cursor.key), cursor.value]);
+        cursor.continue();
+      };
+      request.onerror = () => resolve(found);
+    });
+  }
+  return out;
+}
+
+/** Writes entries into a collection in one transaction (an import): each key is replaced, other keys stay. */
+export async function putEntries(name: StoreName, entries: [string, unknown][]): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(name, 'readwrite');
+    const store = transaction.objectStore(name);
+    for (const [key, value] of entries) store.put(value, key);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+export const isStoreName = (name: string): name is StoreName => (STORES as readonly string[]).includes(name);
+export type { StoreName };
+
 /** Saves a value; `null` (or `undefined`) removes the entry instead of keeping an empty one. */
 export function setPref(key: string, value: unknown): Promise<void> {
   // The Preview's copy of the app shares this storage with the real window: it must not overwrite what that one saved.

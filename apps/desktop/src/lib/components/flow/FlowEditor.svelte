@@ -6,8 +6,7 @@
   import { ZButton, ZDrawer, ZIcon, ZInput, ZModal, ZSelect } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { findModel, modelSources } from '../../models.svelte';
-  import { OPENAI_SVG } from '../../brand-icons';
-  import { AGENT_ICON, AGENT_TEXT, type Agent } from '../../sessions.svelte';
+  import { type Agent } from '../../sessions.svelte';
   import { closeFlow, flowEditor, flowKind, flowProblem, removeStep, savePreset, type WorkflowStep } from '../../workflows.svelte';
   import FlowCanvas from './FlowCanvas.svelte';
   import { confirmDelete } from './confirm';
@@ -119,11 +118,7 @@
 
 {#snippet choice(item: { label: string; agent: Agent; model: string })}
   <span class="flex min-w-0 items-center gap-2">
-    {#if item.agent === 'codex'}
-      <ZIcon zSvg={OPENAI_SVG} class="size-4 shrink-0 text-foreground" />
-    {:else}
-      <AgentLogo agent={item.agent} class="size-4 shrink-0 {AGENT_TEXT[item.agent]}" />
-    {/if}
+    <AgentLogo agent={item.agent} model={item.model} class="size-4 shrink-0" />
     <span class="truncate">{item.label.split(' · ')[0]}</span>
     <span class="truncate text-muted-foreground">{item.model}</span>
   </span>

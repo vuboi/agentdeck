@@ -48,6 +48,7 @@ import {
   reportDigest,
   findAgent,
   formatAgents,
+  privateContentIn,
   formatTaskResult,
   handoffOf,
   isTaskId,
@@ -65,7 +66,7 @@ import {
   type TaskRecord,
   type Verdict,
 } from './delegate-task';
-import { elapsed } from './blocks';
+import { argOf, elapsed, toolOf } from './blocks';
 import { addUsage, applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
 import { estimateCost, recordUsage } from './usage';
@@ -76,8 +77,10 @@ import {
   modelLabel,
   parseCustomModel,
 } from './models.svelte';
-import { connectors } from './connectors.svelte';
-import { sendSystemNotification } from './system-notifications';
+import { agentHasRoom, connectors, limitResetAt, roomLine } from './connectors.svelte';
+import { classifyFailure, continuePrompt, planRecovery, recoveryNote, type FailureKind, type Recovery } from './turn-failure';
+import { parseResetAt } from './limit-reset';
+import { requestSystemNotificationPermission, sendSystemNotification } from './system-notifications';
 import { dequeue, enqueue } from './queue';
 import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from './handback';
 import { joinContinuations } from './continuations';
@@ -89,7 +92,7 @@ import {
   type WorkflowPreset,
   type WorkflowStep,
 } from './workflows.svelte';
-import { agentDisplayName, BUILT_IN_AGENTS } from './provider-registry';
+import { agentDisplayName, BUILT_IN_AGENTS, customProviderOf } from './provider-registry';
 import { listen } from './tauri-event';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
@@ -948,16 +951,40 @@ function notifySessionWorkDone(sessionId: string) {
   const batch = sessionWorkBatches[sessionId];
   if (!batch) return;
   delete sessionWorkBatches[sessionId];
-  if (!connectors.alerts.system) return;
   const session = workspace.sessions.find((item) => item.id === sessionId);
   if (!session) return;
-  const title = batch.failed
-    ? 'Session finished with failures'
-    : 'Session finished';
-  const body = batch.failed
-    ? `${session.title}: at least one task failed. No session work remains.`
-    : `${session.title}: all tasks are done and nothing remains queued.`;
+  // "Notify when done" on this chat: always. Otherwise only with notifications on, and not for the chat the user is
+  // looking at (the answer is in front of them, a notification would only interrupt).
+  if (!notifyDone[sessionId]) {
+    if (!connectors.alerts.system) return;
+    if (typeof document !== 'undefined' && document.hasFocus() && workspace.activeId === sessionId) return;
+  }
+  const last = [...messagesOf(sessionId)].reverse().find((message) => message.role === 'assistant');
+  const answer = last?.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : [])).join(' ') ?? '';
+  const title = batch.failed ? `✖ ${session.title}: failed` : `✔ ${session.title}: done`;
+  const body = answer.trim()
+    ? clipText(answer, 180)
+    : batch.failed
+      ? 'At least one task failed. Nothing else is running.'
+      : 'All tasks are done and nothing remains queued.';
   void sendSystemNotification(title, body);
+}
+
+/** Chats with "Notify when done" on, by id: kept apart from the chats, which may be read again from the CLIs' files. */
+const notifyDone = $state<Record<string, true>>({});
+void getPref<Record<string, true>>('chat.notifyDone').then((saved) => {
+  if (saved) Object.assign(notifyDone, saved);
+});
+export const notifiesWhenDone = (sessionId: string) => Boolean(notifyDone[sessionId]);
+
+/** Turns "Notify when done" on or off for a chat (asks for the system permission the first time). */
+export function toggleNotifyDone(sessionId: string) {
+  if (notifyDone[sessionId]) delete notifyDone[sessionId];
+  else {
+    notifyDone[sessionId] = true;
+    void requestSystemNotificationPermission();
+  }
+  setPref('chat.notifyDone', { ...notifyDone });
 }
 
 /** Whether a chat has a reply in progress (for the send / stop button). */
@@ -967,6 +994,8 @@ export const isRunning = (sessionId: string) =>
 
 /** Stops the reply of a chat now. What was written so far stays. */
 export function stopTurn(sessionId: string) {
+  // Stopped by the user: a retry or a hand-over waiting to start does not start.
+  delete recoveries[sessionId];
   for (const [id, side] of sideTurns) {
     if (side.main !== sessionId) continue;
     void stopAgentTurn(id, side.turn).catch(() => {});
@@ -1242,6 +1271,9 @@ function startTurn(
       const history = list
         .slice(0, silent ? -1 : -2)
         .filter((message) => !hiddenPrompt(message))
+        // A free-tier provider only gets what the user wrote and what restricted providers answered: the other agents'
+        // replies are about the project, and carry its code.
+        .filter((message) => !provider.restricted || message.role === 'user' || customProviderOf(message.model)?.restricted)
         .map((message) => ({
           role: message.role,
           content: spoken(message),
@@ -1265,8 +1297,9 @@ function startTurn(
         ],
         permissionMode: PERMISSION_MODE[turnOptions.permission],
         allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
-        cwd,
+        cwd: provider.restricted ? null : cwd,
         effort: (session.stepEffort ?? turnOptions.effort) as Effort,
+        restricted: Boolean(provider.restricted),
       });
       return;
     }
@@ -1513,6 +1546,171 @@ export function releaseReplyRender(sessionId: string) {
   sendNextQueued(sessionId);
 }
 
+// ---------- keeping work going when a turn fails ----------
+// A turn that ends in an error is not the end of the work: a passing fault is tried again, and otherwise (a usage
+// limit, a sign-out, a crash) the next agent of the user's chain, another provider, takes over the chat (it is told
+// what the others did, see `missedTurns`). Accounts are never switched here: that stays a manual step of the user. The decision is `planRecovery` (turn-failure.ts); the chat shows
+// one line for each step. A new message of the user starts the count again.
+type RecoveryState = { retries: number; tried: string[] };
+const recoveries: Record<string, RecoveryState> = {};
+const CLI_OF: Record<string, string> = { claude: 'claude', codex: 'codex', antigravity: 'agy', opencode: 'opencode' };
+
+/** The agents a chat can move to now, in the user's order: installed, with models, not at their limit. */
+function recoveryChain(): string[] {
+  return connectors.recovery.chain.filter((agent) => {
+    const tool = CLI_OF[agent];
+    if (!tool) return false;
+    const installed = connectors.detected?.tools.find((item) => item.id === tool)?.path !== null;
+    return installed && (MODELS[agent as Agent] ?? []).length > 0 && agentHasRoom(agent);
+  });
+}
+
+/** What to do about a turn of `session` that ended with `message`; null when nothing is (off, or stopped by the user). */
+function recoveryFor(session: SessionItem, message: string): { kind: FailureKind; plan: Recovery } | null {
+  if (!connectors.recovery.enabled || !inTauri()) return null;
+  const kind = classifyFailure(message);
+  if (kind === 'stopped') return null;
+  const state = (recoveries[session.id] ??= { retries: 0, tried: [] });
+  if (!state.tried.includes(session.agent)) state.tried.push(session.agent);
+  const plan = planRecovery({
+    kind,
+    retries: state.retries,
+    chain: recoveryChain(),
+    current: session.agent,
+    tried: state.tried,
+  });
+  return { kind, plan };
+}
+
+/** Moves a chat to another agent (its first model), as picking it in the composer would. */
+export function moveChatTo(session: SessionItem, agent: Agent) {
+  const model = MODELS[agent]?.[0]?.value ?? session.model;
+  if (session.agent !== agent && !session.draft) {
+    session.agents = [...new Set([...(session.agents ?? [session.source ?? session.agent]), agent])];
+    rememberMixed(session);
+  }
+  session.agent = agent;
+  session.model = model;
+  // The composer keeps a picker per chat: it follows, or it would put the old agent back.
+  window.dispatchEvent(new CustomEvent('agentdeck:agent-moved', { detail: { sessionId: session.id, agent, model } }));
+}
+
+/** Carries out the plan after the failed turn has been put away. */
+async function runRecovery(sessionId: string, plan: Recovery, reason: string) {
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  const state = recoveries[sessionId];
+  if (!session || !state || plan.action === 'stop') return;
+  if (plan.action === 'retry') {
+    state.retries++;
+    await new Promise((resolve) => setTimeout(resolve, plan.delayMs));
+    forgetUnstartedConversation(session);
+  } else {
+    moveChatTo(session, plan.agent as Agent);
+    state.retries = 0;
+    state.tried.push(plan.agent);
+  }
+  // The user may have sent something meanwhile, or stopped the chat: their message wins. A newer failure has its own
+  // state, so this older plan is dropped too.
+  if (replies[sessionId] || recoveries[sessionId] !== state) return;
+  const same = plan.action !== 'fallback';
+  send(sessionId, '', [], [], [], { prompt: continuePrompt(reason, same, lastRequest(sessionId)), silent: NO_HANDOUT });
+}
+
+// ---------- carrying on when a usage limit ends ----------
+// A turn that ends at a usage limit with no other agent to move to waits for the limit to reset (its time is in the error,
+// or in the account's usage windows) and then carries on by itself, as Claude Code does. The chat shows a card with the
+// time, a switch to turn the automatic part off, and Try again / Cancel. A message of the user cancels it: they took over.
+export type Resume = { sessionId: string; agent: string; at: number; reason: string; auto: boolean };
+export const resumes = $state<Record<string, Resume>>({});
+const RESUMES_KEY = 'chat.resumes';
+/** A little after the reset, so the first request is not refused for being early. */
+const RESUME_BUFFER_MS = 60_000;
+const RESUME_MAX_WAIT_MS = 8 * 86_400_000;
+const RESUME_MAX_AGE_MS = 36 * 3_600_000;
+const resumeStore = { ready: false };
+/** Automatic resumes made since the user last wrote: a limit that is still on after three of them stops the loop. */
+const resumeTries: Record<string, number> = {};
+const MAX_RESUME_TRIES = 3;
+void getPref<Resume[]>(RESUMES_KEY)
+  .then((saved) => {
+    for (const item of Array.isArray(saved) ? saved : []) if (!resumes[item.sessionId] && item.at + RESUME_MAX_AGE_MS > Date.now()) resumes[item.sessionId] = item;
+  })
+  .catch(() => undefined)
+  .finally(() => {
+    resumeStore.ready = true;
+  });
+$effect.root(() => {
+  $effect(() => {
+    if (!resumeStore.ready) return;
+    setPref(RESUMES_KEY, JSON.parse(JSON.stringify(Object.values(resumes))) as Resume[]);
+  });
+});
+
+function scheduleResume(session: SessionItem, message: string) {
+  const now = Date.now();
+  const end = parseResetAt(message, now) ?? limitResetAt(session.agent, now);
+  if (end === null || end - now > RESUME_MAX_WAIT_MS || (resumeTries[session.id] ?? 0) >= MAX_RESUME_TRIES) return;
+  resumes[session.id] = {
+    sessionId: session.id,
+    agent: session.agent,
+    at: Math.max(end, now) + RESUME_BUFFER_MS,
+    reason: 'the usage limit was reached',
+    auto: connectors.recovery.autoResume,
+  };
+}
+
+/** Carries on now (the "Try again" button, or the time has come). */
+export function resumeNow(sessionId: string) {
+  const resume = resumes[sessionId];
+  delete resumes[sessionId];
+  if (resume) resumeTries[sessionId] = (resumeTries[sessionId] ?? 0) + 1;
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  if (!resume || !session || replies[sessionId]) return;
+  send(sessionId, '', [], [], [], { prompt: continuePrompt(resume.reason, true, lastRequest(sessionId)), silent: NO_HANDOUT });
+}
+export const cancelResume = (sessionId: string) => void delete resumes[sessionId];
+export function setResumeAuto(sessionId: string, auto: boolean) {
+  const resume = resumes[sessionId];
+  if (resume) resume.auto = auto;
+}
+
+function checkResumes() {
+  const now = Date.now();
+  for (const resume of Object.values(resumes)) {
+    if (resume.at + RESUME_MAX_AGE_MS < now) {
+      delete resumes[resume.sessionId];
+      continue;
+    }
+    if (!resume.auto || resume.at > now) continue;
+    const session = workspace.sessions.find((item) => item.id === resume.sessionId);
+    // Wait for the chat to be loaded and idle: a turn that is running will have its own end.
+    if (!session || isRunning(resume.sessionId) || replies[resume.sessionId]) continue;
+    resumeNow(resume.sessionId);
+  }
+}
+if (typeof window !== 'undefined') setInterval(checkResumes, 10_000);
+
+/** The words of the user's latest message, for a turn that carries on without it. */
+function lastRequest(sessionId: string): string {
+  const asked = [...messagesOf(sessionId)].reverse().find((message) => message.role === 'user' && !hiddenPrompt(message));
+  return asked?.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : [])).join('\n').trim() ?? '';
+}
+
+/**
+ * A turn that failed before the CLI ever answered leaves an id with no conversation behind it (or, for Claude, one
+ * it may refuse to reuse with `--session-id`). The retry then starts a new conversation instead.
+ */
+function forgetUnstartedConversation(session: SessionItem) {
+  const first = session.source ?? session.agents?.[0] ?? session.agent;
+  if (session.agent === first) {
+    if (session.agentStarted === true || session.path) return;
+    session.agentSession = undefined;
+    session.agentStarted = false;
+  } else if (session.agentIds?.[session.agent] && !session.agentIds[session.agent]?.started) {
+    delete session.agentIds[session.agent];
+  }
+}
+
 /** Apply one agent event to the reply it belongs to. */
 export function handleAgentEvent(
   sessionId: string,
@@ -1587,8 +1785,24 @@ export function handleAgentEvent(
     const id = update.agentSession ?? session.agentIds?.[agent]?.id;
     if (id) (session.agentIds ??= {})[agent] = { id, started: true };
   }
+  // A failed turn that can be carried on (retry, another account, the next agent) does not end the work: the chat
+  // gets a line saying what happens, and the steps below that close the work (failure, reports) are skipped.
+  const recovery =
+    update.finished && event.kind === 'error' ? recoveryFor(session, event.message) : null;
+  const recovering = recovery !== null && recovery.plan.action !== 'stop';
+  if (update.finished && event.kind !== 'error') delete recoveries[sessionId];
+  // A limit with nowhere to move: wait for it to reset, then carry on (see `resumes`).
+  if (update.finished && event.kind === 'error' && !recovering && classifyFailure(event.message) === 'limit') scheduleResume(session, event.message);
+  if (recovery) {
+    const plan = recovery.plan;
+    const note = recoveryNote(recovery.kind, plan, {
+      from: agentLabel(session.agent, session.model),
+      to: plan.action === 'fallback' ? agentLabel(plan.agent as Agent) : undefined,
+    });
+    reply.blocks = [...reply.blocks, { kind: 'response', text: `> ↻ ${note}` }];
+  }
   if (update.finished) {
-    if (documentTask?.status === 'working') {
+    if (documentTask?.status === 'working' && !recovering) {
       documentTask.status = event.kind === 'error' ? 'error' : 'done';
       documentTask.progress = event.kind === 'error' ? 'Document task failed' : 'Document task finished';
       documentTask.result = event.kind === 'error'
@@ -1600,7 +1814,7 @@ export function handleAgentEvent(
     }
     // The chat is released in `finally`: a step here that throws must not leave it working for ever.
     try {
-      if (event.kind === 'error') failSessionWork(sessionId);
+      if (event.kind === 'error' && !recovering) failSessionWork(sessionId);
       reply.live = false;
       void finishCommandImages(sessionId, reply);
       if (
@@ -1628,13 +1842,16 @@ export function handleAgentEvent(
         });
       }
       openServedPage(sessionId, reply);
-      onDelegateDone(
-        sessionId,
-        reply,
-        event.kind === 'error' ? event.message : null,
-      );
-      onHandbackDone(sessionId, reply, event.kind === 'error');
-      endWaitingTasks(sessionId);
+      // A worker or a hand-back that is being carried on is not over: its waiter gets the turn that finishes it.
+      if (!recovering) {
+        onDelegateDone(
+          sessionId,
+          reply,
+          event.kind === 'error' ? event.message : null,
+        );
+        onHandbackDone(sessionId, reply, event.kind === 'error');
+        endWaitingTasks(sessionId);
+      }
       // Our own copy of the turn (agent, model, time), apart from what the CLIs store: the base for syncing later.
       archiveTurn(
         {
@@ -1667,7 +1884,9 @@ export function handleAgentEvent(
       const responseBlocks = reply.blocks.flatMap((block, index) =>
         block.kind === 'response' && block.text ? [index] : [],
       );
-      if (
+      if (recovering && recovery && event.kind === 'error')
+        void runRecovery(sessionId, recovery.plan, clipText(event.message, 200));
+      else if (
         sessionId === workspace.activeId &&
         responseBlocks.length &&
         !needsUserInput(sessionId)
@@ -2164,8 +2383,10 @@ function agentRows(): AgentRow[] {
       label: item.label,
       description: item.description,
     }));
-    if (models.length && installed(tool))
-      rows.push({ id, label: agentLabel(id), models });
+    // Its room is part of the row, so an agent that hands work out does not pick one at its limit.
+    const room = roomLine(id);
+    const label = `${agentLabel(id)}${room ? `, ${room}` : ''}${agentHasRoom(id) ? '' : ', AT ITS LIMIT: do not use'}`;
+    if (models.length && installed(tool)) rows.push({ id, label, models });
   }
   for (const provider of connectors.custom.filter(
     (item) => item.enabled && item.kind !== 'anthropic',
@@ -2180,6 +2401,7 @@ function agentRows(): AgentRow[] {
         id: provider.id,
         label: provider.name,
         models: names.map((name) => ({ value: name, label: name })),
+        restricted: Boolean(provider.restricted),
       });
   }
   return rows;
@@ -2275,6 +2497,13 @@ function startTask(
   if (!row)
     return reply(
       `No agent "${wanted}" is available. ${formatAgents(rows)}`,
+      true,
+    );
+  // A free tier may train on what it is sent: a task that carries a secret or the project's code never leaves.
+  const leak = row.restricted ? privateContentIn(task) : null;
+  if (leak)
+    return reply(
+      `Not sent: ${row.label} is a free tier that may keep what it is sent, and this task holds ${leak}. Do this part yourself or give it to another agent; send the free tier only public, non-sensitive text.`,
       true,
     );
   // A worker of the same provider keeps the model selected in its parent chat unless the caller asked for one.
@@ -3180,9 +3409,18 @@ function handBack(batch: DelegateBatch) {
 // The agents asked have answered while the chat is busy with another turn. That turn cannot be joined (one CLI
 // conversation runs one turn at a time), so the answers go to a turn of their own, running beside it: it knows the chat so
 // far, has no session and no tab, and its reply sits in the chat as a message (open its steps to see what it did).
+// The same runs a message the user sends while the chat is busy (`sendBeside`): it is answered at once, beside the turn
+// that is still working, instead of waiting in the queue.
 const sideTurns = new Map<
   string,
-  { main: string; reply: Message; turn: string }
+  {
+    main: string;
+    reply: Message;
+    turn: string;
+    /** `handback`: the answers of other agents; `beside`: a message of the user. */
+    kind: 'handback' | 'beside';
+    onDone?: (reply: Message, failed: boolean) => void;
+  }
 >();
 let sideCount = 0;
 
@@ -3192,13 +3430,31 @@ function hasSideTurn(main: string): boolean {
   return false;
 }
 
+const sideTurnsOf = (main: string) =>
+  [...sideTurns.values()].filter((side) => side.main === main).length;
+
 function handBackBeside(batch: DelegateBatch, prompt: string): boolean {
-  const session = workspace.sessions.find((item) => item.id === batch.main);
+  if (!runBeside(batch.main, forkDigest(messagesOf(batch.main)), prompt, 'handback'))
+    return false;
+  batch.run.handback = 'running';
+  batch.run.handbackAt = Date.now();
+  return true;
+}
+
+/** Starts a turn of its own beside the chat `main`: `context` is what it knows of the chat, `prompt` what to do now. */
+function runBeside(
+  main: string,
+  context: string,
+  prompt: string,
+  kind: 'handback' | 'beside',
+  onDone?: (reply: Message, failed: boolean) => void,
+): boolean {
+  const session = workspace.sessions.find((item) => item.id === main);
   // A custom provider keeps its conversation in the app: it has no CLI turn to run beside another one.
   if (!session || session.agent === 'custom' || !inTauri()) return false;
-  const id = `${batch.main}#side${++sideCount}`;
+  const id = `${main}#side${++sideCount}`;
   const turn = nextId();
-  const list = messagesOf(batch.main);
+  const list = messagesOf(main);
   const model = modelFor(session);
   const reply: Message = {
     id: nextId(),
@@ -3211,12 +3467,10 @@ function handBackBeside(batch: DelegateBatch, prompt: string): boolean {
     agent: session.agent,
     model: model ?? session.model,
   };
-  const context = forkDigest(list);
   list.push(reply);
   const stored = list[list.length - 1]; // the stored (reactive) object
-  sideTurns.set(id, { main: batch.main, reply: stored, turn });
-  batch.run.handback = 'running';
-  batch.run.handbackAt = Date.now();
+  sideTurns.set(id, { main, reply: stored, turn, kind, onDone });
+  session.status = 'working';
   const cwd =
     workspace.projects.find((project) => project.id === session.projectId)
       ?.path ?? null;
@@ -3231,12 +3485,103 @@ function handBackBeside(batch: DelegateBatch, prompt: string): boolean {
     model,
     permissionMode: PERMISSION_MODE[turnOptions.permission],
     effort: (session.stepEffort ?? turnOptions.effort) as Effort,
-    allowedTools: [...(approved[batch.main] ?? [])],
+    allowedTools: [...(approved[main] ?? [])],
     cwd,
   }).catch((error: unknown) =>
     handleSideEvent(id, { kind: 'error', message: String(error) }, turn),
   );
   return true;
+}
+
+// ---------- a message sent while the chat is busy ----------
+// Instead of waiting for the running turn, the message is answered at once in a turn beside it. That turn is told what
+// the running one is doing and which files it is editing, so the two do not write over each other; and when it is done,
+// the chat's own agent is told what it answered at the start of its next turn, so its conversation does not miss it.
+
+/** Most turns a chat runs beside its own at once: more is a queue, not a conversation. */
+const BESIDE_MAX = 2;
+const EDIT_TOOL = /^(Edit|MultiEdit|Write|NotebookEdit|apply_patch)$/;
+/** What the user asked beside a busy turn and what was answered, until the chat's agent has been told. */
+const besideNotes: Record<string, string[]> = {};
+
+const clipText = (text: string, max: number) => {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
+/** The files the running turn of a chat has edited so far, from its steps. */
+function filesInUse(sessionId: string): string[] {
+  const blocks = (liveReplies[sessionId] ?? replies[sessionId])?.blocks ?? [];
+  const files = blocks.flatMap((block) =>
+    block.kind === 'command' && EDIT_TOOL.test(toolOf(block.command))
+      ? [argOf(block.command).split(/\s+/, 1)[0] ?? '']
+      : [],
+  );
+  return [...new Set(files.filter(Boolean))].slice(0, 20);
+}
+
+/** Whether a message can be answered beside the busy turn now (else it waits in the queue). */
+export function canRunBeside(sessionId: string, item: Pick<Queued, 'images' | 'mentions'>): boolean {
+  const session = workspace.sessions.find((entry) => entry.id === sessionId);
+  return (
+    inTauri() &&
+    !!session &&
+    session.agent !== 'custom' &&
+    Boolean(replies[sessionId]) &&
+    !needsUserInput(sessionId) &&
+    !presetOf(sessionId) &&
+    item.images.length === 0 &&
+    !(item.mentions ?? []).some((mention) => mention.kind === 'ai') &&
+    sideTurnsOf(sessionId) < BESIDE_MAX
+  );
+}
+
+/** Answers a message beside the busy turn of its chat. False when it cannot (then queue it). */
+export function sendBeside(sessionId: string, item: Queued): boolean {
+  if (!canRunBeside(sessionId, item)) return false;
+  const list = messagesOf(sessionId);
+  const running = [...list].reverse().find((message) => message.role === 'user');
+  const runningAsk = running?.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : [])).join(' ') ?? '';
+  const context = forkDigest(list);
+  const files = item.files ?? [];
+  list.push(userMessage(item.text.trim(), [], item.elements, files));
+  const busy = filesInUse(sessionId);
+  const note = agentdeckLead(
+    `Another turn of this same chat is still running${runningAsk ? ` on: "${clipText(runningAsk, 300)}"` : ''}.`,
+    busy.length ? `It is editing: ${busy.join(', ')}.` : '',
+    'Work beside it: do not edit the files it is editing and do not undo or reformat its changes. If this request needs those files, do the rest, then say which change has to wait for it. Answer only the message below.',
+  );
+  const attached = files.length ? `\n\nAttached files: ${files.map((file) => file.path).join(', ')}` : '';
+  const prompt = note + mentionContext(item.mentions ?? []) + withElements(item.text.trim(), item.elements) + attached;
+  const started = runBeside(sessionId, context, prompt, 'beside', (reply, failed) => {
+    const answer = reply.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : [])).join('\n');
+    besideNotes[sessionId] = [
+      ...(besideNotes[sessionId] ?? []),
+      `- The user asked: "${clipText(item.text, 400)}" ${failed ? '(that turn failed or was stopped)' : `It was answered: "${clipText(answer, 1200)}"`}`,
+    ];
+  });
+  if (!started) list.pop();
+  persistLocal();
+  return started;
+}
+
+/** Runs a queued message beside the busy turn now; false (and it stays queued) when that is not possible. */
+export function runQueuedBeside(sessionId: string, item: Queued): boolean {
+  if (!sendBeside(sessionId, item)) return false;
+  const rest = (queued[sessionId] ?? []).filter((entry) => entry !== item);
+  if (rest.length) queued[sessionId] = rest;
+  else delete queued[sessionId];
+  return true;
+}
+
+/** What the chat's agent is told at the start of its next turn about the messages answered beside it; taken once. */
+function takeBesideNotes(sessionId: string): string {
+  const notes = besideNotes[sessionId];
+  if (!notes?.length) return '';
+  delete besideNotes[sessionId];
+  return agentdeckLead(
+    `While your previous turn was running, the user sent other messages and they were answered in parallel turns of this chat (separate conversations you did not see). Take them into account:\n${notes.join('\n')}`,
+  );
 }
 
 /** One event of a turn running beside its chat: it fills that reply, and ends it. */
@@ -3263,12 +3608,16 @@ function handleSideEvent(id: string, event: AgentEvent, turn: string) {
   if (session)
     session.status = replies[main] || hasSideTurn(main) ? 'working' : 'idle';
   if (session?.path) keepOtherTurn(session, reply);
-  onHandbackDone(main, reply, event.kind === 'error');
+  if (side.kind === 'handback') onHandbackDone(main, reply, event.kind === 'error');
+  side.onDone?.(reply, event.kind === 'error');
   persistLocal();
   if (!replies[main] && !hasSideTurn(main)) sendNextQueued(main);
 }
 
-/** Send from the message box. While the agent is busy: wait in line (Enter), or stop it and go first (Ctrl+Enter). */
+/**
+ * Send from the message box. While the agent is busy: answered beside it at once (Enter), wait in line (Alt+Enter), or
+ * stop it and go first (Ctrl+Enter).
+ */
 /** The picture of each picked element, sent with the message as an image next to its markup. */
 const elementPictures = (elements: PageElement[]): Attachment[] =>
   elements.flatMap((item) =>
@@ -3289,7 +3638,7 @@ export function sendMessage(
   images: Attachment[] = [],
   elements: PageElement[] = [],
   mentions: Mention[] = [],
-  whileRunning: 'queue' | 'interrupt' = 'queue',
+  whileRunning: 'beside' | 'queue' | 'interrupt' = 'beside',
   files: FileAttachment[] = [],
 ) {
   const session = activeSession();
@@ -3310,7 +3659,10 @@ export function sendMessage(
     isRunning(session.id) ||
     needsUserInput(session.id)
   ) {
-    if (whileRunning === 'queue') {
+    // Answered at once beside the running turn when it can be; else it waits in line like a queued message.
+    if (whileRunning === 'beside' && sendBeside(session.id, { text, images, elements, mentions, files }))
+      return;
+    if (whileRunning !== 'interrupt') {
       enqueue(queued, session.id, {
         text,
         images,
@@ -3463,48 +3815,14 @@ export function attachmentsOf(message: Message): {
  * front of the prompt without being shown (context of a delegated task). `extra.silent` (the message that handed work
  * out) sends `extra.prompt` without any message in the chat: the agent's reply just continues after that message.
  */
-function send(
-  sessionId: string,
-  text: string,
+/** A message of the user as the chat shows it: pictures, files and page elements first, then the words. */
+function userMessage(
+  body: string,
   images: Attachment[],
   elements: PageElement[],
-  mentions: Mention[] = [],
-  extra: {
-    prompt?: string;
-    preface?: string;
-    files?: FileAttachment[];
-    silent?: Message;
-  } = {},
-) {
-  const session = workspace.sessions.find((item) => item.id === sessionId);
-  const body = text.trim();
-  const files = extra.files ?? [];
-  if (!session || replies[sessionId]) return;
-  const messages = messagesOf(sessionId);
-  if (
-    extra.silent &&
-    extra.prompt &&
-    inTauri() &&
-    (session.agent === 'claude' ||
-      session.agent === 'codex' ||
-      session.agent === 'antigravity' ||
-      session.agent === 'opencode' ||
-      session.agent === 'custom')
-  ) {
-    startTurn(
-      session,
-      extra.prompt,
-      [],
-      [],
-      extra.preface ?? '',
-      [],
-      extra.silent,
-    );
-    if (!session.path) localMessages[session.id] = messages;
-    persistLocal();
-    return;
-  }
-  messages.push({
+  files: FileAttachment[],
+): Message {
+  return {
     id: nextId(),
     role: 'user',
     time: clock(new Date().toISOString()),
@@ -3537,8 +3855,59 @@ function send(
       ...(body ? [{ kind: 'response' as const, text: body }] : []),
     ],
     at: new Date().toISOString(),
-  });
-  const preface = (extra.preface ?? '') + mentionContext(mentions);
+  };
+}
+
+function send(
+  sessionId: string,
+  text: string,
+  images: Attachment[],
+  elements: PageElement[],
+  mentions: Mention[] = [],
+  extra: {
+    prompt?: string;
+    preface?: string;
+    files?: FileAttachment[];
+    silent?: Message;
+  } = {},
+) {
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  const body = text.trim();
+  const files = extra.files ?? [];
+  if (!session || replies[sessionId]) return;
+  // The user took over: a wait for a limit to reset is over. (The recovery's own turns are silent.)
+  if (!extra.silent) {
+    delete resumes[sessionId];
+    delete resumeTries[sessionId];
+  }
+  const messages = messagesOf(sessionId);
+  if (
+    extra.silent &&
+    extra.prompt &&
+    inTauri() &&
+    (session.agent === 'claude' ||
+      session.agent === 'codex' ||
+      session.agent === 'antigravity' ||
+      session.agent === 'opencode' ||
+      session.agent === 'custom')
+  ) {
+    startTurn(
+      session,
+      extra.prompt,
+      [],
+      [],
+      takeBesideNotes(sessionId) + (extra.preface ?? ''),
+      [],
+      extra.silent,
+    );
+    if (!session.path) localMessages[session.id] = messages;
+    persistLocal();
+    return;
+  }
+  messages.push(userMessage(body, images, elements, files));
+  // A new request from the user: retries and agents tried are counted again from here.
+  delete recoveries[sessionId];
+  const preface = takeBesideNotes(sessionId) + (extra.preface ?? '') + mentionContext(mentions);
   const targets = mentions.filter((mention) => mention.kind === 'ai');
   const preset = presetOf(sessionId);
   if (inTauri() && targets.length > 0 && body)

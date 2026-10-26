@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-quota"
+description = "Enables the provider_quota command without any pre-configured scope."
+commands.allow = ["provider_quota"]
+
+[[permission]]
+identifier = "deny-provider-quota"
+description = "Denies the provider_quota command without any pre-configured scope."
+commands.deny = ["provider_quota"]

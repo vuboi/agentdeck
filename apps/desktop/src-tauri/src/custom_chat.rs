@@ -118,6 +118,39 @@ pub struct Turn {
     pub chat: String,
     /// How much the model thinks: `off`, or a level. `None` leaves the model's own default.
     pub effort: Option<String>,
+    /// A provider whose free tier may keep and train on what it is sent: it gets no file, shell, browser, code index or
+    /// MCP tool and no project text, only web search and fetch. A trusted model reads the project and hands it text.
+    pub restricted: bool,
+}
+
+/// The only tools a restricted provider may call: they read the public web, never this machine.
+const RESTRICTED_TOOLS: [&str; 3] = ["WebSearch", "WebFetch", "PackageInfo"];
+
+const RESTRICTED_PROMPT: &str = "You are an assistant inside AgentDeck for light work: searching and reading public information, writing emails, prompts and scripts, explaining, brainstorming. You have web tools only (WebSearch, WebFetch, PackageInfo). You cannot see the user's files, project or machine and must not ask for them. If the work needs the project's files, code, credentials or anything private, say so in one line: a different agent has to do that part. Never ask for, repeat or store secrets (keys, passwords, tokens, environment variables, internal IPs or host names); AgentDeck blocks any message or tool call that holds one. Call tools for real: never pretend a tool ran. Answer in the user's language.";
+
+/// What in a chat must not go to a restricted provider: a file that holds secrets by its name, or a secret, an
+/// environment variable or an internal address in a message or an attached text file. `None`: the chat may be sent.
+fn restricted_leak(history: &[ChatMessage]) -> Option<String> {
+    for message in history {
+        if let Some(what) = crate::privacy::private_content(&message.content) {
+            return Some(format!("the message holds {what}"));
+        }
+        for path in &message.files {
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
+            if crate::privacy::sensitive_file(path) {
+                return Some(format!("{name} is a file that holds secrets"));
+            }
+            let what = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|text| crate::privacy::private_content(&text));
+            if let Some(what) = what {
+                return Some(format!("{name} holds {what}"));
+            }
+        }
+    }
+    None
 }
 
 /// The address of the chat route for a provider kind.
@@ -465,16 +498,31 @@ fn page_text(html: &str) -> String {
         .join("\n")
 }
 
-async fn web_fetch(args: &Value) -> Outcome {
+/// `restricted`: a free-tier provider's fetch, which never follows a redirect into this machine or its network.
+async fn web_fetch(args: &Value, restricted: bool) -> Outcome {
     let Some(url) = args["url"]
         .as_str()
         .filter(|url| url.starts_with("http://") || url.starts_with("https://"))
     else {
         return failed("url must start with http:// or https://");
     };
+    let redirects = if restricted {
+        reqwest::redirect::Policy::custom(|attempt| {
+            if crate::privacy::internal_url(attempt.url().as_str()) {
+                attempt.error("redirect to an internal address is blocked")
+            } else if attempt.previous().len() >= 10 {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        })
+    } else {
+        reqwest::redirect::Policy::default()
+    };
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("AgentDeck")
+        .redirect(redirects)
         .build()
     {
         Ok(client) => client,
@@ -1081,6 +1129,19 @@ enum Decision {
 /// Whether a tool call may run now, under the permission mode and what the user approved before.
 /// `external`: the tool comes from an MCP server the user set up (AgentDeck's own browser tools are not external).
 fn decide(turn: &Turn, name: &str, args: &Value, external: bool) -> Decision {
+    // Whatever the model asks for, a restricted provider runs nothing that touches this machine.
+    if turn.restricted && (external || !RESTRICTED_TOOLS.contains(&name)) {
+        return Decision::Deny("this provider has no access to the project or the machine: say what is needed and another agent will do it.");
+    }
+    if turn.restricted {
+        // Its web tools must not carry a secret out in a query, nor reach this machine or its network.
+        if name == "WebFetch" && args["url"].as_str().is_some_and(crate::privacy::internal_url) {
+            return Decision::Deny("internal addresses (localhost, private IPs, .internal hosts) are blocked for this provider.");
+        }
+        if crate::privacy::private_content(&args.to_string()).is_some() {
+            return Decision::Deny("the call holds a secret, an environment variable or an internal address: blocked for this provider.");
+        }
+    }
     let mode = turn.permission_mode.as_deref();
     let approved = turn
         .allowed
@@ -1394,6 +1455,13 @@ pub async fn run_turn(
             message: "Anthropic-compatible providers cannot chat yet".into(),
         });
     }
+    if turn.restricted {
+        if let Some(problem) = restricted_leak(&history) {
+            return emit(AgentEvent::Error {
+                message: format!("Not sent: {problem}. This free-tier provider may keep and train on what it gets: remove it, or ask Claude, Codex or Antigravity instead."),
+            });
+        }
+    }
     let client = match reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .build()
@@ -1411,13 +1479,19 @@ pub async fn run_turn(
         .filter(|c| c.is_ascii_alphanumeric() || "-_:".contains(*c))
         .collect();
     let mut tools = builtin_tools();
+    if turn.restricted {
+        tools.retain(|tool| RESTRICTED_TOOLS.contains(&tool["function"]["name"].as_str().unwrap_or_default()));
+    }
     if let Some(folder) = &turn.cwd {
         crate::index::set_root(&chat, &folder.to_string_lossy());
     }
-    tools.extend(browser_tools(app, &chat).await);
-    let skills = skills_for(turn.cwd.as_deref());
-    // The user's own MCP servers: each tool is offered as `mcp__<server>__<tool>`, as Claude names them.
-    let mut servers = start_servers(turn.cwd.as_deref()).await;
+    if !turn.restricted {
+        tools.extend(browser_tools(app, &chat).await);
+    }
+    let skills = if turn.restricted { Vec::new() } else { skills_for(turn.cwd.as_deref()) };
+    // The user's own MCP servers: each tool is offered as `mcp__<server>__<tool>`, as Claude names them. A restricted
+    // provider gets none: they run on this machine, with the user's accounts.
+    let mut servers = if turn.restricted { Vec::new() } else { start_servers(turn.cwd.as_deref()).await };
     let mut external: Vec<(String, usize, String)> = Vec::new();
     for (index, server) in servers.iter().enumerate() {
         for tool in &server.tools {
@@ -1447,7 +1521,7 @@ pub async fn run_turn(
     }
 
     let mut messages: Vec<Value> =
-        vec![json!({ "role": "system", "content": system_prompt(turn.cwd.as_deref(), &skills) })];
+        vec![json!({ "role": "system", "content": if turn.restricted { RESTRICTED_PROMPT.to_string() } else { system_prompt(turn.cwd.as_deref(), &skills) } })];
     messages.extend(history.iter().map(wire_message));
 
     let mut answer = String::new();
@@ -1646,7 +1720,7 @@ pub async fn run_turn(
                                 .await
                                 .unwrap_or_else(|_| failed("the search failed"))
                         }
-                        "WebFetch" => web_fetch(&args).await,
+                        "WebFetch" => web_fetch(&args, turn.restricted).await,
                         "WebSearch" => web_search(&args).await,
                         "LS" => list_dir(&args, turn.cwd.as_deref()),
                         "MkDir" => make_dir(&args, turn.cwd.as_deref()),
@@ -1728,7 +1802,22 @@ mod tests {
             allowed: allowed.iter().map(|s| s.to_string()).collect(),
             chat: String::new(),
             effort: None,
+            restricted: false,
         }
+    }
+
+    #[test]
+    fn a_restricted_provider_may_only_use_the_public_web() {
+        let mut restricted = turn(Some("bypassPermissions"), &[]);
+        restricted.restricted = true;
+        let call = |name: &str, external: bool| matches!(decide(&restricted, name, &json!({}), external), Decision::Allow);
+        assert!(call("WebSearch", false) && call("WebFetch", false) && call("PackageInfo", false));
+        for name in ["Read", "Grep", "Glob", "LS", "Bash", "Write", "Edit", "Delete", "browser_screenshot", "code_search", "delegate_task"] {
+            assert!(!call(name, false), "{name} must be denied");
+        }
+        assert!(!call("mcp__github__create_issue", true));
+        // The same tools are fine for a trusted provider.
+        assert!(matches!(decide(&turn(Some("bypassPermissions"), &[]), "Bash", &json!({}), false), Decision::Allow | Decision::Ask));
     }
 
     #[test]

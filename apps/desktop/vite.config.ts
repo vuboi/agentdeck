@@ -10,4 +10,7 @@ export default defineConfig(async () => ({
   // hidden by a bundle the browser cached under an unchanged address.
   optimizeDeps: { force: true },
   envPrefix: ['VITE_', 'TAURI_'],
+  // The highlighter worker (src/lib/highlight.worker.ts) loads shiki's grammars on demand: an ES module worker keeps those
+  // as separate chunks (the default IIFE format cannot split code).
+  worker: { format: 'es' as const },
 }));

@@ -46,7 +46,7 @@ let counter = 0;
 const newTabId = () => `t${++counter}${Date.now().toString(36)}`;
 const blankTab = (url = ''): BrowserTab => ({ id: newTabId(), url, title: '', favicon: '', loading: false, opened: false });
 
-export type AnnotateTool = 'pick' | 'arrow' | 'box' | 'note';
+export type AnnotateTool = 'pick' | 'arrow' | 'box' | 'note' | 'region';
 /** One mark on the page: where it is (page pixels), what was written, and for an element which one. */
 export type AnnotationNote = {
   n: number;
@@ -102,6 +102,7 @@ async function call<T = void>(command: string, args?: Record<string, unknown>): 
 type Report = { kind: string; tab?: string; id?: string; [key: string]: unknown };
 const waiting = new Map<string, (report: Report) => void>();
 let listening = false;
+let regionSelectionResolve: ((selection: { box: Rect; viewport: { w: number; h: number } } | null) => void) | null = null;
 
 export async function listenToPage() {
   if (listening || !inTauri()) return;
@@ -135,6 +136,16 @@ export async function listenToPage() {
       browser.annotateUndo = payload.undo === true;
       browser.annotateRedo = payload.redo === true;
       browser.annotateSelected = payload.selected === true;
+    } else if (payload.kind === 'capture-region' && payload.tab === browser.activeId) {
+      browser.annotating = false;
+      browser.annotateCount = 0;
+      regionSelectionResolve?.({ box: payload.box as Rect, viewport: payload.viewport as { w: number; h: number } });
+      regionSelectionResolve = null;
+    } else if (payload.kind === 'capture-region-cancel' && payload.tab === browser.activeId) {
+      browser.annotating = false;
+      browser.annotateCount = 0;
+      regionSelectionResolve?.(null);
+      regionSelectionResolve = null;
     } else if (payload.kind === 'nav' && tab && !isErrorUrl(String(payload.url))) {
       tab.url = String(payload.url);
       tab.title = String(payload.title ?? '');
@@ -160,6 +171,8 @@ export async function listenToPage() {
       if (!isErrorUrl(payload.url)) tab.url = payload.url;
       if (tab.id === browser.activeId) {
         // A new page takes the marks with it: leave the mode.
+        regionSelectionResolve?.(null);
+        regionSelectionResolve = null;
         browser.annotating = false;
         browser.annotateCount = 0;
         browser.console = [];
@@ -370,7 +383,7 @@ export const parkBrowser = () => call('browser_park').catch(() => {});
 // Not from the Preview's own copy of the app: it would close the very pages it is shown in.
 export const resetBrowser = () => (inTauri() && !isPreviewCopy() ? call('browser_reset').catch(() => {}) : Promise.resolve());
 /** A picture of the front page taken by the engine (PNG data URL). */
-export const capturePage = (scale = 1) => call<string>('browser_capture', { tab: activeTab().id, scale });
+export const capturePage = (scale = 1, fullPage = false) => call<string>('browser_capture', { tab: activeTab().id, scale, fullPage });
 export const zoomBrowser = (factor: number) => call('browser_zoom', { tab: activeTab().id, factor });
 
 export async function goTo(url: string) {
@@ -432,12 +445,32 @@ export async function captureElement(tab: string, box: PickedElement['box']): Pr
 }
 
 /** A PNG of the whole page as it is now, or undefined when it cannot be captured (or does not answer in time). */
-export async function capturePageIfPossible(scale = 1): Promise<string | undefined> {
+export async function capturePageIfPossible(scale = 1, fullPage = false): Promise<string | undefined> {
   try {
-    const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 5000));
-    return await Promise.race([capturePage(scale), timeout]);
+    const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), fullPage ? 45000 : scale > 1 ? 15000 : 5000));
+    return await Promise.race([capturePage(scale, fullPage), timeout]);
   } catch {
     return undefined;
+  }
+}
+
+/** Starts a drag on the page and returns the selected rectangle in CSS pixels. Escape cancels the selection. */
+export async function selectCaptureRegion(): Promise<{ box: Rect; viewport: { w: number; h: number } } | null> {
+  if (browser.annotating) await stopAnnotating();
+  if (browser.picking) await cancelPick();
+  browser.annotating = true;
+  browser.annotateTool = 'region';
+  const selected = new Promise<{ box: Rect; viewport: { w: number; h: number } } | null>((resolve) => {
+    regionSelectionResolve = resolve;
+  });
+  try {
+    await ask('ann', { tool: 'region' });
+    return await selected;
+  } catch (error) {
+    regionSelectionResolve = null;
+    browser.annotating = false;
+    browser.annotateCount = 0;
+    throw error;
   }
 }
 
@@ -469,6 +502,8 @@ export async function annotationNotes(): Promise<AnnotationNote[]> {
 
 /** Ends the mode and takes every mark off the page. */
 export async function stopAnnotating() {
+  regionSelectionResolve?.(null);
+  regionSelectionResolve = null;
   browser.annotating = false;
   browser.annotateCount = 0;
   browser.annotateUndo = false;

@@ -2,13 +2,14 @@
   import Menu from './Menu.svelte';
   import { closeOnScroll } from '../close-on-scroll';
   import { revealTab } from '../tab-strip';
-  import { customProviderName, modelLabel } from '../models.svelte';
+  import { modelLabel } from '../models.svelte';
   import { onMount, tick, untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
-  import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, ZShimmerText, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
   import { layout, leavePeek, peekSidebar, pinSidebar } from '../layout.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { LOADER } from '../loaders';
+  import { rememberRowHeight, rowHeight } from '../row-size';
   import { toast } from '../toast';
   import { setEagerColour, whenColoured } from '../markdown';
   import { copyMessage } from '../attachments';
@@ -18,13 +19,14 @@
   import { openWithItem, openWithOptions, type OpenWithOption } from '../open-with';
   import { openInViewer } from '../file-viewer.svelte';
   import type { PickerItem } from './PickerPopover.svelte';
-  import { activeSession, AGENTS, answerPermission, delegateTasks, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, releaseReplyRender, replyBlockRendered, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, answerPermission, delegateTasks, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, projectOf, releaseReplyRender, replyBlockRendered, resumes, workspace } from '../sessions.svelte';
   import { ticker } from '../clock.svelte';
   import { agentDisplayName } from '../provider-registry';
   import AgentLogo from './AgentLogo.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
   import { openAttachment, openImages, preview, releasePreview, revealPreviewed } from '../preview.svelte';
+  import ArtifactCards from './ArtifactCards.svelte';
   import ChatBlock from './ChatBlock.svelte';
   import DelegateList from './DelegateList.svelte';
   import CommandGroup from './CommandGroup.svelte';
@@ -32,6 +34,7 @@
   import TaskCards from './TaskCards.svelte';
   import LiveStatus from './LiveStatus.svelte';
   import MessageFooter from './MessageFooter.svelte';
+  import ResumeCard from './ResumeCard.svelte';
   import type { Segment } from '../blocks';
   import type { Message } from '../mock';
   import { listen } from '../tauri-event';
@@ -235,23 +238,61 @@
   const from = 0;
   function revealOlder() {
     if (chat.older > 0 && !chat.loadingOlder) {
-      void loadOlder(activeSession()).then((added) => {
-        if (added > 0) toast.info(`Loaded ${added} earlier messages${chat.older > 0 ? '' : ' · start of the conversation'}`);
-      });
+      // The pill at the top shows while it loads; no note after it.
+      void loadOlder(activeSession());
     }
   }
-  // Rows not measured yet are guessed at the average of those that were: a wrong guess makes the list re-measure and
-  // re-position over several rounds, every one a scroll event the virtualizer has to handle.
-  let averageRow = 96;
+
+  // The page before is read only when the reader scrolls up into the last screen and a half above the first row. Not
+  // ahead of time and not on the virtualizer's own scrolls: putting a page in front moves scrollTop, and each of those
+  // moves used to read the next page, and the next, until the whole chat was in.
+  // During a scrollbar drag the browser owns scrollTop, and rows put in front would move it under the thumb: the page
+  // is read once the button is released.
+  let draggingBar = false;
+  let lastTop = 0;
+  function onViewportPointerDown(event: PointerEvent) {
+    stopSticking();
+    if (!viewportEl || event.offsetX < viewportEl.clientWidth) return;
+    draggingBar = true;
+    const release = () => {
+      draggingBar = false;
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+      if (viewportEl && viewportEl.scrollTop < nearTop()) revealOlder();
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+  }
+  const nearTop = () => Math.max(600, (viewportEl?.clientHeight ?? 0) * 1.5);
+  // Rows not measured yet are guessed from their own text (row-size.ts), or taken from the height they had when last
+  // drawn at this width: a wrong guess makes the rows around it move once it is measured, which a fast scroll or a
+  // scrollbar drag shows as a stutter.
+  let listWidth = $state(800);
+  let viewportHeight = $state(600);
   const virtualOptions = () => ({
     count: chat.messages.length - from,
     getScrollElement: () => viewportEl ?? null,
-    estimateSize: () => averageRow,
+    estimateSize: (index: number) => {
+      const message = chat.messages[index + from];
+      return message ? rowHeight(message, listWidth) : 96;
+    },
     getItemKey: (index: number) => chat.messages[index + from]?.id ?? index + from,
     anchorTo: 'end' as const,
     followOnAppend: true,
     scrollEndThreshold: 80,
-    overscan: 4,
+    // Sizes come from the ResizeObserver, which reports them after layout. The default reads offsetHeight when a row is
+    // put in, which forces a layout per row in the middle of a scroll frame (profiled: most of the stutter). A row that
+    // has no observer entry yet stands at the height it had before, or its guess, until the observer reports.
+    measureElement: (element: Element, entry: ResizeObserverEntry | undefined) => {
+      const message = chat.messages[Number((element as HTMLElement).dataset.index) + from];
+      const box = entry?.borderBoxSize?.[0]?.blockSize;
+      if (box === undefined) return message ? rowHeight(message, listWidth) : 96;
+      const height = Math.round(box);
+      if (message && !message.live) rememberRowHeight(message.id, listWidth, height);
+      return height;
+    },
+    // Rows mounted beyond the screen: enough that a fast drag shows laid-out rows, not blanks, between frames.
+    overscan: 8,
     paddingStart: 8,
     // Clears the fade above the composer (h-12) so the last message ends above it.
     paddingEnd: 56,
@@ -299,6 +340,14 @@
       void tick().then(() => requestAnimationFrame(step));
     });
   }
+
+  /** Whether the "Scroll to latest" button may show: false for a moment after a chat opens at its end. */
+  let jumpReady = $state(true);
+  $effect(() => {
+    if (!revealed || jumpReady) return;
+    const timer = setTimeout(() => (jumpReady = true), 700);
+    return () => clearTimeout(timer);
+  });
 
   // A chat is shown only once it sits at its end, and at once: no fade (a fade over the skeleton looked like a ghost),
   // and not first at the top and then at the end (which looked like two flashes). Hidden, it is still laid out and
@@ -394,6 +443,9 @@
       const left = readingAt.get(id);
       restoreTarget = left && (restoreFor === id || !left.atEnd) ? left : null;
       restoreFor = '';
+      // Back at a place read earlier (scrolled up): the jump button belongs there at once. Opening at the end: it waits
+      // until the list has settled, so it does not flash while rows are still measured.
+      jumpReady = Boolean(restoreTarget);
       revealed = false;
       setEagerColour(true);
       if (!restoreTarget) stickToEnd(6000);
@@ -406,10 +458,6 @@
 
   function measureRow(node: HTMLDivElement) {
     $virtualizer.measureElement(node);
-    const height = node.offsetHeight;
-    // Only while the chat is still hidden: a guess that changes while the reader scrolls moves every row not measured
-    // yet, the ones on screen included.
-    if (height > 0 && !revealed) averageRow = Math.round(averageRow * 0.8 + height * 0.2);
   }
 
   // ---------- navigator: one tick per user question ----------
@@ -431,7 +479,7 @@
   /** The turn being read: the last question at or above the first visible row (the last one at the end). */
   const activeTurn = $derived.by(() => {
     if (turnRows.length === 0) return 0;
-    if ($virtualizer.isAtEnd(1)) return turnRows.length - 1;
+    if (nearEnd(1)) return turnRows.length - 1;
     const first = ($virtualizer.range?.startIndex ?? 0) + from;
     return Math.max(0, turnRows.filter((row) => row <= first).length - 1);
   });
@@ -479,7 +527,27 @@
     }
     return found;
   });
-  const atEnd = $derived($virtualizer.isAtEnd(JUMP_AFTER));
+  const atEnd = $derived(nearEnd(JUMP_AFTER));
+  // While rows are still being measured `atEnd` flips back and forth; following it made the button blink. It hides at
+  // once, but shows only once the view has stayed away from the end for a moment, and never while the view is still
+  // being pinned to the end after the chat opened.
+  let showJump = $state(false);
+  $effect(() => {
+    if (atEnd || !jumpReady) {
+      showJump = false;
+      return;
+    }
+    const away = performance.now();
+    let timer: ReturnType<typeof setTimeout>;
+    // Checked again and again: scrolling up by hand ends the pinning early, and then it should not wait for it.
+    const check = () => {
+      const now = performance.now();
+      if (now - away >= 300 && now >= stickUntil) showJump = true;
+      else timer = setTimeout(check, 150);
+    };
+    timer = setTimeout(check, 300);
+    return () => clearTimeout(timer);
+  });
   const running = $derived(activeSession()?.status === 'working');
   /** The chat the open one is a sub chat of, if it is one. */
   const parentOfActive = $derived.by(() => {
@@ -505,13 +573,27 @@
   let following = true;
   function onViewportScroll() {
     if (!viewportEl) return;
-    following = viewportEl.scrollHeight - viewportEl.scrollTop - viewportEl.clientHeight < 120;
-    if (viewportEl.scrollTop < 1500) revealOlder();
+    // scrollTop only: scrollHeight here forced a layout on every scroll event. The list's height is the virtualizer's.
+    const top = viewportEl.scrollTop;
+    following = listHeight - top - viewportHeight < 120;
+    // Upward only: a page put in front pushes scrollTop down, which never reads another one.
+    const up = top < lastTop;
+    lastTop = top;
+    if (up && !draggingBar && top < nearTop()) revealOlder();
   }
   // Follows what is on screen, not what has arrived: the answer is revealed word by word, so the list grows a little
   // every frame. Each time its measured height changes the view is put at the bottom right away (same frame, no
   // animation frame in between), so the text glides up instead of the view catching up in jumps.
   const listHeight = $derived($virtualizer.getTotalSize());
+  // The rows on screen through a derived: the virtualizer's store changes on every scroll event, but it hands back the
+  // same array while the range stays the same, so the list is laid out again only when rows come or go, not on every
+  // event (profiled at several ms a frame).
+  const virtualRows = $derived($virtualizer.getVirtualItems());
+  /** Within `px` of the end, from the virtualizer's own numbers: isAtEnd() reads scrollHeight, a forced layout on
+   *  every scroll frame for what runs here each frame (the jump button, the ruler's current turn). */
+  function nearEnd(px: number): boolean {
+    return listHeight - ($virtualizer.scrollOffset ?? 0) - viewportHeight <= px;
+  }
   $effect(() => {
     void listHeight;
     if (!following || !running || !viewportEl) return;
@@ -669,7 +751,7 @@
         <div class="flex h-8 min-w-0 items-center gap-1.5">
           {#if taskOfActive}
             <span class="shrink-0">Started by</span>
-            <AgentLogo agent={parentOfActive.agent} class="size-3.5 shrink-0" />
+            <AgentLogo agent={parentOfActive.agent} model={parentOfActive.model} class="size-3.5 shrink-0" />
             <span class="shrink-0 text-foreground">{agentDisplayName(parentOfActive.agent)}</span>
             <span class="shrink-0">from</span>
           {:else}
@@ -698,7 +780,7 @@
     {/key}
 
     <!-- Only while scrolled up: at the bottom there is nothing to jump to, running or not. -->
-    {#if !atEnd}
+    {#if showJump}
       <!-- The wrapper carries the entrance (it rises into place while it fades in, and goes the same way); the button inside keeps its own look. -->
       <div transition:fly={{ y: 10, duration: 200 }} class="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center">
         <ZButton
@@ -731,17 +813,21 @@
     ></div>
 
     {#if chat.loadingOlder}
-      <div class="pointer-events-none absolute top-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur" role="status">
-        <span class="size-3 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-transparent"></span>
-        Loading earlier messages…
+      <!-- Drops in from the top while a page of older messages loads: a spinner in a soft primary ring and shimmering text. -->
+      <div class="pointer-events-none absolute top-3 left-1/2 z-20 -translate-x-1/2" role="status" aria-label="Loading earlier messages" in:fly={{ y: -12, duration: 220 }} out:fade={{ duration: 160 }}>
+        <div class="flex items-center gap-2.5 rounded-full border border-primary/25 bg-background/95 py-1.5 pr-4 pl-2 text-[13px] font-medium shadow-lg shadow-primary/10 backdrop-blur">
+          <span class="grid size-6 place-items-center rounded-full bg-primary/12"><ZLoading zLoading zSpinner={LOADER.fetch} zSize="xs" zColor="primary" /></span>
+          <ZShimmerText zText="Loading earlier messages…" />
+        </div>
       </div>
     {/if}
 
     {#if chat.loading || (!revealed && chat.messages.length > 0)}
       <!-- A thin bar along the top while the chat opens. It shows only if the wait is long (the delay is in the animation),
            so a fast chat opens with nothing at all, and it never mimics the layout, so nothing can ghost over the text. -->
-      <div class="chat-loading pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 overflow-hidden" role="status" aria-label="Loading conversation" out:fade={{ duration: 120 }}>
-        <div class="chat-loading-bar h-full w-2/5 rounded-full bg-primary"></div>
+      <div class="chat-loading pointer-events-none absolute inset-x-0 top-0 z-20 h-[2px] overflow-hidden" role="status" aria-label="Loading conversation" out:fade={{ duration: 120 }}>
+        <div class="chat-loading-bar"></div>
+        <div class="chat-loading-bar chat-loading-bar-trail"></div>
       </div>
     {/if}
 
@@ -759,11 +845,11 @@
     {/if}
 
     <!-- svelte-ignore a11y_no_static_element_interactions (the events only tell that the reader took over the scrolling) -->
-    <div bind:this={viewportEl} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={stopSticking} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 [scrollbar-gutter:stable] {chat.loading || !revealed ? 'pointer-events-none opacity-0' : 'motion-safe:transition-opacity motion-safe:duration-150 motion-safe:ease-out'}" aria-hidden={chat.loading || !revealed}>
-      <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" {@attach watchListHeight} role="log" aria-live="polite" aria-label="Conversation">
+    <div bind:this={viewportEl} bind:clientWidth={listWidth} bind:clientHeight={viewportHeight} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={onViewportPointerDown} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 [overflow-anchor:none] [scrollbar-gutter:stable] {chat.loading || !revealed ? 'pointer-events-none opacity-0' : 'motion-safe:transition-opacity motion-safe:duration-150 motion-safe:ease-out'}" aria-hidden={chat.loading || !revealed}>
+      <div class="relative w-full" style:height="{listHeight}px" {@attach watchListHeight} role="log" aria-live="polite" aria-label="Conversation">
         <!-- A theme change repaints every row from scratch: a row kept from before can show the old theme's colours until the page is reloaded. -->
         {#key `${theme.dark}|${theme.primary}|${theme.neutral}`}
-        {#each $virtualizer.getVirtualItems() as row (row.key)}
+        {#each virtualRows as row (row.key)}
           {@const message = chat.messages[row.index + from]}
           {@const mine = message?.role === 'user'}
           {@const agent = message?.agent ?? activeSession()?.source ?? activeSession()?.agent ?? 'claude'}
@@ -799,7 +885,8 @@
                     </div>
                   {/if}
                   {#if editingId === message.id}
-                    <!-- Editing: the message becomes a box; Send replaces it and everything after it. -->
+                    <!-- Editing: the message becomes a box; Send replaces it and everything after it. The text runs into the
+                         box's right padding, so a long message's scrollbar sits flush with the box's edge. -->
                     <div class="flex w-full max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 pt-3 pb-2.5 text-sm">
                       {#each message.blocks.filter((block) => block.kind === 'element') as attached, at (at)}
                         <ChatBlock block={attached} />
@@ -825,7 +912,7 @@
                         }}
                         aria-label="Edit message"
                         rows="1"
-                        class="w-full resize-none border-0 bg-transparent p-0 text-sm leading-relaxed outline-none"
+                        class="-mr-4 w-[calc(100%+1rem)] resize-none border-0 bg-transparent p-0 pr-3 text-sm leading-relaxed outline-none"
                       ></textarea>
                       <div class="flex justify-end gap-2">
                         <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-3 text-xs" onclick={() => (editingId = null)}>Cancel</ZButton>
@@ -849,8 +936,8 @@
                   {@const working = tail?.kind === 'commands' && tail.items.some((item) => item.status === 'running')}
                   <div class="mb-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs">
                     <span class="inline-flex items-center gap-1 font-semibold {agentText[agent]}">
-                      <AgentLogo agent={agent} class="size-3 shrink-0 {agent === 'codex' ? 'text-foreground [&_path]:fill-current' : ''}" />
-                      {(agent === 'custom' && customProviderName(message.model)) || agentName(agent)}
+                      <AgentLogo agent={agent} model={message.model} class="size-3 shrink-0" />
+                      {agent === 'custom' ? agentDisplayName(agent, message.model) : agentName(agent)}
                     </span>
                     {#if message.model}
                       <span class="text-muted-foreground/40" aria-hidden="true">/</span>
@@ -912,6 +999,7 @@
                         <ChatBlock block={segment.block} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} onrendered={segment.block.kind === 'response' ? () => replyBlockRendered(workspace.activeId, message.id, message.blocks.indexOf(segment.block)) : undefined} answered={!message.live && pendingQuestion?.messageId !== message.id} showQuestions={!message.live && pendingQuestion?.messageId !== message.id} />
                       {/if}
                     {/each}
+                    <ArtifactCards blocks={message.blocks} root={(activeSession() && projectOf(activeSession()!)?.path) || null} live={Boolean(message.live) && isRunning(workspace.activeId)} />
                     <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
                          editing…), as in Claude and Codex; the steps above stay plain, finished lines. -->
 </div>
@@ -943,6 +1031,8 @@
     <div class="relative z-30 shrink-0 bg-background px-2 pt-4 pb-2 min-[720px]:px-6">
       <div class="mx-auto w-full min-w-0 max-w-3xl px-0 min-[720px]:min-w-[440px] min-[720px]:pr-6 min-[720px]:pl-12">
         <!-- A pending approval sits right above the input, where the eye already is. -->
+        <!-- The chat stopped at a usage limit: it carries on by itself when the limit resets. -->
+        {#if resumes[workspace.activeId]}<ResumeCard resume={resumes[workspace.activeId]} />{/if}
         {#each computerApprovals as request (request.id)}
           <section class="mb-2 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3" aria-label="Computer use approval request">
             <div class="flex items-start gap-2">

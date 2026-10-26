@@ -25,6 +25,8 @@
     isPinnedSession,
     togglePinProject,
     togglePinSession,
+    toggleNotifyDone,
+    notifiesWhenDone,
     samePath,
     trustFolder,
     deleteSession,
@@ -336,6 +338,18 @@
   });
   let menuRow: Element | null = null;
   let searchOpen = $state(false);
+  // Ctrl+P: search the chats (the button's title has said so all along).
+  $effect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      // The peek panel holds a second sidebar: the first one to see the key takes it.
+      if (!event.defaultPrevented && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault();
+        searchOpen = true;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
   const menuSession = $derived(menu ? workspace.sessions.find((item) => item.id === menu!.id) : undefined);
 
   async function openMenu(event: MouseEvent, id: string, anchor?: HTMLElement, kind: 'session' | 'project' | 'view' = 'session') {
@@ -429,6 +443,14 @@
     },
     { label: 'Rename', icon: 'lucideSquarePen' as ZIconName, iconSize: '12', shortcut: 'R', class: 'text-xs! py-1', onClick: () => askRename() },
     { label: 'Fork', icon: 'lucideGitFork', iconSize: '12', shortcut: 'F', class: 'text-xs! py-1', onClick: () => menu && fork(menu.id) },
+    {
+      label: 'Notify when done',
+      icon: 'lucideBell' as ZIconName,
+      iconSize: '12',
+      checked: Boolean(menu && notifiesWhenDone(menu.id)),
+      class: 'text-xs! py-1',
+      onClick: () => menu && toggleNotifyDone(menu.id),
+    },
     { label: 'Delete', icon: 'lucideTrash2', iconSize: '12', shortcut: 'D', divide: 'before', class: 'text-xs! py-1 text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive! [&_.ml-auto]:text-destructive!', onClick: () => askDelete() },
   ]);
   // The view menu of the headings: like the list options of Claude's own sidebar.

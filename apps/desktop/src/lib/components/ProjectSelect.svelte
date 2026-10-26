@@ -45,4 +45,4 @@
   <ZIcon zType={'lucideChevronDown' as ZIconName} class="size-3.5 shrink-0 text-muted-foreground" />
 </button>
 
-<PickerPopover anchor={trigger} bind:open bind:query {items} local search placeholder="Search projects…" label="Project" empty="No project matches" position="bottom-right" size="sm" width={240} onpick={pick} onclose={() => (query = '')} />
+<PickerPopover anchor={trigger} bind:open bind:query {items} local search placeholder="Search projects…" label="Project" empty="No project matches" position="bottom-right" size="sm" width={220} onpick={pick} onclose={() => (query = '')} />

@@ -25,7 +25,9 @@ const TOOLS: &[Tool] = &[
     Tool { name: "browser_record_stop", route: "/guide-record/stop", description: "Stops the active guide recording and saves its .webm file in the project. Call after the walkthrough actions are complete.", args: &[] },
     Tool { name: "browser_zoom", route: "/zoom", description: "Changes the Preview page zoom for clear guide shots. Use a factor such as 1.25 to zoom in or 0.8 to zoom out; valid range is 0.25–3.0.", args: &[ ("factor", "number", "page zoom, where 1.0 is 100%", true) ] },
     Tool { name: "browser_page", route: "/page", description: "Address and title of the page open in AgentDeck's Preview panel (the browser the user sees).", args: &[] },
-    Tool { name: "browser_screenshot", route: "/shot", description: "A picture of the Preview page as the user sees it now, menus included. Look before and after every action.", args: &[] },
+    Tool { name: "browser_screenshot", route: "/shot", description: "A picture of the Preview page as the user sees it now, menus included. Look before and after every action. With save_as, the PNG is also written to that file (for a guide, a document or a slide), and the answer says where.", args: &[("save_as", "string", "absolute path of a .png file to write the picture to; its folder is created", false)] },
+    Tool { name: "ui_audit", route: "/eval", description: "Checks the page open in the Preview for common UI faults and answers each with a selector: horizontal overflow and elements past the edge, text with low contrast (WCAG), text under 12px, click targets under 24px, images without alt, buttons and links without a name, and colours or font sizes that are not part of the design tokens (too many one-off values). Run it after building or changing UI, fix what it reports, then run it again; use device mobile with browser_device to audit the phone layout too.", args: &[("selector", "string", "audit only inside this element (default: the whole page)", false), ("max", "number", "most issues listed (default 40)", false)] },
+    Tool { name: "browser_annotate", route: "/eval", description: "Draws a callout on the page for a guide screenshot: a solid or dashed outline around an element (by number from browser_elements, visible text, or CSS selector) or around a rectangle, with an optional step number badge and a short label. The marks stay until clear is true; they are fixed to the screen, so draw them right before browser_screenshot and clear them before scrolling or clicking.", args: &[("index", "number", "number from browser_elements", false), ("text", "string", "visible text or label of the element", false), ("selector", "string", "CSS selector", false), ("x", "number", "rectangle left, CSS pixels (instead of an element)", false), ("y", "number", "rectangle top", false), ("w", "number", "rectangle width", false), ("h", "number", "rectangle height", false), ("label", "string", "short caption shown next to the outline", false), ("number", "number", "step number shown in a badge", false), ("style", "string", "solid (default: the control to use) or dashed (an area to look at)", false), ("color", "string", "CSS colour, default #ef4444", false), ("clear", "boolean", "remove every mark drawn so far (other arguments are ignored)", false)] },
     Tool { name: "browser_click", route: "/click", description: "Clicks at a point of the page, in CSS pixels of the screenshot. Real mouse events; reaches iframes.", args: &[("x", "number", "from the left of the page", true), ("y", "number", "from the top of the page", true)] },
     Tool { name: "browser_hover", route: "/hover", description: "Moves the mouse over a point (hover menus, tooltips).", args: &[("x", "number", "", true), ("y", "number", "", true)] },
     Tool { name: "browser_scroll", route: "/scroll", description: "Scrolls at a point, like a mouse wheel. dy > 0 scrolls down.", args: &[("x", "number", "", true), ("y", "number", "", true), ("dy", "number", "pixels down (negative: up)", false), ("dx", "number", "pixels right", false)] },
@@ -106,6 +108,170 @@ const OVERLAY_NOTE_JS: &str = r#"(() => {
   const ov = adOverlay();
   return ov ? 'A dialog, drawer or menu is open: "' + adDescribe(ov) + '". Close it (its close button, or Escape) before using the page behind it.' : 'No dialog, drawer or menu is open.';
 })()"#;
+
+/// Runs in the page: common UI faults with a selector each (see the `ui_audit` tool).
+fn ui_audit_js(args: &Value) -> String {
+    format!(
+        r#"((arg) => {{
+  const scope = (arg.selector && document.querySelector(arg.selector)) || document.body;
+  const max = Math.max(5, Math.min(200, +arg.max || 40));
+  const issues = [];
+  const add = (el, problem) => {{ if (issues.length < max * 3) issues.push({{ at: sel(el), problem }}); }};
+  // A short selector: the element and at most two parents (an id ends the walk), enough to find it in the code.
+  const sel = (el, depth = 0) => {{
+    if (!el || el === document.body) return 'body';
+    if (el.id) return el.tagName.toLowerCase() + '#' + el.id;
+    const cls = [...el.classList].filter((c) => !/[:[\]/]/.test(c)).slice(0, 2).map((c) => '.' + c).join('');
+    const parent = el.parentElement;
+    const nth = parent ? [...parent.children].filter((c) => c.tagName === el.tagName).indexOf(el) + 1 : 1;
+    const own = el.tagName.toLowerCase() + cls + (nth > 1 ? ':nth-of-type(' + nth + ')' : '');
+    return parent && parent !== document.body && depth < 2 ? sel(parent, depth + 1) + ' > ' + own : own;
+  }};
+  const shown = (el) => {{ const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && +cs.opacity > 0.05; }};
+  const rgb = (text) => {{ const m = /rgba?\(([^)]+)\)/.exec(text || ''); if (!m) return null; const p = m[1].split(/[ ,/]+/).filter(Boolean).map(Number); return {{ r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }}; }};
+  const lum = (c) => {{ const f = (v) => {{ v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }}; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); }};
+  const background = (el) => {{ for (let e = el; e; e = e.parentElement) {{ const c = rgb(getComputedStyle(e).backgroundColor); if (c && c.a > 0.5) return c; if (getComputedStyle(e).backgroundImage !== 'none') return null; }} return {{ r: 255, g: 255, b: 255, a: 1 }}; }};
+  const hex = (c) => '#' + [c.r, c.g, c.b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+
+  // Overflow: the page scrolls sideways, or an element runs past the right edge.
+  const doc = document.documentElement;
+  if (doc.scrollWidth > innerWidth + 1) issues.push({{ at: 'html', problem: 'page scrolls sideways: content is ' + doc.scrollWidth + 'px wide in a ' + innerWidth + 'px viewport' }});
+  const all = [...scope.querySelectorAll('*')].filter((el) => !el.closest('#__ad-guide-marks')).slice(0, 6000);
+  const usedColors = new Map();
+  const usedSizes = new Map();
+  for (const el of all) {{
+    if (!shown(el)) continue;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    if (r.right > innerWidth + 2 && r.width < innerWidth * 2 && cs.position !== 'fixed' && !el.closest('[style*="overflow"],[class*="scroll"],[class*="overflow"]')) add(el, 'runs ' + Math.round(r.right - innerWidth) + 'px past the right edge');
+    const ownText = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim().length > 1);
+    if (ownText) {{
+      const size = parseFloat(cs.fontSize);
+      usedSizes.set(cs.fontSize, (usedSizes.get(cs.fontSize) || 0) + 1);
+      usedColors.set(cs.color, (usedColors.get(cs.color) || 0) + 1);
+      if (size < 12) add(el, 'text is ' + size + 'px: too small to read (12px at least)');
+      const fg = rgb(cs.color);
+      const bg = background(el);
+      if (fg && bg && fg.a > 0.5) {{
+        const ratio = (Math.max(lum(fg), lum(bg)) + 0.05) / (Math.min(lum(fg), lum(bg)) + 0.05);
+        const large = size >= 24 || (size >= 18.6 && +cs.fontWeight >= 700);
+        const need = large ? 3 : 4.5;
+        if (ratio < need) add(el, 'low contrast ' + ratio.toFixed(2) + ':1 (' + hex(fg) + ' on ' + hex(bg) + ', needs ' + need + ':1)');
+      }}
+    }}
+    const bgc = rgb(cs.backgroundColor);
+    if (bgc && bgc.a > 0.5) usedColors.set(cs.backgroundColor, (usedColors.get(cs.backgroundColor) || 0) + 1);
+    const interactive = el.matches('a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[onclick]');
+    if (interactive) {{
+      if ((r.width < 24 || r.height < 24) && !el.closest('p,li,td') ) add(el, 'click target ' + Math.round(r.width) + 'x' + Math.round(r.height) + 'px: under 24px');
+      const name = (el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.value || el.getAttribute('placeholder') || (el.querySelector('img[alt]') || {{}}).alt || '').trim();
+      if (!name && !el.matches('input[type=checkbox],input[type=radio]')) add(el, el.tagName.toLowerCase() + ' has no accessible name (text, aria-label or title)');
+    }}
+    if (el.tagName === 'IMG' && !el.hasAttribute('alt')) add(el, 'image without alt text');
+  }}
+
+  // One-off values: colours and font sizes that are not design tokens.
+  const tokenColors = new Set();
+  const probe = document.createElement('span');
+  document.body.appendChild(probe);
+  const rootStyle = getComputedStyle(document.documentElement);
+  for (const sheet of [...document.styleSheets]) {{
+    let rules = [];
+    try {{ rules = [...sheet.cssRules]; }} catch {{ continue; }}
+    for (const rule of rules) {{
+      if (!rule.style) continue;
+      for (const prop of [...rule.style]) {{
+        if (!prop.startsWith('--')) continue;
+        const value = rootStyle.getPropertyValue(prop).trim();
+        if (!value || !/^(#|rgb|hsl|oklch|oklab|color)/.test(value)) continue;
+        probe.style.color = value;
+        tokenColors.add(getComputedStyle(probe).color);
+      }}
+    }}
+  }}
+  probe.remove();
+  const offToken = [...usedColors.entries()].filter(([c]) => tokenColors.size > 0 && !tokenColors.has(c) && !/rgba?\(0, 0, 0, 0\)/.test(c)).sort((a, b) => b[1] - a[1]);
+  const summary = {{
+    viewport: innerWidth + 'x' + innerHeight,
+    elements: all.length,
+    fontSizes: usedSizes.size,
+    colors: usedColors.size,
+    tokenColors: tokenColors.size,
+  }};
+  if (usedSizes.size > 8) issues.push({{ at: 'page', problem: usedSizes.size + ' different font sizes in use (' + [...usedSizes.keys()].slice(0, 12).join(', ') + '): keep to the type scale of the project' }});
+  if (offToken.length > 6) issues.push({{ at: 'page', problem: offToken.length + ' colours are not design tokens, most used: ' + offToken.slice(0, 6).map(([c, n]) => c + ' x' + n).join('; ') }});
+  // One line per problem kind and place; the worst kinds first.
+  const order = (p) => /sideways|past the right/.test(p) ? 0 : /contrast/.test(p) ? 1 : /accessible name|alt text/.test(p) ? 2 : /click target/.test(p) ? 3 : 4;
+  const seen = new Set();
+  const unique = issues.filter((i) => {{ const k = i.at + '|' + i.problem.replace(/[\d.]+/g, '#'); if (seen.has(k)) return false; seen.add(k); return true; }});
+  // A kind of problem found many times is one line with a few examples, so it does not hide the other kinds.
+  const kind = (p) => p.replace(/[\d.]+(px|:1)?/g, '#').replace(/\(.*\)/, '').trim();
+  const byKind = new Map();
+  for (const i of unique) {{ const k = kind(i.problem); byKind.set(k, [...(byKind.get(k) || []), i]); }}
+  const grouped = [...byKind.values()].flatMap((group) => group.length > 4 ? [...group.slice(0, 3), {{ at: '(' + (group.length - 3) + ' more)', problem: group.length + ' elements in all: ' + group[0].problem }}] : group);
+  const list = grouped.sort((a, b) => order(a.problem) - order(b.problem)).slice(0, max);
+  return JSON.stringify({{ summary, issues: list, verdict: list.length ? list.length + ' issue(s): fix them and run ui_audit again' : 'No issue found' }});
+}})({})"#,
+        args
+    )
+}
+
+/// Runs in the page: draws (or clears) a guide callout, an outline with a badge and a label, in a top layer of its own.
+fn annotate_js(args: &Value) -> String {
+    format!(
+        r#"((arg) => {{
+  const ROOT = '__ad-guide-marks';
+  if (arg.clear) {{ document.getElementById(ROOT)?.remove(); return 'Marks cleared.'; }}
+  let rect = null;
+  if (arg.w > 0 && arg.h > 0) rect = {{ left: +arg.x || 0, top: +arg.y || 0, width: +arg.w, height: +arg.h }};
+  else {{
+    let el = null;
+    if (arg.index !== undefined && arg.index !== null) el = (window.__adEls || [])[arg.index];
+    else if (arg.selector) el = document.querySelector(arg.selector);
+    else if (arg.text) {{
+      const want = String(arg.text).trim().toLowerCase();
+      const label = (e) => (e.getAttribute('aria-label') || e.innerText || e.value || e.placeholder || e.title || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const shown = (e) => {{ const r = e.getBoundingClientRect(); const cs = getComputedStyle(e); return r.width > 1 && r.height > 1 && cs.visibility !== 'hidden' && cs.display !== 'none'; }};
+      const all = [...document.querySelectorAll('a,button,input,select,textarea,summary,label,li,h1,h2,h3,h4,p,span,div,[role]')].filter((e) => shown(e) && label(e).includes(want));
+      all.sort((a, b) => (label(a) === want ? 0 : 1) - (label(b) === want ? 0 : 1) || label(a).length - label(b).length);
+      el = all[0];
+    }}
+    if (!el || !el.isConnected) return {{ error: 'element not found: call browser_elements and use a number from it, or give x, y, w, h' }};
+    const first = el.getBoundingClientRect();
+    if (first.top < 0 || first.bottom > innerHeight) el.scrollIntoView({{ block: 'center', inline: 'nearest' }});
+    rect = el.getBoundingClientRect();
+  }}
+  let root = document.getElementById(ROOT);
+  if (!root) {{
+    root = document.createElement('div');
+    root.id = ROOT;
+    root.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;font:600 13px/1.35 system-ui,-apple-system,Segoe UI,sans-serif';
+    document.documentElement.appendChild(root);
+  }}
+  const color = arg.color || '#ef4444';
+  const pad = 4;
+  const left = rect.left - pad, top = rect.top - pad, width = rect.width + pad * 2, height = rect.height + pad * 2;
+  const box = document.createElement('div');
+  box.style.cssText = 'position:absolute;left:' + left + 'px;top:' + top + 'px;width:' + width + 'px;height:' + height + 'px;box-sizing:border-box;border:3px ' + (arg.style === 'dashed' ? 'dashed' : 'solid') + ' ' + color + ';border-radius:6px;box-shadow:0 0 0 2px rgba(255,255,255,.85),0 4px 14px rgba(0,0,0,.3)';
+  root.appendChild(box);
+  if (arg.number !== undefined && arg.number !== null && arg.number !== '') {{
+    const badge = document.createElement('div');
+    badge.textContent = String(arg.number);
+    badge.style.cssText = 'position:absolute;left:' + Math.max(2, left - 13) + 'px;top:' + Math.max(2, top - 13) + 'px;min-width:26px;height:26px;padding:0 6px;box-sizing:border-box;border-radius:13px;background:' + color + ';color:#fff;border:2px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.35)';
+    root.appendChild(badge);
+  }}
+  if (arg.label) {{
+    const tag = document.createElement('div');
+    tag.textContent = String(arg.label);
+    const below = top + height + 40 < innerHeight;
+    tag.style.cssText = 'position:absolute;left:' + Math.max(4, Math.min(left, innerWidth - 324)) + 'px;' + (below ? 'top:' + (top + height + 8) : 'bottom:' + (innerHeight - top + 8)) + 'px;max-width:320px;padding:5px 9px;border-radius:6px;background:' + color + ';color:#fff;box-shadow:0 2px 10px rgba(0,0,0,.3)';
+    root.appendChild(tag);
+  }}
+  return {{ marked: {{ x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) }}, marks: root.childElementCount }};
+}})({})"#,
+        args
+    )
+}
 
 /// Runs in the page with the target (`index`, `text` or `selector`): scrolls it into view and answers its centre.
 fn locate_js(args: &Value) -> String {
@@ -203,12 +369,17 @@ async fn element_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> 
                 .clamp(500, 200_000),
         )),
         "browser_find" => Some(find_js(args["query"].as_str().unwrap_or_default())),
+        "browser_annotate" => Some(annotate_js(args)),
+        "ui_audit" => Some(ui_audit_js(args)),
         _ => None,
     };
     if let Some(script) = script {
         return match crate::bridge::answer(app, "/eval", &params, &script).await {
             Ok(answer) => match value_of(answer) {
                 Value::String(text) => text_reply(text),
+                other if other["error"].is_string() => {
+                    error_reply(other["error"].as_str().unwrap_or_default().to_string())
+                }
                 other => text_reply(other.to_string()),
             },
             Err(error) => error_reply(error),
@@ -269,6 +440,7 @@ fn tool_list() -> Value {
                 })
             })
             .chain(crate::index::tool_defs())
+            .chain(crate::devtools::tool_defs())
             .chain(crate::delegate::tool_defs())
             .chain([
                 json!({"name":"computer_screen_size","description":"Read the size of the Windows primary display.","inputSchema":{"type":"object","properties":{}}}),
@@ -280,6 +452,22 @@ fn tool_list() -> Value {
             ])
             .collect(),
     )
+}
+
+/// Writes a screenshot where the agent asked (an absolute .png path), creating its folder.
+fn save_shot(path: &str, bytes: &[u8]) -> Result<String, String> {
+    let path = std::path::Path::new(path);
+    if !path.is_absolute() {
+        return Err("save_as must be an absolute path".into());
+    }
+    if path.extension().and_then(|ext| ext.to_str()).map(|ext| ext.eq_ignore_ascii_case("png")) != Some(true) {
+        return Err("save_as must end in .png".into());
+    }
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(path, bytes).map_err(|error| error.to_string())?;
+    Ok(path.display().to_string())
 }
 
 async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Value {
@@ -325,6 +513,12 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Val
     if crate::delegate::is_tool(name) {
         return crate::delegate::call(app, name, args, chat).await;
     }
+    if crate::devtools::is_tool(name) {
+        return match crate::devtools::call(name, args, chat).await {
+            Ok(text) => text_reply(text),
+            Err(error) => error_reply(error),
+        };
+    }
     if crate::index::is_tool(name) {
         return match crate::index::call(name, args, chat).await {
             Ok(text) => text_reply(text),
@@ -333,7 +527,12 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Val
     }
     if matches!(
         name,
-        "browser_elements" | "browser_click_element" | "browser_text" | "browser_find"
+        "browser_elements"
+            | "browser_click_element"
+            | "browser_text"
+            | "browser_find"
+            | "browser_annotate"
+            | "ui_audit"
     ) {
         return element_tool(app, name, args, chat).await;
     }
@@ -355,6 +554,8 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Val
             };
             if key == "script" {
                 body = text;
+            } else if key == "save_as" {
+                continue;
             } else {
                 params.insert(key.clone(), text);
             }
@@ -364,7 +565,14 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Val
         Ok(value) if tool.route == "/shot" => match value["png"].as_str().map(std::fs::read) {
             Some(Ok(bytes)) => {
                 use base64::Engine;
-                json!({ "content": [{ "type": "image", "mimeType": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(bytes) }] })
+                let image = json!({ "type": "image", "mimeType": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(&bytes) });
+                match args["save_as"].as_str().filter(|path| !path.trim().is_empty()) {
+                    Some(path) => match save_shot(path, &bytes) {
+                        Ok(saved) => json!({ "content": [image, { "type": "text", "text": format!("Saved to {saved}") }] }),
+                        Err(error) => json!({ "content": [image, { "type": "text", "text": format!("Not saved: {error}") }], "isError": true }),
+                    },
+                    None => json!({ "content": [image] }),
+                }
             }
             _ => json!({ "content": [{ "type": "text", "text": value.to_string() }] }),
         },

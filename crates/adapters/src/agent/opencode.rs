@@ -113,8 +113,13 @@ impl Provider for OpenCode {
         if let Some(model) = &req.model {
             args.extend(["--model".into(), model.clone()]);
         }
-        // `--session` continues that conversation, or starts one under that id when the server does not know it.
-        if let (Some(session), true) = (&req.session_id, req.resume) {
+        // OpenCode session ids use `ses_…`. AgentDeck may still hold its own draft UUID when a run was stopped
+        // before OpenCode returned an id, so never pass that unrelated id to the CLI's validated `--session` flag.
+        if let Some(session) = req
+            .session_id
+            .as_ref()
+            .filter(|session| req.resume && session.starts_with("ses_"))
+        {
             args.extend(["--session".into(), session.clone()]);
         }
         // Only approving what the CLI's own rules allow maps to `--auto`; in every other mode OpenCode asks, and a

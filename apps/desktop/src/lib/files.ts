@@ -57,6 +57,19 @@ export function imageMimeOf(name: string): string | undefined {
   return dot === -1 ? undefined : IMAGE_MIME[name.slice(dot + 1).toLowerCase()];
 }
 
+const MEDIA_MIME: Record<string, { kind: 'audio' | 'video'; mime: string }> = {
+  wav: { kind: 'audio', mime: 'audio/wav' }, mp3: { kind: 'audio', mime: 'audio/mpeg' }, ogg: { kind: 'audio', mime: 'audio/ogg' },
+  oga: { kind: 'audio', mime: 'audio/ogg' }, m4a: { kind: 'audio', mime: 'audio/mp4' }, flac: { kind: 'audio', mime: 'audio/flac' },
+  aac: { kind: 'audio', mime: 'audio/aac' }, opus: { kind: 'audio', mime: 'audio/ogg' }, weba: { kind: 'audio', mime: 'audio/webm' },
+  mp4: { kind: 'video', mime: 'video/mp4' }, m4v: { kind: 'video', mime: 'video/mp4' }, webm: { kind: 'video', mime: 'video/webm' },
+  mov: { kind: 'video', mime: 'video/quicktime' }, mkv: { kind: 'video', mime: 'video/x-matroska' },
+};
+/** A sound or a video by its file name (the viewer plays it), or undefined. */
+export function mediaOf(name: string): { kind: 'audio' | 'video'; mime: string } | undefined {
+  const dot = name.lastIndexOf('.');
+  return dot === -1 ? undefined : MEDIA_MIME[name.slice(dot + 1).toLowerCase()];
+}
+
 /** A picture inside the project folder, as a data URL the page can show. */
 export async function readImageUrl(root: string, path: string, mime: string): Promise<string> {
   if (!inTauri()) throw new Error('Open the desktop app to read files.');

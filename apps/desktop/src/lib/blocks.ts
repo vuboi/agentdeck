@@ -32,8 +32,12 @@ export function segments(blocks: Block[]): Segment[] {
   const out: Segment[] = [];
   // Reasoning seen before its first step: it goes into the group that step starts.
   let pending: ThinkingBlock[] = [];
+  // Reasoning with no step to join is one "Thinking" entry, however many parts it came in: Codex sends a dozen
+  // reasoning items before an answer, and each used to be a box of its own.
   const flush = () => {
-    for (const thought of pending) out.push({ kind: 'block', block: thought });
+    if (pending.length === 1) out.push({ kind: 'block', block: pending[0] });
+    else if (pending.length > 1)
+      out.push({ kind: 'block', block: { kind: 'thinking', text: pending.map((thought) => thought.text.trim()).join('\n\n'), streaming: pending.some((thought) => thought.streaming) } });
     pending = [];
   };
   for (const block of blocks) {

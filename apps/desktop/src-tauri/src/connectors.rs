@@ -1758,24 +1758,44 @@ fn agy_credential_status(email: &str) -> (bool, Option<String>) {
             return (true, Some("Saved login is invalid".to_string()));
         };
         let token = &value["token"];
-        if token["access_token"].as_str().is_none_or(str::is_empty) {
-            return (true, Some("Access token is missing".to_string()));
-        }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs() as i64);
-        if token["expiry"]
-            .as_str()
-            .and_then(parse_iso)
-            .is_some_and(|expiry| expiry <= now + 30)
-        {
-            return (true, Some("Access token expired".to_string()));
+        // The access token lives about an hour; the refresh token is what keeps the sign-in. agy renews the access
+        // token itself the next time it runs, so only a missing refresh token means signing in again.
+        if token["refresh_token"].as_str().is_none_or(str::is_empty) {
+            if token["access_token"].as_str().is_none_or(str::is_empty) {
+                return (true, Some("Access token is missing".to_string()));
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs() as i64);
+            if token["expiry"]
+                .as_str()
+                .and_then(parse_iso)
+                .is_some_and(|expiry| expiry <= now + 30)
+            {
+                return (true, Some("Access token expired".to_string()));
+            }
         }
     }
     #[cfg(not(windows))]
     let _ = email;
 
     (false, None)
+}
+
+/// Whether two Antigravity sign-ins are the same login. agy renews the access token every hour, so the whole value
+/// changes; the refresh token does not.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn same_agy_login(a: &Value, b: &Value) -> bool {
+    let refresh = |value: &Value| {
+        value["token"]["refresh_token"]
+            .as_str()
+            .filter(|token| !token.is_empty())
+            .map(str::to_owned)
+    };
+    match (refresh(a), refresh(b)) {
+        (Some(left), Some(right)) => left == right,
+        _ => a == b,
+    }
 }
 
 fn read_agy_accounts() -> Vec<AgyAccount> {
@@ -1833,11 +1853,23 @@ fn agy_saved_active_email() -> Option<String> {
     #[cfg(windows)]
     {
         let current = agy_sign_in()?;
-        read_agy_accounts().into_iter().find_map(|account| {
+        let email = read_agy_accounts().into_iter().find_map(|account| {
             let saved = stored_secret(&agy_secret_target(&account.email))?;
             let saved: Value = serde_json::from_str(&saved).ok()?;
-            (saved == current).then_some(account.email)
-        })
+            same_agy_login(&saved, &current).then_some(account.email)
+        })?;
+        // agy renewed the token since it was saved: keep the saved copy current, so switching back to this account
+        // later gives agy a fresh token, not one from hours ago.
+        let target = agy_secret_target(&email);
+        let stale = stored_secret(&target)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .is_some_and(|saved| saved != current);
+        if stale {
+            if let Ok(text) = serde_json::to_string(&current) {
+                let _ = write_secret(&target, &text);
+            }
+        }
+        Some(email)
     }
 }
 
@@ -1987,7 +2019,16 @@ pub async fn antigravity_account_switch(id: String) -> Result<(), String> {
             .ok_or("saved Antigravity credentials are missing")?;
         let sign_in: Value = serde_json::from_str(&secret)
             .map_err(|_| "saved Antigravity credentials are invalid")?;
-        fetch_agy_summary(&sign_in).await?;
+        // Checked against Antigravity's servers only when there is no refresh token to fall back on: an access token
+        // that ran out is renewed by agy on its next run, so it is no reason to refuse the switch.
+        let renewable = sign_in["token"]["refresh_token"]
+            .as_str()
+            .is_some_and(|token| !token.is_empty());
+        if !renewable {
+            fetch_agy_summary(&sign_in).await?;
+        }
+        // The account being left keeps its newest token.
+        let _ = agy_saved_active_email();
         write_secret("gemini:antigravity", &secret)?;
         let mut accounts = read_agy_accounts();
         for saved in &mut accounts {
@@ -2288,6 +2329,52 @@ pub async fn provider_probe(
         Duration::from_secs(6),
     )
     .await
+}
+
+/// What a provider says about the spending left on a key.
+#[derive(Serialize)]
+pub struct ProviderQuota {
+    /// Credit used and the key's limit, in USD (`limit` is null for a key without one).
+    used: f64,
+    limit: Option<f64>,
+    remaining: Option<f64>,
+    /// A key with no credit bought: only the `:free` models work, with daily request caps.
+    free_tier: bool,
+}
+
+/// The spending left on a key, for the providers that tell it (OpenRouter: `GET /key`). `None` for the rest: they
+/// report their limits only in response headers, or not at all.
+#[tauri::command]
+pub async fn provider_quota(
+    base_url: String,
+    api_key: Option<String>,
+    key_env: Option<String>,
+) -> Option<ProviderQuota> {
+    let host = base_url.split('/').nth(2).unwrap_or_default();
+    if host != "openrouter.ai" {
+        return None;
+    }
+    let key = api_key
+        .filter(|key| !key.is_empty())
+        .or_else(|| key_env.filter(|name| !name.is_empty()).and_then(|name| std::env::var(name).ok()))?;
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(8)).build().ok()?;
+    let response = client
+        .get("https://openrouter.ai/api/v1/key")
+        .bearer_auth(key)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let json: Value = response.json().await.ok()?;
+    let data = &json["data"];
+    Some(ProviderQuota {
+        used: data["usage"].as_f64().unwrap_or(0.0),
+        limit: data["limit"].as_f64(),
+        remaining: data["limit_remaining"].as_f64(),
+        free_tier: data["is_free_tier"].as_bool().unwrap_or(false),
+    })
 }
 
 #[derive(Serialize)]

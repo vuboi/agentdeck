@@ -21,9 +21,16 @@ marked.use({
   breaks: true,
   renderer: {
     // `http://localhost:4200` in backticks is an address too: make it a link.
+    // marked passes the code as written (not escaped): `<pre>` in backticks must show as text, not become a tag.
     codespan({ text }: Tokens.Codespan) {
-      const code = `<code>${text}</code>`;
-      return /^https?:\/\/[^\s<>"]+$/.test(text) ? `<a href="${escapeHtml(text.replace(/&amp;/g, '&'))}">${code}</a>` : code;
+      const code = `<code>${escapeHtml(text)}</code>`;
+      return /^https?:\/\/[^\s<>"]+$/.test(text) ? `<a href="${escapeHtml(text)}">${code}</a>` : code;
+    },
+    // A picture, sound or video on disk (`![Sound](/C:/out/cry.wav)`) is shown by the cards under the answer
+    // (ArtifactCards: a player, a picture): as an <img> here it was a broken picture. Web and data pictures stay.
+    image({ href, text }: Tokens.Image) {
+      if (!/^(https?:|data:image\/)/i.test(href)) return '';
+      return `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}">`;
     },
     // A link to a file (`E:/repo/a.txt`, `/home/me/a.txt`, `src/a.ts:12`) keeps its path in data-file: DOMPurify drops
     // a Windows drive from href, and the click opens the file in a tab.

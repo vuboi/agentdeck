@@ -17,3 +17,6 @@
 *.pem
 *.key
 .claude/settings.local.json
+
+# images and checks the app generates for the user
+/.agentdeck/

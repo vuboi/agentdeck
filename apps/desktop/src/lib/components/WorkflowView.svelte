@@ -6,7 +6,7 @@
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { modelLabel } from '../models.svelte';
-  import { AGENT_ICON, AGENT_TEXT, AGENTS, delegateRuns, liveStats, workspace, type DelegateRun, type RunNode, type RunStats } from '../sessions.svelte';
+  import { AGENTS, delegateRuns, liveStats, workspace, type DelegateRun, type RunNode, type RunStats } from '../sessions.svelte';
   import FlowCanvas from './flow/FlowCanvas.svelte';
   import ProjectSelect from './ProjectSelect.svelte';
   import FlowTemplates from './flow/FlowTemplates.svelte';
@@ -145,7 +145,7 @@
   </div>
 {/snippet}
 
-{#snippet card(agent: RunNode['agent'], title: string, sub: string, state: 'idle' | 'running' | 'done' | 'failed', last: string, stats: RunStats | undefined, time: string, open: () => void)}
+{#snippet card(agent: RunNode['agent'], title: string, sub: string, state: 'idle' | 'running' | 'done' | 'failed', last: string, stats: RunStats | undefined, time: string, open: () => void, model?: string)}
   <button
     type="button"
     class="node group relative flex w-full min-w-0 flex-col gap-1.5 overflow-hidden rounded-lg border bg-card p-2.5 text-left transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none {state === 'running' ? 'node-running border-primary/50' : 'border-border'}"
@@ -154,7 +154,7 @@
   >
     {#if state === 'running'}<span class="node-bar" aria-hidden="true"></span>{/if}
     <span class="flex min-w-0 items-center gap-2">
-      <AgentLogo agent={agent} class="size-4 shrink-0 {AGENT_TEXT[agent]}" />
+      <AgentLogo agent={agent} {model} class="size-4 shrink-0" />
       <span class="flex min-w-0 flex-1 flex-col gap-1">
         <span class="block truncate text-xs font-medium text-foreground">{title}</span>
         <span class="block truncate text-[11px] text-muted-foreground">{sub}</span>
@@ -184,9 +184,9 @@
   </span>
 {/snippet}
 
-{#snippet panelHead(tile: ZIconName, tint: string, title: string, sub: string, tag: { tone: "working" | "done" | "failed" | "idle"; text: string }, chat?: () => void)}
+{#snippet panelHead(tile: ZIconName | { agent: string; model?: string }, tint: string, title: string, sub: string, tag: { tone: "working" | "done" | "failed" | "idle"; text: string }, chat?: () => void)}
   <div class="flex items-center gap-2.5">
-    <span class="grid size-9 shrink-0 place-items-center rounded-xl {tint}"><ZIcon zType={tile} class="size-[18px]" /></span>
+    <span class="grid size-9 shrink-0 place-items-center rounded-xl {tint}">{#if typeof tile === 'string'}<ZIcon zType={tile} class="size-[18px]" />{:else}<AgentLogo agent={tile.agent} model={tile.model} class="size-[18px]" />{/if}</span>
     <div class="min-w-0 flex-1">
       <div class="truncate text-sm font-semibold text-foreground">{title}</div>
       {#if sub}<div class="truncate text-[11px] text-muted-foreground">{sub}</div>{/if}
@@ -230,7 +230,7 @@
       {#if mainStats(run)?.last}{@render section('Latest', '', mainStats(run)?.last ?? '')}{/if}
     {:else if step}
       {@const tag = node ? (node.state === 'running' ? { tone: 'working' as const, text: 'Working' } : node.state === 'done' ? { tone: 'done' as const, text: 'Done' } : { tone: 'failed' as const, text: 'Failed' }) : run.skipped?.includes(step.id) ? { tone: 'idle' as const, text: 'Skipped' } : { tone: 'idle' as const, text: 'Not started' }}
-      {@render panelHead(AGENT_ICON[step.agent], 'bg-muted ' + AGENT_TEXT[step.agent], step.name, `${AGENTS.find((item) => item.value === step.agent)?.label ?? step.agent}${step.model ? ` · ${modelLabel(step.model)}` : ''}`, tag, node ? () => showSession(node.childId) : undefined)}
+      {@render panelHead({ agent: step.agent, model: step.model }, 'bg-muted', step.name, `${AGENTS.find((item) => item.value === step.agent)?.label ?? step.agent}${step.model ? ` · ${modelLabel(step.model)}` : ''}`, tag, node ? () => showSession(node.childId) : undefined)}
       {#if node}
         <div class="mt-2.5">{@render numbers(stats, elapsed(node))}</div>
         {@render section('Handed to it', node.input ? `${node.input.length} chars` : run.task ? 'the task only' : '', node.input || run.task || '')}
@@ -338,13 +338,13 @@
             {:else if isOpen(run, index)}
               <div class="flex flex-col p-2.5 pt-1.5">
                 {@render edge(false)}
-                {@render card(main?.agent ?? 'claude', main?.title ?? 'Chat', `Asked · ${main ? modelLabel(main.model) : ''}`, 'done', firstLine(run.task), undefined, '', () => showSession(run.main))}
+                {@render card(main?.agent ?? 'claude', main?.title ?? 'Chat', `Asked · ${main ? modelLabel(main.model) : ''}`, 'done', firstLine(run.task), undefined, '', () => showSession(run.main), main?.model)}
                 {@render edge(childrenWorking(run))}
                 <div class="grid gap-2" style="grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr))" role="list" aria-label="Delegated agents">
                   {#each run.nodes as node (node.childId)}
                     {@const stats = statsOf(node)}
                     <div role="listitem" class="min-w-0">
-                      {@render card(node.agent, node.label.split(' · ')[0], modelLabel(node.model), node.state, node.note ?? stats?.last ?? '', stats, elapsed(node), () => showSession(node.childId))}
+                      {@render card(node.agent, node.label.split(' · ')[0], modelLabel(node.model), node.state, node.note ?? stats?.last ?? '', stats, elapsed(node), () => showSession(node.childId), node.model)}
                     </div>
                   {/each}
                 </div>
@@ -363,6 +363,7 @@
                   mainStats(run),
                   run.handbackAt ? span((run.endedAt ?? ticker.sec) - run.handbackAt) : '0s',
                   () => showSession(run.main),
+                  main?.model,
                 )}
               </div>
             {/if}

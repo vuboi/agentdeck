@@ -3,13 +3,17 @@
   import { fade, scale } from 'svelte/transition';
   import { ZButton, ZIcon, ZInput, ZModal, ZSelect, ZSlider, ZSwitch } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { testSystemNotification } from '../system-notifications';
+  import { toast } from '../toast';
   import { ticker } from '../clock.svelte';
   import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
   import { inTauri, isPreviewCopy } from '../history';
   import { getPref } from '../prefs';
   import { exportArchive, pullArchive, pushArchive } from '../archive';
   import { syncProviders } from '../sync';
+  import { describeExport, exportData, importData, parseExport, pickExport, type ExportFile } from '../data-export';
   import { openExternal } from '../browser.svelte';
+  import { brandLogoFor, providerLogo } from '../brand-icons';
   import {
     addAccount,
     cancelAccountAdd,
@@ -224,12 +228,28 @@
     // No model list yet: ask the server for it, so the provider shows up in the chat's model picker with its models.
     if (draft.models.length === 0 && draft.baseUrl.trim()) await test();
     if (!draft) return;
-    draft.name = draft.name.trim() || KINDS.find((kind) => kind.value === draft?.kind)?.label || 'Provider';
+    draft.name = freePreset?.name ?? (draft.name.trim() || KINDS.find((kind) => kind.value === draft?.kind)?.label || 'Provider');
     saveProvider($state.snapshot(draft) as CustomProvider);
     draft = null;
   }
 
-  function useLocal(server: { kind: CustomProvider['kind']; label: string; base_url: string; models: string[] }) {
+  /** Official APIs with a free tier, all OpenAI-compatible. The key is read from the named environment variable when none is typed. */
+  const FREE_CLOUD = [
+    { name: 'Google Gemini', base: 'https://generativelanguage.googleapis.com/v1beta/openai', keyEnv: 'GEMINI_API_KEY', model: 'gemini-flash-latest', note: 'Gemini Flash, generous daily limit', keyUrl: 'https://aistudio.google.com/app/apikey' },
+    { name: 'Groq', base: 'https://api.groq.com/openai/v1', keyEnv: 'GROQ_API_KEY', model: '', note: 'Very fast open models', keyUrl: 'https://console.groq.com/keys' },
+    { name: 'Cerebras', base: 'https://api.cerebras.ai/v1', keyEnv: 'CEREBRAS_API_KEY', model: '', note: 'High throughput open models', keyUrl: 'https://cloud.cerebras.ai' },
+    { name: 'OpenRouter (free)', base: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY', model: '', note: 'Many ":free" models, one key', keyUrl: 'https://openrouter.ai/settings/keys' },
+  ];
+  /** The free cloud provider being edited, found by its address: its name and logo are fixed. */
+  const freePreset = $derived(draft ? FREE_CLOUD.find((preset) => preset.base === draft?.baseUrl.trim().replace(/\/+$/, '')) : undefined);
+
+  /** Opens the provider form filled in for a free cloud API: paste the key, Test lists its models, Save. */
+  function useFreeCloud(preset: (typeof FREE_CLOUD)[number]) {
+    draft = { ...blank(), name: preset.name, kind: 'openai', baseUrl: preset.base, keyEnv: preset.keyEnv, defaultModel: preset.model, restricted: true };
+    probeNote = { ok: true, text: `Paste your ${preset.name} key (or set ${preset.keyEnv}), then Load models.` };
+  }
+
+  function useLocal(server:{ kind: CustomProvider['kind']; label: string; base_url: string; models: string[] }) {
     draft = { ...blank(), name: server.label, kind: server.kind, baseUrl: server.base_url, models: server.models, defaultModel: server.models[0] ?? '' };
     probeNote = { ok: true, text: `${server.models.length} models found` };
   }
@@ -284,6 +304,52 @@
   $effect(() => {
     if (settings.open && settings.section === 'sync') void countArchive();
   });
+
+  // Export / import of the app's data: a stand-in for sync, so a new install gets its settings back in one step.
+  const transfer = $state({ withKeys: false, withHistory: false, busy: '' as '' | 'export' | 'import' });
+  let transferNote = $state<{ ok: boolean; text: string } | null>(null);
+  /** An export picked for import, waiting for the user to confirm. */
+  let pending = $state<ExportFile | null>(null);
+
+  async function runExport() {
+    transfer.busy = 'export';
+    transferNote = null;
+    try {
+      const done = await exportData({ withKeys: transfer.withKeys, withHistory: transfer.withHistory });
+      if (done) transferNote = { ok: true, text: `Exported ${done.summary} to ${done.path}` };
+    } catch (error) {
+      transferNote = { ok: false, text: error instanceof Error ? error.message : String(error) };
+    } finally {
+      transfer.busy = '';
+    }
+  }
+
+  async function pickImport() {
+    transferNote = null;
+    try {
+      const text = await pickExport();
+      if (text === null) return;
+      const parsed = parseExport(text);
+      if (parsed.ok) pending = parsed.file;
+      else transferNote = { ok: false, text: parsed.error };
+    } catch (error) {
+      transferNote = { ok: false, text: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async function confirmImport() {
+    if (!pending) return;
+    transfer.busy = 'import';
+    try {
+      await importData(pending);
+      // Every store read its data at start: reload so the imported settings are the ones in use.
+      location.reload();
+    } catch (error) {
+      transferNote = { ok: false, text: error instanceof Error ? error.message : String(error) };
+      transfer.busy = '';
+      pending = null;
+    }
+  }
 
   // --- Alerts ---------------------------------------------------------------------------------------------
   const active = $derived(warnings(ticker.min));
@@ -407,24 +473,34 @@
                   {refreshingDetect ? 'Retrying…' : 'Try again'}
                 </ZButton>
               </div>
-            {:else if !connectors.detected}
-              <!-- First load: placeholders in the shape of the cards, replaced by the real ones fading in. -->
-              <div class="flex flex-col gap-4" out:fade={{ duration: 120 }} aria-busy="true" aria-label="Loading connectors">
+            {:else}
+            <!-- Placeholders and the real cards share one grid cell: the cards fade in over the placeholders as they fade
+                 out, so nothing is pushed down or jumps while they swap. -->
+            <div class="grid">
+            {#if !connectors.detected}
+              <div class="col-start-1 row-start-1 flex flex-col gap-4" out:fade={{ duration: 180 }} aria-busy="true" aria-label="Loading connectors">
                 {#each CARDS as card (card.id)}
-                  <div class="animate-pulse rounded-xl border border-border bg-card/40 p-4">
-                    <div class="flex items-center gap-3">
+                  <div class="animate-pulse rounded-xl border border-border bg-card/40">
+                    <div class="flex items-start gap-3 p-4">
                       <span class="size-10 shrink-0 rounded-lg bg-muted"></span>
-                      <span class="flex flex-1 flex-col gap-2">
+                      <span class="flex flex-1 flex-col gap-2 pt-0.5">
                         <span class="h-3.5 w-32 rounded bg-muted"></span>
                         <span class="h-3 w-56 max-w-full rounded bg-muted/70"></span>
+                        <span class="h-2.5 w-40 max-w-full rounded bg-muted/50"></span>
                       </span>
                       <span class="h-8 w-24 rounded-md bg-muted"></span>
                     </div>
+                    {#if card.accounts || card.id === 'agy'}
+                      <div class="border-t border-border/70 px-4 py-3">
+                        <span class="mb-2 block h-3 w-28 rounded bg-muted/70"></span>
+                        <span class="block h-12 rounded-lg bg-muted/40"></span>
+                      </div>
+                    {/if}
                   </div>
                 {/each}
               </div>
             {:else}
-            <div class="flex flex-col gap-4">
+            <div class="col-start-1 row-start-1 flex flex-col gap-4" in:fade={{ duration: 220, delay: 60 }}>
               {#each CARDS as card (card.id)}
                 {@const info = loginOf(card.id)}
                 {@const path = tool(card.binary)?.path}
@@ -681,7 +757,9 @@
                                   <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Refresh usage" title="Reload usage and reset credits" disabled={Boolean(busyOf('accounts:codex'))} onclick={() => { refreshing = account.email; void refreshAccounts('codex', true).finally(() => (refreshing = '')); }}>
                                     <ZIcon zType={icon('lucideRefreshCw')} class="size-3 {refreshing === account.email ? 'animate-spin' : ''}" />
                                   </ZButton>
-                                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 px-2 text-[11px]" disabled={resetCredits === undefined || resetCredits < 1 || resetBusy} onclick={() => (resetAsk = account.email)}>Reset limit</ZButton>
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 gap-1 px-2 text-[11px] {resetBusy ? 'border-primary/40 text-primary' : ''}" aria-busy={resetBusy} disabled={resetCredits === undefined || resetCredits < 1 || resetBusy} onclick={() => (resetAsk = account.email)}>
+                                    {#if resetBusy}<ZIcon zType={icon('lucideLoaderCircle')} class="size-3 animate-spin" />Resetting…{:else}Reset limit{/if}
+                                  </ZButton>
                                 </div>
                                 {#if resetError}<p class="mt-1 text-[11px] text-destructive" role="alert">{resetError}</p>{/if}
                               {/if}
@@ -709,6 +787,8 @@
                   {/if}
                 </section>
               {/each}
+            </div>
+            {/if}
             </div>
 
             {/if}
@@ -741,6 +821,32 @@
                 {/if}
               </section>
 
+              <section aria-label="Free cloud providers">
+                <h3 class="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Free cloud providers</h3>
+                <p class="mb-2 text-xs text-muted-foreground">Official APIs with a free tier, for small jobs (an email, a summary, a quick search). The key button opens the page where you create a free API key; then press + , paste the key and Test. Limits change often.</p>
+                <ul class="grid gap-2 sm:grid-cols-2">
+                  {#each FREE_CLOUD as preset (preset.name)}
+                    <li class="flex min-w-0 items-center gap-2.5 rounded-lg border border-border px-3 py-2 text-xs">
+                      <img src={brandLogoFor(preset.base)} alt="" class="size-5 shrink-0 rounded-sm object-contain" />
+                      <span class="min-w-0 flex-1">
+                        <span class="block text-sm font-medium">{preset.name}</span>
+                        <span class="block truncate text-muted-foreground" title={preset.note}>{preset.note}</span>
+                      </span>
+                      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Get a {preset.name} API key" title="Get a free API key ({preset.keyUrl.replace('https://', '')})" onclick={() => void openExternal(preset.keyUrl)}>
+                        <ZIcon zType={icon('lucideKeyRound')} class="size-3.5" />
+                      </ZButton>
+                      {#if connectors.custom.some((item) => item.baseUrl === preset.base)}
+                        <span class="grid size-7 shrink-0 place-items-center text-primary" title="Added"><ZIcon zType={icon('lucideCheck')} class="size-3.5" /></span>
+                      {:else}
+                        <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Add {preset.name}" title="Add {preset.name}" onclick={() => useFreeCloud(preset)}>
+                          <ZIcon zType={icon('lucidePlus')} class="size-3.5" />
+                        </ZButton>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </section>
+
               <section aria-label="Custom providers">
                 <div class="mb-2 flex items-center gap-2">
                   <h3 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Custom providers</h3>
@@ -762,12 +868,22 @@
                         <div class="flex flex-col gap-1 text-xs">
                           <span class="font-medium">Name and logo</span>
                           <div class="flex items-center gap-2">
-                            <label class="group relative grid size-9 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-lg border border-dashed border-border bg-muted/40 transition-colors hover:border-primary/60 hover:bg-primary/5" title="Upload a logo">
-                              {#if draft.logo}<img src={draft.logo} alt="" class="size-6 object-contain" />{:else}<ZIcon zType={icon('lucideUpload')} class="size-4 text-muted-foreground group-hover:text-primary" />{/if}
-                              <input type="file" accept="image/*" class="sr-only" onchange={(event) => { void pickLogo(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} />
-                            </label>
-                            <div class="min-w-0 flex-1"><ZInput bind:value={draft.name} zPlaceholder="My LiteLLM" /></div>
-                            {#if draft.logo}<button type="button" class="shrink-0 text-[11px] text-muted-foreground hover:text-destructive" onclick={() => { if (draft) draft.logo = undefined; }}>Remove</button>{/if}
+                            <!-- A known provider shows its own logo (no upload). A free cloud provider's name is read-only; a
+                                 custom endpoint takes an uploaded logo and any name. -->
+                            {#if brandLogoFor(draft.baseUrl)}
+                              <span class="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-muted/40"><img src={brandLogoFor(draft.baseUrl)} alt="" class="size-6 object-contain" /></span>
+                            {:else}
+                              <label class="group relative grid size-9 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-lg border border-dashed border-border bg-muted/40 transition-colors hover:border-primary/60 hover:bg-primary/5" title="Upload a logo">
+                                {#if draft.logo}<img src={draft.logo} alt="" class="size-6 object-contain" />{:else}<ZIcon zType={icon('lucideUpload')} class="size-4 text-muted-foreground group-hover:text-primary" />{/if}
+                                <input type="file" accept="image/*" class="sr-only" onchange={(event) => { void pickLogo(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} />
+                              </label>
+                            {/if}
+                            {#if freePreset}
+                              <div class="min-w-0 flex-1" title="The name of a free cloud provider is fixed"><ZInput value={freePreset.name} zReadonly /></div>
+                            {:else}
+                              <div class="min-w-0 flex-1"><ZInput bind:value={draft.name} zPlaceholder="My LiteLLM" /></div>
+                            {/if}
+                            {#if draft.logo && !brandLogoFor(draft.baseUrl)}<button type="button" class="shrink-0 text-[11px] text-muted-foreground hover:text-destructive" onclick={() => { if (draft) draft.logo = undefined; }}>Remove</button>{/if}
                           </div>
                         </div>
                         <div class="flex flex-col gap-1 text-xs">
@@ -789,15 +905,18 @@
                       <div class="rounded-lg border border-border bg-muted/30 p-3">
                         <div class="flex flex-wrap items-center gap-2">
                           <span class="text-xs font-medium">Models</span>
-                          {#if probeNote}
-                            <span class="inline-flex items-center gap-1 text-xs {probeNote.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}" role="status">
-                              <ZIcon zType={icon(probeNote.ok ? 'lucideCircleCheck' : 'lucideCircleX')} class="size-3.5" />{probeNote.text}
-                            </span>
-                          {/if}
                           <ZButton zWave={false} zType="outline" zSize="sm" class="ml-auto h-7 gap-1.5 px-2.5 text-xs" disabled={probing || !draft.baseUrl} onclick={() => void test()}>
                             <ZIcon zType={icon(probing ? 'lucideLoaderCircle' : 'lucideRefreshCw')} class="size-3.5 {probing ? 'animate-spin' : ''}" /> {draft.models.length ? 'Reload models' : 'Load models'}
                           </ZButton>
                         </div>
+                        <!-- One line always kept for the note, so loading, a result or an error never moves the form. -->
+                        <p class="mt-1.5 flex h-4 min-w-0 items-center gap-1 text-xs transition-colors duration-200 {probing ? 'text-muted-foreground' : probeNote?.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}" role="status" title={probeNote?.text}>
+                          {#if probing}
+                            <ZIcon zType={icon('lucideLoaderCircle')} class="size-3.5 shrink-0 animate-spin" /><span class="truncate">Loading models…</span>
+                          {:else if probeNote}
+                            <ZIcon zType={icon(probeNote.ok ? 'lucideCircleCheck' : 'lucideCircleX')} class="size-3.5 shrink-0" /><span class="truncate">{probeNote.text}</span>
+                          {/if}
+                        </p>
                         {#if draft.models.length > 0}
                           <label class="mt-2.5 flex flex-col gap-1 text-xs">
                             <span class="text-muted-foreground">Default model</span>
@@ -809,6 +928,14 @@
                             <ZInput bind:value={draft.defaultModel} zPlaceholder="qwen3-coder:30b" />
                           </label>
                         {/if}
+                      </div>
+
+                      <div class="flex items-start gap-3 rounded-lg border border-border p-3">
+                        <div class="min-w-0 flex-1">
+                          <div class="text-xs font-medium">Free tier: keep private data away</div>
+                          <p class="mt-0.5 text-[11px] text-muted-foreground">Free plans may keep and train on what they are sent. This provider then gets web search only: no files, code, terminal, browser or MCP tools, and no project text. Other agents may hand it light public work (search, emails, prompts, scripts) after checking it holds nothing private.</p>
+                        </div>
+                        <ZSwitch checked={Boolean(draft.restricted)} zSize="sm" onChange={(value) => { if (draft) draft.restricted = value; }} />
                       </div>
                     </div>
 
@@ -826,9 +953,9 @@
                     <!-- The provider being edited is shown by the form above, not twice. -->
                     {#each connectors.custom.filter((item) => item.id !== draft?.id) as provider (provider.id)}
                       <li class="flex items-center gap-3 rounded-lg border border-border p-3">
-                        <span class="grid size-8 shrink-0 place-items-center rounded-md bg-muted">{#if provider.logo}<img src={provider.logo} alt="" class="size-5 object-contain" />{:else}<ZIcon zType={icon('lucideServer')} class="size-4" />{/if}</span>
+                        <span class="grid size-8 shrink-0 place-items-center rounded-md bg-muted">{#if providerLogo(provider)}<img src={providerLogo(provider)} alt="" class="size-5 object-contain" />{:else}<ZIcon zType={icon('lucideServer')} class="size-4" />{/if}</span>
                         <span class="min-w-0 flex-1">
-                          <span class="block truncate text-sm font-medium">{provider.name}</span>
+                          <span class="flex items-center gap-1.5 truncate text-sm font-medium">{provider.name}{#if provider.restricted}<span class="shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400" title="May train on what it is sent: gets no project data">Free tier</span>{/if}</span>
                           <span class="block truncate text-[11px] text-muted-foreground">{KINDS.find((kind) => kind.value === provider.kind)?.label} · {provider.baseUrl}{provider.defaultModel ? ` · ${provider.defaultModel}` : ''}{provider.apiKey ? ` · key ••••${provider.apiKey.slice(-4)}` : ''}</span>
                         </span>
                         <ZSwitch bind:checked={provider.enabled} zSize="sm" />
@@ -866,6 +993,43 @@
                 <p class="mt-2 text-xs text-muted-foreground">
                   {#if archived}<b class="text-foreground tabular-nums">{archived.messages}</b> messages in <b class="text-foreground tabular-nums">{archived.chats}</b> chats saved so far (from chats made since this was added).{:else}Counting…{/if}
                 </p>
+              </section>
+
+              <section class="rounded-xl border border-border p-4" aria-label="Export and import">
+                <div class="text-sm font-medium">Export and import</div>
+                <p class="mt-0.5 text-xs text-muted-foreground">Until sync is ready: save settings, custom providers, flows, permissions, layout and theme to a file, and import it on another computer or after a reinstall.</p>
+                <fieldset class="m-0 mt-3 flex flex-col gap-2 border-0 p-0" aria-label="What the export holds">
+                  <div class="flex min-h-9 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs">
+                    <ZIcon zType={icon('lucideMessagesSquare')} class="size-4 shrink-0 text-muted-foreground" />
+                    <span class="min-w-0 flex-1"><span class="font-medium">Include chat history</span> <span class="text-muted-foreground">(bigger file)</span></span>
+                    <ZSwitch checked={transfer.withHistory} zSize="sm" onChange={(value) => (transfer.withHistory = value)} />
+                  </div>
+                  <div class="flex min-h-9 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs">
+                    <ZIcon zType={icon('lucideKeyRound')} class="size-4 shrink-0 text-muted-foreground" />
+                    <span class="min-w-0 flex-1"><span class="font-medium">Include provider API keys</span> <span class="text-muted-foreground">(stored as plain text in the file)</span></span>
+                    <ZSwitch checked={transfer.withKeys} zSize="sm" onChange={(value) => (transfer.withKeys = value)} />
+                  </div>
+                </fieldset>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={transfer.busy !== ''} onclick={() => void runExport()}>
+                    <ZIcon zType={icon(transfer.busy === 'export' ? 'lucideLoaderCircle' : 'lucideDownload')} class="size-3.5 {transfer.busy === 'export' ? 'animate-spin' : ''}" /> Export data
+                  </ZButton>
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={transfer.busy !== ''} onclick={() => void pickImport()}>
+                    <ZIcon zType={icon('lucideUpload')} class="size-3.5" /> Import data
+                  </ZButton>
+                </div>
+                {#if pending}
+                  <div class="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs" role="alert">
+                    <p>Import {describeExport(pending)} from {new Date(pending.exportedAt).toLocaleString()}? Settings with the same name are replaced, the rest stay. AgentDeck reloads afterwards.{pending.withKeys ? '' : ' The file has no API keys: providers keep the keys saved on this computer.'}</p>
+                    <div class="mt-2 flex justify-end gap-2">
+                      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 px-2.5 text-xs" disabled={transfer.busy === 'import'} onclick={() => (pending = null)}>Cancel</ZButton>
+                      <ZButton zWave={false} zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={transfer.busy === 'import'} onclick={() => void confirmImport()}>
+                        {#if transfer.busy === 'import'}<ZIcon zType={icon('lucideLoaderCircle')} class="size-3.5 animate-spin" />{/if}Import and reload
+                      </ZButton>
+                    </div>
+                  </div>
+                {/if}
+                {#if transferNote}<p class="mt-2 text-xs break-all {transferNote.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}" role="status">{transferNote.text}</p>{/if}
               </section>
 
               <ul class="flex flex-col gap-3">
@@ -927,7 +1091,44 @@
                   <div class="text-sm font-medium">System notification</div>
                   <p class="mt-0.5 text-xs text-muted-foreground">Show quota warnings and finished session tasks in Windows, macOS, or Linux notifications.</p>
                 </div>
+                <ZButton
+                  zWave={false}
+                  zType="outline"
+                  zSize="sm"
+                  class="h-7! shrink-0 px-2.5 text-xs"
+                  onclick={async () => {
+                    const problem = await testSystemNotification();
+                    if (problem) toast.error(problem);
+                    else toast.success('Test notification sent. If nothing appeared, check Focus Assist / Do Not Disturb.');
+                  }}>Send a test</ZButton>
                 <ZSwitch checked={connectors.alerts.system} zSize="sm" onChange={(value) => void allowSystemNotifications(value)} />
+              </section>
+
+              <section class="rounded-xl border border-border p-4">
+                <div class="flex items-start gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm font-medium">Keep working when an agent fails</div>
+                    <p class="mt-0.5 text-xs text-muted-foreground">A passing error is tried again. At a usage limit or a sign-out the next agent below carries on from where it stopped. Accounts are never switched automatically: switch them yourself.</p>
+                  </div>
+                  <ZSwitch checked={connectors.recovery.enabled} zSize="sm" onChange={(value) => (connectors.recovery.enabled = value)} />
+                </div>
+                <div class="mt-3 flex items-start gap-3 rounded-lg border border-border px-3 py-2.5">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-xs font-medium">Auto-continue when a limit resets</div>
+                    <p class="mt-0.5 text-[11px] text-muted-foreground">When a chat stops at a usage limit and no other agent can take over, it carries on by itself once the limit resets (the time is read from the error or the account's usage). A card above the message box shows the time and lets you cancel or try again now.</p>
+                  </div>
+                  <ZSwitch checked={connectors.recovery.autoResume} zSize="sm" onChange={(value) => (connectors.recovery.autoResume = value)} />
+                </div>
+                <ol class="mt-3 flex flex-col gap-1 {connectors.recovery.enabled ? '' : 'pointer-events-none opacity-50'}" aria-label="Order of agents to carry on with">
+                  {#each connectors.recovery.chain as agent, index (agent)}
+                    <li class="flex items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-xs">
+                      <span class="w-4 text-center tabular-nums text-muted-foreground">{index + 1}</span>
+                      <span class="flex-1 capitalize">{agent}</span>
+                      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0" aria-label="Move up" disabled={index === 0} onclick={() => { const list = [...connectors.recovery.chain]; [list[index - 1], list[index]] = [list[index], list[index - 1]]; connectors.recovery.chain = list; }}><ZIcon zType={'lucideChevronUp' as ZIconName} class="size-3.5" /></ZButton>
+                      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0" aria-label="Move down" disabled={index === connectors.recovery.chain.length - 1} onclick={() => { const list = [...connectors.recovery.chain]; [list[index + 1], list[index]] = [list[index], list[index + 1]]; connectors.recovery.chain = list; }}><ZIcon zType={'lucideChevronDown' as ZIconName} class="size-3.5" /></ZButton>
+                    </li>
+                  {/each}
+                </ol>
               </section>
 
               <section aria-label="Right now">

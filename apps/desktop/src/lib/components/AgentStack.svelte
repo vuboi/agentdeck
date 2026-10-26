@@ -1,8 +1,8 @@
 <script lang="ts">
   import AgentLogo from './AgentLogo.svelte';
   import { ZIcon } from '@shival99/z-ui-svelte';
-  import { customProviderName } from '../models.svelte';
-  import { AGENT_ICON, AGENT_TEXT, AGENTS, type Agent } from '../sessions.svelte';
+  import { agentDisplayName } from '../provider-registry';
+  import { AGENTS, type Agent } from '../sessions.svelte';
 
   // Overlapping brand logos for a chat that several agents work on together.
   // A custom agent is named after its provider, from the model it used in this chat.
@@ -12,7 +12,7 @@
   const extra = $derived(agents.length - shown.length);
   const names = $derived(
     agents
-      .map((agent) => (agent === 'custom' && customProviderName(models?.custom)) || AGENTS.find((item) => item.value === agent)?.label || agent)
+      .map((agent) => agent === 'custom' ? agentDisplayName(agent, models?.[agent]) : (AGENTS.find((item) => item.value === agent)?.label ?? agent))
       .join(', '),
   );
 </script>
@@ -20,7 +20,7 @@
 <span class="flex shrink-0 items-center -space-x-1" role="img" aria-label="Agents: {names}" title={names}>
   {#each shown as agent (agent)}
     <span class="grid size-4.5 place-items-center rounded-full bg-background">
-      <AgentLogo agent={agent} class="size-3 {agent === 'codex' ? 'text-foreground [&_path]:fill-current' : AGENT_TEXT[agent]}" />
+      <AgentLogo agent={agent} model={models?.[agent]} class="size-3" />
     </span>
   {/each}
   {#if extra > 0}

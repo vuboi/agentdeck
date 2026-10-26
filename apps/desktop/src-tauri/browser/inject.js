@@ -470,6 +470,13 @@
   // Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes, while marking up and not writing a comment.
   const annKey = (event) => {
     if (!ann || ann.editing) return;
+    if (ann.tool === 'region' && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      annStop();
+      post({ kind: 'capture-region-cancel' });
+      return;
+    }
     if ((event.key === 'Delete' || event.key === 'Backspace') && ann.selected) {
       event.preventDefault();
       event.stopPropagation();
@@ -524,7 +531,7 @@
     event.preventDefault();
     event.stopPropagation();
     const at = annAt(event);
-    if (ann.tool === 'arrow' || ann.tool === 'box') ann.drag = { x0: at.x, y0: at.y, ...at };
+    if (ann.tool === 'arrow' || ann.tool === 'box' || ann.tool === 'region') ann.drag = { x0: at.x, y0: at.y, ...at };
   };
 
   const annUp = (event) => {
@@ -533,6 +540,18 @@
     event.stopPropagation();
     const d = ann.drag;
     ann.drag = null;
+    if (ann.tool === 'region') {
+      const box = { x: Math.round(Math.min(d.x0, d.x) - scrollX), y: Math.round(Math.min(d.y0, d.y) - scrollY), w: Math.round(Math.abs(d.x - d.x0)), h: Math.round(Math.abs(d.y - d.y0)) };
+      const viewport = { w: innerWidth, h: innerHeight };
+      document.addEventListener('click', (click) => {
+        click.preventDefault();
+        click.stopPropagation();
+      }, { capture: true, once: true });
+      annStop();
+      if (box.w >= 12 && box.h >= 12) post({ kind: 'capture-region', box, viewport });
+      else post({ kind: 'capture-region-cancel' });
+      return;
+    }
     if (Math.hypot(d.x - d.x0, d.y - d.y0) < 12) return annRender();
     if (ann.tool === 'arrow') annAdd({ type: 'arrow', x1: d.x0, y1: d.y0, x2: d.x, y2: d.y });
     else annAdd({ type: 'box', x1: Math.min(d.x0, d.x), y1: Math.min(d.y0, d.y), x2: Math.max(d.x0, d.x), y2: Math.max(d.y0, d.y) });
@@ -587,6 +606,19 @@
     }
     ann.tool = tool;
     ann.hover = null;
+    if (tool === 'region') {
+      let instruction = ann.root.querySelector('[data-ann-region-instruction]');
+      if (!instruction) {
+        instruction = document.createElement('div');
+        instruction.dataset.annRegionInstruction = '';
+        instruction.setAttribute('data-ann-ui', '');
+        instruction.textContent = 'Drag to select a region · Esc to cancel';
+        instruction.style.cssText = 'position:fixed;left:50%;top:16px;transform:translateX(-50%);padding:8px 12px;border:1px solid rgba(255,255,255,.18);border-radius:8px;background:#171717;color:#fff;font:12px/1.3 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35);z-index:2147483647;pointer-events:none';
+        ann.root.appendChild(instruction);
+      }
+    } else {
+      ann.root.querySelector('[data-ann-region-instruction]')?.remove();
+    }
     annRender();
   };
 

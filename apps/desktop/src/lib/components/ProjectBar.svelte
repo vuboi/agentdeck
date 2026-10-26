@@ -8,6 +8,8 @@
   import { toast } from '../toast';
   import { addAccount, cancelLogin, connectors, installed, login, refreshAccounts, refreshAgyAccounts, switchAccount, switchAgyAccount, type Account, type AccountProvider, type AgyAccount } from '../connectors.svelte';
   import AgentLogo from './AgentLogo.svelte';
+  import { ticker } from '../clock.svelte';
+  import { resetCountdown, steadyReset } from '../countdown';
 
   // Under the message box: the project the chat works in (switchable while the chat is new, "This computer" by default)
   // and the git branch of that project, which can be switched. A chat that has started keeps its folder.
@@ -84,6 +86,25 @@
     }
     const now = Date.now();
     return entry.account.usage.filter((window) => window.pct >= 100 && (window.resets_at === null || window.resets_at * 1000 > now)).map((window) => window.label);
+  }
+  /**
+   * When the account can be used again, or (not at a limit) when its next window resets. A limited account is free once
+   * every full window has reset, so that is the latest of those. Antigravity tells its windows only for the account in
+   * use (the status line agy writes).
+   */
+  function nextReset(entry: QuickAccount): { at: number; label: string } | null {
+    const now = Date.now() / 1000;
+    const windows = entry.provider === 'agy' ? (entry.account.active ? (connectors.agyQuota?.groups.flatMap((group) => group.windows) ?? []) : []) : entry.account.usage;
+    const live = windows.filter((window): window is typeof window & { resets_at: number } => window.resets_at !== null && window.resets_at > now);
+    const full = live.filter((window) => window.pct >= 100);
+    const at = (window: (typeof live)[number]) => steadyReset(`${entry.provider}:${entry.account.id}:${window.label}`, window.resets_at);
+    if (full.length) {
+      const last = full.reduce((a, b) => (at(b) > at(a) ? b : a));
+      return { at: at(last), label: last.label };
+    }
+    if (!live.length) return null;
+    const first = live.reduce((a, b) => (at(b) < at(a) ? b : a));
+    return { at: at(first), label: `${first.label} ${Math.round(first.pct)}%` };
   }
   type AccountState = 'in-use' | 'switch' | 'limit' | 'sign-in';
   function accountState(entry: QuickAccount): AccountState {
@@ -337,13 +358,14 @@
             </ZButton>
           {/if}
         </div>
-        <div class="flex max-h-[max(180px,30vh)] flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-1" {@attach glide()}>
+        <div class="flex max-h-[max(180px,30vh)] flex-col overflow-x-hidden overflow-y-auto p-1 [&>button+button]:mt-1 [&>button+button]:before:absolute [&>button+button]:before:inset-x-2 [&>button+button]:before:-top-0.5 [&>button+button]:before:h-px [&>button+button]:before:bg-border [&>button+button]:before:content-['']" {@attach glide()}>
           {#each sortedAccountRows as entry (entryKey(entry))}
             {@const active = entry.account.active}
             {@const expired = needsLogin(entry)}
             {@const exhausted = exhaustedLimits(entry)}
             {@const unavailable = expired || exhausted.length > 0}
             {@const state = accountState(entry)}
+            {@const reset = expired ? null : nextReset(entry)}
             {@const tagStyle = state === 'in-use' ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'}
             <button
               type="button"
@@ -353,13 +375,14 @@
               aria-disabled={exhausted.length > 0 && !expired}
               disabled={exhausted.length > 0 && !expired}
               title={exhausted.length ? `Limit reached: ${exhausted.join(', ')}` : undefined}
-              class="flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none {exhausted.length ? 'cursor-not-allowed text-muted-foreground/55' : 'cursor-pointer'} {active && !unavailable ? 'bg-primary/10' : ''}"
+              class="relative flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none {exhausted.length ? 'cursor-not-allowed text-muted-foreground/55' : 'cursor-pointer'} {active && !unavailable ? 'bg-primary/10' : ''}"
               onclick={() => beginAccountAction(entry)}
             >
               <ZIcon zType={icon(expired ? 'lucideLogIn' : exhausted.length ? 'lucideCircleOff' : active ? 'lucideCheck' : 'lucideArrowLeftRight')} class="size-3.5 shrink-0 {expired ? 'text-warning' : exhausted.length ? 'text-muted-foreground/55' : active ? 'text-primary' : 'text-muted-foreground'}" />
               <span class="min-w-0 flex-1">
                 <span class="block truncate font-medium {unavailable ? 'text-muted-foreground/60' : 'text-foreground'}">{entry.account.email}</span>
-                {#if exhausted.length}<span class="mt-0.5 block truncate text-[10px]">Limit reached · {exhausted.join(', ')}</span>
+                {#if exhausted.length}<span class="mt-0.5 block truncate text-[10px]">Limit reached · {exhausted.join(', ')}{#if reset} · <span class="font-medium text-foreground/80 tabular-nums">resets in {resetCountdown(reset.at, ticker.sec)}</span>{/if}</span>
+                {:else if reset}<span class="mt-0.5 block truncate text-[10px] text-muted-foreground">{reset.label} · <span class="tabular-nums">resets in {resetCountdown(reset.at, ticker.sec)}</span></span>
                 {:else if entry.account.status}<span class="mt-0.5 block truncate text-[10px] text-muted-foreground">{entry.account.status}</span>{/if}
               </span>
               <span class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase {tagStyle}">{state === 'sign-in' ? 'Sign in' : state === 'limit' ? 'Limit' : state === 'in-use' ? 'In use' : 'Switch'}</span>

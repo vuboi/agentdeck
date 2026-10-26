@@ -35,6 +35,8 @@
     projectOf,
     queued,
     steerQueued,
+    runQueuedBeside,
+    canRunBeside,
     type Queued,
     sendMessage,
     stopTurn,
@@ -52,6 +54,8 @@
   import FileChip from './FileChip.svelte';
   import { clipFromPaste, imageMime, isImageName } from '../attachments';
   import { fileSize, saveFileAttachment } from '../agent';
+  import { customProviderOf } from '../provider-registry';
+  import { onUsage, shortCount, totalTokens, usageLog, usd } from '../usage';
   import { inTauri } from '../history';
   import { toast } from '../toast';
   import ModelPicker from './ModelPicker.svelte';
@@ -59,6 +63,8 @@
     connectors,
     refreshAccounts,
     refreshAgyQuota,
+    refreshProviderQuota,
+    providerQuotas,
     type UsageWindow,
   } from '../connectors.svelte';
 
@@ -218,10 +224,42 @@
     return () => clearInterval(timer);
   });
 
+  // A custom provider (OpenRouter…) of the chosen model: its credit left when it tells it, else what was used today.
+  const customProvider = $derived(agent === 'custom' ? customProviderOf(model) : undefined);
+  $effect(() => {
+    const provider = customProvider;
+    if (!provider || !inTauri()) return;
+    void refreshProviderQuota(provider);
+    const timer = window.setInterval(() => void refreshProviderQuota(provider), 120_000);
+    return () => clearInterval(timer);
+  });
+  /** What this provider's key can still spend (OpenRouter), or its free-tier note. */
+  const keyQuota = $derived(customProvider ? providerQuotas[customProvider.id] : undefined);
+
+  // What was used today with this agent (or custom provider), counted from the replies the app finished.
+  let todayUsed = $state<{ tokens: number; replies: number; cost: number } | null>(null);
+  async function readToday() {
+    const log = await usageLog();
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    const mine = log.filter((item) => new Date(item.at) >= from && item.agent === agent && (agent !== 'custom' || customProviderOf(item.model)?.id === customProvider?.id));
+    todayUsed = { tokens: mine.reduce((sum, item) => sum + totalTokens(item.tokens), 0), replies: mine.length, cost: mine.reduce((sum, item) => sum + (item.cost ?? 0), 0) };
+  }
+  $effect(() => {
+    void agent;
+    void customProvider?.id;
+    void readToday();
+    return onUsage(() => void readToday());
+  });
+
   const quota = $derived.by(() => {
     let windows: UsageWindow[] = [];
     let observedAt: number | null = null;
-    if (agent === 'claude' || agent === 'codex') {
+    if (keyQuota && keyQuota.limit && keyQuota.remaining !== null) {
+      // A key with a credit limit reads like a quota window: the share still left.
+      windows = [{ label: 'credit', pct: Math.min(100, ((keyQuota.limit - keyQuota.remaining) / keyQuota.limit) * 100), resets_at: null }];
+      observedAt = keyQuota.at;
+    } else if (agent === 'claude' || agent === 'codex') {
       const account = connectors.accounts[agent]?.accounts.find(
         (item) => item.active,
       );
@@ -376,6 +414,25 @@
   $effect(() => {
     const id = workspace.activeId;
     if (id) untrack(() => applyPickerFor(id));
+  });
+
+  // A chat moved to another agent by itself (its agent failed and the next one of the chain took over): its picker
+  // follows, so the next message goes to the agent now in charge.
+  $effect(() => {
+    const moved = (event: Event) => {
+      const { sessionId: id, agent: next, model: nextModel } = (event as CustomEvent<{ sessionId: string; agent: Agent; model: string }>).detail;
+      const saved = pickers[id];
+      if (saved) {
+        pickers[id] = { ...saved, agent: next, model: nextModel };
+        setPref('composer.pickers', pickers);
+      }
+      if (id === workspace.activeId) {
+        agent = next;
+        model = nextModel;
+      }
+    };
+    window.addEventListener('agentdeck:agent-moved', moved);
+    return () => window.removeEventListener('agentdeck:agent-moved', moved);
   });
 
   // Any change of the picker: remember it for this session and make it the session's model.
@@ -812,7 +869,7 @@
     void addFiles(files);
   }
 
-  function submit(whileRunning: 'queue' | 'interrupt' = 'queue') {
+  function submit(whileRunning: 'beside' | 'queue' | 'interrupt' = 'beside') {
     if (!hasInput) return;
     // Handing work to an agent needs words that say what the work is.
     if (mentions.some((entry) => entry.kind === 'ai') && !draft.trim()) return;
@@ -857,8 +914,9 @@
       });
     } else if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      // While the agent works: Enter waits in line, Ctrl+Enter (Cmd+Enter on a Mac) stops it and goes first.
-      submit(event.ctrlKey || event.metaKey ? 'interrupt' : 'queue');
+      // While the agent works: Enter is answered beside it at once, Alt+Enter waits in line, Ctrl+Enter (Cmd+Enter on a
+      // Mac) stops it and goes first.
+      submit(event.ctrlKey || event.metaKey ? 'interrupt' : event.altKey ? 'queue' : 'beside');
     }
   }
 </script>
@@ -921,6 +979,17 @@
                   : 'Element')}</span
           >
           <span class="flex shrink-0 items-center gap-0.5">
+            {#if canRunBeside(sessionId, item)}
+              <button
+                type="button"
+                class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+                {@attach zTooltip({ content: 'Answer it now, beside the running turn', position: 'top' })}
+                onclick={() => runQueuedBeside(sessionId, item)}
+              >
+                <ZIcon zType={'lucideSplit' as ZIconName} class="size-3" />
+                <span>Beside</span>
+              </button>
+            {/if}
             <button
               type="button"
               class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -1131,7 +1200,7 @@
     wrap="soft"
     aria-label="Message"
     placeholder={running
-      ? `Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt`
+      ? `Enter runs beside · ${mac ? '⌥' : 'Alt'}+Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt`
       : 'Do anything…'}
     class="max-h-45 min-h-10 w-[calc(100%+0.5rem)] resize-none overflow-x-hidden break-words border-0 bg-transparent pt-0 pr-2 pb-1 pl-0.5 text-sm leading-normal outline-none placeholder:text-muted-foreground"
   ></textarea>
@@ -1220,10 +1289,10 @@
         zSize="default"
         class="size-7! shrink-0 rounded-full p-0"
         disabled={!hasInput}
-        aria-label={running ? 'Add to the queue' : 'Send message'}
+        aria-label={running ? 'Send beside the running turn' : 'Send message'}
         {@attach zTooltip({
           content: running
-            ? `Add to the queue · ${mac ? '⌘' : 'Ctrl'}+Enter to stop and send now`
+            ? `Answer beside the running turn · ${mac ? '⌥' : 'Alt'}+Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to stop and send now`
             : 'Send',
           position: 'top',
         })}
@@ -1307,7 +1376,8 @@
     title="This provider does not currently expose quota data to AgentDeck"
   >
     <span class="text-[10px] leading-[1.25] text-muted-foreground"
-      >Quota unavailable for this model</span
+      >{#if keyQuota?.free_tier}Free key: only “:free” models work, with daily request limits{:else if keyQuota}Spent {usd(keyQuota.used)} · this key has no limit{:else}This provider reports no limit{/if}{#if todayUsed && todayUsed.replies > 0}
+        · today {shortCount(todayUsed.tokens)} tokens{todayUsed.cost > 0 ? ` · ${usd(todayUsed.cost)}` : ''} · {todayUsed.replies} {todayUsed.replies === 1 ? 'reply' : 'replies'}{/if}</span
     >
     <div
       class="h-1.5 rounded-full bg-muted"

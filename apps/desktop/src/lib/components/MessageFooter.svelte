@@ -9,6 +9,21 @@
   // Under each answer: copy, fork, how long it took, and how long ago it was (hover for the date).
   let { message, onfork, onedit, oncopyall, end = false }: { message: Message; onfork: () => void; onedit?: () => void; /** Your message with attachments: copies text, pictures, notes and files together. */ oncopyall?: () => void; end?: boolean } = $props();
 
+  // The buttons show only while the row is hovered or focused, and each one costs a tooltip and an icon to mount: a
+  // row scrolled into view gets an empty line of the same height, and the buttons the first time it is pointed at.
+  // Fewer nodes per row is what keeps a fast scroll or a scrollbar drag from dropping frames.
+  let armed = $state(false);
+  function arm(node: HTMLElement) {
+    const row = node.closest('article') ?? node;
+    const on = () => (armed = true);
+    row.addEventListener('pointerenter', on, { once: true });
+    row.addEventListener('focusin', on, { once: true });
+    return () => {
+      row.removeEventListener('pointerenter', on);
+      row.removeEventListener('focusin', on);
+    };
+  }
+
   let copied = $state(false);
   async function copy() {
     try {
@@ -22,7 +37,8 @@
   }
 </script>
 
-<div class="mt-2.5 flex items-center {end ? 'flex-row-reverse' : '-ml-1'} gap-1 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 focus-within:opacity-100">
+<div class="mt-2.5 flex h-5 items-center {end ? 'flex-row-reverse' : '-ml-1'} gap-1 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 focus-within:opacity-100" {@attach arm}>
+  {#if armed}
   <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Copy answer" onclick={copy} {@attach zTooltip({ content: copied ? 'Copied' : 'Copy', position: 'top' })}>
     <ZIcon zType={copied ? 'lucideCheck' : 'lucideCopy'} zSize="14" class="size-[14px]!" />
   </ZButton>
@@ -47,4 +63,5 @@
       <span>{message.time}</span>
     {/if}
   </span>
+  {/if}
 </div>

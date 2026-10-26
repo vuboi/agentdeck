@@ -90,12 +90,15 @@ const tokenField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
-function tokenDecorations(doc: EditorState['doc'], rows: Token[][]): DecorationSet {
+/** `rows` may have gaps: lines not coloured yet (the part on screen is coloured first) stay plain. */
+function tokenDecorations(doc: EditorState['doc'], rows: (Token[] | undefined)[]): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   for (let i = 0; i < rows.length && i < doc.lines; i++) {
+    const row = rows[i];
+    if (!row) continue;
     const line = doc.line(i + 1);
     let offset = line.from;
-    for (const token of rows[i]) {
+    for (const token of row) {
       const end = offset + token.content.length;
       if (token.color && end > offset && end <= line.to) builder.add(offset, end, colorMark(token.color));
       offset = end;
@@ -221,21 +224,40 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     }),
   });
 
-  /** Colours the whole text in chunks (a first small one so the top is coloured at once); an edit in between starts over. */
+  /**
+   * Colours the whole text in chunks, the part on screen first: each next chunk is the uncoloured one nearest to where
+   * the view is now, so a file opened (or scrolled) to its middle gets its colours there at once instead of after
+   * everything above it (it went top down in 1500-line chunks: about 0.5 s for the middle of a Svelte file).
+   * An edit in between starts over.
+   */
+  const CHUNK = 80;
   async function colorize() {
     const gen = ++generation;
     const doc = view.state.doc;
     if (!lang) return void view.dispatch({ effects: setTokens.of(Decoration.none) });
     const lines = doc.toString().split('\n');
-    const rows: Token[][] = [];
-    for (let i = 0; i < lines.length; ) {
-      const size = i === 0 ? 150 : 1500;
-      const result = await highlightTokens(lines.slice(i, i + size).join('\n'), lang, dark);
+    const chunks = Math.ceil(lines.length / CHUNK);
+    const rows: (Token[] | undefined)[] = new Array(lines.length);
+    const done = new Set<number>();
+    while (done.size < chunks) {
+      const here = Math.floor((doc.lineAt(Math.min(view.viewport.from, doc.length)).number - 1) / CHUNK);
+      let pick = -1;
+      for (let step = 0; pick < 0 && step < chunks; step++) {
+        for (const chunk of [here + step, here - step]) {
+          if (chunk >= 0 && chunk < chunks && !done.has(chunk)) {
+            pick = chunk;
+            break;
+          }
+        }
+      }
+      if (pick < 0) return;
+      done.add(pick);
+      const start = pick * CHUNK;
+      const result = await highlightTokens(lines.slice(start, start + CHUNK).join('\n'), lang, dark);
       if (gen !== generation || view.state.doc !== doc || !result) return; // no result: unknown language, the text stays plain
-      rows.push(...result);
-      i += size;
+      result.forEach((row, offset) => (rows[start + offset] = row));
       view.dispatch({ effects: setTokens.of(tokenDecorations(doc, rows)) });
-      if (i < lines.length) await new Promise((resolve) => setTimeout(resolve, 0));
+      if (done.size < chunks) await new Promise((resolve) => setTimeout(resolve, 0));
       if (gen !== generation) return;
     }
   }

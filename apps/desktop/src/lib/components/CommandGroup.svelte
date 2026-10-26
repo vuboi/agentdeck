@@ -1,7 +1,7 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { ZIcon, ZLoading, ZShowMore, ZShimmerText, zModalService } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZLoading, ZShowMore, ZShimmerText, zModalService } from '@shival99/z-ui-svelte';
   import { parseDiff, type DiffRow } from '../diff';
   import { fileWrites } from '../activity.svelte';
   import { ticker } from '../clock.svelte';
@@ -14,6 +14,9 @@
   import { inTauri } from '../history';
   import { activeSession, workspace } from '../sessions.svelte';
   import { toast } from '../toast';
+  import Markdown from './Markdown.svelte';
+  import CodeView from './CodeView.svelte';
+  import { languageOf } from '../files';
 
   // A screenshot step: click its picture to see it large.
   const showShot = (event: Event, src: string) => {
@@ -28,6 +31,15 @@
 
   // What is open lives outside the list (see open-groups.svelte.ts), so it is still open when the chat comes back.
   const view = $derived(groupState(stateKey));
+  // A folded part is not built until it is first opened: every tool group of a chat used to build all of its steps,
+  // diffs, file previews and show-more boxes while folded, and the chat's virtual list builds a row each time it
+  // scrolls into view (profiled as most of a scroll frame). Once opened it stays built, so folding it animates.
+  const built = $state({ open: false, thinking: false, rows: {} as Record<number, boolean> });
+  $effect.pre(() => {
+    if (view.open) built.open = true;
+    if (view.thinking) built.thinking = true;
+    for (const [index, on] of Object.entries(view.rows)) if (on) built.rows[Number(index)] = true;
+  });
 
   // A tool that saved its picture and returned only the file path: the picture is read from disk once the step is done.
   let fromPaths = $state<Record<string, string>>({});
@@ -56,6 +68,14 @@
   const total = $derived(totalChange(items));
   const seconds = $derived(elapsed(ticker.sec - (startedAt ?? ticker.sec)));
   const shown = (item: CommandBlock) => (toolOf(item.command) === 'Bash' ? `> ${argOf(item.command)}` : item.command);
+  let readModes = $state<Record<string, 'preview' | 'raw'>>({});
+  const isRead = (item: CommandBlock) => /^read$/i.test(toolOf(item.command));
+  const readText = (item: CommandBlock) => (item.output ?? '').split('\n').map((line) => line.replace(/^\s*\d+: ?/, '')).join('\n');
+  const readName = (item: CommandBlock) => {
+    const target = argOf(item.command).replace(/^['"]|['"]$/g, '').split(/:\d+(?::\d+)?$/)[0];
+    return target.split(/[\\/]/).filter(Boolean).at(-1) ?? target;
+  };
+  const readLanguage = (item: CommandBlock) => languageOf(readName(item));
   let gitDiffs = $state<Record<string, DiffRow[]>>({});
   let diffLoading = $state<Record<string, boolean>>({});
   let visibleDiffCounts = $state<Record<string, number>>({});
@@ -121,6 +141,7 @@
   function toggleRow(index: number) {
     view.rows[index] = !view.rows[index];
   };
+  const canOpenFiles = $derived(workspace.projects.some((project) => project.id === activeSession()?.projectId));
   function openChangedFile(path: string) {
     const root = projectRoot();
     if (root) openProjectFile(path, root, 'file');
@@ -196,6 +217,7 @@
 
   <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {view.open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
     <div class="min-h-0 overflow-hidden">
+      {#if view.open || built.open}
       <div class="mt-1.5 divide-y divide-border overflow-hidden rounded-xl border border-border">
         {#if thoughts.length > 0}
           <div>
@@ -208,6 +230,7 @@
             </button>
             <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {view.thinking ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
               <div class="min-h-0 overflow-hidden">
+                {#if view.thinking || built.thinking}
                 <div class="px-3 pt-1 pb-3 text-muted-foreground">
                   {#if thinkingText.length > 600}
                     <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="var(--background)" moreLabel="Show more" lessLabel="Show less">
@@ -217,6 +240,7 @@
                     <p class="m-0 whitespace-pre-wrap leading-relaxed">{thinkingText}</p>
                   {/if}
                 </div>
+                {/if}
               </div>
             </div>
           </div>
@@ -235,7 +259,19 @@
                 <ZShimmerText class="min-w-0 truncate font-medium" zText={step.subject || '…'} />
               {:else}
                 <span class="shrink-0 {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{step.verb}</span>
-                <span class="min-w-0 truncate font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}">{step.subject}</span>
+                {#if item.change && canOpenFiles}
+                  <!-- The file's name opens it: underlined on hover, and the click does not fold the step. -->
+                  <span
+                    role="link"
+                    tabindex="0"
+                    class="min-w-0 cursor-pointer truncate font-medium hover:underline focus-visible:underline focus-visible:outline-none {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}"
+                    title="Open {item.change.path}"
+                    onclick={(event) => { event.stopPropagation(); openChangedFile(item.change!.path); }}
+                    onkeydown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); event.preventDefault(); openChangedFile(item.change!.path); } }}
+                  >{step.subject}</span>
+                {:else}
+                  <span class="min-w-0 truncate font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}">{step.subject}</span>
+                {/if}
               {/if}
               {#if step.counts}{@render chips(step.counts)}{/if}
               {#if item.image}
@@ -248,20 +284,17 @@
             </button>
             <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {view.rows[index] ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
               <div class="min-h-0 overflow-hidden">
+                {#if view.rows[index] || built.rows[index]}
                 <div class="flex flex-col gap-2 px-3 py-1.5">
                   {#if item.change}
                     {@const rows = diffLines(item)}
                     {@const diffKey = `${stateKey}:${item.id ?? index}:${item.change.path}`}
                     {@const visibleCount = visibleDiffCounts[diffKey] ?? INITIAL_DIFF_ROWS}
-                    <div class="max-h-60 overflow-auto rounded-lg border border-border bg-background py-1 font-mono text-[11px] leading-relaxed">
-                      <div class="flex min-w-0 items-center gap-1.5 px-3 pb-1">
-                      <button
-                        type="button"
-                        class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left text-muted-foreground outline-none hover:text-foreground hover:underline disabled:cursor-default disabled:hover:no-underline"
-                        title={item.change.path}
-                        disabled={!workspace.projects.some((project) => project.id === activeSession()?.projectId)}
-                        onclick={() => openChangedFile(item.change!.path)}
-                      ><span class="min-w-0 flex-1 truncate">{item.change.path}</span><ZIcon zType="lucideExternalLink" class="size-3 shrink-0" /></button>
+                    <div class="flex max-h-60 flex-col overflow-hidden rounded-lg border border-border bg-background font-mono text-[11px] leading-relaxed">
+                      <!-- The path stays put; only the diff under it scrolls, with the scrollbar beside the diff. -->
+                      <div class="flex min-w-0 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-3 py-1.5">
+                      <!-- Only the path: the file opens from its name in the step line above. -->
+                      <span class="min-w-0 flex-1 truncate text-muted-foreground" title={item.change.path}>{item.change.path}</span>
                       {#if inTauri() && withinRoot(projectRoot(), item.change.path)}
                         <button type="button" class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 text-muted-foreground outline-none transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-default disabled:opacity-50" title="Revert file" aria-label="Revert {item.change.path}" disabled={reverting === item.change.path} onclick={() => askRevert(item.change!.path)}>
                           <ZIcon zType={reverting === item.change.path ? 'lucideLoaderCircle' : 'lucideUndo2'} class="size-3 {reverting === item.change.path ? 'animate-spin' : ''}" />
@@ -269,6 +302,7 @@
                         </button>
                       {/if}
                       </div>
+                      <div class="min-h-0 flex-1 overflow-auto pb-1">
                       {#if rows.length === 0 && !diffLoading[item.change.path]}
                         <div class="px-3 py-2 text-muted-foreground">No diff content available for this file.</div>
                       {/if}
@@ -280,6 +314,7 @@
                           Show next {Math.min(DIFF_ROW_BATCH, rows.length - visibleCount)} of {rows.length - visibleCount} remaining lines
                         </button>
                       {/if}
+                      </div>
                     </div>
                   {:else}
                     <pre class="m-0 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all">{shown(item)}</pre>
@@ -290,14 +325,40 @@
                     </button>
                   {/if}
                   {#if item.output && !item.change}
-                    <pre class="m-0 max-h-60 overflow-auto px-1 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
+                    {@const key = item.id ?? `${index}:${item.command}`}
+                    {@const content = isRead(item) ? readText(item) : item.output}
+                    {@const lang = isRead(item) ? readLanguage(item) : undefined}
+                    {@const markdown = lang === 'markdown' || lang === 'mdx'}
+                    {#if isRead(item) && (lang || markdown)}
+                      <div class="overflow-hidden rounded-md border border-border bg-background">
+                        <div class="flex h-7 items-center gap-1 border-b border-border px-1.5">
+                          <span class="min-w-0 flex-1 truncate px-1 font-mono text-[10px] text-muted-foreground">{readName(item)}</span>
+                          {#if markdown}
+                            {#each ['preview', 'raw'] as mode}
+                              <ZButton zWave={false} zType={readModes[key] === mode || readModes[key] === undefined && mode === 'preview' ? 'default' : 'ghost'} zSize="sm" class="h-5! px-1.5! text-[10px]!" aria-pressed={(readModes[key] ?? 'preview') === mode} onclick={() => (readModes[key] = mode as 'preview' | 'raw')}>{mode === 'preview' ? 'Preview' : 'Raw'}</ZButton>
+                            {/each}
+                          {/if}
+                        </div>
+                        {#if markdown && (readModes[key] ?? 'preview') === 'preview'}
+                          <div class="max-h-60 overflow-auto px-3 py-2 text-xs leading-relaxed"><Markdown text={content} /></div>
+                        {:else if !markdown}
+                          <div class="h-60 max-h-60 overflow-auto text-[11px] leading-5"><CodeView text={content} lang={lang} wrap /></div>
+                        {:else}
+                          <pre class="m-0 max-h-60 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all">{content}</pre>
+                        {/if}
+                      </div>
+                    {:else}
+                      <pre class="m-0 max-h-60 overflow-auto px-1 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
+                    {/if}
                   {/if}
                 </div>
+                {/if}
               </div>
             </div>
           </div>
         {/each}
       </div>
+      {/if}
     </div>
   </div>
   {#if shots.length > 0}

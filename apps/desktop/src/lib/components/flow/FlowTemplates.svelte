@@ -2,7 +2,7 @@
   import AgentLogo from '../AgentLogo.svelte';
   import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { AGENT_ICON, AGENT_TEXT, workspace } from '../../sessions.svelte';
+  import { workspace } from '../../sessions.svelte';
   import { allPresets, assignPreset, createFlow, deletePreset, duplicatePreset, editFlow, flowKind, normalizeGraph, stepGroups, workflows, type WorkflowPreset } from '../../workflows.svelte';
 
   // The flows a chat can use: the built-in templates and the user's own. "Use" puts one on the open chat; Edit opens
@@ -37,7 +37,7 @@
               {#if at > 0}<ZIcon zType={icon('lucideArrowRight')} class="size-3 shrink-0 text-muted-foreground/60" />{/if}
               <span class="inline-flex items-center gap-0.5 rounded-lg {stage.length > 1 ? 'bg-muted px-1 py-0.5' : ''}" title={stage.map((step) => step.name).join(' + ')}>
                 {#each stage as step (step.id)}
-                  <span class="grid size-6 place-items-center rounded-md border border-border bg-background"><AgentLogo agent={step.agent} class="size-3.5 {AGENT_TEXT[step.agent]}" /></span>
+                  <span class="grid size-6 place-items-center rounded-md border border-border bg-background"><AgentLogo agent={step.agent} model={step.model} class="size-3.5" /></span>
                 {/each}
               </span>
             {/each}

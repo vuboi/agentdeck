@@ -1,11 +1,13 @@
 <script lang="ts">
   import { ZButton, ZIcon, ZModal, ZPopover } from '@shival99/z-ui-svelte';
+  import LoadingBar from './LoadingBar.svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { contentTabs, saveTab, type ContentTab } from '../content-tabs.svelte';
   import { isViewerTab } from '../file-viewer.svelte';
   import { changeLines, countsOf, parseDiff, type DiffRow } from '../diff';
   import { relativeTo } from '../paths';
-  import { imageMimeOf, languageLabel, languageOf, officeFormatOf, readImageUrl, readProjectFile } from '../files';
+  import { imageMimeOf, languageLabel, languageOf, mediaOf, officeFormatOf, readImageUrl, readProjectFile } from '../files';
+  import MediaView from './MediaView.svelte';
   import { canFormat, prettifyStrict } from '../format';
   import { drafts, type Draft } from '../file-buffers';
   import { diffCache, fileKey, rememberText, textCache } from '../file-cache';
@@ -113,6 +115,7 @@
     void fileWrites.tick;
     void attempt;
     if (imageMimeOf(file.name)) return; // a picture is read by the picture effect below
+    if (mediaOf(file.name)) return; // a sound or a video is read and played by MediaView
     if (officeFormatOf(file.name)) return; // Office formats are binary ZIP packages; OfficePreview reads their bytes.
     const seq = ++readSeq;
     const key = fileKey(root, path);
@@ -186,7 +189,7 @@
   $effect(() => {
     const { root, path } = file;
     void fileWrites.tick;
-    if (!inTauri() || imageMimeOf(file.name)) {
+    if (!inTauri() || imageMimeOf(file.name) || mediaOf(file.name)) {
       diffRead = true;
       return;
     }
@@ -338,8 +341,8 @@
   // Ctrl+F while this viewer is on screen and focus is not in some other field.
   function onWindowKey(event: KeyboardEvent) {
     if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'f' || view !== 'file' || disk === null || !panel || panel.offsetParent === null) return;
-    const target = event.target as HTMLElement | null;
-    if (target && /^(INPUT|TEXTAREA)$/.test(target.tagName) && !panel.contains(target)) return;
+    // Only while the file has the focus (a click in it): anywhere else Ctrl+F finds in the whole app (FindBar.svelte).
+    if (!panel.contains(document.activeElement)) return;
     event.preventDefault();
     void openFind();
   }
@@ -398,7 +401,7 @@
 
 <svelte:window onkeydown={onWindowKey} />
 
-<div bind:this={panel} class="relative flex h-full min-h-0 flex-col bg-background" role="tabpanel" aria-label={file.name}>
+<div bind:this={panel} class="relative flex h-full min-h-0 flex-col bg-background" role="tabpanel" aria-label={file.name} data-file-find>
   {#if error}
     <div class="flex flex-1 items-center justify-center p-6">
       <div class="flex w-full max-w-md flex-col items-center gap-3 text-center">
@@ -420,6 +423,8 @@
         </div>
       </div>
     </div>
+  {:else if mediaOf(file.name)}
+    <MediaView path={file.path} name={file.name} />
   {:else if imageMimeOf(file.name)}
     <div class="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 [background-image:linear-gradient(45deg,var(--muted)_25%,transparent_25%),linear-gradient(-45deg,var(--muted)_25%,transparent_25%),linear-gradient(45deg,transparent_75%,var(--muted)_75%),linear-gradient(-45deg,transparent_75%,var(--muted)_75%)] [background-position:0_0,0_8px,8px_-8px,-8px_0] [background-size:16px_16px]">
       {#if picture}
@@ -437,11 +442,11 @@
     {#if changed || !diffRead}
       <!-- The bar is there from the first frame (its counts fade in once git has answered), so the area is never a blank band. -->
       <div class="flex h-10 shrink-0 items-center gap-1 border-b border-border px-1.5 text-xs"><div class="flex items-center gap-1 transition-opacity duration-200 {diffRead ? 'opacity-100' : 'opacity-0'}" aria-hidden={!diffRead}>{@render viewToggle()}</div></div>
-      <div class="min-h-0 flex-1">
+      <div class="relative min-h-0 flex-1">
         {#if changed}
           <div class="h-full" in:fade={{ duration: 200 }}><DiffView {rows} lang={language} /></div>
         {:else if !diffRead}
-          <div class="flex h-full items-center justify-center"><ZIcon zType={icon('lucideLoaderCircle')} class="size-5 animate-spin text-muted-foreground" /></div>
+          <LoadingBar label="Loading changes" />
         {/if}
       </div>
     {:else}
@@ -488,7 +493,7 @@
         <button type="button" class="{tool} {toolOff}" title="Keep your edits; saving overwrites the file on disk" onclick={keepMine}>Keep mine</button>
       </div>
     {/if}
-    <div class="relative min-h-0 flex-1">
+    <div class="relative min-h-0 flex-1" in:fade={{ duration: 180 }}>
       {#if !(dirty || staleDiff) && changed}
         <ChangeRuler total={shownLines} {added} {removed} {modified} ongo={(line) => (readOnly ? viewer?.goToLine(line) : editor?.goToLine(line))} />
       {/if}
@@ -505,6 +510,12 @@
       <span class="shrink-0 rounded-sm bg-muted px-1.5 py-px">{languageLabel(language)}</span>
       <span class="shrink-0 whitespace-nowrap tabular-nums">{shownLines} lines · {sizeLabel}</span>
     </div>
+  {:else}
+    <!-- The file is still being read: the same frame as a loaded file (tool bar, body, footer) with the chat's bar along
+         the top, so nothing moves when the text comes in; the text then fades in where it will stay. -->
+    <div class="h-10 shrink-0 border-b border-border"></div>
+    <div class="relative min-h-0 flex-1"><LoadingBar label="Loading file" /></div>
+    <div class="flex h-7 shrink-0 items-center border-t border-border px-3 text-[11px] text-muted-foreground"><span class="min-w-0 flex-1 truncate font-mono" title={file.path}>{shortPath}</span></div>
   {/if}
 </div>
 

@@ -1,11 +1,23 @@
 <script module lang="ts">
-  // shiki is the heaviest import of the chat: load it once the app has settled, not in the middle of opening a chat.
-  if (typeof window !== 'undefined') setTimeout(preloadHighlighter, 4000);
+  import { preloadHighlighter as preload } from '../highlight';
+  // shiki and its grammars load in the highlighter's worker as soon as the app is idle after start (they took about
+  // 0.4 s plus 0.5 s for the Svelte grammar on the first file opened); in the worker this costs the page nothing.
+  if (typeof window !== 'undefined') {
+    const idle = globalThis.requestIdleCallback ?? ((run: () => void) => setTimeout(run, 300));
+    setTimeout(() => idle(preload, { timeout: 1500 }), 600);
+  }
+
+  // Coloured code by language, theme and text, shared by every answer: a row the virtual list mounts again gets its
+  // colours at once, with no second pass through shiki (it was kept per component, so every remount coloured again:
+  // profiled at hundreds of ms in the middle of a scroll). Very long blocks stay plain.
+  const COLOUR_MAX_CHARS = 20_000;
+  const coloured = new Map<string, string>();
+  const COLOURED_MAX = 600;
 </script>
 
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { highlightHtml, preloadHighlighter } from '../highlight';
+  import { highlightHtml } from '../highlight';
   import { isLocalUrl, linkMenu, openExternal, openInPreview, terminalCommand } from '../browser.svelte';
   import { inTauri } from '../history';
   import { colourFinished, colourStarted, eagerColour, renderMarkdown } from '../markdown';
@@ -146,11 +158,6 @@
     untrack(() => fadeTail(container));
   });
 
-  // Coloured code by language, theme and text: a row mounted again gets its colours at once, with no second pass
-  // through shiki. Very long blocks stay plain, since colouring them blocks the page for a noticeable time.
-  const COLOUR_MAX_CHARS = 20_000;
-  const coloured = new Map<string, string>();
-  const COLOURED_MAX = 300;
 
   async function colour(container: HTMLElement, dark: boolean) {
     // A block coloured for the other theme (the theme changed, or the app was still settling) is coloured again.
@@ -180,6 +187,7 @@
         continue;
       }
       try {
+        // shiki works in its own thread (highlight.ts): the page only puts the colours in.
         const inner = await highlightHtml(source, language, dark);
         if (inner === null) continue;
         coloured.set(key, inner);

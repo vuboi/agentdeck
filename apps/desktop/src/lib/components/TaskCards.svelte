@@ -3,7 +3,7 @@
   import { ZIcon, ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { LOADER } from '../loaders';
-  import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
+  import AgentLogo from './AgentLogo.svelte';
   import { elapsed, type CommandBlock } from '../blocks';
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
@@ -66,17 +66,7 @@
     <div class="overflow-hidden rounded-lg border border-border bg-background">
       <div class="group/row flex w-full items-stretch transition-colors hover:bg-muted/40">
         <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-left outline-none" aria-expanded={expanded} aria-label="Details of the task for {nameOf(card, record)}" onclick={() => (open[key(item, index)] = !expanded)}>
-          {#if kind === 'codex'}
-            <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
-          {:else if kind === 'claude'}
-            <ZIcon zType="brandClaude" class="size-3.5 shrink-0" />
-          {:else if kind === 'antigravity'}
-            <ZIcon zType="brandGemini" class="size-3.5 shrink-0" />
-          {:else if kind === 'opencode'}
-            <ZIcon zSvg={OPENCODE_SVG} class="size-3.5 shrink-0 text-foreground" />
-          {:else}
-            <ZIcon zType={'lucideServer' as ZIconName} class="size-3.5 shrink-0 text-violet-500" />
-          {/if}
+          <AgentLogo agent={kind} model={card.model} class="size-3.5 shrink-0" />
           <span class="shrink-0 text-muted-foreground">Messaged agent</span>
           <span class="shrink-0 font-medium">{nameOf(card, record)}</span>
           <span class="min-w-0 flex-1 truncate text-muted-foreground">{doing(card) || firstLine(card.task)}</span>

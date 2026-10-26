@@ -2,6 +2,7 @@ import type { ZIconName } from '@shival99/z-ui-svelte';
 import { inTauri } from './history';
 import { connectors } from './connectors.svelte';
 import { agentProfile } from './provider-registry';
+import { providerLogo } from './brand-icons';
 
 // Model catalogue for the picker, per provider. It starts from a small built-in list and is replaced at start-up
 // by what each CLI keeps on disk (Rust `models_list`): Codex's cached catalogue with each model's reasoning
@@ -99,7 +100,7 @@ export function modelSources(): ModelSource[] {
       provider: 'custom' as const,
       label: provider.name,
       icon: 'lucideServer' as ZIconName,
-      logo: provider.logo,
+      logo: providerLogo(provider),
       models: () => catalog.custom.filter((item) => parseCustomModel(item.value)?.providerId === provider.id),
     })),
   ];
@@ -167,4 +168,17 @@ export function modelLabel(value: string | undefined | null): string {
     else words.push(part === 'gpt' ? 'GPT' : isNumber(part) ? part : part.charAt(0).toUpperCase() + part.slice(1));
   }
   return words.join(' ');
+}
+
+/** A free model: its id ends in `-free` (OpenCode) or `:free` (OpenRouter). */
+export const isFreeModel = (item: { value: string }) => /[-:]free$/i.test(item.value);
+
+/**
+ * A model list with the free models first and the paid ones after; each group keeps the catalogue's order. `paidAt`
+ * is the index of the first paid model when both kinds are there (where the pickers draw their "Paid" divider), else -1.
+ */
+export function freeFirst<T extends { value: string }>(items: T[]): { items: T[]; paidAt: number } {
+  const free = items.filter(isFreeModel);
+  const paid = items.filter((item) => !isFreeModel(item));
+  return { items: [...free, ...paid], paidAt: free.length && paid.length ? free.length : -1 };
 }

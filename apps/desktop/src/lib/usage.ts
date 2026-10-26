@@ -13,9 +13,48 @@ const PRICES: Record<string, Price> = {
   'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01 },
 };
 
+// Prices the user typed for models that have none above (Codex, Gemini, local ones...): kept in prefs, read once at
+// start, and used for every reply, past ones included (the dashboard works a cost out again when the reply had none).
+const PRICES_KEY = 'usage.prices';
+const custom: Record<string, Price> = {};
+const priceListeners = new Set<() => void>();
+if (typeof window !== 'undefined') {
+  void getPref<Record<string, Price>>(PRICES_KEY).then((saved) => {
+    if (saved) Object.assign(custom, saved);
+    for (const listener of priceListeners) listener();
+  });
+}
+/** Calls `listener` when a price is set or loaded; returns how to stop. */
+export function onPrices(listener: () => void) {
+  priceListeners.add(listener);
+  return () => void priceListeners.delete(listener);
+}
+/** The price per million tokens of a model: the built-in one, else the one the user typed. */
+// List prices (USD per million tokens) of models that report no cost, from the providers' published rates in October
+// 2026, matched by family so an id with a prefix (`opencode/…`) or a point release (`gpt-6.1-sol`) is found. Cached
+// input is billed at a tenth of the input rate where the provider gives no figure. These are estimates: a subscription
+// is not charged this way, and rates change (Gemini 4 Argon's introductory rate ends on 30 November 2026).
+const LIST: [RegExp, () => Price][] = [
+  [/gpt-6(?:\.\d+)?-sol/i, () => ({ input: 2, output: 10, cacheRead: 0.2 })],
+  [/gpt-6(?:\.\d+)?-luna/i, () => ({ input: 0.1, output: 0.5, cacheRead: 0.01 })],
+  [/gpt-5\.6-sol/i, () => ({ input: 4, output: 20, cacheRead: 0.4 })],
+  [/gpt-5\.6-luna/i, () => ({ input: 0.2, output: 1.2, cacheRead: 0.02 })],
+  [/gemini-4-argon/i, () => (Date.now() >= Date.UTC(2026, 11, 1) ? { input: 4, output: 20, cacheRead: 0.4 } : { input: 2, output: 10, cacheRead: 0.2 })],
+];
+const listed = (model: string): Price | undefined => LIST.find(([pattern]) => pattern.test(model))?.[1]();
+export const priceOf = (model: string | undefined): Price | undefined => (model ? (custom[model] ?? PRICES[model] ?? listed(model)) : undefined);
+/** Saves a price for a model (`null` removes it). */
+export function setModelPrice(model: string, price: Price | null) {
+  if (price) custom[model] = price;
+  else delete custom[model];
+  setPref(PRICES_KEY, { ...custom });
+  for (const listener of priceListeners) listener();
+}
+export type { Price };
+
 /** Estimated cost in USD, or null when the model's price is unknown. Cache writes cost 1.25x input. */
 export function estimateCost(tokens: Tokens, model: string | undefined): number | null {
-  const price = model ? PRICES[model] : undefined;
+  const price = priceOf(model);
   if (!price) return null;
   const perM = (count: number, rate: number) => (count / 1_000_000) * rate;
   return perM(tokens.input, price.input) + perM(tokens.cacheWrite, price.input * 1.25) + perM(tokens.cacheRead, price.cacheRead) + perM(tokens.output, price.output);
@@ -35,7 +74,7 @@ export const totalTokens = (tokens: Tokens) => tokens.input + tokens.cacheRead +
 
 /** What each kind of token cost, in USD (null when the model's price is unknown). */
 export function costParts(tokens: Tokens, model: string | undefined) {
-  const price = model ? PRICES[model] : undefined;
+  const price = priceOf(model);
   if (!price) return null;
   const perM = (count: number, rate: number) => (count / 1_000_000) * rate;
   return {

@@ -18,6 +18,29 @@ export type SlashItem = {
   origin: string;
 };
 
+/**
+ * How a user guide is made: the agent itself works through the site in the Preview, marks each step on the page and
+ * saves the pictures, then builds the requested file around them. Shared by `/docs` (when the request is a how-to)
+ * and `/document`.
+ */
+const GUIDE_WORKFLOW = `HOW TO MAKE THE GUIDE (do every step yourself; never ask the user to click, take screenshots or record):
+
+1. Format. Use the one asked for: Word (.docx), PDF (.pdf), PowerPoint (.pptx) or a video (.webm). None named: make a Word (.docx). Never switch formats without saying so.
+2. Folder. Put everything under <project root>/docs/user-guides/<short-slug>/ (pictures in images/ inside it). Without a project folder, use the current working directory.
+3. Open the site in the AgentDeck Preview: browser_open with the address (or browser_serve when it is this project and its dev server is not running). Check it with browser_screenshot.
+4. Work through the task on the real page, one step at a time, with browser_elements, browser_click_element, browser_type, browser_key and browser_scroll. For each step:
+   a. browser_annotate the control the user acts on: style "solid", the step number, and a short label (what to click or type). Mark a region the reader should look at with style "dashed". Use several marks when it helps.
+   b. browser_screenshot with save_as = <folder>/images/step-NN.png.
+   c. browser_annotate with clear true, then do the action and screenshot again to confirm it worked before the next step.
+   Sign-in: use credentials the user gave or test values from the project. Never invent or guess real passwords. On a CAPTCHA, a code sent to a phone or an email, or missing credentials, stop and ask, and document the remaining steps from what the page shows.
+   Never type real secrets into the document: write "your password" instead.
+5. Build the file with the pictures embedded, a title, a short purpose line, numbered steps (action + expected result), and notes and troubleshooting at the end.
+   - .docx: python-docx, or the docx npm package. .pptx: python-pptx, or pptxgenjs (one step per slide, picture large, caption under it). .pdf: build an HTML page with the pictures and print it with a headless browser (Playwright or Chrome --headless --print-to-pdf), or use reportlab.
+   - Check which of these are available first. If none is, install one into a temporary folder or a virtual environment, not into the project's dependencies, and say what you installed.
+   - Video: browser_record_start with the project root and a .webm name, do the steps (marks drawn with browser_annotate show in the recording; clear them after each step), then browser_record_stop.
+6. Also write README.md in the same folder with the same steps as text and links to the pictures.
+7. Verify: the file exists and opens (read it back with the same library, or count its pictures and pages). Report every output path, the number of steps and pictures, and anything you could not do.`;
+
 /** AgentDeck's own commands: a way of working, written once, usable with any agent. */
 export const BUILTIN: SlashItem[] = [
   {
@@ -102,11 +125,52 @@ export const BUILTIN: SlashItem[] = [
   },
   {
     name: 'docs',
-    description: 'Write or update documentation',
+    description: 'Write docs: a user guide with marked screenshots, or code docs',
     kind: 'builtin',
     origin: 'AgentDeck',
     template:
-      'Write or update the documentation for: $ARGUMENTS\n\nRead the code first so every statement is true. Match the tone and layout of the docs already here. Keep it short, with a runnable example where it helps.',
+      'Write documentation for: $ARGUMENTS\n\nFirst decide which kind this is.\n- A user guide (how a person signs in, uses a screen, completes a task on a website or app, "hướng dẫn", "thao tác"): follow the guide workflow below, working the real site in the AgentDeck Preview yourself.\n- Developer documentation for code (an API, a module, setup): read the code first so every statement is true, match the tone and layout of the docs already here, and keep it short, with a runnable example where it helps.\n\n' +
+      GUIDE_WORKFLOW,
+  },
+  {
+    name: 'email',
+    description: 'Write an email: clear, the right tone, ready to send',
+    kind: 'builtin',
+    origin: 'AgentDeck',
+    template:
+      'Write an email: $ARGUMENTS\n\nWork out who reads it, what they must know or do, and the tone that fits (a colleague, a client, a manager, support; Vietnamese or English as the request is written, unless it says otherwise). Then write it:\n- Subject line: specific, under 60 characters.\n- First sentence: the point or the request. No warm-up lines.\n- Body: short paragraphs or a short list; numbers, dates and names exact; one clear ask with a deadline when something is needed.\n- Close with a short sign-off, and leave [placeholders] for anything you do not know (a name, a date, an amount) instead of inventing it.\nGive the email in one block ready to copy, then one line with a shorter alternative subject. If the request leaves out something that changes the email (the reader, the goal), ask one short question first. Do not send anything.',
+  },
+  {
+    name: 'layout',
+    description: 'Suggest a UI layout that fits the project',
+    kind: 'builtin',
+    origin: 'AgentDeck',
+    template:
+      'Suggest a layout for: $ARGUMENTS\n\nFirst call the agentdeck tool project_context: use the project\'s own design tokens, components and rules, not a new look. Look at one or two existing screens of the app in the Preview (browser_open, browser_screenshot) so the new one belongs with them.\nThen give 2 or 3 layout options. For each: what the user does on the screen first, the structure as a small ASCII wireframe, which existing components it uses, how it behaves on a phone, and its trade-off. Avoid the usual AI look: no gradient hero, no card grid of equal boxes, no decorative icons in every heading, no centred everything; hierarchy comes from size, weight, spacing and alignment, with one accent colour. Recommend one option and say why in two lines. Do not write code until I pick one; when I do, build it, open it in the Preview, run ui_audit (desktop and with browser_device mobile) and run_checks, and fix what they report.',
+  },
+  {
+    name: 'research',
+    description: 'Research a question quickly, with sources',
+    kind: 'builtin',
+    origin: 'AgentDeck',
+    template:
+      'Research: $ARGUMENTS\n\nSearch the web (your web search tool, or open pages in the AgentDeck Preview with browser_open and read them with browser_text when you have none). Prefer primary sources: official docs, the project\'s repository and changelog, the vendor\'s own pricing page, papers. Check dates: say when a fact may have changed and prefer the newest source. Answer in this shape: the answer in 2-3 sentences; the key facts as a short list, each with its source link; where sources disagree, say so; what is still unknown. Keep it short. Do not change any file.',
+  },
+  {
+    name: 'deep-research',
+    description: 'Deep research: many sources, compared, written up',
+    kind: 'builtin',
+    origin: 'AgentDeck',
+    template:
+      'Deep research: $ARGUMENTS\n\n1. Plan: split the question into 3-6 sub-questions and say them in one line each.\n2. For each sub-question search widely (several queries, several sources each), open the best pages in full (browser_open + browser_text, or your fetch tool) instead of trusting snippets, and note each claim with its source and date. When the work is big and parts are independent, hand sub-questions to other agents with delegate_task (wait:false) and merge their reports.\n3. Cross-check: a claim that matters needs two independent sources; mark the ones with only one. Note conflicts and why they may differ (date, region, version).\n4. Write it up as a Markdown file under docs/research/<short-slug>.md in the current project (or the working folder): summary (5 lines), findings by sub-question, a comparison table when options are compared, recommendation with the reasons, open questions, and a numbered source list with links and dates.\nEnd your reply with the summary, the recommendation and the file path. Do not change any other file.',
+  },
+  {
+    name: 'ui-review',
+    description: 'Audit the UI in the Preview and fix what is wrong',
+    kind: 'builtin',
+    origin: 'AgentDeck',
+    template:
+      'Review the UI of: $ARGUMENTS\n\nCall project_context first to know the design tokens and components. Open the screen in the Preview (browser_serve or browser_open), then for desktop and for browser_device mobile: browser_screenshot, ui_audit, browser_console. List the problems by severity (broken layout, unreadable text, missing names for controls, off-token colours and sizes, inconsistent spacing), each with its selector and the file that renders it (use code_search). Fix them in the code with the project\'s tokens and components, reload, and run ui_audit and run_checks again until they are clean. End with before/after of what changed.',
   },
   {
     name: 'document',
@@ -114,7 +178,8 @@ export const BUILTIN: SlashItem[] = [
     kind: 'builtin',
     origin: 'AgentDeck',
     template:
-      'Create this user-facing document: $ARGUMENTS\n\nUse the format explicitly requested: Word (.docx), PDF (.pdf), PowerPoint (.pptx), or a recorded Preview walkthrough (.webm). If the format is omitted, choose the one that best fits the request. Read relevant project source first when the workflow belongs to this project; otherwise inspect the current Preview page. Write concise, accurate, numbered steps and save deliverables under docs/user-guides/ in the current project.\n\nFor a video walkthrough, the agent itself operates the AgentDeck Preview and records it: call browser_record_start with the project root and a .webm filename, perform the requested browser workflow, and call browser_record_stop when finished. Recording captures continuously at up to 4 fps and 1.5× scale to keep the Preview responsive; the user does not perform recording or screenshot steps. Use browser_zoom when a close-up helps explain a control, then restore normal zoom before finishing. For visual callouts, use browser_eval to temporarily add a top-layer arrow, outline, or label at screenshot coordinates and remove it after its explanatory frame. Do not substitute a screenshot list for a requested video or claim a file was created unless the tool confirms its path. For Word, PDF, and PowerPoint, create the requested file with the project tools/libraries already available; do not silently change formats. Include a brief companion notes file with the steps and any limitations. Report every output path and what you verified.',
+      'Create this user guide: $ARGUMENTS\n\nWhen the workflow belongs to this project, read its source first so the steps are accurate. Use browser_zoom for a close-up of a small control, and set it back to 1 before the next step. Do not claim a file was created unless you saw it on disk.\n\n' +
+      GUIDE_WORKFLOW,
   },
 ];
 

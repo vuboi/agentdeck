@@ -147,7 +147,7 @@
         {LEVELS.find((item) => item.value === level)?.label}
         <ZIcon zType="lucideChevronDown" class="size-3.5 text-muted-foreground" />
       </button>
-      <PickerPopover anchor={levelButton} bind:open={levelOpen} items={levelItems} label="Level" position="bottom-right" size="sm" rowHeight={28} width={150} onpick={(item) => ((level = item.data), (levelOpen = false))} />
+      <PickerPopover anchor={levelButton} bind:open={levelOpen} items={levelItems} label="Level" position="bottom-right" size="sm" rowHeight={28} width={150} initialActive={false} heightReduction={80} onpick={(item) => ((level = item.data), (levelOpen = false))} />
     {:else if tab === 'network'}
       <button
         bind:this={typeButton}
@@ -161,7 +161,7 @@
         {TYPES.find((item) => item.value === netType)?.label}
         <ZIcon zType="lucideChevronDown" class="size-3.5 text-muted-foreground" />
       </button>
-      <PickerPopover anchor={typeButton} bind:open={typeOpen} items={typeItems} label="Type" position="bottom-right" size="sm" rowHeight={28} width={170} onpick={(item) => ((netType = item.data), (typeOpen = false))} />
+      <PickerPopover anchor={typeButton} bind:open={typeOpen} items={typeItems} label="Type" position="bottom-right" size="sm" rowHeight={28} width={170} initialActive={false} heightReduction={80} onpick={(item) => ((netType = item.data), (typeOpen = false))} />
     {/if}
     {#if tab !== 'application'}
       <MenuButton items={copyItems} icon="lucideCopy" label="Copy" position="bottom-right" width={260} />

@@ -89,7 +89,7 @@ pub fn set_root(chat: &str, root: &str) {
     });
 }
 
-fn root_of(chat: &str, args: &Value) -> Result<String, String> {
+pub(crate) fn root_of(chat: &str, args: &Value) -> Result<String, String> {
     if let Some(root) = args["root"].as_str().filter(|root| !root.is_empty()) {
         return Ok(norm(root));
     }

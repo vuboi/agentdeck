@@ -27,6 +27,8 @@
   import { inTauri } from '../lib/history';
   import { workspace } from '../lib/sessions.svelte';
   import { openNewChatTab } from '../lib/content-tabs.svelte';
+  import FindBar from '../lib/components/FindBar.svelte';
+  import KeyboardShortcuts from '../lib/components/KeyboardShortcuts.svelte';
 
   // Layout, outside in: sidebar | [left zone | (top zone / chat / bottom zone / terminal) | right zone] | tools.
   // Every pane is a fixed px size kept in layout.sizes; splitters between them change those sizes.
@@ -121,8 +123,26 @@
     return () => stop?.();
   });
 
+  let findOpen = $state(false);
+  let findBar: FindBar | undefined = $state();
+  let shortcutsOpen = $state(false);
+
   function onKey(event: KeyboardEvent) {
     handleTerminalShortcut(event);
+    const mod = event.ctrlKey || event.metaKey;
+    // Ctrl+F: find in the whole app, as in a browser. A file with the focus keeps its own find (FileView.svelte).
+    if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f') {
+      const active = document.activeElement;
+      if (active?.closest('[data-file-find], .xterm')) return;
+      event.preventDefault();
+      if (findOpen) void findBar?.focus();
+      else findOpen = true;
+    }
+    // Ctrl+/ or Ctrl+? (Shift+/): the list of shortcuts.
+    if (mod && !event.altKey && (event.key === '/' || event.key === '?')) {
+      event.preventDefault();
+      shortcutsOpen = !shortcutsOpen;
+    }
     // Ctrl+B (Cmd+B): fold the sidebar away or bring it back (the drawer, in a narrow window).
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'b') {
       event.preventDefault();
@@ -233,6 +253,8 @@
   <SelectionMenu />
   <ThemePanel />
   <SettingsModal />
+  <FindBar bind:this={findBar} bind:open={findOpen} />
+  <KeyboardShortcuts bind:open={shortcutsOpen} />
   <!-- A fault while the editor draws would leave a click that does nothing: it is reported and the editor is put away. -->
   <svelte:boundary
     onerror={(error) => {

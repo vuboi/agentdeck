@@ -76,7 +76,7 @@
               aria-checked={theme.primary === color}
               aria-label={color}
               title={color}
-              class="swatch relative grid size-5 cursor-pointer place-items-center rounded-full outline-none ring-offset-2 ring-offset-popover focus-visible:ring-2 focus-visible:ring-ring {theme.primary === color ? 'swatch-selected' : ''}"
+              class="swatch relative grid size-5 cursor-pointer place-items-center rounded-[2px] outline-none ring-offset-2 ring-offset-popover focus-visible:ring-2 focus-visible:ring-ring {theme.primary === color ? 'swatch-selected' : ''}"
               style:background={swatch(color)}
               style:--halo={swatch(color)}
               onclick={() => (theme.primary = color)}
@@ -97,7 +97,7 @@
               aria-checked={theme.neutral === color}
               aria-label={color}
               title={color}
-              class="swatch relative grid size-5 cursor-pointer place-items-center rounded-full outline-none ring-offset-2 ring-offset-popover focus-visible:ring-2 focus-visible:ring-ring {theme.neutral === color ? 'swatch-selected' : ''}"
+              class="swatch relative grid size-5 cursor-pointer place-items-center rounded-[2px] outline-none ring-offset-2 ring-offset-popover focus-visible:ring-2 focus-visible:ring-ring {theme.neutral === color ? 'swatch-selected' : ''}"
               style:background={swatch(color)}
               style:--halo={swatch(color)}
               onclick={() => (theme.neutral = color)}

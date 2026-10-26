@@ -56,7 +56,8 @@ export const isTaskId = (id: unknown): id is string => typeof id === 'string' &&
 // ---------- agents and models ----------
 
 export type ModelRow = { value: string; label: string; description?: string };
-export type AgentRow = { id: string; label: string; models: ModelRow[] };
+/** `restricted`: a free tier that may keep and train on what it is sent (see `privateContentIn`). */
+export type AgentRow = { id: string; label: string; models: ModelRow[]; restricted?: boolean };
 
 const norm = (value: string) => value.trim().toLowerCase();
 
@@ -89,8 +90,42 @@ export function findAgent(rows: AgentRow[], wanted: string): AgentRow | undefine
 /** The answer of `list_agents`. */
 export function formatAgents(rows: AgentRow[]): string {
   if (rows.length === 0) return 'No agent is available to delegate to right now.';
-  const lines = rows.map((row) => `- ${row.id}${row.label.toLowerCase() === row.id ? '' : ` (${row.label})`}: ${row.models.map((model) => (model.label && model.label !== model.value ? `${model.label} [${model.value}]` : model.value)).join(', ') || 'no models'}`);
+  const lines = rows.map((row) => `- ${row.id}${row.label.toLowerCase() === row.id ? '' : ` (${row.label})`}: ${row.models.map((model) => (model.label && model.label !== model.value ? `${model.label} [${model.value}]` : model.value)).join(', ') || 'no models'}${row.restricted ? ` ${RESTRICTED_NOTE}` : ''}`);
   return `Agents you can pass as \`agent\` to delegate_task (a model name, or a part of it, goes in \`model\`):\n${lines.join('\n')}`;
+}
+
+// ---------- free-tier providers ----------
+
+/** Said of a restricted provider in `list_agents`. */
+export const RESTRICTED_NOTE =
+  '[FREE TIER: may keep and train on what it is sent. Light public work only: web search, reading public pages, chat, emails, prompts, scripts and other writing, small text edits. It sees no file, project or tool of this machine: put everything it needs in `task`, with no source code, private data, secrets, passwords, environment variables, internal IPs or host names (AgentDeck blocks those).]';
+
+/** Fenced code a task may carry to a free tier: a short public snippet, not a file of the project. */
+const CODE_LINES_MAX = 30;
+
+const SECRET_PATTERNS: [RegExp, string][] = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'a private key'],
+  [/\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|glpat-[A-Za-z0-9_-]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35})/, 'an API key or token'],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, 'a signed token (JWT)'],
+  [/\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:[^\s@/]+@/i, 'a URL with a password'],
+  [/(?<![a-z])(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["']?[^\s"']{6,}/i, 'a password or secret'],
+  [/\bauthorization:\s*(?:bearer|basic)\s+\S{8,}/i, 'an authorization header'],
+  [/^\s*(?:export\s+|set\s+|\$env:)?[A-Z][A-Z0-9_]*_(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|CREDENTIALS?|DSN|URL)\s*=\s*\S+/m, 'an environment variable'],
+  [/\b(?:10(?:\.\d{1,3}){3}|127(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2})\b/, 'an internal IP address'],
+  [/\b(?:localhost|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:internal|local|lan|corp|intranet|home\.arpa))(?::\d+)?\b/i, 'an internal host name'],
+];
+
+/**
+ * What in a task must not reach a free-tier provider: a secret, or source code longer than a short snippet. `null`:
+ * nothing found. A guard behind the caller's own judgement, not a replacement for it: the caller still decides what is
+ * private.
+ */
+export function privateContentIn(task: string): string | null {
+  for (const [pattern, what] of SECRET_PATTERNS) if (pattern.test(task)) return what;
+  if ((task.match(/^\s*(?:export\s+)?[A-Z][A-Z0-9_]{2,}\s*=\s*\S/gm)?.length ?? 0) >= 3) return 'an environment file';
+  const fenced = [...task.matchAll(/```[^\n]*\n([\s\S]*?)(?:```|$)/g)].reduce((sum, match) => sum + match[1].split('\n').length, 0);
+  if (fenced > CODE_LINES_MAX) return `${fenced} lines of code`;
+  return null;
 }
 
 // ---------- the report ----------
@@ -311,7 +346,7 @@ export function cardOf(call: { command: string; output: string; status: 'running
  * tool descriptions say the same (src-tauri/src/delegate.rs). Kept short: it is sent with the first turn of every chat.
  */
 export const DELEGATE_HINT =
-  'Delegation (delegate_task, list_agents): choose the lightest useful shape for the request. Keep ordinary Q&A, a small edit, a quick command, and a simple artifact action in this chat; do them yourself and do not invent a plan for them. Delegate only when work is BIG or clearly separable; split by capability (investigator, implementer, verifier, artifact/browser specialist) only when the parts are genuinely independent. Give each worker a self-contained goal, paths/resources, constraints, and a compact evidence-first handoff. Independent tasks: wait:false, in parallel, and side by side; dependent tasks: wait (the default). Reuse the worker conversation for follow-up or correction, and replan only when a check or handoff shows a real gap. Never delegate just to relay the user\'s message or the final answer. Prefer 1-3 workers.';
+  'Delegation (delegate_task, list_agents): choose the lightest useful shape for the request. Keep ordinary Q&A, a small edit, a quick command, and a simple artifact action in this chat; do them yourself and do not invent a plan for them. Delegate only when work is BIG or clearly separable; split by capability (investigator, implementer, verifier, artifact/browser specialist) only when the parts are genuinely independent. Give each worker a self-contained goal, paths/resources, constraints, and a compact evidence-first handoff. Independent tasks: wait:false, in parallel, and side by side; dependent tasks: wait (the default). Reuse the worker conversation for follow-up or correction, and replan only when a check or handoff shows a real gap. Never delegate just to relay the user\'s message or the final answer. Prefer 1-3 workers. One exception to "only big work": light public work (search, reading public info, chat, emails, prompts, scripts, small text edits) may go to an agent marked FREE TIER in list_agents, to save the paid agents\' usage. A free tier may train on what it is sent, so check the task yourself first: no source code of the project, no private or personal data, no keys, passwords, tokens, environment variables, internal IPs or host names, and no secret files (.env, keys, credentials). AgentDeck refuses such a task. Work that needs any of that goes to another agent or stays with you.';
 
 /** The line the app puts before a prompt: its parts joined into one paragraph that starts with `[AgentDeck] `. */
 export function agentdeckLead(...parts: string[]): string {

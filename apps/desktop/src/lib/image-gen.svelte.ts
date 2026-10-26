@@ -18,6 +18,8 @@ export const gen = $state({
   runMs: 0,
   /** The skeleton of a run is fixed when it starts: changing the settings only shapes the next run. */
   runSkeleton: 2,
+  /** What each placeholder of the run stands for: the model and the variant it waits on. */
+  runTiles: [] as { label: string; variant: number }[],
   activeRunId: null as string | null,
   loadingRun: 0,
   history: [] as ImageHistoryRun[],
@@ -72,6 +74,7 @@ export async function startRun(args: { prompt: string; choices: (ImageModelChoic
     return;
   }
   gen.runSkeleton = Math.max(2, Math.min(6, args.choices.length * args.variants));
+  gen.runTiles = args.choices.flatMap((choice) => Array.from({ length: args.variants }, (_, index) => ({ label: choice.label, variant: index + 1 }))).slice(0, gen.runSkeleton);
   gen.working = true;
   runStart = performance.now();
   gen.runMs = 0;

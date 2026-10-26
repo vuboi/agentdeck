@@ -501,6 +501,7 @@ pub async fn browser_show(
     if let Some(agent) = user_agent.as_deref() {
         builder = builder.user_agent(agent);
     }
+    let touch = user_agent.is_some();
     let view = window
         .add_child(
             builder,
@@ -508,6 +509,27 @@ pub async fn browser_show(
             LogicalSize::new(w.max(1.0), h.max(1.0)),
         )
         .map_err(|error| error.to_string())?;
+    // A phone or tablet takes touch, not a mouse: the pointer's presses and drags reach the page as touch events
+    // (taps, swipes to scroll, `pointer: coarse`, no hover), the way a device's browser sends them.
+    if touch {
+        let view = view.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::cdp::call(
+                &view,
+                "Emulation.setTouchEmulationEnabled",
+                serde_json::json!({ "enabled": true, "maxTouchPoints": 5 }),
+                None,
+            )
+            .await;
+            let _ = crate::cdp::call(
+                &view,
+                "Emulation.setEmitTouchEventsForMouse",
+                serde_json::json!({ "enabled": true, "configuration": "mobile" }),
+                None,
+            )
+            .await;
+        });
+    }
     allow_password_saving(&view);
     allow_local_certificates(&view);
     crate::cdp::watch_frames(&view);
@@ -963,8 +985,17 @@ pub async fn browser_capture(
     app: AppHandle,
     tab: String,
     scale: Option<f64>,
+    full_page: Option<bool>,
 ) -> Result<String, String> {
     let view = webview(&app, &tab)?;
+    if full_page.unwrap_or(false) {
+        let bytes = crate::cdp::screenshot_full_page(&view).await?;
+        use base64::Engine;
+        return Ok(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ));
+    }
     if scale.unwrap_or(1.0) > 1.0 {
         let bytes = crate::cdp::screenshot_scaled(&view, scale.unwrap_or(1.0)).await?;
         use base64::Engine;

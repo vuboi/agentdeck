@@ -52,6 +52,8 @@ export type CustomProvider = {
   models: string[];
   defaultModel: string;
   enabled: boolean;
+  /** A free tier that may keep and train on what it is sent: it never sees project files, code or secrets. */
+  restricted?: boolean;
 };
 export type Probe = { ok: boolean; models: string[]; ms: number; error: string | null };
 export type LocalServer = { kind: ProviderKind; label: string; base_url: string; models: string[] };
@@ -74,7 +76,9 @@ export const connectors = $state({
   logs: {} as Record<string, string[]>,
   /** The last error of an action, by key. */
   errors: {} as Record<string, string>,
-  alerts: { enabled: true, threshold: 90, system: false },
+  alerts: { enabled: true, threshold: 90, system: true, systemChosen: false },
+  /** When a turn fails: retry, or let the next agent (provider) of `chain` carry on; never another account (turn-failure.ts). */
+  recovery: { enabled: true, chain: ['claude', 'codex', 'opencode', 'antigravity'] as string[], /** At a usage limit with nowhere to move, carry on by itself once the limit resets. */ autoResume: true },
   custom: [] as CustomProvider[],
   local: [] as LocalServer[],
   /** What agy last reported per model family, read from the file a status-line tool saves. `null`: none saved. */
@@ -339,7 +343,13 @@ export async function consumeCodexResetCredit(email: string): Promise<boolean> {
   const ok = await task(key, 'Redeeming Codex reset', () => call('codex_consume_reset_credit', { email }));
   if (!ok) return false;
   toast.success('Codex reset redeemed');
-  await refreshAccounts('codex', true);
+  // The button keeps spinning until the new usage is shown, not only while the reset is redeemed.
+  connectors.busy[key] = 'Updating usage';
+  try {
+    await refreshAccounts('codex', true);
+  } finally {
+    delete connectors.busy[key];
+  }
   return true;
 }
 
@@ -370,6 +380,41 @@ export function warnings(now = Date.now()): Warning[] {
   return found;
 }
 
+/** A usage window that still counts now (not reset yet). */
+const liveWindow = (window: UsageWindow, now: number) => window.resets_at === null || window.resets_at * 1000 > now;
+/** An account that can take work now: signed in, and no live window full. */
+const hasRoom = (account: Account, now: number) =>
+  !account.expired && account.usage.every((window) => !liveWindow(window, now) || window.pct < 98);
+
+/**
+ * Whether an agent can take work now, as far as the app knows: the account it is signed in with (Claude, Codex) is
+ * not full or signed out. Other accounts do not count: the app never switches accounts by itself. An agent whose
+ * usage the app cannot read counts as available.
+ */
+export function agentHasRoom(agent: string, now = Date.now()): boolean {
+  if (agent !== 'claude' && agent !== 'codex') return true;
+  const active = connectors.accounts[agent]?.accounts.find((account) => account.active);
+  return !active || hasRoom(active, now);
+}
+
+/** When the signed-in account of an agent is free again: the latest reset among its full windows, in ms; null when none is full. */
+export function limitResetAt(agent: string, now = Date.now()): number | null {
+  if (agent !== 'claude' && agent !== 'codex') return null;
+  const active = connectors.accounts[agent]?.accounts.find((account) => account.active);
+  const full = active?.usage.filter((window) => window.pct >= 98 && window.resets_at !== null && window.resets_at * 1000 > now) ?? [];
+  return full.length ? Math.max(...full.map((window) => window.resets_at as number)) * 1000 : null;
+}
+
+/** One line on an agent's room for `list_agents`: "5h 42%, weekly 80%" or "signed out". */
+export function roomLine(agent: string, now = Date.now()): string {
+  if (agent !== 'claude' && agent !== 'codex') return '';
+  const active = connectors.accounts[agent]?.accounts.find((account) => account.active);
+  if (!active) return '';
+  if (active.expired) return 'signed out';
+  const windows = active.usage.filter((window) => liveWindow(window, now)).map((window) => `${window.label} ${Math.round(window.pct)}%`);
+  return windows.length ? `usage ${windows.join(', ')}` : '';
+}
+
 const announced = new Set<string>();
 
 function announce(warning: Warning) {
@@ -385,6 +430,7 @@ function announce(warning: Warning) {
 
 export async function allowSystemNotifications(allow: boolean) {
   connectors.alerts.system = allow && (await requestSystemNotificationPermission());
+  connectors.alerts.systemChosen = true;
 }
 
 let watching = false;
@@ -405,6 +451,22 @@ export function startWatching() {
 }
 
 // --- Custom and local providers ----------------------------------------------------------------------------
+
+/** What a provider says about the spending left on a key (OpenRouter), by provider id. */
+export type ProviderQuota = { used: number; limit: number | null; remaining: number | null; free_tier: boolean; at: number };
+export const providerQuotas = $state<Record<string, ProviderQuota>>({});
+
+/** Reads the spending left on a custom provider's key, when the provider tells it; leaves it unset otherwise. */
+export async function refreshProviderQuota(provider: CustomProvider) {
+  if (!inTauri()) return;
+  try {
+    const found = await call<Omit<ProviderQuota, 'at'> | null>('provider_quota', { baseUrl: provider.baseUrl, apiKey: provider.apiKey || null, keyEnv: provider.keyEnv || null });
+    if (found) providerQuotas[provider.id] = { ...found, at: Date.now() / 1000 };
+    else delete providerQuotas[provider.id];
+  } catch {
+    // No reading: the footer then shows what the app counted itself.
+  }
+}
 
 export async function probeProvider(kind: ProviderKind, baseUrl: string, apiKey: string, keyEnv = ''): Promise<Probe> {
   if (!inTauri()) return { ok: false, models: [], ms: 0, error: 'Only available in the desktop app' };
@@ -436,10 +498,16 @@ export const newProviderId = () => `custom-${Date.now().toString(36)}`;
 // --- Saved settings ---------------------------------------------------------------------------------------
 
 let hydrated = false;
-Promise.all([getPref<CustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts')]).then(([custom, alerts]) => {
+Promise.all([getPref<CustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts'), getPref<typeof connectors.recovery>('connectors.recovery')]).then(([custom, alerts, recovery]) => {
   if (custom) connectors.custom = custom;
+  if (recovery) connectors.recovery = { ...connectors.recovery, ...recovery };
   if (alerts) connectors.alerts = { ...connectors.alerts, ...alerts };
+  // System notifications used to start switched off, so most people never saw a finished task announced. They are on
+  // now; a saved "off" from before the user ever chose (no `systemChosen`) is turned on once.
+  if (!connectors.alerts.systemChosen) connectors.alerts = { ...connectors.alerts, system: true, systemChosen: true };
   hydrated = true;
+  // macOS asks once; Windows and Linux grant it. Without it a notification is dropped silently.
+  if (connectors.alerts.system) void requestSystemNotificationPermission();
 });
 
 $effect.root(() => {
@@ -450,5 +518,9 @@ $effect.root(() => {
   $effect(() => {
     const alerts = { ...connectors.alerts };
     if (hydrated) setPref('connectors.alerts', alerts);
+  });
+  $effect(() => {
+    const recovery = $state.snapshot(connectors.recovery);
+    if (hydrated) setPref('connectors.recovery', recovery);
   });
 });

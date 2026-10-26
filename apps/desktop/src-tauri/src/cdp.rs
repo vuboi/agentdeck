@@ -570,6 +570,49 @@ pub async fn screenshot_scaled(view: &Webview, scale: f64) -> Result<Vec<u8>, St
         .map_err(|error| error.to_string())
 }
 
+/// Captures the complete scrollable document without moving the live page.
+pub async fn screenshot_full_page(view: &Webview) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+
+    let metrics = call(view, "Page.getLayoutMetrics", json!({}), None).await?;
+    let content = metrics
+        .get("cssContentSize")
+        .or_else(|| metrics.get("contentSize"))
+        .ok_or("page content size is unavailable")?;
+    let width = content["width"]
+        .as_f64()
+        .ok_or("page content width is unavailable")?
+        .ceil();
+    let height = content["height"]
+        .as_f64()
+        .ok_or("page content height is unavailable")?
+        .ceil();
+    if width <= 0.0 || height <= 0.0 {
+        return Err("page content is empty".into());
+    }
+    if width > 16_000.0 || height > 16_000.0 {
+        return Err("the page is too large for one full-page screenshot".into());
+    }
+
+    let answer = call(
+        view,
+        "Page.captureScreenshot",
+        json!({
+            "format": "png",
+            "clip": { "x": 0, "y": 0, "width": width, "height": height, "scale": 1 },
+            "captureBeyondViewport": true
+        }),
+        None,
+    )
+    .await?;
+    let data = answer["data"]
+        .as_str()
+        .ok_or("the browser returned no full-page screenshot data")?;
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|error| error.to_string())
+}
+
 /// Only the given part of the page (CSS pixels), PNG bytes: a picture of one element.
 pub async fn screenshot_clip(
     view: &Webview,

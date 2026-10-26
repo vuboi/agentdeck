@@ -7,7 +7,7 @@
   import { ticker } from '../../clock.svelte';
   import { closeTab, showSession } from '../../content-tabs.svelte';
   import { modelLabel } from '../../models.svelte';
-  import { AGENT_ICON, AGENT_TEXT, AGENTS, liveStats } from '../../sessions.svelte';
+  import { AGENTS, liveStats } from '../../sessions.svelte';
   import { shortCount, totalTokens, usd } from '../../usage';
   import type { StepData } from './flow-graph';
 
@@ -81,7 +81,7 @@
   <Handle type="target" position={across ? Position.Left : Position.Top} class="flow-handle" />
   <div class="flex items-center gap-2.5 px-3 pt-3">
     <span class="grid size-9 shrink-0 place-items-center rounded-xl {TINT[step.agent] ?? 'bg-muted'}">
-      <AgentLogo agent={step.agent} class="size-[18px] {AGENT_TEXT[step.agent]}" />
+      <AgentLogo agent={step.agent} model={step.model} class="size-[18px]" />
     </span>
     <span class="min-w-0 flex-1">
       <span class="block truncate text-[13px] leading-tight font-semibold text-foreground">{step.name || 'Untitled step'}</span>

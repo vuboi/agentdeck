@@ -26,6 +26,7 @@
     forward,
     goTo,
     capturePageIfPossible,
+    selectCaptureRegion,
     hideBrowser,
     listenToPage,
     matchHistory,
@@ -58,6 +59,7 @@
   import { inTauri } from '../history';
   import { trackRun } from '../activity.svelte';
   import RunCard from './RunCard.svelte';
+  import ScreenshotEditor from './ScreenshotEditor.svelte';
   import TabListButton from './TabListButton.svelte';
   import type { PickerItem } from './PickerPopover.svelte';
   import { blurPage, cutHole, modalBlur, overPage, setBelow } from '../page-layer';
@@ -105,6 +107,11 @@
   const painted = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
   /** Where the phone / tablet sits in the stage (stage coordinates), for its frame. */
   let deviceBox = $state<{ x: number; y: number; w: number; h: number; zoom: number } | null>(null);
+  /** The device frame is changing size (another device, or turned): the frame glides and the page waits, then appears. */
+  let morphing = $state(false);
+  let morphTimer: ReturnType<typeof setTimeout> | undefined;
+  const MORPH_MS = 300;
+  const glideClass = 'transition-[left,top,width,height,border-radius] duration-300 ease-[cubic-bezier(.2,.8,.2,1)] motion-reduce:transition-none';
 
   const tab = $derived(activeTab());
   const errors = $derived(browser.console.filter((line) => line.level === 'error').length);
@@ -220,6 +227,8 @@
     // Keep the device frame responsive even before a URL has been opened. There is no native page
     // to place yet, but switching Tablet/Mobile should still change the empty Preview layout.
     deviceBox = DEVICES[browser.device].w ? { x: place.rect.x - origin.x, y: place.rect.y - origin.y, w: place.rect.w, h: place.rect.h, zoom: place.zoom } : null;
+    // While the frame glides the native page stays away: resizing it every frame tears the picture and re-lays out the site.
+    if (morphing) return;
     // An empty tab (a new one, nothing typed yet) shows no page: the previous tab's page must go away.
     if (inTauri() && !started && !layout.dragging) {
       await takePageAway();
@@ -471,6 +480,24 @@
     });
   });
 
+  // Another device or a turn: the page steps aside, the frame glides to its new size, then the page comes back in it.
+  let lastShape = `${browser.device}|${browser.landscape}`;
+  $effect(() => {
+    const shape = `${browser.device}|${browser.landscape}`;
+    if (shape === lastShape) return;
+    lastShape = shape;
+    untrack(() => {
+      morphing = true;
+      clearTimeout(morphTimer);
+      void takePageAway();
+      morphTimer = setTimeout(() => {
+        morphing = false;
+        void sync();
+      }, MORPH_MS + 40);
+    });
+  });
+  onDestroy(() => clearTimeout(morphTimer));
+
   // A new device means a new user agent, which only a new page can have: the pages are created again at the same address.
   let lastDevice = browser.device;
   $effect(() => {
@@ -597,6 +624,51 @@
     }
   }
 
+  let screenshotOpen = $state(false);
+  let screenshotImage = $state('');
+
+  async function openScreenshotEditor(regionOnly: boolean, fullPage = false) {
+    busy = 'capture';
+    browser.error = '';
+    try {
+      let selected: Awaited<ReturnType<typeof selectCaptureRegion>> = null;
+      if (regionOnly) {
+        selected = await selectCaptureRegion();
+        if (!selected) return;
+      } else {
+        if (browser.annotating) await stopAnnotating();
+        if (browser.picking) await cancelPick();
+      }
+      const captured = await capturePageIfPossible(fullPage ? 1 : 2, fullPage);
+      if (!captured) throw new Error('Could not capture the page. Try again after it finishes loading.');
+      screenshotImage = selected ? await cropScreenshot(captured, selected.box, selected.viewport) : captured;
+      screenshotOpen = true;
+    } catch (error) {
+      browser.error = String(error);
+    } finally {
+      busy = '';
+    }
+  }
+
+  async function cropScreenshot(dataUrl: string, box: Rect, viewport: { w: number; h: number }): Promise<string> {
+    const image = new Image();
+    image.src = dataUrl;
+    await image.decode();
+    const scale = image.naturalWidth / viewport.w;
+    const x = Math.max(0, Math.round(box.x * scale));
+    const y = Math.max(0, Math.round(box.y * scale));
+    const width = Math.min(image.naturalWidth - x, Math.round(box.w * scale));
+    const height = Math.min(image.naturalHeight - y, Math.round(box.h * scale));
+    if (width <= 0 || height <= 0) throw new Error('The selected region is outside the captured page.');
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not prepare the selected screenshot.');
+    context.drawImage(image, x, y, width, height, 0, 0, width, height);
+    return canvas.toDataURL('image/png');
+  }
+
   const DEVICE_BUTTONS = (['desktop', 'tablet', 'mobile'] as Device[]).map((value) => ({
     value,
     label: DEVICES[value].w ? `${DEVICES[value].label} · ${DEVICES[value].w}×${DEVICES[value].h}` : DEVICES[value].label,
@@ -609,7 +681,7 @@
   let toolsWidth = $state(0);
   const alive = $derived({ length: servers.list.filter((item) => item.running).length + terminalRuns.list.length });
   let processOpen = $state(false);
-  const pageTools = $derived<ZDropdownMenuItem[]>([
+  const pageTools = $derived<(ZDropdownMenuItem & { separatorBefore?: boolean })[]>([
     { label: browser.picking ? 'Stop inspecting' : 'Inspect an element', icon: 'lucideMousePointerClick', iconSize: 12, checked: browser.picking, disabled: !started, onClick: () => void pick() },
     { label: browser.annotating ? 'Stop marking up' : 'Mark up the page', icon: 'lucideMousePointer2', iconSize: 12, checked: browser.annotating, disabled: !started, onClick: () => void toggleMarkup() },
     { label: 'Create guide', icon: 'lucideClipboardList', iconSize: 12, disabled: !started, onClick: () => (guide.open = true) },
@@ -617,8 +689,8 @@
     { label: alive.length > 0 ? `Running in the background (${alive.length})` : 'Running in the background', icon: 'lucideServer', iconSize: 12, checked: processOpen, onClick: () => (processOpen = !processOpen) },
     ...(browser.annotating
       ? [
-          ...MARK_TOOLS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, checked: browser.annotateTool === item.tool, onClick: () => void useTool(item.tool) })),
-          { label: 'Undo', icon: 'lucideUndo2' as ZIconName, iconSize: 12, disabled: !browser.annotateUndo, onClick: () => void markHistory('undo') },
+          ...MARK_TOOLS.map((item, index) => ({ label: item.label, icon: item.icon, iconSize: 12, checked: browser.annotateTool === item.tool, separatorBefore: index === 0, onClick: () => void useTool(item.tool) })),
+          { label: 'Undo', icon: 'lucideUndo2' as ZIconName, iconSize: 12, separatorBefore: true, disabled: !browser.annotateUndo, onClick: () => void markHistory('undo') },
           { label: 'Redo', icon: 'lucideRedo2' as ZIconName, iconSize: 12, disabled: !browser.annotateRedo, onClick: () => void markHistory('redo') },
           { label: browser.annotateSelected ? 'Delete selected note' : 'Delete all notes', icon: 'lucideTrash2' as ZIconName, iconSize: 12, class: 'text-destructive!', disabled: browser.annotateCount === 0, onClick: () => void markHistory('remove') },
           ...(browser.annotateCount > 0 ? [{ label: 'Add notes to chat', icon: 'lucidePlus' as ZIconName, iconSize: 12, disabled: busy !== '', onClick: () => void addMarksToChat() }] : []),
@@ -626,7 +698,22 @@
       : []),
   ]);
   // Each toolbar button is 28px with a 2px gap; reserve padding and the always-visible menu trigger.
-  const visibleToolCount = $derived(Math.min(pageTools.length, Math.max(0, Math.floor((toolsWidth - 46) / 30))));
+  const visibleToolCount = $derived.by(() => {
+    let used = 0;
+    let count = 0;
+    for (const item of pageTools) {
+      const next = 30 + (item.separatorBefore ? 8 : 0);
+      if (used + next > Math.max(0, toolsWidth - 76)) break;
+      used += next;
+      count += 1;
+    }
+    return count;
+  });
+  const screenshotItems = $derived<ZDropdownMenuItem[]>([
+    { label: 'Capture full viewport', icon: 'lucideScan' as ZIconName, iconSize: 12, disabled: !started || busy !== '', onClick: () => void openScreenshotEditor(false) },
+    { label: 'Capture full scrollable page', icon: 'lucidePanelsTopLeft' as ZIconName, iconSize: 12, disabled: !started || busy !== '', onClick: () => void openScreenshotEditor(false, true) },
+    { label: 'Select capture region', icon: 'lucideCrop' as ZIconName, iconSize: 12, disabled: !started || busy !== '', onClick: () => void openScreenshotEditor(true) },
+  ]);
   const menuItems = $derived<ZDropdownMenuItem[]>([
     ...(compact
       ? [
@@ -973,21 +1060,34 @@
     </div>
     <div bind:clientWidth={toolsWidth} class="flex min-h-9 shrink-0 items-center justify-between gap-1 border-b border-border px-1 py-1" role="toolbar" aria-label="Page tools">
       <div class="flex min-w-0 items-center gap-0.5 overflow-hidden">
+        <MenuButton items={screenshotItems} icon="lucideScan" label="Capture screenshot" width={220} />
+        <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
         {#each pageTools.slice(0, visibleToolCount) as item (`${item.label}:${item.icon}`)}
+          {#if item.separatorBefore}<span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>{/if}
           <button type="button" class="{icon} relative {item.checked ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : ''} {item.class ?? ''}" aria-label={item.label} title={item.label} aria-pressed={item.checked} disabled={item.disabled ?? false} onclick={() => item.onClick?.()}>
-            <ZIcon zType={item.icon as ZIconName} class="size-4" />
+            <ZIcon zType={item.icon as ZIconName} class={item.icon === 'lucideSquare' ? 'size-3.5' : 'size-4'} />
             {#if item.icon === 'lucideSquareTerminal' && errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
             {#if item.icon === 'lucideServer' && alive.length > 0}<span class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center text-[9px] leading-3.5 text-primary-foreground">{alive.length}</span>{/if}
           </button>
         {/each}
       </div>
-      <div data-page-menu class="shrink-0">
+      <div data-page-menu class="flex shrink-0 items-center gap-1">
         <MenuButton items={moreItems} icon={compact ? 'lucideMenu' : 'lucideEllipsis'} label="More tools" width={240} />
       </div>
     </div>
     {#if browser.error}
       <div class="shrink-0 border-b border-border px-3 py-1 text-xs text-destructive" role="status">{browser.error}</div>
     {/if}
+    <ScreenshotEditor
+      bind:open={screenshotOpen}
+      imageUrl={screenshotImage}
+      filename={`screenshot-${new Date().toISOString().slice(0, 10)}.png`}
+      onadd={(src) => {
+        const id = workspace.activeId;
+        draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'screenshot.png', mime: 'image/png', src }];
+        toast.success('Added to the message');
+      }}
+    />
     {#if browser.problem}
       {@const problem = browser.problem}
       <div class="flex max-h-64 shrink-0 flex-col gap-1.5 overflow-hidden border-b border-border px-3 py-2 text-xs" role="alert">
@@ -1012,14 +1112,14 @@
       {#if deviceBox}
         <!-- The device: a bezel around the page (the page itself is the native layer above) and its caption. -->
         <div
-          class="pointer-events-none absolute border-[10px] border-black shadow-lg ring-1 ring-border {browser.device === 'mobile' ? 'rounded-2xl' : 'rounded-xl'}"
-          style:left="{deviceBox.x - 10}px"
-          style:top="{deviceBox.y - 10}px"
-          style:width="{deviceBox.w + 20}px"
-          style:height="{deviceBox.h + 20}px"
+          class="pointer-events-none absolute border-[6px] border-black bg-background shadow-lg ring-1 ring-border {browser.device === 'mobile' ? 'rounded-2xl' : 'rounded-xl'} {morphing ? glideClass : ''}"
+          style:left="{deviceBox.x - 6}px"
+          style:top="{deviceBox.y - 6}px"
+          style:width="{deviceBox.w + 12}px"
+          style:height="{deviceBox.h + 12}px"
           aria-hidden="true"
         ></div>
-        <div class="absolute flex items-center justify-center gap-2 text-[11px] text-muted-foreground" style:left="{deviceBox.x - 10}px" style:width="{deviceBox.w + 20}px" style:top="{deviceBox.y - 34}px">
+        <div class="absolute flex items-center justify-center gap-2 text-[11px] text-muted-foreground {morphing ? glideClass : ''}" style:left="{deviceBox.x - 6}px" style:width="{deviceBox.w + 12}px" style:top="{deviceBox.y - 30}px">
           <span>{DEVICES[browser.device].name} · {browser.landscape ? `${DEVICES[browser.device].h}×${DEVICES[browser.device].w}` : `${DEVICES[browser.device].w}×${DEVICES[browser.device].h}`}{deviceBox.zoom < 1 ? ` · ${Math.round(deviceBox.zoom * 100)}%` : ''}</span>
           <button type="button" class="grid size-5 cursor-pointer place-items-center rounded hover:bg-accent hover:text-foreground" aria-label="Rotate" onclick={() => (browser.landscape = !browser.landscape)} {@attach zTooltip({ content: 'Rotate', position: 'top' })}>
             <ZIcon zType={'lucideRotateCw' as ZIconName} class="size-3" />

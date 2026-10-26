@@ -3,10 +3,10 @@
   import { ZIcon, ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { LOADER } from '../loaders';
-  import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
+  import AgentLogo from './AgentLogo.svelte';
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
-  import { customProviderName, modelLabel } from '../models.svelte';
+  import { modelLabel } from '../models.svelte';
   import { agentDisplayName } from '../provider-registry';
   import { answerQuestions, delegateRuns, isDelegating, isRunActive, liveStats, needsApproval, workspace } from '../sessions.svelte';
   import { shortCount, totalTokens, usd } from '../usage';
@@ -86,17 +86,9 @@
       {@const expanded = openRows[block.childId] ?? false}
       <div class="group/row flex w-full items-stretch transition-colors hover:bg-muted/60 {i > 0 ? 'border-t border-border' : ''} {settled === 'queued' || settled === 'skipped' ? 'opacity-70' : ''}">
       <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-left text-xs outline-none" aria-expanded={expanded} aria-label="Details of {block.step ?? block.agent}" onclick={() => (openRows[block.childId] = !expanded)}>
-        {#if block.agent === 'codex'}
-          <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
-        {:else if block.agent === 'opencode'}
-          <ZIcon zSvg={OPENCODE_SVG} class="size-3.5 shrink-0 text-foreground" />
-        {:else if block.agent === 'custom'}
-          <ZIcon zType={'lucideServer' as ZIconName} class="size-3.5 shrink-0 text-violet-500" />
-        {:else}
-          <ZIcon zType={block.agent === 'claude' ? 'brandClaude' : 'brandGemini'} class="size-3.5 shrink-0" />
-        {/if}
+        <AgentLogo agent={block.agent} model={block.model} class="size-3.5 shrink-0" />
         {#if block.step}<span class="shrink-0 rounded bg-primary/10 px-1.5 py-px text-[10px] font-medium text-primary">{block.step}</span>{/if}
-        <span class="shrink-0 font-medium">{block.agent === 'custom' ? (customProviderName(block.model) ?? 'Custom') : agentDisplayName(block.agent)}</span>
+        <span class="shrink-0 font-medium">{agentDisplayName(block.agent, block.model)}</span>
         <span class="min-w-0 flex-1 truncate text-muted-foreground">{talkLine(block) || lineOf(block.childId, settled) || modelLabel(block.model)}</span>
         <span class="inline-flex shrink-0 items-center gap-1 {tone[settled]}">
           {#if settled === 'running' && block.talking}
@@ -125,7 +117,7 @@
         {@const info = detail(block, settled)}
         <div transition:slide={{ duration: 300 }} class="flex flex-col gap-1.5 bg-muted/20 px-3 py-2 text-[11px]">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground tabular-nums">
-            <span><span class="text-foreground">{block.agent === 'custom' ? (customProviderName(block.model) ?? 'Custom') : agentDisplayName(block.agent)}</span> · {modelLabel(block.model)}</span>
+            <span><span class="text-foreground">{agentDisplayName(block.agent, block.model)}</span> · {modelLabel(block.model)}</span>
             <span class="{tone[settled]}">{info.status}</span>
             {#if info.time}<span class="inline-flex items-center gap-1"><ZIcon zType="lucideClock" class="size-3" />{info.time}</span>{/if}
             {#if info.tokens}<span class="inline-flex items-center gap-1"><ZIcon zType="lucideDatabase" class="size-3" />{info.tokens}</span>{/if}

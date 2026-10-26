@@ -8,6 +8,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { ZButton, ZIcon, createVirtualizer, zModalService } from '@shival99/z-ui-svelte';
+  import LoadingBar from './LoadingBar.svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { activeSession, workspace } from '../sessions.svelte';
   import { fileWrites } from '../activity.svelte';
@@ -229,11 +230,8 @@
     </div>
   {:else}
     {#if changes.length === 0 && !loaded}
-      <!-- git has not answered yet: a spinner and a line, centred, so the pane does not look empty or broken meanwhile. -->
-      <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground" role="status" aria-label="Loading changes">
-        <ZIcon zType={icon('lucideLoaderCircle')} zSize="28" class="size-7 animate-spin text-primary" />
-        <p class="m-0">Loading changes…</p>
-      </div>
+      <!-- git has not answered yet: the chat's bar along the top, then the list fades in under it. -->
+      <div class="relative flex-1"><LoadingBar label="Loading changes" /></div>
     {:else if changes.length === 0}
       <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
         <ZIcon zType={icon('lucideGitCompare')} zSize="28" class="size-7 opacity-60" />

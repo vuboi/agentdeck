@@ -50,7 +50,7 @@
     import { tick, untrack } from 'svelte';
     import { glide, listHeight, ROW_ON } from '../popover';
     import { fade } from 'svelte/transition';
-    import { AGENT_TEXT, type Agent } from '../sessions.svelte';
+    import { type Agent } from '../sessions.svelte';
     import AgentLogo from './AgentLogo.svelte';
 
     // The pickers of the app (a file, a mention, a command): a popover on its anchor instead of a full-screen palette.
@@ -133,7 +133,7 @@
     } = $props();
 
     const SIZE = {
-        sm: { row: 30, text: 'text-xs', icon: 'size-3.5' },
+        sm: { row: 28, text: 'text-xs', icon: 'size-3.5' },
         md: { row: 34, text: 'text-[13px]', icon: 'size-4' },
     } as const;
     const look = $derived(SIZE[size]);
@@ -269,13 +269,11 @@
     function measure() {
         if (!scroller) return;
         atTop = scroller.scrollTop <= 0;
-        atEnd =
-            scroller.scrollTop + scroller.clientHeight >=
-            scroller.scrollHeight - 2;
-        if (
-            scroller.scrollTop + scroller.clientHeight >=
-            scroller.scrollHeight - 3 * ROW_PX
-        )
+        // The list's height from the virtualizer (plus the scroller's p-1): scrollHeight here forced a layout on every
+        // scroll event.
+        const full = total + 8;
+        atEnd = scroller.scrollTop + scroller.clientHeight >= full - 2;
+        if (scroller.scrollTop + scroller.clientHeight >= full - 3 * ROW_PX)
             onmore?.();
     }
     $effect(() => {
@@ -298,6 +296,19 @@
         active = selected < 0 ? (initialActive ? 0 : -1) : selected;
         void tick().then(() => {
             if (!open || !scroller) return;
+            scroller.scrollTop = 0;
+            measure();
+        });
+    });
+
+    // A new search starts at the top of what it found, not where the list was scrolled to before.
+    let lastQuery = '';
+    $effect(() => {
+        const now = query;
+        if (now === lastQuery) return;
+        lastQuery = now;
+        untrack(() => {
+            if (!scroller) return;
             scroller.scrollTop = 0;
             measure();
         });
@@ -530,9 +541,7 @@
                                         >
                                             {#if item.agent}<AgentLogo
                                                     agent={item.agent}
-                                                    class="size-4 shrink-0 {AGENT_TEXT[
-                                                        item.agent
-                                                    ]}"
+                                                    class="size-4 shrink-0"
                                                 />{:else if item.iconSrc}<span class="relative size-4 shrink-0"><span class="hidden"><ZIcon
                                                             zType={item.icon ?? 'lucideAppWindow'}
                                                             class="size-4 text-muted-foreground"
