@@ -9,7 +9,8 @@
   import { openImages } from '../preview.svelte';
   import { imagePathsIn, loadImagePath } from '../attachments';
   import { groupState } from '../open-groups.svelte';
-  import { openFileTab } from '../content-tabs.svelte';
+  import { openProjectFile } from '../file-viewer.svelte';
+  import { withinRoot } from '../paths';
   import { inTauri } from '../history';
   import { activeSession, workspace } from '../sessions.svelte';
   import { toast } from '../toast';
@@ -76,27 +77,8 @@
   function projectRoot() {
     return workspace.projects.find((project) => project.id === activeSession()?.projectId)?.path ?? '';
   }
-  function relativeWithinRoot(root: string, path: string) {
-    const windows = /^[A-Za-z]:[\\/]/.test(root) || /^\\\\/.test(root);
-    const normalizedRoot = root.replace(/\\/g, '/').replace(/\/+$/, '');
-    const normalizedPath = path.replace(/\\/g, '/');
-    const absolute = windows
-      ? /^[A-Za-z]:\//.test(normalizedPath) || normalizedPath.startsWith('//')
-      : normalizedPath.startsWith('/');
-    let relative = normalizedRelative(normalizedPath, normalizedRoot, absolute, windows);
-    if (relative === null) return null;
-    relative = relative.replace(/^\/+/, '');
-    const parts = relative.split('/');
-    return !relative || parts.some((part) => part === '..') ? null : relative;
-  }
-  function normalizedRelative(path: string, root: string, absolute: boolean, windows: boolean) {
-    if (!absolute) return path;
-    const prefix = root ? `${root}/` : '/';
-    const matches = windows ? path.toLowerCase().startsWith(prefix.toLowerCase()) : path.startsWith(prefix);
-    return matches ? path.slice(prefix.length) : null;
-  }
   async function currentGitPath(root: string, path: string) {
-    const relative = relativeWithinRoot(root, path);
+    const relative = withinRoot(root, path);
     if (!relative || !inTauri()) return null;
     const { invoke } = await import('@tauri-apps/api/core');
     const changes = await invoke<{ path: string }[]>('changes_list', { root });
@@ -141,16 +123,7 @@
   };
   function openChangedFile(path: string) {
     const root = projectRoot();
-    if (!root) return;
-    const windowsPath = /^[A-Za-z]:[\\/]/.test(root) || /^\\\\/.test(root);
-    const separator = windowsPath ? '\\' : '/';
-    const absolute = windowsPath
-      ? /^[A-Za-z]:[\\/]/.test(path) || /^\\\\/.test(path)
-      : path.startsWith('/');
-    const fullPath = absolute
-      ? path
-      : `${root.replace(/[\\/]+$/, '') || separator}${separator}${path.replace(/^[\\/]+/, '').replace(/[\\/]+/g, separator)}`;
-    openFileTab(fullPath, root, 'changes');
+    if (root) openProjectFile(path, root, 'file');
   }
   function askRevert(path: string) {
     const root = projectRoot();
@@ -289,7 +262,7 @@
                         disabled={!workspace.projects.some((project) => project.id === activeSession()?.projectId)}
                         onclick={() => openChangedFile(item.change!.path)}
                       ><span class="min-w-0 flex-1 truncate">{item.change.path}</span><ZIcon zType="lucideExternalLink" class="size-3 shrink-0" /></button>
-                      {#if inTauri() && relativeWithinRoot(projectRoot(), item.change.path)}
+                      {#if inTauri() && withinRoot(projectRoot(), item.change.path)}
                         <button type="button" class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 text-muted-foreground outline-none transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-default disabled:opacity-50" title="Revert file" aria-label="Revert {item.change.path}" disabled={reverting === item.change.path} onclick={() => askRevert(item.change!.path)}>
                           <ZIcon zType={reverting === item.change.path ? 'lucideLoaderCircle' : 'lucideUndo2'} class="size-3 {reverting === item.change.path ? 'animate-spin' : ''}" />
                           Revert

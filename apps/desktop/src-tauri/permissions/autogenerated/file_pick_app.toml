@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-file-pick-app"
+description = "Enables the file_pick_app command without any pre-configured scope."
+commands.allow = ["file_pick_app"]
+
+[[permission]]
+identifier = "deny-file-pick-app"
+description = "Denies the file_pick_app command without any pre-configured scope."
+commands.deny = ["file_pick_app"]

@@ -1,11 +1,12 @@
 <script lang="ts">
+  import Menu from './Menu.svelte';
   import { closeOnScroll } from '../close-on-scroll';
   import { revealTab } from '../tab-strip';
   import { customProviderName, modelLabel } from '../models.svelte';
   import { onMount, tick, untrack } from 'svelte';
-  import { fly } from 'svelte/transition';
+  import { fade, fly } from 'svelte/transition';
   import { ZButton, ZChatNavigator, ZDropdownMenu, ZGalleryPreview, ZIcon, ZLoading, ZNumberTicker, createVirtualizer, zTooltip } from '@shival99/z-ui-svelte';
-  import { layout, setSidebarCollapsed } from '../layout.svelte';
+  import { layout, leavePeek, peekSidebar, pinSidebar } from '../layout.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { LOADER } from '../loaders';
   import { toast } from '../toast';
@@ -13,8 +14,14 @@
   import { copyMessage } from '../attachments';
   import { openSelectionMenu } from '../selection-menu.svelte';
   import FileChip from './FileChip.svelte';
-  import { activeSession, AGENTS, answerPermission, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, releaseReplyRender, replyBlockRendered, workspace } from '../sessions.svelte';
+  import TabListButton from './TabListButton.svelte';
+  import { openWithItem, openWithOptions, type OpenWithOption } from '../open-with';
+  import { openInViewer } from '../file-viewer.svelte';
+  import type { PickerItem } from './PickerPopover.svelte';
+  import { activeSession, AGENTS, answerPermission, delegateTasks, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, releaseReplyRender, replyBlockRendered, workspace } from '../sessions.svelte';
   import { ticker } from '../clock.svelte';
+  import { agentDisplayName } from '../provider-registry';
+  import AgentLogo from './AgentLogo.svelte';
   import { theme } from '../theme.svelte';
   import { segments } from '../blocks';
   import { openAttachment, openImages, preview, releasePreview, revealPreviewed } from '../preview.svelte';
@@ -113,21 +120,17 @@
   import { activateTab, closeAllTabs, closeOtherTabs, closeTab, contentTabs, openChatTab, openNewChatTab, saveTab, type ContentTab } from '../content-tabs.svelte';
   import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
 
-  // The folded desktop sidebar: hovering its button opens the recents drawer after a short wait. A click brings the
-  // desktop sidebar back and closes the drawer, whether the drawer had opened yet or not.
-  let railTimer: ReturnType<typeof setTimeout> | undefined;
+  // The folded desktop sidebar: hovering its button shows the sidebar floating over the app (SidebarPeek) after a
+  // short wait. A click pins it back into the layout, in the place and at the width of the peek.
   function railEnter() {
     if (!layout.sidebarCollapsed || layout.sidebarHidden) return;
-    clearTimeout(railTimer);
-    railTimer = setTimeout(() => (layout.sidebarDrawer = true), 350);
+    peekSidebar(layout.sidebarDrawer ? 0 : 200);
   }
-  function railClick() {
-    clearTimeout(railTimer);
-    layout.sidebarDrawer = false;
-    setSidebarCollapsed(false);
+  function railLeave() {
+    if (layout.sidebarCollapsed && !layout.sidebarHidden) leavePeek();
   }
-  // While the hover drawer covers the folded button, a press on the button still brings the sidebar back: the drawer
-  // would otherwise take the press as a click outside it.
+  // The peek covers the folded button: a press where the button is still pins the sidebar (it lands on the peek's
+  // header otherwise).
   let railButton = $state<HTMLButtonElement | undefined>();
   $effect(() => {
     if (!layout.sidebarDrawer || !layout.sidebarCollapsed) return;
@@ -136,7 +139,7 @@
       if (!box || event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) return;
       event.preventDefault();
       event.stopPropagation();
-      railClick();
+      pinSidebar();
     };
     document.addEventListener('pointerdown', onPress, true);
     return () => document.removeEventListener('pointerdown', onPress, true);
@@ -152,12 +155,24 @@
     tabMenuKey++;
     tabMenu = { x: event.clientX, y: event.clientY, id };
     tabMenuOpen = true;
+    // For a file tab: the editors this machine has, for "Open with".
+    openWithList = [];
+    const file = contentTabs.tabs.find((tab) => tab.id === id);
+    if (file?.kind === 'file') void openWithOptions(file.path).then((found) => tabMenu?.id === id && (openWithList = found));
   }
+  let openWithList = $state<OpenWithOption[]>([]);
   // Save shows only for a file tab with unsaved edits; it saves that tab, in front or not.
   const menuTab = $derived(tabMenu ? contentTabs.tabs.find((tab) => tab.id === tabMenu?.id) : undefined);
   const tabContextItems = $derived<ZDropdownMenuItem[]>([
     ...(menuTab?.kind === 'file' && menuTab.dirty
       ? [{ label: 'Save', icon: 'lucideSave', iconSize: '12', shortcut: 'Ctrl+S', divide: 'after', class: 'text-xs! py-1', onClick: () => tabMenu && void saveTab(tabMenu.id) } as ZDropdownMenuItem]
+      : []),
+    ...(menuTab?.kind === 'file'
+      ? [
+          { label: 'Open in the side panel', icon: 'lucidePanelRight', iconSize: '12', class: 'text-xs! py-1', onClick: () => openInViewer(menuTab.path, menuTab.root, menuTab.view) } as ZDropdownMenuItem,
+          ...openWithItem(menuTab.path, openWithList),
+          { label: 'Copy path', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', divide: 'after', onClick: () => void navigator.clipboard.writeText(menuTab.path) } as ZDropdownMenuItem,
+        ]
       : []),
     { label: 'Close tab', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+W', class: 'text-xs! py-1', onClick: () => tabMenu && closeTab(tabMenu.id) },
     { label: 'Close other tabs', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+K Ctrl+O', class: 'text-xs! py-1', onClick: () => tabMenu && closeOtherTabs(tabMenu.id) },
@@ -190,13 +205,8 @@
     });
   });
   const fileActive = $derived(contentTabs.tabs.find((tab) => tab.id === contentTabs.active)?.kind === 'file');
-  const tabMenuItems = $derived(
-    contentTabs.tabs.map((tab) => ({
-      label: tabLabel(tab),
-      checked: contentTabs.active === tab.id,
-      class: contentTabs.active === tab.id ? 'bg-primary/15! text-primary!' : undefined,
-      onClick: () => activateTab(tab.id),
-    })),
+  const tabListItems = $derived<PickerItem<string>[]>(
+    contentTabs.tabs.map((tab) => ({ id: tab.id, label: tabLabel(tab), icon: (tab.kind === 'chat' ? 'lucideMessageSquare' : 'lucideFile') as ZIconName, selected: contentTabs.active === tab.id, data: tab.id })),
   );
 
   // The session on screen always has a chat tab: sidebar picks and new sessions open one. Closing a
@@ -476,6 +486,19 @@
     const parentId = activeSession()?.parentId;
     return parentId ? workspace.sessions.find((item) => item.id === parentId) : undefined;
   });
+  /** The delegated task the open chat works on, when an agent handed it over with delegate_task. */
+  const taskOfActive = $derived(Object.values(delegateTasks).find((record) => record.childId === workspace.activeId));
+  // The brief is unfolded for one chat at a time: opening another chat folds it again.
+  let briefFor = $state('');
+  const briefOpen = $derived(briefFor !== '' && briefFor === workspace.activeId);
+  /** "1 minute ago", read again every minute. */
+  function ago(at: number): string {
+    const minutes = Math.floor((ticker.min - at) / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+    const hours = Math.floor(minutes / 60);
+    return hours < 24 ? `${hours} hour${hours === 1 ? '' : 's'} ago` : `${Math.floor(hours / 24)} day${hours < 48 ? '' : 's'} ago`;
+  }
 
   // While a reply streams the view follows it, but only for a reader who is already at the bottom:
   // scrolling up to read stops the following, sending a message (or the jump button) resumes it.
@@ -551,9 +574,10 @@
         class="ml-2 grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
         aria-label={layout.sidebarHidden ? 'Open sessions' : 'Show sidebar (Ctrl+B)'}
         title={layout.sidebarHidden ? 'Sessions' : 'Show sidebar (Ctrl+B)'}
+        data-sidebar-rail
         onpointerenter={railEnter}
-        onpointerleave={() => clearTimeout(railTimer)}
-        onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = !layout.sidebarDrawer) : railClick())}
+        onpointerleave={railLeave}
+        onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = !layout.sidebarDrawer) : pinSidebar())}
       >
         <ZIcon zType={layout.sidebarHidden ? 'lucideMenu' : 'lucidePanelLeft'} class="size-4" />
       </button>
@@ -593,19 +617,8 @@
         {/if}
       </div>
       {#if tabsOverflow}
-        <!-- Trigger styled like the other ghost icon buttons: same size, same hover colour. -->
-        <div class="-mr-0.5 flex shrink-0 items-center bg-background [&_button]:size-7! [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:outline-none [&_button]:focus-visible:ring-0">
-          <ZDropdownMenu
-          zItems={tabMenuItems}
-          zIcon="lucideChevronDown"
-          zLabel=""
-          zButtonType="ghost"
-          zButtonSize="sm"
-          zPosition="bottom-right"
-          zOffset={6}
-          zMinWidth={200}
-          zWave={false}
-        />
+        <div class="-mr-0.5 flex shrink-0 items-center bg-background">
+          <TabListButton items={tabListItems} onpick={activateTab} label="Open tabs" />
         </div>
       {/if}
       {#if contentTabs.tabs.some((tab) => tab.kind === 'chat')}
@@ -627,11 +640,7 @@
 
   {#if tabMenu}
     {#key tabMenuKey}
-      <div class="pointer-events-none fixed z-50 size-px" style:left="{tabMenu.x}px" style:top="{tabMenu.y}px">
-        <ZDropdownMenu zItems={tabContextItems} bind:open={tabMenuOpen} zPosition="bottom-left" zOffset={4} zMinWidth={180} zContentClass="p-1 text-xs">
-          <span class="block size-px"></span>
-        </ZDropdownMenu>
-      </div>
+      <Menu items={tabContextItems} bind:open={tabMenuOpen} at={{ x: tabMenu.x, y: tabMenu.y }} position="bottom-left" width={220} />
     {/key}
   {/if}
 
@@ -654,13 +663,29 @@
       {/if}
     {/if}
     {#if contentTabs.active.startsWith('chat:') && parentOfActive}
-      <!-- A sub chat (a step of a flow, a delegated task, a fork): one click back to the chat it came from. -->
-      <div class="relative z-30 flex h-8 shrink-0 items-center gap-2 border-b border-border bg-background px-3 text-xs">
-        <button type="button" class="inline-flex h-6 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Back to {parentOfActive.title}" onclick={() => backToParent(parentOfActive.id)}>
-          <ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-3.5 shrink-0" />
-          <span class="shrink-0">Back to</span>
-          <span class="truncate font-medium text-foreground">{parentOfActive.title}</span>
-        </button>
+      <!-- A sub chat (a step of a flow, a delegated task, a fork): who started it, from which chat (one click back),
+           and for a delegated task the brief it was handed, folded under the line. -->
+      <div class="relative z-30 shrink-0 border-b border-border bg-background px-3 text-xs text-muted-foreground">
+        <div class="flex h-8 min-w-0 items-center gap-1.5">
+          {#if taskOfActive}
+            <span class="shrink-0">Started by</span>
+            <AgentLogo agent={parentOfActive.agent} class="size-3.5 shrink-0" />
+            <span class="shrink-0 text-foreground">{agentDisplayName(parentOfActive.agent)}</span>
+            <span class="shrink-0">from</span>
+          {:else}
+            <span class="shrink-0">Started from</span>
+          {/if}
+          <button type="button" class="min-w-0 cursor-pointer truncate rounded-sm font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-2 outline-none hover:text-primary hover:decoration-primary" aria-label="Back to {parentOfActive.title}" onclick={() => backToParent(parentOfActive.id)}>{parentOfActive.title}</button>
+          {#if taskOfActive}
+            <span class="shrink-0 whitespace-nowrap">{ago(taskOfActive.startedAt)}</span>
+            <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md outline-none hover:bg-primary/10 hover:text-primary" aria-expanded={briefOpen} aria-label={briefOpen ? 'Hide the brief' : 'Show the brief'} title={briefOpen ? 'Hide the brief' : 'Show the brief it was handed'} onclick={() => (briefFor = briefOpen ? '' : workspace.activeId)}>
+              <ZIcon zType={'lucideChevronRight' as ZIconName} class="size-3.5 transition-transform duration-150 {briefOpen ? 'rotate-90' : ''}" />
+            </button>
+          {/if}
+        </div>
+        {#if taskOfActive && briefOpen}
+          <div class="mb-2 max-h-48 overflow-auto rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap text-foreground">{taskOfActive.task}</div>
+        {/if}
       </div>
     {/if}
     <!-- Keyed by session so the ruler never carries scroll/hover state over from the previous chat. -->
@@ -712,18 +737,17 @@
       </div>
     {/if}
 
-    {#if chat.messages.length === 0 || !revealed}
+    {#if chat.loading || (!revealed && chat.messages.length > 0)}
+      <!-- A thin bar along the top while the chat opens. It shows only if the wait is long (the delay is in the animation),
+           so a fast chat opens with nothing at all, and it never mimics the layout, so nothing can ghost over the text. -->
+      <div class="chat-loading pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 overflow-hidden" role="status" aria-label="Loading conversation" out:fade={{ duration: 120 }}>
+        <div class="chat-loading-bar h-full w-2/5 rounded-full bg-primary"></div>
+      </div>
+    {/if}
+
+    {#if chat.messages.length === 0 && !chat.loading}
       <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center text-xs text-muted-foreground">
-        {#if chat.loading || (!revealed && chat.messages.length > 0)}
-          <div class="flex w-full max-w-3xl animate-pulse flex-col gap-6 px-6" role="status" aria-label="Loading conversation">
-            {#each [60, 90, 75, 40, 85] as width, index}
-              <div class="flex flex-col gap-2 {index % 2 === 0 ? 'items-end' : ''}">
-                <div class="h-3 rounded bg-muted" style:width="{width}%"></div>
-                <div class="h-3 rounded bg-muted" style:width="{Math.max(25, width - 30)}%"></div>
-              </div>
-            {/each}
-          </div>
-        {:else if chat.error}
+        {#if chat.error}
           <span class="max-w-sm text-center text-destructive">{chat.error}</span>
         {:else}
           <div class="flex flex-col items-center gap-3">
@@ -735,7 +759,7 @@
     {/if}
 
     <!-- svelte-ignore a11y_no_static_element_interactions (the events only tell that the reader took over the scrolling) -->
-    <div bind:this={viewportEl} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={stopSticking} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 [scrollbar-gutter:stable] {chat.loading || !revealed ? 'invisible' : ''}">
+    <div bind:this={viewportEl} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={stopSticking} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 [scrollbar-gutter:stable] {chat.loading || !revealed ? 'pointer-events-none opacity-0' : 'motion-safe:transition-opacity motion-safe:duration-150 motion-safe:ease-out'}" aria-hidden={chat.loading || !revealed}>
       <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px" {@attach watchListHeight} role="log" aria-live="polite" aria-label="Conversation">
         <!-- A theme change repaints every row from scratch: a row kept from before can show the old theme's colours until the page is reloaded. -->
         {#key `${theme.dark}|${theme.primary}|${theme.neutral}`}
@@ -824,7 +848,10 @@
                   {@const tail = parts.at(-1)}
                   {@const working = tail?.kind === 'commands' && tail.items.some((item) => item.status === 'running')}
                   <div class="mb-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs">
-                    <span class="font-semibold {agentText[agent]}">{(agent === 'custom' && customProviderName(message.model)) || agentName(agent)}</span>
+                    <span class="inline-flex items-center gap-1 font-semibold {agentText[agent]}">
+                      <AgentLogo agent={agent} class="size-3 shrink-0 {agent === 'codex' ? 'text-foreground [&_path]:fill-current' : ''}" />
+                      {(agent === 'custom' && customProviderName(message.model)) || agentName(agent)}
+                    </span>
                     {#if message.model}
                       <span class="text-muted-foreground/40" aria-hidden="true">/</span>
                       <span class="text-muted-foreground" title={message.model}>{modelLabel(message.model)}</span>

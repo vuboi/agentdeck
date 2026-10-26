@@ -85,6 +85,8 @@ export const connectors = $state({
 
 const activeLoginRuns = new Map<ConnectorId, number>();
 const cancelledLoginRuns = new Set<number>();
+const activeAccountAddRuns = new Map<AccountProvider, number>();
+const cancelledAccountAddRuns = new Set<number>();
 let loginSequence = 0;
 
 const call = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
@@ -281,11 +283,31 @@ export async function cancelLogin(id: ConnectorId): Promise<void> {
 }
 
 export async function addAccount(provider: AccountProvider, label: string) {
+  if (connectors.busy[`add:${provider}`]) return;
+  const run = ++loginSequence;
+  activeAccountAddRuns.set(provider, run);
   connectors.logs[provider] = [];
   const ok = await task(`add:${provider}`, `Adding a ${label} account`, () => call('account_add', { provider }));
+  const cancelled = cancelledAccountAddRuns.delete(run);
+  if (activeAccountAddRuns.get(provider) === run) activeAccountAddRuns.delete(provider);
+  if (!ok && cancelled) {
+    delete connectors.errors[`add:${provider}`];
+    return;
+  }
   if (ok) {
     toast.success(`${label} account added`);
     await refreshAll();
+  }
+}
+
+/** Cancels an in-progress account-add flow and suppresses its expected cancellation error. */
+export async function cancelAccountAdd(provider: AccountProvider): Promise<void> {
+  const run = activeAccountAddRuns.get(provider);
+  if (run !== undefined) cancelledAccountAddRuns.add(run);
+  try {
+    await call('account_add_cancel', { provider });
+  } catch {
+    if (run !== undefined) cancelledAccountAddRuns.delete(run);
   }
 }
 

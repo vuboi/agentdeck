@@ -1,5 +1,7 @@
 <script lang="ts">
   import { ZButton, ZIcon, ZModal, ZPopover } from '@shival99/z-ui-svelte';
+  import { glide, ROW_ON, TRIGGER_ON_PLAIN } from '../popover';
+  import PickerPopover, { type PickerItem } from './PickerPopover.svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { inTauri } from '../history';
   import { activeSession, isRunning, isUnstarted, moveDraftToProject, NO_PROJECT, workspace } from '../sessions.svelte';
@@ -36,7 +38,7 @@
   const canQuickSwitch = $derived(accountRows.length > 1 || Boolean(activeAccount && ('expired' in activeAccount.account && activeAccount.account.expired)));
   const canQuickAdd = $derived(
     accountProvider === 'agy'
-      ? installed('agy') && connectors.detected?.antigravity.logged_in === true
+      ? installed('agy')
       : accountProvider
         ? Boolean(connectors.accounts[accountProvider]?.manager)
         : false,
@@ -194,16 +196,12 @@
   // ---- project ----
   let projectTrigger = $state<HTMLElement>();
   let projectOpen = $state(false);
-  let projectQuery = $state('');
-  let projectSearch = $state<HTMLInputElement>();
-  const shownProjects = $derived(choices.filter((item) => item.name.toLowerCase().includes(projectQuery.trim().toLowerCase())));
-  $effect(() => {
-    if (projectOpen) requestAnimationFrame(() => projectSearch?.focus());
-  });
+  const projectItems = $derived<PickerItem<string>[]>(
+    choices.map((item) => ({ id: item.id, label: item.name, icon: icon(item.id === NO_PROJECT ? 'lucideMonitor' : 'lucideFolder'), selected: item.id === session?.projectId, data: item.id })),
+  );
   function pickProject(id: string) {
     if (session) moveDraftToProject(session.id, id);
     projectOpen = false;
-    projectQuery = '';
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('main[aria-label="Conversation"] form textarea')?.focus());
   }
 
@@ -212,13 +210,10 @@
   let branches = $state<Branches | null>(null);
   let branchTrigger = $state<HTMLElement>();
   let branchOpen = $state(false);
-  let branchQuery = $state('');
-  let branchSearch = $state<HTMLInputElement>();
   let switching = $state(false);
-  const shownBranches = $derived((branches?.branches ?? []).filter((name) => name.toLowerCase().includes(branchQuery.trim().toLowerCase())));
-  $effect(() => {
-    if (branchOpen) requestAnimationFrame(() => branchSearch?.focus());
-  });
+  const branchItems = $derived<PickerItem<string>[]>(
+    (branches?.branches ?? []).map((name) => ({ id: name, label: name, icon: icon('lucideGitBranch'), selected: name === branches?.current, data: name })),
+  );
 
   async function readBranches(path: string | undefined) {
     if (!path || !inTauri()) {
@@ -255,7 +250,6 @@
       await invoke('git_switch', { root: project.path, branch: name });
       toast.success(`Switched to ${name}`);
       branchOpen = false;
-      branchQuery = '';
     } catch (error) {
       // Git's own words: usually local changes that the other branch would overwrite.
       toast.error(String(error).replace(/^error:\s*/i, '').split('\n')[0]);
@@ -273,7 +267,7 @@
       <button
         bind:this={projectTrigger}
         type="button"
-        class="inline-flex h-6 min-w-0 max-w-48 cursor-pointer items-center gap-1.5 rounded-md px-1.5 outline-none hover:bg-accent hover:text-foreground max-[560px]:max-w-[26%] {projectOpen ? 'bg-accent text-foreground' : ''}"
+        class="inline-flex h-6 min-w-0 max-w-48 cursor-pointer items-center gap-1.5 rounded-md px-1.5 outline-none hover:bg-primary/10 hover:text-primary max-[560px]:max-w-[26%] {projectOpen ? TRIGGER_ON_PLAIN : ''}"
         aria-label="Project"
         aria-haspopup="listbox"
         aria-expanded={projectOpen}
@@ -295,7 +289,7 @@
       <button
         bind:this={branchTrigger}
         type="button"
-        class="inline-flex h-6 min-w-0 max-w-48 cursor-pointer items-center gap-1.5 rounded-md px-1.5 outline-none hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 max-[560px]:max-w-[26%] {branchOpen ? 'bg-accent text-foreground' : ''}"
+        class="inline-flex h-6 min-w-0 max-w-48 cursor-pointer items-center gap-1.5 rounded-md px-1.5 outline-none hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50 max-[560px]:max-w-[26%] {branchOpen ? TRIGGER_ON_PLAIN : ''}"
         aria-label="Git branch"
         aria-haspopup="listbox"
         aria-expanded={branchOpen}
@@ -313,7 +307,7 @@
       <button
         bind:this={accountTrigger}
         type="button"
-        class="ml-auto inline-flex h-6 min-w-0 max-w-[44%] cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-muted-foreground outline-none hover:bg-accent hover:text-foreground {accountOpen ? 'bg-accent text-foreground' : ''}"
+        class="ml-auto inline-flex h-6 min-w-0 max-w-[44%] cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary {accountOpen ? TRIGGER_ON_PLAIN : ''}"
         aria-label="{labelFor(accountProvider)} account: {activeAccount?.account.email ?? 'needs attention'}"
         title="{labelFor(accountProvider)} · {activeAccount?.account.email ?? 'Account needs attention'}"
         aria-haspopup="listbox"
@@ -327,54 +321,9 @@
     {/if}
   </div>
 
-  <ZPopover anchor={projectTrigger} bind:open={projectOpen} zTrigger="manual" zPosition="top-left" zOffset={6} zWidth={200}>
-    {#snippet children()}
-      <div class="flex w-full flex-col text-xs" role="listbox" aria-label="Project">
-        {#if choices.length >= SEARCH_FROM}
-          <div class="flex h-9 items-center gap-2 border-b border-border px-3">
-            <ZIcon zType={icon('lucideSearch')} class="size-3.5 shrink-0 text-muted-foreground" />
-            <input class="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground" placeholder="Search projects…" aria-label="Search projects" bind:this={projectSearch} bind:value={projectQuery} />
-          </div>
-        {/if}
-        <div class="flex max-h-44 flex-col gap-0.5 overflow-y-auto p-1">
-          {#each shownProjects as item (item.id)}
-            <button type="button" role="option" aria-selected={item.id === session.projectId} class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left outline-none hover:bg-accent {item.id === session.projectId ? 'bg-primary/15 text-primary' : ''}" onclick={() => pickProject(item.id)}>
-              <ZIcon zType={icon(item.id === NO_PROJECT ? 'lucideMonitor' : 'lucideFolder')} class="size-3.5 shrink-0 text-muted-foreground" />
-              <span class="min-w-0 flex-1 truncate">{item.name}</span>
-              {#if item.id === session.projectId}<ZIcon zType={icon('lucideCheck')} class="size-3.5 shrink-0" />{/if}
-            </button>
-          {:else}
-            <p class="m-0 px-2 py-2 text-center text-muted-foreground">No project matches</p>
-          {/each}
-        </div>
-      </div>
-    {/snippet}
-  </ZPopover>
+  <PickerPopover anchor={projectTrigger} bind:open={projectOpen} items={projectItems} local search={choices.length >= SEARCH_FROM} placeholder="Search projects…" label="Project" empty="No project matches" position="top-left" size="sm" width={220} onpick={(item) => pickProject(item.data)} />
 
-  <ZPopover anchor={branchTrigger} bind:open={branchOpen} zTrigger="manual" zPosition="top-left" zOffset={6} zWidth={180}>
-    {#snippet children()}
-      <div class="flex w-full flex-col text-xs" role="listbox" aria-label="Git branch">
-        {#if (branches?.branches.length ?? 0) >= SEARCH_FROM}
-          <div class="flex h-9 items-center gap-2 border-b border-border px-3">
-            <ZIcon zType={icon('lucideSearch')} class="size-3.5 shrink-0 text-muted-foreground" />
-            <input class="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground" placeholder="Search branches…" aria-label="Search branches" bind:this={branchSearch} bind:value={branchQuery} />
-          </div>
-        {/if}
-        <!-- Fits its branches, and scrolls past a maximum height. -->
-        <div class="flex max-h-44 flex-col gap-0.5 overflow-y-auto p-1">
-          {#each shownBranches as name (name)}
-            <button type="button" role="option" aria-selected={name === branches?.current} class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left outline-none hover:bg-accent {name === branches?.current ? 'bg-primary/15 text-primary' : ''}" disabled={switching} onclick={() => void switchTo(name)}>
-              <ZIcon zType={icon('lucideGitBranch')} class="size-3.5 shrink-0 text-muted-foreground" />
-              <span class="min-w-0 flex-1 truncate">{name}</span>
-              {#if name === branches?.current}<ZIcon zType={icon('lucideCheck')} class="size-3.5 shrink-0" />{/if}
-            </button>
-          {:else}
-            <p class="m-0 px-2 py-2 text-center text-muted-foreground">No branch matches</p>
-          {/each}
-        </div>
-      </div>
-    {/snippet}
-  </ZPopover>
+  <PickerPopover anchor={branchTrigger} bind:open={branchOpen} items={branchItems} local search={branchItems.length >= SEARCH_FROM} placeholder="Search branches…" label="Git branch" empty="No branch matches" position="top-left" size="sm" width={220} onpick={(item) => void switchTo(item.data)} />
 
   <ZPopover anchor={accountTrigger} bind:open={accountOpen} zTrigger="manual" zPosition="top-right" zOffset={6} zWidth={280}>
     {#snippet children()}
@@ -388,7 +337,7 @@
             </ZButton>
           {/if}
         </div>
-        <div class="flex max-h-60 flex-col gap-0.5 overflow-y-auto p-1">
+        <div class="flex max-h-[max(180px,30vh)] flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-1" {@attach glide()}>
           {#each sortedAccountRows as entry (entryKey(entry))}
             {@const active = entry.account.active}
             {@const expired = needsLogin(entry)}
@@ -400,10 +349,11 @@
               type="button"
               role="option"
               aria-selected={active && !expired}
+              data-glide-item={exhausted.length > 0 && !expired ? undefined : ''}
               aria-disabled={exhausted.length > 0 && !expired}
               disabled={exhausted.length > 0 && !expired}
               title={exhausted.length ? `Limit reached: ${exhausted.join(', ')}` : undefined}
-              class="flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none {exhausted.length ? 'cursor-not-allowed text-muted-foreground/55' : 'cursor-pointer hover:bg-accent'} {active && !unavailable ? 'bg-primary/8' : ''}"
+              class="flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none {exhausted.length ? 'cursor-not-allowed text-muted-foreground/55' : 'cursor-pointer'} {active && !unavailable ? 'bg-primary/10' : ''}"
               onclick={() => beginAccountAction(entry)}
             >
               <ZIcon zType={icon(expired ? 'lucideLogIn' : exhausted.length ? 'lucideCircleOff' : active ? 'lucideCheck' : 'lucideArrowLeftRight')} class="size-3.5 shrink-0 {expired ? 'text-warning' : exhausted.length ? 'text-muted-foreground/55' : active ? 'text-primary' : 'text-muted-foreground'}" />

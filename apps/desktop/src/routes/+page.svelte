@@ -1,18 +1,22 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { ZDrawer } from '@shival99/z-ui-svelte';
   import LinkMenu from '../lib/components/LinkMenu.svelte';
   import SelectionMenu from '../lib/components/SelectionMenu.svelte';
   import WindowControls from '../lib/components/WindowControls.svelte';
   import ThemePanel from '../lib/components/ThemePanel.svelte';
   import SettingsModal from '../lib/components/SettingsModal.svelte';
   import FlowEditor from '../lib/components/flow/FlowEditor.svelte';
+  import { closeFlow } from '../lib/workflows.svelte';
+  import { guide } from '../lib/guide.svelte';
+  import { toast } from '../lib/toast';
   import { openSettings, settings } from '../lib/connectors.svelte';
   import ToolsModal from '../lib/components/ToolsModal.svelte';
   import Sidebar from '../lib/components/Sidebar.svelte';
+  import SidebarPeek from '../lib/components/SidebarPeek.svelte';
   import Chat from '../lib/components/Chat.svelte';
   import Terminal from '../lib/components/Terminal.svelte';
   import RightPanel from '../lib/components/RightPanel.svelte';
+  import BrowserGuide from '../lib/components/BrowserGuide.svelte';
   import DockZone from '../lib/components/DockZone.svelte';
   import Splitter from '../lib/components/Splitter.svelte';
   import { slide } from 'svelte/transition';
@@ -119,7 +123,6 @@
 
   function onKey(event: KeyboardEvent) {
     handleTerminalShortcut(event);
-    if (event.key === 'Escape') layout.sidebarDrawer = false;
     // Ctrl+B (Cmd+B): fold the sidebar away or bring it back (the drawer, in a narrow window).
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'b') {
       event.preventDefault();
@@ -223,19 +226,24 @@
     </div>
   {/if}
 
-  <!-- Narrow window: the sidebar as a floating drawer over the conversation. -->
-  <ZDrawer bind:open={layout.sidebarDrawer} zPlacement="left" zFloating zHideHeader zHideFooter zBodyClass="!p-0 flex h-full min-h-0 flex-col" zScrollMode="inner" zWidth="min(320px, 86vw)">
-    <!-- The drawer panel is the full viewport height: fill it, so the session list gets the room between header and footer. -->
-    <div class="flex h-screen min-h-0 w-full flex-col">
-      <Sidebar />
-    </div>
-  </ZDrawer>
+  <!-- The folded sidebar (or, in a narrow window, the hidden one), floating over the app. -->
+  <SidebarPeek />
 
   <LinkMenu />
   <SelectionMenu />
   <ThemePanel />
   <SettingsModal />
-  <FlowEditor />
+  <!-- A fault while the editor draws would leave a click that does nothing: it is reported and the editor is put away. -->
+  <svelte:boundary
+    onerror={(error) => {
+      console.error('flow editor failed', error);
+      toast.error(`The flow editor could not open: ${String((error as Error)?.message ?? error)}`);
+      closeFlow();
+    }}
+  >
+    <FlowEditor />
+  </svelte:boundary>
   <ToolsModal />
+  <BrowserGuide bind:open={guide.open} />
   <WindowControls />
 </div>

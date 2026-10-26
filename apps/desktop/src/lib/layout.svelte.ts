@@ -1,4 +1,5 @@
 import { getPref, setPref } from './prefs';
+import { TOOLS } from './tools';
 
 // Shared shell state. The page reacts to `toolsOpen` by resizing the columns.
 // `themeAnchor` is the palette button on screen, so the theme popover has a position the moment it opens.
@@ -23,10 +24,10 @@ export const layout = $state({
   activeTool: 'Explore',
   /** Tools torn out into their own floating windows. Each one is independent of the right panel. */
   floating: [] as FloatingTool[],
-  /** Tools docked around the workspace: under the sidebar list, and on the four sides of the conversation. */
-  docked: { sidebar: [] as string[], left: [] as string[], right: [] as string[], top: [] as string[], bottom: [] as string[] },
+  /** Tools docked around the workspace: under the sidebar list, on the four sides of the conversation, and under the tools panel's own tool. */
+  docked: { sidebar: [] as string[], left: [] as string[], right: [] as string[], top: [] as string[], bottom: [] as string[], toolsBottom: [] as string[] },
   /** Pane sizes in px. Dock panes and the terminal are resized with splitters and kept across reloads. */
-  sizes: { sidebar: 260, sidebarZone: 176, tools: 360, left: 320, right: 320, top: 240, bottom: 240, terminal: 240 },
+  sizes: { sidebar: 260, sidebarZone: 176, toolsBottom: 240, tools: 360, left: 320, right: 320, top: 240, bottom: 240, terminal: 240 },
   /** A docked tool was grabbed: the floating window picks the drag up at this pointer position. */
   dragRequest: null as null | { tool: string; x: number; y: number },
   /** A floating window is being dragged; zones show their drop outline while it is. */
@@ -71,7 +72,7 @@ $effect.root(() => {
   });
 });
 
-export type DockZone = 'sidebar' | 'left' | 'right' | 'top' | 'bottom';
+export type DockZone = 'sidebar' | 'left' | 'right' | 'top' | 'bottom' | 'toolsBottom';
 export type Zone = 'tools' | DockZone;
 
 // Floating windows and their positions survive a reload. Hydrated once, saved on every change.
@@ -79,7 +80,8 @@ let floatingHydrated = false;
 getPref<{ floating: FloatingTool[]; activeTool: string; docked?: typeof layout.docked }>('layout.floating').then((saved) => {
   if (saved) {
     // Audit was folded into Tasks: a saved Audit window, tab or dock becomes Tasks.
-    const renamed = (tool: string) => (tool === 'Audit' ? 'Tasks' : tool);
+    // Tools that were merged into another keep working from a saved layout.
+    const renamed = (tool: string) => (tool === 'Audit' ? 'Tasks' : tool === 'Diff' || tool === 'Files' ? 'Explore' : tool);
     layout.floating = (saved.floating ?? []).map((win) => ({ ...win, tool: renamed(win.tool) }));
     layout.activeTool = renamed(saved.activeTool ?? layout.activeTool);
     if (saved.docked) {
@@ -111,6 +113,45 @@ export function setSidebarCollapsed(collapsed: boolean): void {
   layout.sidebarWidthAnimating = true;
   layout.sidebarCollapsed = collapsed;
   sidebarAnimationTimer = setTimeout(() => (layout.sidebarWidthAnimating = false), 260);
+}
+
+// ---------- the sidebar peek: the folded sidebar shown floating over the app, as Claude does ----------
+// `layout.sidebarDrawer` is whether it is on screen. Hover opens it (the folded sidebar's button, after a short wait)
+// and leaving both that button and the panel puts it away; in a narrow window a click opens it instead.
+let peekTimer: ReturnType<typeof setTimeout> | undefined;
+/** Shown at once when set: pinning puts the docked sidebar where the peek was, with no exit animation in between. */
+export const peekMotion = $state({ instant: false });
+
+export function peekSidebar(delay = 0) {
+  clearTimeout(peekTimer);
+  if (delay === 0) layout.sidebarDrawer = true;
+  else peekTimer = setTimeout(() => (layout.sidebarDrawer = true), delay);
+}
+/** The pointer left the button or the panel: put it away unless it comes back in a moment. */
+export function leavePeek() {
+  clearTimeout(peekTimer);
+  peekTimer = setTimeout(() => (layout.sidebarDrawer = false), 280);
+}
+/** The pointer is back over the button or the panel: keep it. */
+export function holdPeek() {
+  clearTimeout(peekTimer);
+}
+export function closePeek() {
+  clearTimeout(peekTimer);
+  layout.sidebarDrawer = false;
+}
+/** Pin the folded sidebar back into the layout. From the peek, it takes the peek's place and width with no animation. */
+export function pinSidebar() {
+  clearTimeout(peekTimer);
+  if (layout.sidebarDrawer && layout.sidebarCollapsed) {
+    peekMotion.instant = true;
+    layout.sidebarDrawer = false;
+    layout.sidebarCollapsed = false;
+    requestAnimationFrame(() => (peekMotion.instant = false));
+    return;
+  }
+  layout.sidebarDrawer = false;
+  setSidebarCollapsed(false);
 }
 
 let sizesHydrated = false;
@@ -216,6 +257,8 @@ export function dockTool(tool: string, zone: Zone = 'tools') {
     setToolsOpen(true);
   } else {
     layout.docked[zone].push(tool);
+    // Under the tools panel's own tool: the panel above shows another tool, not "open elsewhere".
+    if (zone === 'toolsBottom' && layout.activeTool === tool) layout.activeTool = TOOLS.find((item) => !isAway(item.value))?.value ?? tool;
   }
 }
 

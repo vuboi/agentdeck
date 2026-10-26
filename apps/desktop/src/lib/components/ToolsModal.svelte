@@ -14,20 +14,29 @@
   const inside = (x: number, y: number, box: DOMRect) => x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
 
   // Where a released window would land, and the line that shows it. Only edges are targets, never areas:
-  // the workspace's left/right/top/bottom bands, the tools panel, and the lower part of the sidebar.
+  // the workspace's left/right/top/bottom bands, the tools panel and its lower part, and the lower part of the sidebar.
   function targetAt(x: number, y: number): Target | null {
     const tools = document.querySelector<HTMLElement>('[aria-label="Tools panel"]')?.getBoundingClientRect();
-    if (tools && inside(x, y, tools)) return { zone: 'tools', line: { x: tools.left, y: tools.top, w: 2, h: tools.height } };
+    if (tools && inside(x, y, tools)) {
+      // Lower part of the tools panel: under its own tool, split like the terminal under the conversation.
+      const zone = document.querySelector<HTMLElement>('[data-dock-zone="toolsBottom"]')?.getBoundingClientRect();
+      const split = zone?.top ?? Math.min(tools.bottom - layout.sizes.toolsBottom, tools.top + tools.height * 0.6);
+      // The line sits on the bottom edge of the panel: the tool lands against it.
+      if (y > split) return { zone: 'toolsBottom', line: { x: tools.left, y: tools.bottom - 2, w: tools.width, h: 2 } };
+      return { zone: 'tools', line: { x: tools.left - 0.5, y: tools.top, w: 2, h: tools.height } };
+    }
 
     const sidebar = document.querySelector<HTMLElement>('[data-sidebar]')?.getBoundingClientRect();
     if (sidebar && inside(x, y, sidebar) && y > sidebar.top + sidebar.height * 0.6) {
-      return { zone: 'sidebar', line: { x: sidebar.left, y: sidebar.bottom - 44, w: sidebar.width, h: 2 } };
+      // On the border between the session list and the footer (settings row): the tool lands above it.
+      return { zone: 'sidebar', line: { x: sidebar.left, y: sidebar.bottom - 45, w: sidebar.width, h: 2 } };
     }
 
     const ws = document.querySelector<HTMLElement>('[data-workspace]')?.getBoundingClientRect();
     if (!ws || !inside(x, y, ws)) return null;
     if (x - ws.left < EDGE) return { zone: 'left', line: { x: ws.left, y: ws.top, w: 2, h: ws.height } };
-    if (ws.right - x < EDGE) return { zone: 'right', line: { x: ws.right - 2, y: ws.top, w: 2, h: ws.height } };
+    // Centred on the 1px divider the workspace shares with the tools panel, not beside it.
+    if (ws.right - x < EDGE) return { zone: 'right', line: { x: ws.right - 0.5, y: ws.top, w: 2, h: ws.height } };
     if (y - ws.top < EDGE) return { zone: 'top', line: { x: ws.left, y: ws.top, w: ws.width, h: 2 } };
     const terminal = document.querySelector<HTMLElement>('[data-terminal]')?.getBoundingClientRect();
     const bottomY = terminal ? terminal.top : ws.bottom;
@@ -157,7 +166,7 @@
 {#each layout.floating as win (win.tool)}
   {@const current = toolOf(win.tool)}
   <div
-    class="fixed z-50 flex flex-col overflow-hidden rounded-md border border-border bg-background text-foreground shadow-2xl transition-[width,height] duration-150 {layout.dragging ? 'transition-none' : ''}"
+    class="fixed z-[20000] flex flex-col overflow-hidden rounded-md border border-border bg-background text-foreground shadow-2xl transition-[width,height] duration-150 {layout.dragging ? 'transition-none' : ''}"
     style:left="{win.x}px"
     style:top="{win.y}px"
     style:width="{win.w ?? 560}px"
@@ -182,10 +191,7 @@
         <ZIcon zType={win.max ? 'lucideMinimize2' : 'lucideMaximize2'} class="size-3.5" />
       </ZButton>
       <ZButton zWave={false} zType="ghost" zSize="sm" class={headerButton} aria-label="Dock back" title="Dock back" onclick={() => dockTool(win.tool)}>
-        <ZIcon zType="lucidePanelRight" class="size-4" />
-      </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class={headerButton} aria-label="Close" title="Close" onclick={() => dockTool(win.tool)}>
-        <ZIcon zType="lucideX" class="size-4" />
+        <ZIcon zType="lucideUndo2" class="size-4" />
       </ZButton>
     </div>
     {#if !win.min}
@@ -199,10 +205,11 @@
   </div>
 {/each}
 
-<!-- Where the window will land: a thin primary line on the edge, nothing else. -->
+<!-- Where the window will land: a thin primary line on the edge. Above the floating windows (the carried one
+     often sits on the target) and above the modals and drawers, as the windows themselves are. -->
 {#if layout.dropLine}
   <div
-    class="pointer-events-none fixed z-40 rounded-full bg-primary shadow-[0_0_10px_var(--primary)]"
+    class="pointer-events-none fixed z-[20001] rounded-full bg-primary shadow-[0_0_10px_var(--primary)]"
     style:left="{layout.dropLine.x}px"
     style:top="{layout.dropLine.y}px"
     style:width="{layout.dropLine.w}px"

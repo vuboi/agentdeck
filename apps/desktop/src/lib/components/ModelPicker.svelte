@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import AgentLogo from './AgentLogo.svelte';
   import { ZButton, ZIcon, ZPopover, ZSwitch, ZTabs, zHoverGlide, zTooltip } from '@shival99/z-ui-svelte';
+  import { listHeight } from '../popover';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
   import { agyBlocks, agyModes } from '../agy-modes.svelte';
@@ -90,6 +91,22 @@
   /** The nested popover is at most this tall (px) and scrolls inside. */
   const subMax = $derived(Math.min(360, Math.max(160, panelMax - 40)));
 
+  function updatePanelMax() {
+    if (!trigger) return;
+    const availableAbove = trigger.getBoundingClientRect().top - 16;
+    panelMax = Math.max(
+      96,
+      Math.min(Math.max(550, listHeight() + 150), availableAbove, window.innerHeight - 24),
+    );
+  }
+
+  $effect(() => {
+    if (!open) return;
+    updatePanelMax();
+    window.addEventListener('resize', updatePanelMax);
+    return () => window.removeEventListener('resize', updatePanelMax);
+  });
+
   // Hovering a provider row opens its models; moving to another row switches. Nothing to click.
   // Leaving a row (or its list) closes the list after a short wait, so a pointer that crosses to it stays open.
   let subTimer: ReturnType<typeof setTimeout> | undefined;
@@ -98,6 +115,21 @@
     clearTimeout(subTimer);
     subTimer = setTimeout(() => (subOpen = false), 200);
   };
+  /**
+   * The nested list is a popover of its own, so a press in it is a press outside the main menu, which closes on it:
+   * the menu (and the nested list, anchored to a row of it) can be gone before the `click` arrives. A row therefore acts
+   * on the press; `click` only serves the keyboard (Enter and Space send a click with no pointer: `detail` 0).
+   */
+  const onPress = (action: () => void) => ({
+    onpointerdown: (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      action();
+    },
+    onclick: (event: MouseEvent) => {
+      if (event.detail === 0) action();
+    },
+  });
   function openSub(provider: string, row: HTMLElement) {
     keepSub();
     if (subOpen && subProvider === provider) return;
@@ -151,12 +183,12 @@
   zWave={false}
   zType="ghost"
   zSize="sm"
-  class="group h-6 w-fit min-w-0 max-w-full flex-none justify-start gap-1 px-1.5 text-left text-[11px] {open ? '!bg-primary/15 !text-primary hover:!bg-primary/20' : 'hover:!bg-primary/15 hover:!text-primary'}"
+  class="group h-7 w-fit min-w-0 max-w-full flex-none justify-start gap-1 px-1.5 text-left text-[11px] {open ? '!bg-primary/15 !text-primary hover:!bg-primary/20' : 'hover:!bg-primary/15 hover:!text-primary'}"
   aria-haspopup="dialog"
   aria-expanded={open}
   aria-label="Model and permissions"
   onclick={() => {
-    panelMax = Math.max(220, (trigger?.getBoundingClientRect().top ?? 600) - 16);
+    updatePanelMax();
     open = !open;
   }}
 >
@@ -192,7 +224,7 @@
   onClosed={() => !warming && document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()}
 >
   {#snippet children()}
-    <div class="overflow-y-auto py-2.5" style:max-height="{panelMax}px">
+    <div class="overflow-x-hidden overflow-y-auto py-2.5" style:max-height="{panelMax}px">
       <div class="flex w-full flex-col gap-3 px-2.5">
       <section aria-label="Model">
         <SectionTitle label="MODEL" />
@@ -314,14 +346,14 @@
   {#snippet children()}
     {#if subProvider === FLOW}
       <div class="flex w-full flex-col" style:max-height="{subMax}px">
-        <div class="flex min-h-0 flex-col gap-0.5 overflow-y-auto py-1 pl-1" role="radiogroup" tabindex="-1" aria-label="Flows" onpointerenter={keepSub} onpointerleave={leaveSub} {@attach glide()}>
-          <button type="button" role="radio" aria-checked={!flow} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {!flow ? 'bg-primary/10' : ''}" onclick={() => assignPreset(workspace.activeId, null)} {@attach zTooltip({ content: 'No flow: the agent answers', position: 'right', autoDetect: true, offset: 6 })}>
+        <div class="flex min-h-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1" role="radiogroup" tabindex="-1" aria-label="Flows" onpointerenter={keepSub} onpointerleave={leaveSub} {@attach glide()}>
+          <button type="button" role="radio" aria-checked={!flow} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {!flow ? 'bg-primary/10' : ''}" {...onPress(() => assignPreset(workspace.activeId, null))} {@attach zTooltip({ content: 'No flow: the agent answers', position: 'right', autoDetect: true, offset: 6 })}>
             <span class="min-w-0 flex-1 truncate">No flow: the agent answers</span>
             {#if !flow}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
           </button>
           {#each allPresets() as preset (preset.id)}
             {@const chosen = flow?.id === preset.id}
-            <button type="button" role="radio" aria-checked={chosen} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {chosen ? 'bg-primary/10' : ''}" onclick={() => assignPreset(workspace.activeId, preset.id)} {@attach zTooltip({ content: preset.name, position: 'right', autoDetect: true, offset: 6 })}>
+            <button type="button" role="radio" aria-checked={chosen} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {chosen ? 'bg-primary/10' : ''}" {...onPress(() => assignPreset(workspace.activeId, preset.id))} {@attach zTooltip({ content: preset.name, position: 'right', autoDetect: true, offset: 6 })}>
               <span class="min-w-0 flex-1 truncate">{preset.name}</span>
               {#if chosen}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
             </button>
@@ -333,11 +365,11 @@
             type="button"
             role="menuitem"
             class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-muted-foreground outline-none hover:bg-primary/10 focus-visible:bg-primary/10"
-            onclick={() => {
+            {...onPress(() => {
               subOpen = false;
               open = false;
               createFlow();
-            }}
+            })}
           >
             <ZIcon zType="lucidePlus" class="size-3.5 shrink-0" />New flow…
           </button>
@@ -350,7 +382,7 @@
         <p class="m-0 text-[11px] leading-snug text-muted-foreground">{sourceOf(subProvider).label} returned no models, or its provider has an error. Check it in Settings.</p>
       </div>
     {:else}
-      <div class="flex w-full flex-col gap-0.5 overflow-y-auto py-1 pl-1" style:max-height="{subMax}px" role="radiogroup" tabindex="-1" aria-label="{sourceOf(subProvider).label} models" onpointerenter={keepSub} onpointerleave={leaveSub} {@attach glide()}>
+      <div class="flex w-full flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1" style:max-height="{subMax}px" role="radiogroup" tabindex="-1" aria-label="{sourceOf(subProvider).label} models" onpointerenter={keepSub} onpointerleave={leaveSub} {@attach glide()}>
         {#each modelsOf(subProvider) as item (item.value)}
           {@const selected = agent === sourceOf(subProvider).provider && model === item.value}
           <button

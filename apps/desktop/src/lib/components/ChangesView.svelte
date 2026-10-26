@@ -1,6 +1,6 @@
 <script lang="ts" module>
   // The last list read for each project: reopening the panel shows it at once while git is read again.
-  const lastRead = new Map<string, { path: string; status: string; staged: boolean; added: number; removed: number }[]>();
+  const lastRead = new Map<string, { path: string; abs: string; status: string; staged: boolean; added: number; removed: number }[]>();
   /** The project whose changes were shown last: used while the open chat has none. */
   let lastRoot = '';
 </script>
@@ -13,15 +13,22 @@
   import { fileWrites } from '../activity.svelte';
   import { inTauri } from '../history';
   import { toast } from '../toast';
-  import { openFileTab } from '../content-tabs.svelte';
-  import { parseDiff, relativeTo } from '../diff';
+  import { openInViewer } from '../file-viewer.svelte';
+  import { parseDiff } from '../diff';
   import { imageMimeOf, readProjectFile } from '../files';
   import { diffCache, fileKey, rememberText } from '../file-cache';
+  import PickerPopover, { compact, type PickerItem } from './PickerPopover.svelte';
+
+  // Narrow: the labels of the header's buttons go, their icons stay (with a tooltip).
+  let headWidth = $state(0);
+  const narrow = $derived(headWidth > 0 && headWidth < 300);
 
   // Everything the agent left changed in the project, read from git (so it holds for every agent): files with
   // their +/- counts, a click opens the file in a tab. Revert puts a file back to the last commit; an untracked file is
   // deleted. The list is read again after each agent turn and after each file write.
-  type Change = { path: string; status: string; staged: boolean; added: number; removed: number };
+  type Change = { path: string; abs: string; status: string; staged: boolean; added: number; removed: number };
+  /** The repository's top folder, from a change: its full path without the path inside the repository. */
+  const topOf = (change: Change) => change.abs.slice(0, Math.max(0, change.abs.length - change.path.length)).replace(/[\\/]+$/, '');
   const icon = (name: string) => name as ZIconName;
 
   const session = $derived(activeSession());
@@ -39,6 +46,29 @@
   let shownFor = untrack(() => root);
   let failure = $state('');
   let busy = $state(false);
+
+  // Bindable: the Files tool's own search button opens the changed-file search too.
+  // `count`: how many files are changed, for the Files tool, which hides its search button while there are none.
+  let { findOpen = $bindable(false), count = $bindable(0), from = null }: { findOpen?: boolean; count?: number; from?: HTMLElement | null } = $props();
+  $effect(() => {
+    count = changes.length;
+  });
+  let findAnchor = $state<HTMLElement>();
+  let findQuery = $state('');
+  // Only the changed files, each with what it adds and removes; the list is the whole of them, the picker ranks them.
+  const findItems = $derived<PickerItem<Change>[]>(
+    changes
+      .filter((item) => {
+        const needle = findQuery.trim().toLowerCase();
+        return !needle || item.path.toLowerCase().includes(needle);
+      })
+      .map((item) => ({ id: item.path, label: item.path.slice(item.path.lastIndexOf('/') + 1), hint: item.path.includes('/') ? item.path.slice(0, item.path.lastIndexOf('/')) : undefined, icon: 'lucideFile' as ZIconName, stat: { added: item.added, removed: item.removed }, data: item })),
+  );
+  function pickChanged(item: PickerItem<Change>) {
+    findOpen = false;
+    findQuery = '';
+    openChange(item.data);
+  }
   async function call<T = void>(command: string, args: Record<string, unknown>): Promise<T> {
     const { invoke } = await import('@tauri-apps/api/core');
     return invoke<T>(command, args);
@@ -75,13 +105,13 @@
   const warmed = new Map<string, number>();
   function warm(change: Change) {
     if (change.status === 'D' || !inTauri() || imageMimeOf(change.path)) return;
-    const from = root;
-    const path = `${from.replace(/[\/]+$/, '')}/${change.path}`;
+    const from = topOf(change);
+    const path = change.abs;
     const key = fileKey(from, path);
     const at = warmed.get(key);
     if (at !== undefined && Date.now() - at < 3000) return;
     warmed.set(key, Date.now());
-    void call<string>('change_diff', { root: from, path: relativeTo(from, path) })
+    void call<string>('change_diff', { root: from, path: change.path })
       .then((diff) => diffCache.set(key, { diff, rows: parseDiff(diff) }))
       .catch(() => {});
     void readProjectFile(from, path)
@@ -94,7 +124,7 @@
       toast.info('That file is deleted');
       return;
     }
-    openFileTab(`${root.replace(/[\/]+$/, '')}/${change.path}`, root, 'changes');
+    openInViewer(change.abs, topOf(change), 'changes');
   }
 
   async function act(work: () => Promise<unknown>, done: string) {
@@ -184,6 +214,14 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Changes">
+  {#if root && changes.length > 0}
+    <!-- Find a changed file by name: the same bar as the file tree's, over the changed files only. -->
+    <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center border-b border-border p-1 text-xs">
+      <button type="button" class="inline-flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-2 text-left outline-none {findOpen ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" title="Find a changed file by name" aria-expanded={findOpen} onclick={() => (findOpen = true)}>
+        <ZIcon zType={icon('lucideSearch')} zSize="15" /> <span class="truncate">Search changed files</span>
+      </button>
+    </div>
+  {/if}
   {#if !root || failure}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
       <ZIcon zType={icon('lucideGitCompare')} zSize="28" class="size-7 opacity-60" />
@@ -202,16 +240,16 @@
         <p class="m-0">No changes since the last commit.</p>
       </div>
     {:else}
-      <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
-        <span class="font-medium">{changes.length} {changes.length === 1 ? 'file' : 'files'}</span>
-        <span class="text-emerald-500">+{totals.added}</span>
-        <span class="text-red-500">-{totals.removed}</span>
+      <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-2 text-xs" bind:clientWidth={headWidth}>
+        <span class="font-medium tabular-nums" title="{changes.length} {changes.length === 1 ? 'file' : 'files'}">{compact(changes.length)}{narrow ? '' : changes.length === 1 ? ' file' : ' files'}</span>
+        <span class="text-emerald-500 tabular-nums" title="{totals.added} lines added">+{compact(totals.added)}</span>
+        <span class="text-red-500 tabular-nums" title="{totals.removed} lines removed">−{compact(totals.removed)}</span>
         <span class="flex-1"></span>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 px-2 text-xs" disabled={busy} title={allStaged ? 'Unstage all' : 'Stage all'} onclick={() => void stage('', !allStaged)}>
-          {allStaged ? 'Unstage all' : 'Stage all'}
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 {narrow ? 'size-6! p-0' : 'px-2'} text-xs" disabled={busy} aria-label={allStaged ? 'Unstage all' : 'Stage all'} title={allStaged ? 'Unstage all' : 'Stage all'} onclick={() => void stage('', !allStaged)}>
+          {#if narrow}<ZIcon zType={icon(allStaged ? 'lucideMinus' : 'lucidePlus')} class="size-3.5" />{:else}{allStaged ? 'Unstage all' : 'Stage all'}{/if}
         </ZButton>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 gap-1 px-2 text-xs hover:!bg-destructive/10 hover:!text-destructive" disabled={busy} onclick={() => (ask({ all: true, path: '' }))}>
-          <ZIcon zType={icon(reverting ? 'lucideLoaderCircle' : 'lucideUndo2')} class="size-3 {reverting ? 'animate-spin' : ''}" /> {reverting ? 'Reverting…' : 'Revert all'}
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 gap-1 {narrow ? 'size-6! p-0' : 'px-2'} text-xs hover:!bg-destructive/10 hover:!text-destructive" disabled={busy} aria-label="Revert all" title="Revert all" onclick={() => (ask({ all: true, path: '' }))}>
+          <ZIcon zType={icon(reverting ? 'lucideLoaderCircle' : 'lucideUndo2')} class="size-3.5 {reverting ? 'animate-spin' : ''}" />{#if !narrow} {reverting ? 'Reverting…' : 'Revert all'}{/if}
         </ZButton>
       </div>
 
@@ -222,15 +260,16 @@
             {@const change = changes[row.index]}
             <!-- The slot is ROW high (the list is virtual); the row inside leaves 1px above and below, so rows do not touch. -->
             <div class="absolute top-0 left-0 w-full py-px" style:height="{row.size}px" style:transform="translateY({row.start}px)">
-            <div class="group flex h-full items-center gap-1.5 rounded-(--radius-row) px-2.5 text-xs hover:bg-muted/50">
-              <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left no-underline outline-none" title="Open {change.path}" onpointerenter={() => warm(change)} onclick={() => openChange(change)}>
+            <!-- The whole row opens the file; the stage and revert buttons at its end do their own thing. -->
+            <div class="group flex h-full cursor-pointer items-center gap-1.5 rounded-(--radius-row) px-2.5 text-xs hover:bg-muted/50" role="presentation" onpointerenter={() => warm(change)} onclick={(event) => !(event.target as Element).closest('[data-row-action]') && openChange(change)}>
+              <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left no-underline outline-none" title="Open {change.path}">
                 <span class="w-3 shrink-0 text-center font-mono {STATUS[change.status]?.tone}" title={STATUS[change.status]?.label}>{change.status}</span>
                 <span class="min-w-0 truncate" title={change.path}><span class="text-muted-foreground">{dirOf(change.path)}</span>{nameOf(change.path)}</span>
               </button>
               {#if change.staged}<span class="shrink-0 rounded bg-primary/15 px-1 text-[10px] text-primary">staged</span>{/if}
-              <span class="shrink-0 font-mono text-emerald-500">+{change.added}</span>
-              <span class="shrink-0 font-mono text-red-500">-{change.removed}</span>
-              <span class="flex shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+              <span class="shrink-0 font-mono text-emerald-500" title="{change.added} lines added">+{compact(change.added)}</span>
+              <span class="shrink-0 font-mono text-red-500" title="{change.removed} lines removed">−{compact(change.removed)}</span>
+              <span class="flex shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100" data-row-action>
                 <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0" aria-label={change.staged ? 'Unstage' : 'Stage'} title={change.staged ? 'Unstage' : 'Stage'} disabled={busy} onclick={() => void stage(change.path, !change.staged)}>
                   <ZIcon zType={icon(change.staged ? 'lucideMinus' : 'lucidePlus')} class="size-3.5" />
                 </ZButton>
@@ -246,3 +285,16 @@
     {/if}
   {/if}
 </div>
+
+<PickerPopover
+  anchor={from ?? findAnchor}
+  bind:open={findOpen}
+  bind:query={findQuery}
+  items={findItems}
+  search
+  placeholder="Search changed files"
+  empty={findQuery ? `No changed file matches “${findQuery}”` : 'No changes'}
+  position="bottom-right"
+  onpick={pickChanged}
+  onclose={() => (findQuery = '')}
+/>

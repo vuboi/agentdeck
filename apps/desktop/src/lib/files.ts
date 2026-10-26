@@ -70,3 +70,23 @@ export async function readProjectFile(root: string, path: string): Promise<strin
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<string>('file_read', { root, path });
 }
+
+export type OfficeFormat = 'docx' | 'xlsx' | 'pptx';
+
+/** The Office Open XML formats this viewer can render without changing the source file. */
+export function officeFormatOf(name: string): OfficeFormat | undefined {
+  const extension = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+  if (extension === 'docx') return 'docx';
+  if (['xls', 'xlsx', 'xlsm'].includes(extension)) return 'xlsx';
+  if (extension === 'pptx') return 'pptx';
+  return undefined;
+}
+
+/** Bytes of a supported Office file inside the project folder, decoded from the desktop's bounded base64 response. */
+export async function readProjectFileBytes(root: string, path: string): Promise<Uint8Array> {
+  if (!inTauri()) throw new Error('Open the desktop app to read Office files.');
+  const { invoke } = await import('@tauri-apps/api/core');
+  const base64 = await invoke<string>('file_read_bytes', { root, path });
+  const binary = atob(base64);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}

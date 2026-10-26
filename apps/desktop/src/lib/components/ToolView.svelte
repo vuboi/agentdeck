@@ -3,8 +3,7 @@
   import { toolOf } from '../tools';
   import BrowserView from './BrowserView.svelte';
   import DevTools from './DevTools.svelte';
-  import ChangesView from './ChangesView.svelte';
-  import FileExplorer from './FileExplorer.svelte';
+  import FileViewer from './FileViewer.svelte';
   import TasksView from './TasksView.svelte';
   import McpView from './McpView.svelte';
   import WorkflowView from './WorkflowView.svelte';
@@ -16,16 +15,14 @@
   const current = $derived(toolOf(tool));
 </script>
 
-{#if tool === 'Explore'}
-  <FileExplorer />
+{#if tool === 'Explore' || tool === 'Files' || tool === 'Diff'}
+  <FileViewer />
 {:else if tool === 'Preview'}
   <BrowserView />
 {:else if tool === 'Images'}
   <ImageGenerator />
 {:else if tool === 'Tasks' || tool === 'Audit'}
   <TasksView />
-{:else if tool === 'Diff'}
-  <ChangesView />
 {:else if tool === 'Workflow'}
   <WorkflowView />
 {:else if tool === 'DevTools'}

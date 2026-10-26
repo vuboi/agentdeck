@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ZIcon, ZPopover } from '@shival99/z-ui-svelte';
+  import { ZIcon } from '@shival99/z-ui-svelte';
+  import ProjectSelect from './ProjectSelect.svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { modelLabel } from '../models.svelte';
   import { workspace } from '../sessions.svelte';
@@ -29,15 +30,6 @@
   let range = $state<Range>('week');
   // null: all projects. '' is a real choice: the chats outside any project.
   let project = $state<string | null>(null);
-  // The project picker: a popover with a small search once there are enough projects to need one.
-  let projectTrigger = $state<HTMLElement>();
-  let projectOpen = $state(false);
-  let projectQuery = $state('');
-  let projectSearch = $state<HTMLInputElement>();
-  // The search is ready to type in as soon as the popover opens.
-  $effect(() => {
-    if (projectOpen) requestAnimationFrame(() => projectSearch?.focus());
-  });
 
   async function reload() {
     log = await usageLog();
@@ -59,13 +51,6 @@
   const inRange = $derived(log.filter((item) => new Date(item.at).getTime() >= startOfRange(range)));
   const projectIds = $derived([...new Set(inRange.map((item) => item.projectId ?? ''))].sort());
   const chosen = $derived(project !== null && projectIds.includes(project) ? project : null);
-  const SEARCH_FROM = 6;
-  const shownProjects = $derived(projectIds.filter((id) => projectName(id).toLowerCase().includes(projectQuery.trim().toLowerCase())));
-  function pickProject(id: string | null) {
-    project = id;
-    projectOpen = false;
-    projectQuery = '';
-  }
   const rows = $derived(inRange.filter((item) => chosen === null || (item.projectId ?? '') === chosen));
   const projectName = (id: string) => (id === '' ? 'No project' : (workspace.projects.find((item) => item.id === id)?.name ?? id));
 
@@ -153,25 +138,14 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-1 flex-col text-xs" role="tabpanel" aria-label="Usage">
-  <div class="flex min-h-9 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-1">
-    <div class="flex rounded-md bg-muted p-0.5" role="group" aria-label="Range">
+  <div class="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+    <div class="flex rounded-md bg-muted p-0.5" role="tablist" aria-label="Range">
       {#each RANGES as item (item.value)}
-        <button type="button" class="rounded px-2 py-0.5 {range === item.value ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}" aria-pressed={range === item.value} onclick={() => (range = item.value)}>{item.label}</button>
+        <button type="button" role="tab" aria-selected={range === item.value} class="cursor-pointer rounded px-2.5 py-0.5 {range === item.value ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
       {/each}
     </div>
     {#if projectIds.length > 1}
-      <button
-        bind:this={projectTrigger}
-        type="button"
-        class="ml-auto inline-flex h-6 min-w-36 max-w-44 cursor-pointer items-center justify-between gap-1.5 rounded-md border border-border bg-background px-2 text-xs outline-none hover:bg-accent {projectOpen ? 'bg-accent' : ''}"
-        aria-label="Project"
-        aria-haspopup="listbox"
-        aria-expanded={projectOpen}
-        onclick={() => (projectOpen = !projectOpen)}
-      >
-        <span class="truncate">{chosen === null ? 'All projects' : projectName(chosen)}</span>
-        <ZIcon zType={'lucideChevronDown' as ZIconName} class="size-3 shrink-0 text-muted-foreground" />
-      </button>
+      <ProjectSelect bind:value={project} options={projectIds} label={projectName} class="ml-auto" />
     {/if}
   </div>
 
@@ -260,33 +234,3 @@
     </div>
   {/if}
 </div>
-
-<ZPopover anchor={projectTrigger} bind:open={projectOpen} zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth={220}>
-  {#snippet children()}
-    <div class="flex w-full flex-col text-xs" role="listbox" aria-label="Project">
-      {#if projectIds.length >= SEARCH_FROM}
-        <div class="flex h-9 items-center gap-2 border-b border-border px-3">
-            <ZIcon zType={'lucideSearch' as ZIconName} class="size-3.5 shrink-0 text-muted-foreground" />
-            <input class="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground" placeholder="Search projects…" aria-label="Search projects" bind:this={projectSearch} bind:value={projectQuery} />
-          </div>
-      {/if}
-      <!-- A fixed minimum, so the popover does not shrink and jump as the search narrows the list. -->
-      <div class="flex max-h-44 min-h-32 flex-col gap-0.5 overflow-y-auto p-1">
-        {#if !projectQuery.trim()}
-          <button type="button" role="option" aria-selected={chosen === null} class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left outline-none hover:bg-accent {chosen === null ? 'bg-primary/15 text-primary' : ''}" onclick={() => pickProject(null)}>
-            <span class="min-w-0 flex-1 truncate">All projects</span>
-            {#if chosen === null}<ZIcon zType={'lucideCheck' as ZIconName} class="size-3.5 shrink-0" />{/if}
-          </button>
-        {/if}
-        {#each shownProjects as id (id)}
-          <button type="button" role="option" aria-selected={chosen === id} class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left outline-none hover:bg-accent {chosen === id ? 'bg-primary/15 text-primary' : ''}" onclick={() => pickProject(id)}>
-            <span class="min-w-0 flex-1 truncate">{projectName(id)}</span>
-            {#if chosen === id}<ZIcon zType={'lucideCheck' as ZIconName} class="size-3.5 shrink-0" />{/if}
-          </button>
-        {:else}
-          <p class="m-0 px-2 py-2 text-center text-muted-foreground">No project matches</p>
-        {/each}
-      </div>
-    </div>
-  {/snippet}
-</ZPopover>

@@ -1,8 +1,10 @@
 <script lang="ts">
+  import MenuButton from './MenuButton.svelte';
+  import { guide } from '../guide.svelte';
   import { fly } from 'svelte/transition';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { revealTab } from '../tab-strip';
-  import { ZDrawer, ZDropdownMenu, ZIcon, ZLoading, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZDrawer, ZIcon, ZLoading, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import { toast } from '../toast';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
@@ -39,6 +41,7 @@
     runTarget as startTarget,
     asRunFailure,
     failureText,
+    addBrowserExtension,
     terminalCommand,
     type RunTarget,
     reload,
@@ -55,6 +58,8 @@
   import { inTauri } from '../history';
   import { trackRun } from '../activity.svelte';
   import RunCard from './RunCard.svelte';
+  import TabListButton from './TabListButton.svelte';
+  import type { PickerItem } from './PickerPopover.svelte';
   import { blurPage, cutHole, modalBlur, overPage, setBelow } from '../page-layer';
   import { devtoolsOpen, layout, setDevtools } from '../layout.svelte';
   import { runInTerminal, showTerminalTab, stopTerminalRun, terminal, terminalRuns } from '../terminal.svelte';
@@ -381,7 +386,7 @@
       tabScrolled = (tabStrip?.scrollLeft ?? 0) > 1;
     });
   });
-  const tabMenuItems = $derived<ZDropdownMenuItem[]>(browser.tabs.map((item) => ({ label: tabTitle(item), class: item.id === browser.activeId ? 'text-xs! py-1 bg-primary/15! text-primary!' : 'text-xs! py-1', checked: item.id === browser.activeId, onClick: () => selectTab(item.id) })));
+  const tabListItems = $derived<PickerItem<string>[]>(browser.tabs.map((item) => ({ id: item.id, label: tabTitle(item), hint: item.url ? item.url.replace(/^https?:\/\//, '') : undefined, icon: 'lucideGlobe' as ZIconName, selected: item.id === browser.activeId, data: item.id })));
   function addTab() {
     if (tabsFull()) {
       toast.info(`Tab limit reached (${MAX_TABS}). Close a tab to open another.`);
@@ -598,28 +603,67 @@
     icon: (value === 'desktop' ? 'lucideMonitor' : value === 'tablet' ? 'lucideTablet' : 'lucideSmartphone') as ZIconName,
   }));
   // ---- the "more" menu ----
-  // A narrow toolbar hides the device group; its choices move to the top of this menu.
+  // At phone-width, controls move into More tools instead of disappearing.
   let barWidth = $state(1000);
-  const compact = $derived(barWidth < 560);
+  const compact = $derived(barWidth < 420);
+  let toolsWidth = $state(0);
   const alive = $derived({ length: servers.list.filter((item) => item.running).length + terminalRuns.list.length });
   let processOpen = $state(false);
+  const pageTools = $derived<ZDropdownMenuItem[]>([
+    { label: browser.picking ? 'Stop inspecting' : 'Inspect an element', icon: 'lucideMousePointerClick', iconSize: 12, checked: browser.picking, disabled: !started, onClick: () => void pick() },
+    { label: browser.annotating ? 'Stop marking up' : 'Mark up the page', icon: 'lucideMousePointer2', iconSize: 12, checked: browser.annotating, disabled: !started, onClick: () => void toggleMarkup() },
+    { label: 'Create guide', icon: 'lucideClipboardList', iconSize: 12, disabled: !started, onClick: () => (guide.open = true) },
+    { label: errors > 0 ? `Developer tools (${errors} errors)` : 'Developer tools', icon: 'lucideSquareTerminal', iconSize: 12, checked: devtoolsOpen(), onClick: () => setDevtools(!devtoolsOpen()) },
+    { label: alive.length > 0 ? `Running in the background (${alive.length})` : 'Running in the background', icon: 'lucideServer', iconSize: 12, checked: processOpen, onClick: () => (processOpen = !processOpen) },
+    ...(browser.annotating
+      ? [
+          ...MARK_TOOLS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, checked: browser.annotateTool === item.tool, onClick: () => void useTool(item.tool) })),
+          { label: 'Undo', icon: 'lucideUndo2' as ZIconName, iconSize: 12, disabled: !browser.annotateUndo, onClick: () => void markHistory('undo') },
+          { label: 'Redo', icon: 'lucideRedo2' as ZIconName, iconSize: 12, disabled: !browser.annotateRedo, onClick: () => void markHistory('redo') },
+          { label: browser.annotateSelected ? 'Delete selected note' : 'Delete all notes', icon: 'lucideTrash2' as ZIconName, iconSize: 12, class: 'text-destructive!', disabled: browser.annotateCount === 0, onClick: () => void markHistory('remove') },
+          ...(browser.annotateCount > 0 ? [{ label: 'Add notes to chat', icon: 'lucidePlus' as ZIconName, iconSize: 12, disabled: busy !== '', onClick: () => void addMarksToChat() }] : []),
+        ]
+      : []),
+  ]);
+  // Each toolbar button is 28px with a 2px gap; reserve padding and the always-visible menu trigger.
+  const visibleToolCount = $derived(Math.min(pageTools.length, Math.max(0, Math.floor((toolsWidth - 46) / 30))));
   const menuItems = $derived<ZDropdownMenuItem[]>([
     ...(compact
       ? [
           ...DEVICE_BUTTONS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, class: `text-xs! py-1 ${browser.device === item.value ? 'bg-primary/10 text-primary' : ''}`, checked: browser.device === item.value, onClick: () => (browser.device = item.value) })),
           { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${browser.landscape && browser.device !== 'desktop' ? 'bg-primary/10 text-primary' : ''}`, disabled: browser.device === 'desktop', checked: browser.landscape && browser.device !== 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
+          { label: browser.picking ? 'Stop inspecting' : 'Inspect an element', icon: 'lucideMousePointerClick' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${browser.picking ? 'bg-primary/10 text-primary' : ''}`, checked: browser.picking, disabled: !started, onClick: () => void pick() },
+          { label: browser.annotating ? 'Stop marking up' : 'Mark up the page', icon: 'lucideMousePointer2' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${browser.annotating ? 'bg-primary/10 text-primary' : ''}`, checked: browser.annotating, disabled: !started, onClick: () => void toggleMarkup() },
+          { label: 'Create guide', icon: 'lucideClipboardList' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !started, onClick: () => (guide.open = true) },
         ]
       : []),
-    ...(compact
+    ...(compact && browser.annotating
       ? [
-          { label: errors > 0 ? `Developer tools (${errors} errors)` : 'Developer tools', icon: 'lucideSquareTerminal' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${devtoolsOpen() ? 'bg-primary/10 text-primary' : ''}`, checked: devtoolsOpen(), onClick: () => setDevtools(!devtoolsOpen()) },
-          { label: alive.length > 0 ? `Running in the background (${alive.length})` : 'Running in the background', icon: 'lucideServer' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${processOpen ? 'bg-primary/10 text-primary' : ''}`, checked: processOpen, onClick: () => (processOpen = !processOpen) },
+          ...MARK_TOOLS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, class: `text-xs! py-1 ${browser.annotateTool === item.tool ? 'bg-primary/10 text-primary' : ''}`, checked: browser.annotateTool === item.tool, onClick: () => void useTool(item.tool) })),
+          { label: 'Undo', icon: 'lucideUndo2' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !browser.annotateUndo, onClick: () => void markHistory('undo') },
+          { label: 'Redo', icon: 'lucideRedo2' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !browser.annotateRedo, onClick: () => void markHistory('redo') },
+          { label: browser.annotateSelected ? 'Delete selected note' : 'Delete all notes', icon: 'lucideTrash2' as ZIconName, iconSize: 12, class: 'text-xs! py-1 text-destructive!', disabled: browser.annotateCount === 0, onClick: () => void markHistory('remove') },
+          ...(browser.annotateCount > 0 ? [{ label: 'Add notes to chat', icon: 'lucidePlus' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: busy !== '', onClick: () => void addMarksToChat() }] : []),
         ]
       : []),
+    { label: /windows/i.test(navigator.userAgent) ? 'Add unpacked extension…' : 'Extensions require Windows', icon: 'lucidePuzzle' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: 'before', disabled: !inTauri() || !tab.opened || !/windows/i.test(navigator.userAgent), onClick: () => void addExtension() },
     { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: compact ? 'before' : undefined, disabled: !tab.url, onClick: () => void openExternal(tab.url) },
     { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url).then(() => toast.success('Address copied')) },
     { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
   ]);
+  const moreItems = $derived([
+    ...pageTools.slice(visibleToolCount).map((item) => ({ ...item, class: `text-xs! py-1 ${item.class ?? ''} ${item.checked ? 'bg-primary/10 text-primary' : ''}` })),
+    ...menuItems,
+  ]);
+
+  async function addExtension() {
+    try {
+      const name = await addBrowserExtension(tab.id);
+      if (name) toast.success(`Added ${name} to Browser Preview`);
+    } catch (error) {
+      toast.error(String(error));
+    }
+  }
 
   // What runs in the background (servers started from the Preview or by an agent): open it, or stop it.
   // Commands running in the Terminal panel's tabs are listed too (their address, when they printed one).
@@ -743,8 +787,8 @@
       {/if}
       </div>
       {#if tabsOverflow}
-        <div data-page-menu class="flex shrink-0 items-center bg-background [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:outline-none [&_button]:focus-visible:ring-0">
-          <ZDropdownMenu zItems={tabMenuItems} zIcon={'lucideChevronDown' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
+        <div class="flex shrink-0 items-center bg-background">
+          <TabListButton items={tabListItems} onpick={selectTab} label="Open tabs" />
         </div>
       {/if}
       <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary {tabsFull() ? 'opacity-40' : ''}" aria-label="New tab" aria-disabled={tabsFull()} {@attach zTooltip({ content: tabsFull() ? `Tab limit reached (${MAX_TABS})` : 'New tab', position: 'top' })} onclick={addTab}>
@@ -752,19 +796,13 @@
       </button>
     </div>
 
-    <!-- Address bar: navigation and inspector on the left, the address in the middle, markup / devtools / menu on the right -->
-    <div bind:clientWidth={barWidth} class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-2">
+    <!-- Address bar: navigation and address stay together; page tools live in the row below. -->
+    <div bind:clientWidth={barWidth} class="flex shrink-0 items-center gap-1 border-b border-border px-1 py-2">
       <div class="flex shrink-0 items-center gap-0.5">
         <button type="button" class={icon} aria-label="Back" {@attach zTooltip({ content: 'Back', position: 'top' })} onclick={() => void back()}><ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-4" /></button>
         <button type="button" class={icon} aria-label="Forward" {@attach zTooltip({ content: 'Forward', position: 'top' })} onclick={() => void forward()}><ZIcon zType={'lucideArrowRight' as ZIconName} class="size-4" /></button>
         <button type="button" class={icon} aria-label={tab.loading ? 'Stop' : 'Reload'} {@attach zTooltip({ content: tab.loading ? 'Stop loading' : 'Reload', position: 'top' })} onclick={() => void (tab.loading ? stop() : reload())}>
           {#if tab.loading}<ZLoading zLoading zSpinner="spinner" zSize="xs" zColor="primary" />{:else}<ZIcon zType={'lucideRotateCw' as ZIconName} class="size-4" />{/if}
-        </button>
-        <button type="button" class="{icon} {browser.picking ? 'bg-primary/15 text-primary' : ''}" aria-label="Inspect an element" disabled={!started} aria-pressed={browser.picking} {@attach zTooltip({ content: browser.picking ? 'Stop inspecting' : 'Inspect an element and add it to the message', position: 'top' })} onclick={() => void pick()}>
-          <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-4" />
-        </button>
-        <button type="button" class="{icon} {browser.annotating ? 'bg-primary/15 text-primary' : ''}" aria-label="Mark up the page" disabled={!started} aria-pressed={browser.annotating} {@attach zTooltip({ content: browser.annotating ? 'Stop marking up' : 'Mark up the page: draw and write notes', position: 'top' })} onclick={() => void toggleMarkup()}>
-          <ZIcon zType={'lucideMousePointer2' as ZIconName} class="size-4" />
         </button>
       </div>
       <form class="relative min-w-0 flex-1" onsubmit={(event) => { event.preventDefault(); void go(); }}>
@@ -862,39 +900,6 @@
       </form>
       <div class="flex shrink-0 items-center gap-0.5">
         <!-- Desktop, tablet, phone: one group, the current one pressed. -->
-        {#if browser.annotating}
-          <!-- Mark-up tools sit in this row, in place of the device buttons: a bar of their own would resize the native page. -->
-          <div class="mr-1 flex items-center gap-0.5" role="toolbar" aria-label="Mark up tools">
-            {#each MARK_TOOLS as item (item.tool)}
-              <button
-                type="button"
-                class="{icon} {browser.annotateTool === item.tool ? 'bg-primary/15 text-primary' : ''}"
-                aria-label={item.label}
-                aria-pressed={browser.annotateTool === item.tool}
-                {@attach zTooltip({ content: `${item.label}: ${item.hint}`, position: 'top' })}
-                onclick={() => void useTool(item.tool)}
-              >
-                <ZIcon zType={item.icon} class="size-4" />
-              </button>
-            {/each}
-            <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
-            <button type="button" class={icon} aria-label="Undo" disabled={!browser.annotateUndo} {@attach zTooltip({ content: 'Undo (Ctrl+Z)', position: 'top' })} onclick={() => void markHistory('undo')}>
-              <ZIcon zType={'lucideUndo2' as ZIconName} class="size-4" />
-            </button>
-            <button type="button" class={icon} aria-label="Redo" disabled={!browser.annotateRedo} {@attach zTooltip({ content: 'Redo (Ctrl+Shift+Z)', position: 'top' })} onclick={() => void markHistory('redo')}>
-              <ZIcon zType={'lucideRedo2' as ZIconName} class="size-4" />
-            </button>
-            <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-destructive outline-none hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-40" aria-label={browser.annotateSelected ? 'Delete the selected note' : 'Delete all notes'} disabled={browser.annotateCount === 0} {@attach zTooltip({ content: browser.annotateSelected ? 'Delete the selected note' : 'Delete all notes', position: 'top' })} onclick={() => void markHistory('remove')}>
-              <ZIcon zType={'lucideTrash2' as ZIconName} class="size-4" />
-            </button>
-            {#if browser.annotateCount > 0}
-              <button type="button" class="ml-1 inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground outline-none hover:bg-primary/90 disabled:opacity-60" disabled={busy !== ''} onclick={() => void addMarksToChat()}>
-                <ZIcon zType={'lucidePlus' as ZIconName} class="size-3.5" />
-                Add to chat
-              </button>
-            {/if}
-          </div>
-        {:else}
         <div class="mr-0.5 items-center rounded-md border border-border p-px {compact ? 'hidden' : 'flex'}" role="radiogroup" aria-label="Device">
           {#each DEVICE_BUTTONS as item, index (item.value)}
             <button
@@ -913,17 +918,6 @@
             {/if}
           {/each}
         </div>
-        {/if}
-        {#if !compact}
-          <button type="button" class="{icon} relative {devtoolsOpen() ? 'bg-primary/15 text-primary' : ''}" aria-label="Developer tools" aria-pressed={devtoolsOpen()} {@attach zTooltip({ content: errors > 0 ? `Developer tools · ${errors} errors` : 'Developer tools', position: 'top' })} onclick={() => setDevtools(!devtoolsOpen())}>
-            <ZIcon zType={'lucideSquareTerminal' as ZIconName} class="size-4" />
-            {#if errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
-          </button>
-          <button type="button" data-page-menu class="{icon} relative {processOpen ? 'bg-primary/15 text-primary' : ''}" aria-label="Running in the background" aria-expanded={processOpen} {@attach zTooltip({ content: alive.length > 0 ? `Running in the background · ${alive.length}` : 'Running in the background', position: 'top' })} onclick={() => (processOpen = !processOpen)}>
-            <ZIcon zType={'lucideServer' as ZIconName} zSize="14" />
-            {#if alive.length > 0}<span class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center text-[9px] leading-3.5 text-primary-foreground">{alive.length}</span>{/if}
-          </button>
-        {/if}
         <ZDrawer bind:open={processOpen} zPlacement="right" zWidth="380px" zFloating zClosable={false} zTitle={processTitle} footer={processFooter}>
 <div class="flex min-h-full flex-col gap-2">
               {#if rowCount === 0}
@@ -975,9 +969,20 @@
               {/each}
 </div>
         </ZDrawer>
-<div data-page-menu class="flex items-center [&_.z-icon]:size-3.5! [&_svg]:size-3.5! [&_button]:size-7! [&_button]:rounded-md [&_button]:p-0 [&_button]:!bg-transparent [&_button]:!text-muted-foreground [&_button:hover]:!bg-primary/10 [&_button:hover]:!text-primary [&_button[aria-expanded=true]]:!bg-primary/15 [&_button[aria-expanded=true]]:!text-primary [&_button]:focus-visible:ring-0">
-                  <ZDropdownMenu zItems={menuItems} zIcon={'lucideEllipsis' as ZIconName} zLabel="" zButtonType="ghost" zButtonSize="sm" zPosition="bottom-right" zOffset={6} zMinWidth={200} zWave={false} />
-        </div>
+      </div>
+    </div>
+    <div bind:clientWidth={toolsWidth} class="flex min-h-9 shrink-0 items-center justify-between gap-1 border-b border-border px-1 py-1" role="toolbar" aria-label="Page tools">
+      <div class="flex min-w-0 items-center gap-0.5 overflow-hidden">
+        {#each pageTools.slice(0, visibleToolCount) as item (`${item.label}:${item.icon}`)}
+          <button type="button" class="{icon} relative {item.checked ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : ''} {item.class ?? ''}" aria-label={item.label} title={item.label} aria-pressed={item.checked} disabled={item.disabled ?? false} onclick={() => item.onClick?.()}>
+            <ZIcon zType={item.icon as ZIconName} class="size-4" />
+            {#if item.icon === 'lucideSquareTerminal' && errors > 0}<span class="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-[9px] leading-3.5 text-white">{errors}</span>{/if}
+            {#if item.icon === 'lucideServer' && alive.length > 0}<span class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center text-[9px] leading-3.5 text-primary-foreground">{alive.length}</span>{/if}
+          </button>
+        {/each}
+      </div>
+      <div data-page-menu class="shrink-0">
+        <MenuButton items={moreItems} icon={compact ? 'lucideMenu' : 'lucideEllipsis'} label="More tools" width={240} />
       </div>
     </div>
     {#if browser.error}

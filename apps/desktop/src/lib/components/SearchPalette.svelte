@@ -3,6 +3,10 @@
   import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
   import { projectOf, workspace } from '../sessions.svelte';
   import { showSession } from '../content-tabs.svelte';
+  import { layout, setToolsOpen } from '../layout.svelte';
+  import { TOOLS } from '../tools';
+  import { toggleTerminal } from '../terminal.svelte';
+  import { openSettings } from '../connectors.svelte';
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
 
@@ -53,6 +57,14 @@
     return out;
   });
 
+  // The tools and a few places of the app, to open by name: "usage", "preview", "tasks".
+  const ACTIONS: { id: string; label: string; icon: ZIconName; keywords: string[] }[] = [
+    ...TOOLS.map((tool) => ({ id: `tool:${tool.value}`, label: tool.label, icon: tool.icon, keywords: [tool.value, 'tool', 'panel'] })),
+    { id: 'action:terminal', label: 'Terminal', icon: 'lucideSquareTerminal' as ZIconName, keywords: ['shell', 'console'] },
+    { id: 'action:settings', label: 'Settings', icon: 'lucideSettings' as ZIconName, keywords: ['preferences', 'options'] },
+  ];
+  const actionItem = (action: (typeof ACTIONS)[number]): ZCommandItem<string> => ({ id: action.id, label: action.label, icon: action.icon, category: 'Open', keywords: action.keywords, data: action.id });
+
   const groups = $derived.by<ZCommandGroup<string>[]>(() => {
     const needle = fold(query.replace(/\s+/g, ''));
     if (!needle) {
@@ -61,6 +73,7 @@
         { heading: 'Recent', items: byRecent.slice(0, RECENT).map((item) => toItem(item.id)) },
       ];
     }
+    const tools = ACTIONS.filter((action) => inOrder(fold(`${action.label}${action.keywords.join('')}`.replace(/\s+/g, '')), needle)).map(actionItem);
     // Matches are grouped by project so it is clear where each chat lives.
     const byProject = new Map<string, ZCommandItem<string>[]>();
     for (const session of byRecent
@@ -69,12 +82,18 @@
       const name = projectOf(session)?.name ?? 'Other';
       byProject.set(name, [...(byProject.get(name) ?? []), toItem(session.id)]);
     }
-    return [...byProject].map(([heading, items]) => ({ heading, items }));
+    return [...(tools.length ? [{ heading: 'Open', items: tools }] : []), ...[...byProject].map(([heading, items]) => ({ heading, items }))];
   });
 
   function select(item: ZCommandItem<string>) {
+    if (!item.data) return;
+    if (item.data.startsWith('tool:')) {
+      layout.activeTool = item.data.slice(5);
+      setToolsOpen(true);
+    } else if (item.data === 'action:terminal') toggleTerminal();
+    else if (item.data === 'action:settings') openSettings();
     // Opens its tab too: picking the chat that was open before its tab was closed brings it back.
-    if (item.data) showSession(item.data);
+    else showSession(item.data);
   }
 </script>
 
@@ -83,12 +102,30 @@
   bind:query
   zGroups={groups}
   zSearch="fuzzy"
-  zSize="default"
+  zSize="sm"
+  class="search-palette"
   zHotkey="mod+p"
-  zPlaceholder="Search chats…"
+  zPlaceholder="Search chats or open a tool…"
   onSelect={select}
 >
   {#snippet empty(text)}
     <span class="text-xs text-muted-foreground">No chat matches “{text}”</span>
   {/snippet}
 </ZCommand>
+
+<style>
+  /* Compact rows, and a line between the groups that runs from edge to edge of the palette. */
+  :global(.search-palette [role='separator']) {
+    margin: 4px -8px;
+    border-top-color: var(--border);
+  }
+  :global(.search-palette [role='group'] > [role='presentation']) {
+    padding: 6px 12px 2px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  :global(.search-palette .z-command-item) {
+    padding-block: 5px;
+    font-size: 13px;
+  }
+</style>

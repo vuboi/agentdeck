@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-save-guide"
+description = "Enables the browser_save_guide command without any pre-configured scope."
+commands.allow = ["browser_save_guide"]
+
+[[permission]]
+identifier = "deny-browser-save-guide"
+description = "Denies the browser_save_guide command without any pre-configured scope."
+commands.deny = ["browser_save_guide"]

@@ -108,6 +108,14 @@ export const BUILTIN: SlashItem[] = [
     template:
       'Write or update the documentation for: $ARGUMENTS\n\nRead the code first so every statement is true. Match the tone and layout of the docs already here. Keep it short, with a runnable example where it helps.',
   },
+  {
+    name: 'document',
+    description: 'Create a Word, PDF, PowerPoint, or recorded video guide',
+    kind: 'builtin',
+    origin: 'AgentDeck',
+    template:
+      'Create this user-facing document: $ARGUMENTS\n\nUse the format explicitly requested: Word (.docx), PDF (.pdf), PowerPoint (.pptx), or a recorded Preview walkthrough (.webm). If the format is omitted, choose the one that best fits the request. Read relevant project source first when the workflow belongs to this project; otherwise inspect the current Preview page. Write concise, accurate, numbered steps and save deliverables under docs/user-guides/ in the current project.\n\nFor a video walkthrough, the agent itself operates the AgentDeck Preview and records it: call browser_record_start with the project root and a .webm filename, perform the requested browser workflow, and call browser_record_stop when finished. Recording captures continuously at up to 4 fps and 1.5× scale to keep the Preview responsive; the user does not perform recording or screenshot steps. Use browser_zoom when a close-up helps explain a control, then restore normal zoom before finishing. For visual callouts, use browser_eval to temporarily add a top-layer arrow, outline, or label at screenshot coordinates and remove it after its explanatory frame. Do not substitute a screenshot list for a requested video or claim a file was created unless the tool confirms its path. For Word, PDF, and PowerPoint, create the requested file with the project tools/libraries already available; do not silently change formats. Include a brief companion notes file with the steps and any limitations. Report every output path and what you verified.',
+  },
 ];
 
 export const slash = $state({ agent: '' as SlashAgent | '', cwd: '', items: [] as SlashItem[], loading: false });

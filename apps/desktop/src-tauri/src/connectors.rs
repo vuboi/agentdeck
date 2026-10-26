@@ -30,6 +30,21 @@ struct LoginTask {
     abort: tokio::task::AbortHandle,
 }
 
+#[cfg(windows)]
+struct CancellableChild {
+    child: tokio::process::Child,
+    kill_on_drop: bool,
+}
+
+#[cfg(windows)]
+impl Drop for CancellableChild {
+    fn drop(&mut self) {
+        if self.kill_on_drop {
+            let _ = self.child.start_kill();
+        }
+    }
+}
+
 static LOGIN_TASKS: LazyLock<Mutex<HashMap<String, LoginTask>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static LOGIN_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -166,11 +181,19 @@ struct LogLine {
     line: String,
 }
 
-async fn pump<R: AsyncRead + Unpin>(app: AppHandle, id: String, stream: R) {
+async fn pump<R: AsyncRead + Unpin>(
+    app: AppHandle,
+    id: String,
+    stream: R,
+    activity: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+) {
     let mut lines = BufReader::new(stream).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let line = line.trim_end().to_owned();
         if !line.is_empty() {
+            if let Some(activity) = &activity {
+                let _ = activity.send(());
+            }
             let _ = app.emit(
                 "connector-log",
                 LogLine {
@@ -190,6 +213,24 @@ async fn run_logged(
     args: &[&str],
     limit: Duration,
 ) -> Result<(), String> {
+    run_logged_with_idle_timeout(app, id, program, args, limit, None, None).await
+}
+
+/// Runs an interactive login CLI with an optional output-idle timeout, so a closed auth page cannot leave the UI
+/// waiting forever for a callback that will never arrive.
+async fn run_logged_with_idle_timeout(
+    app: &AppHandle,
+    id: &str,
+    program: &Path,
+    args: &[&str],
+    limit: Duration,
+    idle_limit: Option<Duration>,
+    auth_watch_provider: Option<&str>,
+) -> Result<(), String> {
+    let initial_auth = match auth_watch_provider {
+        Some(provider) => Some(login_status(provider).await),
+        None => None,
+    };
     let _ = app.emit(
         "connector-log",
         LogLine {
@@ -204,30 +245,115 @@ async fn run_logged(
             ),
         },
     );
-    let mut child = command(program)
+    let mut command = command(program);
+    // Aborting sign-in (or timing out after the browser is closed) must not leave the CLI
+    // waiting for an OAuth callback in the background.
+    command.kill_on_drop(true);
+    let mut child = command
         .args(args)
         .spawn()
         .map_err(|error| format!("could not start {}: {error}", program.display()))?;
-    let out = child
-        .stdout
-        .take()
-        .map(|stream| tauri::async_runtime::spawn(pump(app.clone(), id.to_owned(), stream)));
-    let err = child
-        .stderr
-        .take()
-        .map(|stream| tauri::async_runtime::spawn(pump(app.clone(), id.to_owned(), stream)));
-    let status = tokio::time::timeout(limit, child.wait())
-        .await
-        .map_err(|_| format!("timed out after {} minutes", limit.as_secs() / 60))?
-        .map_err(|error| error.to_string())?;
-    for task in [out, err].into_iter().flatten() {
-        let _ = task.await;
+    let (activity_tx, mut activity_rx) = tokio::sync::mpsc::unbounded_channel();
+    let out = child.stdout.take().map(|stream| {
+        tauri::async_runtime::spawn(pump(
+            app.clone(),
+            id.to_owned(),
+            stream,
+            idle_limit.map(|_| activity_tx.clone()),
+        ))
+    });
+    let err = child.stderr.take().map(|stream| {
+        tauri::async_runtime::spawn(pump(
+            app.clone(),
+            id.to_owned(),
+            stream,
+            idle_limit.map(|_| activity_tx.clone()),
+        ))
+    });
+    drop(activity_tx);
+    let mut auth_completed = false;
+    let status: Result<std::process::ExitStatus, String> = if let Some(idle_limit) = idle_limit {
+        let deadline = tokio::time::Instant::now() + limit;
+        let mut idle_deadline = tokio::time::Instant::now() + idle_limit;
+        let mut auth_check_at = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            tokio::select! {
+                status = child.wait() => break status.map_err(|error| error.to_string()),
+                _ = tokio::time::sleep_until(idle_deadline.min(deadline)) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        break Err(format!("timed out after {} minutes", limit.as_secs() / 60));
+                    }
+                    break Err(format!("sign-in stopped responding for {} seconds; it was cancelled", idle_limit.as_secs()));
+                }
+                Some(()) = activity_rx.recv() => {
+                    idle_deadline = tokio::time::Instant::now() + idle_limit;
+                }
+                _ = tokio::time::sleep_until(auth_check_at), if auth_watch_provider.is_some() => {
+                    auth_check_at = tokio::time::Instant::now() + Duration::from_secs(2);
+                    if let (Some(provider), Some(initial)) = (auth_watch_provider, initial_auth.as_ref()) {
+                        let current = login_status(provider).await;
+                        if authenticated_since(initial, &current) {
+                            auth_completed = true;
+                            let _ = child.start_kill();
+                            break Err("sign-in completed".to_string());
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        tokio::time::timeout(limit, child.wait())
+            .await
+            .map_err(|_| format!("timed out after {} minutes", limit.as_secs() / 60))?
+            .map_err(|error| error.to_string())
+    };
+    if status.is_err() {
+        let _ = child.start_kill();
     }
+    for mut task in [out, err].into_iter().flatten() {
+        if tokio::time::timeout(Duration::from_secs(2), &mut task)
+            .await
+            .is_err()
+        {
+            // A CLI-launched child may inherit the pipe handles even after the CLI exits.
+            // Never let its detached output reader keep the sign-in spinner alive.
+            task.abort();
+        }
+    }
+    if auth_completed {
+        return Ok(());
+    }
+    let status = status?;
     if status.success() {
         Ok(())
     } else {
         Err(format!("exited with {status}"))
     }
+}
+
+/// Reads provider auth status without loading usage data, for noticing OAuth success while its CLI is still waiting.
+async fn login_status(provider: &str) -> Login {
+    match provider {
+        "claude" => match which("claude") {
+            Some(claude) => {
+                match capture(&claude, &["auth", "status"], Duration::from_secs(5)).await {
+                    Ok(output) => claude_login(&output.stdout),
+                    Err(_) => Login::default(),
+                }
+            }
+            None => Login::default(),
+        },
+        "codex" => codex_login(),
+        _ => Login::default(),
+    }
+}
+
+/// Only ends an active login early when credentials become available or the signed-in identity changes.
+fn authenticated_since(before: &Login, after: &Login) -> bool {
+    after.logged_in == Some(true)
+        && (before.logged_in != Some(true)
+            || before.email != after.email
+            || before.plan != after.plan)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -240,7 +366,7 @@ pub struct Tool {
     version: Option<String>,
 }
 
-#[derive(Serialize, Default)]
+#[derive(Clone, Serialize, Default)]
 pub struct Login {
     /// `None` when AgentDeck cannot tell (Antigravity has no status command).
     logged_in: Option<bool>,
@@ -338,6 +464,40 @@ fn antigravity_email(log_tail: &str) -> Option<String> {
         .take_while(|c| !c.is_whitespace() && *c != ',')
         .collect();
     email.contains('@').then_some(email)
+}
+
+/// Reads the account identity from CLI logs written on or after `since`.
+fn antigravity_email_since(since: std::time::SystemTime) -> Option<String> {
+    let folder = crate::home_folder()
+        .ok()?
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("log");
+    let mut logs: Vec<_> = std::fs::read_dir(folder)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("cli-"))
+        .filter_map(|entry| {
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            (modified >= since).then_some((modified, entry.path()))
+        })
+        .collect();
+    logs.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    logs.into_iter()
+        .find_map(|(_, path)| antigravity_email(&tail_of(&path)))
+}
+
+/// Runs a quiet CLI model-list request so `agy` records which account owns the current credential.
+async fn refresh_antigravity_cli_email(since: std::time::SystemTime) -> Result<String, String> {
+    let agy = which("agy").ok_or("Antigravity CLI is not installed")?;
+    let result = capture(&agy, &["models"], Duration::from_secs(30)).await?;
+    antigravity_email_since(since).ok_or_else(|| {
+        if result.ok {
+            "the Antigravity CLI did not report the signed-in account email".to_string()
+        } else {
+            "the Antigravity CLI could not verify the signed-in account".to_string()
+        }
+    })
 }
 
 fn tail_of(path: &Path) -> String {
@@ -588,14 +748,46 @@ pub fn connector_login_cancel(id: String) -> Result<(), String> {
 
 async fn connector_login_inner(app: AppHandle, id: String) -> Result<(), String> {
     let limit = Duration::from_secs(300);
+    let idle_limit = Some(Duration::from_secs(120));
     match id.as_str() {
         "claude" => {
             let claude = which("claude").ok_or("Claude Code is not installed")?;
-            run_logged(&app, &id, &claude, &["auth", "login"], limit).await
+            run_logged_with_idle_timeout(
+                &app,
+                &id,
+                &claude,
+                &["auth", "login"],
+                limit,
+                idle_limit,
+                Some("claude"),
+            )
+            .await
         }
         "codex" => match (which("codex-auth"), which("codex")) {
-            (Some(auth), _) => run_logged(&app, &id, &auth, &["login"], limit).await,
-            (None, Some(codex)) => run_logged(&app, &id, &codex, &["login"], limit).await,
+            (Some(auth), _) => {
+                run_logged_with_idle_timeout(
+                    &app,
+                    &id,
+                    &auth,
+                    &["login"],
+                    limit,
+                    idle_limit,
+                    Some("codex"),
+                )
+                .await
+            }
+            (None, Some(codex)) => {
+                run_logged_with_idle_timeout(
+                    &app,
+                    &id,
+                    &codex,
+                    &["login"],
+                    limit,
+                    idle_limit,
+                    Some("codex"),
+                )
+                .await
+            }
             (None, None) => Err("Codex is not installed".to_string()),
         },
         "opencode" => {
@@ -1237,21 +1429,79 @@ pub async fn account_switch(provider: String, id: String) -> Result<(), String> 
 /// Signs in (browser) and saves the account into the switcher's list.
 #[tauri::command]
 pub async fn account_add(app: AppHandle, provider: String) -> Result<(), String> {
+    let id = format!("add:{provider}");
+    let generation = LOGIN_GENERATION.fetch_add(1, Ordering::Relaxed);
+    let task = {
+        let mut tasks = LOGIN_TASKS
+            .lock()
+            .map_err(|_| "could not access connector account state".to_string())?;
+        if tasks.contains_key(&id) {
+            return Err("adding an account is already running".to_string());
+        }
+        let task = tokio::spawn(async move { account_add_inner(app, provider).await });
+        let abort = task.abort_handle();
+        tasks.insert(id.clone(), LoginTask { generation, abort });
+        task
+    };
+
+    let result = match task.await {
+        Ok(result) => result,
+        Err(error) if error.is_cancelled() => Err("account addition cancelled".to_string()),
+        Err(error) => Err(format!("account addition task failed: {error}")),
+    };
+
+    if let Ok(mut tasks) = LOGIN_TASKS.lock() {
+        if tasks
+            .get(&id)
+            .is_some_and(|task| task.generation == generation)
+        {
+            tasks.remove(&id);
+        }
+    }
+    result
+}
+
+/// Cancels an in-progress account-add flow and drops its child process.
+#[tauri::command]
+pub fn account_add_cancel(provider: String) -> Result<(), String> {
+    let id = format!("add:{provider}");
+    let task = LOGIN_TASKS
+        .lock()
+        .map_err(|_| "could not access connector account state".to_string())?
+        .remove(&id);
+    if let Some(task) = task {
+        task.abort.abort();
+    }
+    Ok(())
+}
+
+async fn account_add_inner(app: AppHandle, provider: String) -> Result<(), String> {
     match provider.as_str() {
         "codex" => {
             let auth = which("codex-auth").ok_or("`codex-auth` is not installed")?;
-            run_logged(&app, "codex", &auth, &["login"], Duration::from_secs(300)).await
+            run_logged_with_idle_timeout(
+                &app,
+                "codex",
+                &auth,
+                &["login"],
+                Duration::from_secs(300),
+                Some(Duration::from_secs(120)),
+                Some("codex"),
+            )
+            .await
         }
         "claude" => {
             let cswap = which("cswap").ok_or("`cswap` is not installed")?;
             let claude = which("claude").ok_or("Claude Code is not installed")?;
             // Sign in as the new account first; the switcher then saves whoever is signed in.
-            run_logged(
+            run_logged_with_idle_timeout(
                 &app,
                 "claude",
                 &claude,
                 &["auth", "login"],
                 Duration::from_secs(300),
+                Some(Duration::from_secs(120)),
+                Some("claude"),
             )
             .await?;
             run_logged(&app, "claude", &cswap, &["add"], Duration::from_secs(60)).await
@@ -1620,25 +1870,15 @@ async fn antigravity_sign_in_another_account() -> Result<(), String> {
     {
         let previous = agy_sign_in();
         if let Some(sign_in) = previous.as_ref() {
-            let email = antigravity_login().email.ok_or(
-                "could not read the signed-in Antigravity email; current login was left untouched",
-            )?;
+            let email = if let Some(email) = agy_saved_active_email() {
+                email
+            } else {
+                refresh_antigravity_cli_email(std::time::SystemTime::now()).await?
+            };
             save_agy_account(sign_in, email)?;
         }
 
-        let local_app_data = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .ok_or("could not locate the Antigravity desktop app")?;
-        let antigravity = local_app_data
-            .join("Programs")
-            .join("Antigravity")
-            .join("Antigravity.exe");
-        if !antigravity.is_file() {
-            return Err(format!(
-                "Antigravity desktop app was not found at {}",
-                antigravity.display()
-            ));
-        }
+        let agy = which("agy").ok_or("Antigravity CLI is not installed")?;
         let token_file = crate::home_folder()?
             .join(".gemini")
             .join("jetski-standalone-oauth-token");
@@ -1649,13 +1889,24 @@ async fn antigravity_sign_in_another_account() -> Result<(), String> {
         }
         delete_secret("gemini:antigravity")?;
 
-        std::process::Command::new(&antigravity)
+        // `agy` owns the CLI sign-in flow. A fresh console gives its TUI a real terminal and lets
+        // Google Sign-In open the browser; launching Antigravity.exe here skips the CLI auth log.
+        let login_started_at = std::time::SystemTime::now();
+        let mut cli = Command::new(&agy);
+        cli.stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        #[cfg(windows)]
+        cli.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
+        let child = cli
             .spawn()
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("could not start Antigravity CLI: {error}"))?;
+        let mut child = CancellableChild {
+            child,
+            kill_on_drop: true,
+        };
 
         let timeout = tokio::time::Instant::now() + Duration::from_secs(300);
-        let launch_deadline = tokio::time::Instant::now() + Duration::from_secs(45);
-        let mut antigravity_was_running = antigravity_process_running()?;
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
             if let Some(current) = agy_sign_in() {
@@ -1663,41 +1914,32 @@ async fn antigravity_sign_in_another_account() -> Result<(), String> {
                     .as_str()
                     .is_some_and(|token| !token.is_empty());
                 if has_access_token && previous.as_ref() != Some(&current) {
-                    let email = antigravity_login().email.ok_or(
-                        "sign-in completed, but the Antigravity account email could not be read; account was not saved",
-                    )?;
+                    let email = if let Some(email) = antigravity_email_since(login_started_at) {
+                        email
+                    } else {
+                        refresh_antigravity_cli_email(login_started_at).await?
+                    };
                     save_agy_account(&current, email)?;
+                    // Leave the authenticated CLI available in its terminal, but stop treating it
+                    // as part of the cancellable sign-in task.
+                    child.kill_on_drop = false;
                     return Ok(());
                 }
             }
-            let antigravity_is_running = antigravity_process_running()?;
-            if antigravity_is_running {
-                antigravity_was_running = true;
-            } else if antigravity_was_running {
-                return Err("Antigravity was closed before sign-in completed".to_string());
-            } else if tokio::time::Instant::now() >= launch_deadline {
-                return Err("Antigravity did not open; sign-in was cancelled".to_string());
+            if let Some(status) = child
+                .child
+                .try_wait()
+                .map_err(|error| format!("could not check Antigravity CLI: {error}"))?
+            {
+                return Err(format!(
+                    "Antigravity CLI exited before sign-in completed ({status})"
+                ));
             }
             if tokio::time::Instant::now() >= timeout {
-                return Err("timed out waiting for Antigravity sign-in; finish login in the Antigravity window and refresh accounts".to_string());
+                return Err("timed out waiting for Antigravity CLI sign-in".to_string());
             }
         }
     }
-}
-
-/// Checks whether the Antigravity desktop process is still open while an external sign-in is pending.
-#[cfg(windows)]
-fn antigravity_process_running() -> Result<bool, String> {
-    let output = std::process::Command::new("tasklist")
-        .args(["/FI", "IMAGENAME eq Antigravity.exe", "/NH"])
-        .output()
-        .map_err(|error| format!("could not check Antigravity process: {error}"))?;
-    if !output.status.success() {
-        return Err("could not check Antigravity process".to_string());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .any(|line| line.to_ascii_lowercase().contains("antigravity.exe")))
 }
 
 /// Saves an Antigravity credential under its account-specific Windows Credential Manager target.

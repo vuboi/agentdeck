@@ -7,6 +7,7 @@ pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod opencode;
+pub mod resolve;
 pub mod runner;
 
 use serde::Serialize;
@@ -39,6 +40,8 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         image: Option<String>,
     },
+    /// New command output written since the last update, correlated to the running tool call.
+    ToolOutputDelta { id: String, delta: String },
     /// The CLI refused tools that need the user's approval. Allow them and send a follow-up turn to continue.
     PermissionDenied { requests: Vec<PermissionRequest> },
     /// The turn finished. `session_id` is the CLI's id for the conversation, to resume next turn.

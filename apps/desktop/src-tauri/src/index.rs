@@ -977,7 +977,7 @@ mod tests {
         )
         .expect("importers");
         eprintln!("{importers}");
-        assert!(importers.contains("ChangesView.svelte"));
+        assert!(importers.contains("FileView.svelte"));
         let again = Instant::now();
         let _ = run(
             "code_outline",

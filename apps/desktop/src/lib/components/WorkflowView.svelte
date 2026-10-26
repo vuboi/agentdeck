@@ -8,6 +8,7 @@
   import { modelLabel } from '../models.svelte';
   import { AGENT_ICON, AGENT_TEXT, AGENTS, delegateRuns, liveStats, workspace, type DelegateRun, type RunNode, type RunStats } from '../sessions.svelte';
   import FlowCanvas from './flow/FlowCanvas.svelte';
+  import ProjectSelect from './ProjectSelect.svelte';
   import FlowTemplates from './flow/FlowTemplates.svelte';
   import { shortCount, totalTokens, usd } from '../usage';
 
@@ -15,7 +16,30 @@
 
   // Newest run first. Each run is one `@agent task` message: the main chat, a card per delegated agent, the answers
   // handed back, and the main agent carrying on. Cards read their numbers from the chats while they work.
-  const runs = $derived([...delegateRuns].reverse());
+  // The same filters as the Tasks tool: how far back (left) and which project (right).
+  type Range = 'day' | 'week' | 'month' | 'all';
+  const RANGES: { value: Range; label: string; days: number }[] = [
+    { value: 'day', label: 'Day', days: 1 },
+    { value: 'week', label: 'Week', days: 7 },
+    { value: 'month', label: 'Month', days: 30 },
+    { value: 'all', label: 'All', days: 0 },
+  ];
+  let range = $state<Range>('week');
+  // null: all projects. '' is a real choice: the chats outside any project.
+  let project = $state<string | null>(null);
+  const since = (days: number) => {
+    if (days === 0) return 0;
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return start.getTime() - (days - 1) * 86_400_000;
+  };
+  const projectOfRun = (run: DelegateRun) => workspace.sessions.find((item) => item.id === run.main)?.projectId ?? '';
+  const projectName = (id: string) => (id === '' ? 'No project' : (workspace.projects.find((item) => item.id === id)?.name ?? id));
+  const inRange = $derived(delegateRuns.filter((run) => !run.endedAt || run.startedAt >= since(RANGES.find((item) => item.value === range)?.days ?? 0)));
+  const projectIds = $derived([...new Set(inRange.map(projectOfRun))].sort());
+  const chosen = $derived(project !== null && projectIds.includes(project) ? project : null);
+  const filtered = $derived(inRange.filter((run) => chosen === null || projectOfRun(run) === chosen));
+  const runs = $derived([...filtered].reverse());
   let folded = $state<Record<string, boolean>>({});
   const isOpen = (run: DelegateRun, index: number) => folded[run.id] ?? (index === 0 || !run.endedAt);
 
@@ -78,7 +102,7 @@
   // and what a run costs in time and money on average. `@agent` hand-offs count together.
   const flowStats = $derived.by(() => {
     const groups = new Map<string, DelegateRun[]>();
-    for (const run of delegateRuns) {
+    for (const run of filtered) {
       if (!run.endedAt || run.cancelled) continue;
       const key = run.preset ?? '@agent';
       groups.set(key, [...(groups.get(key) ?? []), run]);
@@ -228,10 +252,23 @@
 
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Workflow">
   <FlowTemplates />
+  {#if delegateRuns.length > 0}
+    <!-- How far back the runs reach (left) and which project (right); the select drops under the range when narrow. -->
+    <div class="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-xs">
+      <div class="flex rounded-md bg-muted p-0.5" role="tablist" aria-label="Range">
+        {#each RANGES as item (item.value)}
+          <button type="button" role="tab" aria-selected={range === item.value} class="cursor-pointer rounded px-2.5 py-0.5 {range === item.value ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
+        {/each}
+      </div>
+      {#if projectIds.length > 1}
+        <ProjectSelect bind:value={project} options={projectIds} label={projectName} class="ml-auto" />
+      {/if}
+    </div>
+  {/if}
   {#if runs.length === 0}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
       <ZIcon zType={icon('lucideWorkflow')} zSize="28" class="size-7 opacity-60" />
-      <h2 class="text-sm font-medium text-foreground">No run yet</h2>
+      <h2 class="text-sm font-medium text-foreground">{delegateRuns.length > 0 ? 'No run in this range' : 'No run yet'}</h2>
       <p class="m-0 max-w-60 text-xs leading-normal">
         Put a flow on this chat (Use, above) and send a message, or hand a task to another agent from any chat. Type <code class="rounded bg-muted px-1 py-0.5 font-mono text-foreground">@claude</code>,
         <code class="rounded bg-muted px-1 py-0.5 font-mono text-foreground">@codex</code> or

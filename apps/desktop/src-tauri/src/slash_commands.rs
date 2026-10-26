@@ -33,9 +33,20 @@ fn split_front_matter(text: &str) -> (BTreeMap<String, String>, &str) {
     let Some(end) = rest.find("\n---") else {
         return (fields, trimmed);
     };
-    for line in rest[..end].lines() {
+    let mut lines = rest[..end].lines().peekable();
+    while let Some(line) = lines.next() {
         if let Some((key, value)) = line.split_once(':') {
-            let value = value.trim().trim_matches(['"', '\'']).to_owned();
+            let mut value = value.trim().trim_matches(['"', '\'']).to_owned();
+            // A YAML block (`description: >` or `|`, then indented lines): the value is those lines, not the marker.
+            if matches!(value.trim_end_matches(['-', '+']), ">" | "|") {
+                let mut parts: Vec<&str> = Vec::new();
+                while let Some(next) = lines.next_if(|next| next.is_empty() || next.starts_with([' ', '\t'])) {
+                    if !next.trim().is_empty() {
+                        parts.push(next.trim());
+                    }
+                }
+                value = parts.join(" ");
+            }
             if !key.starts_with(' ') && !value.is_empty() {
                 fields.insert(key.trim().to_owned(), value);
             }
@@ -330,6 +341,15 @@ mod tests {
     fn write(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().expect("has a parent")).expect("makes folders");
         std::fs::write(path, text).expect("writes");
+    }
+
+    #[test]
+    fn a_block_description_is_read_whole_not_as_its_marker() {
+        let (fields, _) = split_front_matter("---\nname: x\ndescription: >\n  First part\n  second part\nother: y\n---\nBody");
+        assert_eq!(fields.get("description").map(String::as_str), Some("First part second part"));
+        assert_eq!(fields.get("other").map(String::as_str), Some("y"));
+        let (fields, _) = split_front_matter("---\ndescription: >\n---\nBody");
+        assert_eq!(fields.get("description"), None);
     }
 
     #[test]

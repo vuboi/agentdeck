@@ -1,22 +1,42 @@
-//! Runs one agent turn: finds the CLI, starts it, reads its output line by line and turns each line into events.
+//! Runs one agent turn: starts the CLI, reads its output line by line and turns each line into events.
 //! Kept apart from the app so the process handling is tested with stand-in binaries and runs the same on
-//! Windows, macOS and Linux.
+//! Windows, macOS and Linux. Finding the binary is in [`super::resolve`].
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
+pub use super::resolve::resolve_binary;
+use super::resolve::augmented_path;
 use super::{AgentEvent, Provider, TurnRequest};
 
-/// File extensions a bare command name may carry on this platform.
-fn executable_suffixes(os: &str) -> &'static [&'static str] {
-    if os == "windows" {
-        &[".exe", ".cmd", ".bat"]
-    } else {
-        &[""]
+/// How long output may still come in after the CLI exited. A process it left running (a dev server started in the
+/// background) can hold the pipe open for ever, so the stream is not read to its end.
+const EXIT_GRACE: Duration = Duration::from_secs(2);
+
+/// The last part of stderr kept for the error message.
+const STDERR_KEEP: usize = 16 * 1024;
+
+/// Reads stderr while the CLI runs, keeping only its tail. A pipe nobody reads fills up (4 KB on Windows) and the
+/// CLI then blocks on its next write, so the turn would never end.
+async fn drain_stderr(mut stderr: tokio::process::ChildStderr, kept: Arc<Mutex<Vec<u8>>>) {
+    let mut chunk = [0u8; 4096];
+    while let Ok(read) = stderr.read(&mut chunk).await {
+        if read == 0 {
+            break;
+        }
+        let Ok(mut kept) = kept.lock() else { break };
+        kept.extend_from_slice(&chunk[..read]);
+        if kept.len() > STDERR_KEEP {
+            let extra = kept.len() - STDERR_KEEP;
+            kept.drain(..extra);
+        }
     }
 }
 
@@ -39,205 +59,6 @@ fn command_for(binary: OsString, args: &[String]) -> Command {
     let mut command = Command::new(binary);
     command.args(args);
     command
-}
-
-/// First existing `<dir>/<name><suffix>` for the directories of a PATH-like list.
-fn find_in(dirs: impl Iterator<Item = PathBuf>, name: &str, os: &str) -> Option<PathBuf> {
-    dirs.flat_map(|dir| {
-        executable_suffixes(os)
-            .iter()
-            .map(move |suffix| dir.join(format!("{name}{suffix}")))
-            .collect::<Vec<_>>()
-    })
-    .find(|path| path.is_file())
-}
-
-/// Install folders shared by the three CLIs (npm, pnpm, bun, volta, scoop, brew, version managers), beyond the exact
-/// paths each provider names. A desktop app started from the Dock, the Start menu or a launcher gets a short PATH.
-fn common_dirs(
-    os: &str,
-    home: Option<&Path>,
-    local: Option<&Path>,
-    appdata: Option<&Path>,
-) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    let under = |base: Option<&Path>, parts: &[&str]| {
-        base.map(|base| {
-            parts
-                .iter()
-                .fold(base.to_path_buf(), |path, part| path.join(part))
-        })
-    };
-    let mut push = |path: Option<PathBuf>| dirs.extend(path);
-    // Node version managers keep one `bin` folder per installed Node: newest first.
-    let versions = |parent: Option<PathBuf>, tail: &[&str]| -> Vec<PathBuf> {
-        let mut found: Vec<PathBuf> = parent
-            .and_then(|parent| std::fs::read_dir(parent).ok())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| tail.iter().fold(entry.path(), |path, part| path.join(part)))
-            .collect();
-        found.sort();
-        found.reverse();
-        found
-    };
-    match os {
-        "windows" => {
-            push(under(appdata, &["npm"]));
-            push(under(local, &["pnpm"]));
-            push(std::env::var_os("PNPM_HOME").map(PathBuf::from));
-            push(under(local, &["Volta", "bin"]));
-            push(under(local, &["Microsoft", "WinGet", "Links"]));
-            push(under(home, &[".volta", "bin"]));
-            push(under(home, &[".bun", "bin"]));
-            push(under(home, &["scoop", "shims"]));
-            push(under(home, &[".cargo", "bin"]));
-            push(under(home, &[".local", "bin"]));
-            for dir in versions(under(appdata, &["nvm"]), &[]) {
-                push(Some(dir));
-            }
-            // mise installs Node itself under LOCALAPPDATA, and npm -g puts command shims
-            // beside that Node executable. A GUI-launched Tauri process does not inherit mise's
-            // shell shim PATH, so include every installed Node version here as well.
-            for dir in versions(under(local, &["mise", "installs", "node"]), &[]) {
-                push(Some(dir));
-            }
-        }
-        _ => {
-            push(under(home, &[".local", "bin"]));
-            if os == "macos" {
-                push(Some(PathBuf::from("/opt/homebrew/bin")));
-                push(under(home, &["Library", "pnpm"]));
-            } else {
-                push(Some(PathBuf::from("/home/linuxbrew/.linuxbrew/bin")));
-                push(Some(PathBuf::from("/snap/bin")));
-                push(under(home, &[".local", "share", "pnpm"]));
-            }
-            push(Some(PathBuf::from("/usr/local/bin")));
-            push(Some(PathBuf::from("/usr/bin")));
-            push(under(home, &[".npm-global", "bin"]));
-            push(under(home, &[".volta", "bin"]));
-            push(under(home, &[".bun", "bin"]));
-            push(under(home, &[".cargo", "bin"]));
-            push(under(home, &[".asdf", "shims"]));
-            push(under(home, &[".local", "share", "mise", "shims"]));
-            for dir in versions(under(home, &[".nvm", "versions", "node"]), &["bin"]) {
-                push(Some(dir));
-            }
-            let fnm = if os == "macos" {
-                under(
-                    home,
-                    &["Library", "Application Support", "fnm", "node-versions"],
-                )
-            } else {
-                under(home, &[".local", "share", "fnm", "node-versions"])
-            };
-            for dir in versions(fnm, &["installation", "bin"]) {
-                push(Some(dir));
-            }
-        }
-    }
-    dirs
-}
-
-/// Adds the same well-known CLI folders used for resolution to the child process PATH. This matters
-/// for npm shims such as `opencode.cmd`: the shim may need its matching `node` executable on PATH.
-fn augmented_path() -> Option<OsString> {
-    let mut dirs = std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-        .unwrap_or_default();
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from);
-    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
-    let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
-    dirs.extend(common_dirs(
-        std::env::consts::OS,
-        home.as_deref(),
-        local.as_deref(),
-        appdata.as_deref(),
-    ));
-    std::env::join_paths(dirs).ok()
-}
-
-/// The PATH a login shell gives: what the user's terminal sees, which a GUI app on macOS and Linux does not inherit
-/// (it is where npm, nvm, brew and the like are put on PATH). Asked once; a slow or broken shell is given up on.
-#[cfg(unix)]
-fn login_shell_path() -> Option<OsString> {
-    use std::sync::OnceLock;
-    static PATH: OnceLock<Option<OsString>> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let shell = std::env::var_os("SHELL")
-            .filter(|shell| !shell.is_empty())
-            .unwrap_or_else(|| "/bin/sh".into());
-        let (send, receive) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let output = std::process::Command::new(shell)
-                .args(["-ilc", "printf '__AGPATH__%s__AGPATH__' \"$PATH\""])
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output();
-            let _ = send.send(output);
-        });
-        let output = receive
-            .recv_timeout(std::time::Duration::from_secs(4))
-            .ok()?
-            .ok()?;
-        let text = String::from_utf8_lossy(&output.stdout).into_owned();
-        let path = text.split("__AGPATH__").nth(1)?.trim();
-        (!path.is_empty()).then(|| OsString::from(path))
-    })
-    .clone()
-}
-
-#[cfg(not(unix))]
-fn login_shell_path() -> Option<OsString> {
-    None
-}
-
-/// The binary to run, first match wins: `AGENTDECK_<NAME>_BIN` (a path the user pinned), the provider's own known
-/// locations, PATH, the install folders every CLI shares, the PATH of a login shell, and last the bare name so
-/// the OS can report "not found".
-pub fn resolve_binary(provider: &dyn Provider) -> OsString {
-    let pinned = std::env::var_os(format!("AGENTDECK_{}_BIN", provider.id().to_uppercase()))
-        .map(PathBuf::from)
-        .filter(|path| path.is_file());
-    let os = std::env::consts::OS;
-    let from_path = || {
-        let path = std::env::var_os("PATH")?;
-        find_in(std::env::split_paths(&path), provider.binary(), os)
-    };
-    let from_common = || {
-        let env_path = |key: &str| std::env::var_os(key).map(PathBuf::from);
-        let home = env_path("HOME").or_else(|| env_path("USERPROFILE"));
-        let dirs = common_dirs(
-            os,
-            home.as_deref(),
-            env_path("LOCALAPPDATA").as_deref(),
-            env_path("APPDATA").as_deref(),
-        );
-        find_in(dirs.into_iter(), provider.binary(), os)
-    };
-    let from_shell = || {
-        find_in(
-            std::env::split_paths(&login_shell_path()?),
-            provider.binary(),
-            os,
-        )
-    };
-    pinned
-        .or_else(|| {
-            provider
-                .candidates()
-                .into_iter()
-                .find(|path| path.is_file())
-        })
-        .or_else(from_path)
-        .or_else(from_common)
-        .or_else(from_shell)
-        .map(PathBuf::into_os_string)
-        .unwrap_or_else(|| provider.binary().into())
 }
 
 /// Runs one turn: start the CLI, read its stream line by line, translate each line, hand each event to `emit`.
@@ -297,11 +118,36 @@ pub async fn drive_turn(
         });
     }
 
+    let stderr_kept = Arc::new(Mutex::new(Vec::new()));
+    let stderr = child
+        .stderr
+        .take()
+        .map(|err| tokio::spawn(drain_stderr(err, Arc::clone(&stderr_kept))));
+
     let mut finished = false;
+    // Set once the CLI has exited, with the time after which its pipe is no longer read.
+    let mut exited: Option<(std::io::Result<std::process::ExitStatus>, tokio::time::Instant)> = None;
     if let Some(stdout) = child.stdout.take() {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            for event in provider.parse_line(&line) {
+        // Split on bytes, not `lines()`: one line that is not UTF-8 would end that reader with an error and leave
+        // the CLI blocked on a pipe nobody reads.
+        let mut lines = BufReader::new(stdout).split(b'\n');
+        loop {
+            let next = match &exited {
+                Some((_, deadline)) => tokio::time::timeout_at(*deadline, lines.next_segment())
+                    .await
+                    .unwrap_or(Ok(None)),
+                None => tokio::select! {
+                    next = lines.next_segment() => next,
+                    status = child.wait() => {
+                        exited = Some((status, tokio::time::Instant::now() + EXIT_GRACE));
+                        continue;
+                    }
+                },
+            };
+            let Ok(Some(bytes)) = next else { break };
+            let text = String::from_utf8_lossy(&bytes);
+            let line = text.strip_suffix('\r').unwrap_or(&text);
+            for event in provider.parse_line(line) {
                 finished |= matches!(event, AgentEvent::Done { .. } | AgentEvent::Error { .. });
                 emit(event);
             }
@@ -313,22 +159,31 @@ pub async fn drive_turn(
         }
     }
 
-    let status = if finished {
-        let _ = child.start_kill();
-        child.wait().await
-    } else {
-        child.wait().await
+    let status = match exited {
+        Some((status, _)) => status,
+        None => {
+            if finished {
+                let _ = child.start_kill();
+            }
+            child.wait().await
+        }
     };
     if !finished {
         if let Some(event) = provider.finish(req) {
             emit(event);
             return;
         }
-        let mut stderr = String::new();
-        if let Some(mut err) = child.stderr.take() {
-            use tokio::io::AsyncReadExt;
-            let _ = err.read_to_string(&mut stderr).await;
+        // A process the CLI left running can hold stderr open too: what was read by then is enough.
+        if let Some(task) = stderr {
+            let abort = task.abort_handle();
+            if tokio::time::timeout(EXIT_GRACE, task).await.is_err() {
+                abort.abort();
+            }
         }
+        let stderr = stderr_kept
+            .lock()
+            .map(|kept| String::from_utf8_lossy(&kept).into_owned())
+            .unwrap_or_default();
         let message = match status {
             Ok(status) if status.success() => "agent ended without a result".to_string(),
             _ => stderr.trim().to_string(),
@@ -340,46 +195,6 @@ pub async fn drive_turn(
                 message
             },
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn path_lookup_adds_extensions_only_on_windows() {
-        let dir = std::env::temp_dir().join(format!("ag-runner-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("tool.cmd"), "").unwrap();
-        std::fs::write(dir.join("other"), "").unwrap();
-
-        let here = || std::iter::once(dir.clone());
-        assert_eq!(
-            find_in(here(), "tool", "windows"),
-            Some(dir.join("tool.cmd"))
-        );
-        assert_eq!(find_in(here(), "tool", "linux"), None);
-        assert_eq!(find_in(here(), "other", "macos"), Some(dir.join("other")));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn common_dirs_differ_per_platform_and_cover_the_usual_installs() {
-        let home = Path::new("/h");
-        let mac = common_dirs("macos", Some(home), None, None);
-        assert!(mac.contains(&PathBuf::from("/opt/homebrew/bin")));
-        assert!(mac.contains(&home.join(".local").join("bin")));
-        assert!(!mac.contains(&PathBuf::from("/snap/bin")));
-        let linux = common_dirs("linux", Some(home), None, None);
-        assert!(linux.contains(&PathBuf::from("/snap/bin")));
-        assert!(linux.contains(&home.join(".npm-global").join("bin")));
-        let (local, appdata) = (Path::new("/l"), Path::new("/a"));
-        let windows = common_dirs("windows", Some(home), Some(local), Some(appdata));
-        assert!(windows.contains(&appdata.join("npm")));
-        assert!(windows.contains(&local.join("pnpm")));
-        assert!(windows.contains(&home.join("scoop").join("shims")));
-        assert!(!windows.contains(&PathBuf::from("/usr/bin")));
     }
 }
 
@@ -471,6 +286,59 @@ echo '{"type":"result","is_error":false,"result":"pong","session_id":"s1"}'"#,
                 message: "boom".into()
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn heavy_stderr_does_not_block_the_turn() {
+        // Far more stderr than a pipe holds, written before the result.
+        let path = script(
+            "noisy",
+            r#"i=0; while [ $i -lt 4000 ]; do echo 'warning: something the CLI logs on stderr' >&2; i=$((i+1)); done
+echo '{"type":"result","is_error":false,"result":"pong","session_id":"s1"}'"#,
+        );
+        let mut events = Vec::new();
+        let run = drive_turn(path.clone().into_os_string(), &Fake, &req(), |e| {
+            events.push(e)
+        });
+        let ended = tokio::time::timeout(Duration::from_secs(20), run).await;
+        let _ = std::fs::remove_file(&path);
+        assert!(ended.is_ok(), "the turn hung on a full stderr pipe");
+        assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+    }
+
+    #[tokio::test]
+    async fn exit_ends_the_turn_while_a_left_process_holds_the_pipe() {
+        // The CLI dies without a result; a process it started keeps stdout and stderr open.
+        let path = script("orphan", "sleep 30 &\necho 'boom' >&2\nexit 3");
+        let mut events = Vec::new();
+        let run = drive_turn(path.clone().into_os_string(), &Fake, &req(), |e| {
+            events.push(e)
+        });
+        let ended = tokio::time::timeout(Duration::from_secs(10), run).await;
+        let _ = std::fs::remove_file(&path);
+        assert!(ended.is_ok(), "the turn waited for the left process");
+        assert_eq!(
+            events,
+            vec![AgentEvent::Error {
+                message: "boom".into()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_line_that_is_not_utf8_does_not_end_the_stream() {
+        let path = script(
+            "latin1",
+            r#"printf '\377\376 not utf-8\n'
+echo '{"type":"result","is_error":false,"result":"pong","session_id":"s1"}'"#,
+        );
+        let mut events = Vec::new();
+        drive_turn(path.clone().into_os_string(), &Fake, &req(), |e| {
+            events.push(e)
+        })
+        .await;
+        let _ = std::fs::remove_file(&path);
+        assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
     }
 
     #[tokio::test]

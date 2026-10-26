@@ -1,5 +1,6 @@
 import { untrack } from 'svelte';
-import { history, newSession, NO_PROJECT, pendingProject, watchDroppedDrafts, workspace } from './sessions.svelte';
+import { activeSession, history, newSession, NO_PROJECT, pendingProject, watchDroppedDrafts, workspace } from './sessions.svelte';
+import { samePath } from './paths';
 import { getPref, setPref } from './prefs';
 import { fileWrites } from './activity.svelte';
 import { drafts } from './file-buffers';
@@ -99,9 +100,15 @@ export function openChatTab(sessionId: string) {
   workspace.activeId = sessionId;
 }
 
-/** Starts a distinct chat draft and asks the chat view to open its tab and focus the composer. */
-export function openNewChatTab(projectId = NO_PROJECT) {
-  newSession(projectId, { reuseDraft: false });
+/** Starts or reopens the one pending chat and focuses its composer in the current project context. */
+export function openNewChatTab(projectId?: string) {
+  const active = contentTabs.tabs.find((tab) => tab.id === contentTabs.active);
+  const tabProject = active?.kind === 'chat'
+    ? workspace.sessions.find((session) => session.id === active.sessionId)?.projectId
+    : active?.kind === 'file'
+      ? workspace.projects.find((project) => project.path && samePath(project.path, active.root))?.id
+      : undefined;
+  newSession(projectId ?? tabProject ?? (active ? undefined : activeSession()?.projectId) ?? NO_PROJECT);
   window.dispatchEvent(new Event('agentdeck:new-chat-requested'));
 }
 
@@ -166,7 +173,7 @@ export function reopenTab(): boolean {
 // try again within a few seconds closes and drops the edits.
 let armedClose = '';
 let armedAt = 0;
-function confirmDiscard(tabs: ContentTab[]): boolean {
+export function confirmDiscard(tabs: ContentTab[]): boolean {
   const dirty = tabs.filter((tab) => tab.kind === 'file' && tab.dirty);
   if (dirty.length === 0) return true;
   const key = dirty.map((tab) => tab.id).join('|');
@@ -182,9 +189,12 @@ function confirmDiscard(tabs: ContentTab[]): boolean {
   return false;
 }
 
-/** Writes the unsaved edits of a file tab to disk (Ctrl+S, or Save in the tab menu). Answers whether it saved. */
-export async function saveTab(id: string): Promise<boolean> {
-  const tab = contentTabs.tabs.find((item) => item.id === id);
+/**
+ * Writes the unsaved edits of a file tab to disk (Ctrl+S, or Save in the tab menu). Answers whether it saved.
+ * `given` is a file tab that lives elsewhere (the Files tool of the right panel).
+ */
+export async function saveTab(id: string, given?: ContentTab): Promise<boolean> {
+  const tab = given ?? contentTabs.tabs.find((item) => item.id === id);
   const draft = drafts.get(id);
   if (!tab || tab.kind !== 'file' || !draft || !inTauri()) return false;
   const raw = joinFileText(draft.read?.() ?? draft.text, splitFileText(draft.disk).format);
@@ -221,12 +231,6 @@ export function closeTab(id: string) {
   }
 }
 
-/** The folder a file is read from: the project when the file is inside it, else the file's own folder. */
-export function fileRootOf(path: string, projectRoot: string): string {
-  const norm = (text: string) => text.replace(/\\/g, '/').toLowerCase();
-  return projectRoot && norm(path).startsWith(`${norm(projectRoot)}/`) ? projectRoot : path.replace(/[\\/][^\\/]*$/, '');
-}
-
 /** Closes every open tab. The chats themselves stay in the sidebar. */
 export function closeAllTabs() {
   if (!confirmDiscard(contentTabs.tabs)) return;
@@ -255,6 +259,11 @@ export function installTabShortcuts() {
     if (mod && event.shiftKey && !event.altKey && key === 't') {
       event.preventDefault();
       reopenTab();
+      return;
+    }
+    if (mod && !event.shiftKey && !event.altKey && key === 't') {
+      event.preventDefault();
+      openNewChatTab();
       return;
     }
     if (mod && !event.shiftKey && !event.altKey && key === 'k') {

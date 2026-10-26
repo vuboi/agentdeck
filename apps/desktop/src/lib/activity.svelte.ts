@@ -53,7 +53,7 @@ let calls = 0;
 /** Bumped whenever an agent writes, edits or deletes a file, so Explore reads its folders again. */
 export const fileWrites = $state({ tick: 0 });
 
-/** Finished calls and chat errors, oldest first: loaded from disk at start, then kept in step with each finish. */
+/** Live and finished calls plus chat errors, oldest first: live rows enter at start and persist on completion. */
 export const audit = $state<Activity[]>([]);
 
 async function tauriCall(command: string, args?: Record<string, unknown>) {
@@ -100,7 +100,9 @@ if (inTauri()) {
 function record(item: Activity) {
   // Tool ids restart in every turn (Codex counts from item_0 each time), so a saved entry gets its own key.
   const entry = { ...item, key: `${item.key}@${item.startedAt}`, output: item.output?.slice(0, OUTPUT_CAP) };
-  audit.push(entry);
+  const liveIndex = audit.findIndex((saved) => saved.key === item.key);
+  if (liveIndex >= 0) audit.splice(liveIndex, 1, entry);
+  else audit.push(entry);
   if (!inTauri()) return;
   const picture = entry.image?.startsWith('data:') ? entry.image : undefined;
   if (!picture) {
@@ -132,7 +134,7 @@ export function trackActivity(sessionId: string, title: string, project: string,
     const now = Date.now();
     record({ key: `${sessionId}:raw:${++calls}`, sessionId, title, project, name: `${event.source} · ${event.label}`, input: event.line.slice(0, 200), background: false, status: 'ok', startedAt: now, endedAt: now, output: event.line });
   } else if (event.kind === 'tool_call') {
-    activity.push({
+    const item: Activity = {
       key: `${sessionId}:${event.id}:${++calls}`,
       callId: event.id,
       sessionId,
@@ -143,8 +145,15 @@ export function trackActivity(sessionId: string, title: string, project: string,
       background: event.background,
       status: 'running',
       startedAt: Date.now(),
-    });
+    };
+    activity.push(item);
+    // The Audit view shares this live entry; `record` replaces it with the final snapshot on completion.
+    audit.push(item);
     if (activity.length > LIMIT) activity.splice(0, activity.length - LIMIT);
+  } else if (event.kind === 'tool_output_delta') {
+    const same = (entry: Activity) => entry.sessionId === sessionId && entry.callId === event.id;
+    const item = activity.findLast((entry) => same(entry) && (entry.status === 'running' || entry.status === 'background'));
+    if (item) item.output = `${item.output ?? ''}${event.delta}`.slice(-OUTPUT_CAP);
   } else if (event.kind === 'tool_result') {
     // The call still open with this id, else the latest one with it.
     const same = (entry: Activity) => entry.sessionId === sessionId && entry.callId === event.id;

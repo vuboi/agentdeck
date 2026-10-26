@@ -1,21 +1,22 @@
 <script lang="ts">
+  import Menu from './Menu.svelte';
   import { closeOnScroll } from '../close-on-scroll';
-  import { ZDropdownMenu, ZIcon, ZTree } from '@shival99/z-ui-svelte';
+  import { ZDropdownMenu, ZIcon, ZTree, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import { tick, untrack } from 'svelte';
   import { activeSession, workspace } from '../sessions.svelte';
-  import { openFileTab } from '../content-tabs.svelte';
+  import { openProjectFile } from '../file-viewer.svelte';
   import { inTauri } from '../history';
   import { toast } from '../toast';
   import { fileWrites } from '../activity.svelte';
-  import FileSearchPalette from './FileSearchPalette.svelte';
+  import FileSearchPalette, { warmFiles } from './FileSearchPalette.svelte';
+  import { openWithItem, openWithOptions as getOpenWithOptions, type OpenWithOption } from '../open-with';
 
   // Files of the active session's project, read from disk one folder at a time as folders are opened.
   // Right click renames or deletes; a delete goes to ~/.agentdeck/trash/files, so Ctrl+Z can put it back.
   // Outside the desktop app (the web preview) a small mock listing stands in.
   type File = { name: string; children?: File[] };
-  type Entry = { name: string; dir: boolean };
-  type FileOpenOption = { id: string; label: string };
+  type Entry = { name: string; dir: boolean; has_children: boolean };
   const mockFiles: Record<string, File[]> = {
     agentdeck: [
       { name: 'apps', children: [{ name: 'desktop', children: [{ name: 'src', children: [{ name: 'lib', children: [{ name: 'components' }, { name: 'sessions.svelte.ts' }] }, { name: 'routes' }] }, { name: 'package.json' }] }] },
@@ -26,6 +27,10 @@
     ],
   };
 
+  // The files are listed ahead of time, so the search opens full.
+  $effect(() => {
+    if (root && inTauri()) void warmFiles(root);
+  });
   const project = $derived(workspace.projects.find((item) => item.id === activeSession()?.projectId));
   const root = $derived(project?.path ?? '');
 
@@ -37,20 +42,25 @@
   // Folder listings by path inside the project ('' is the project folder itself, '/src' a folder in it).
   let listing = $state<Record<string, Entry[]>>({});
   let failure = $state('');
-  const loading = new Set<string>();
+  const loading = new Map<string, Promise<Entry[]>>();
 
-  async function load(dir: string) {
-    if (loading.has(dir) || listing[dir]) return;
-    loading.add(dir);
+  async function load(dir: string): Promise<Entry[]> {
+    if (listing[dir]) return listing[dir];
+    const pending = loading.get(dir);
+    if (pending) return pending;
     const from = root;
-    try {
-      const entries = await call<Entry[]>('folder_list', { root: from, path: `${from}${dir}` });
-      if (from === root) listing[dir] = entries;
-    } catch (error) {
-      if (dir === '') failure = String(error);
-    } finally {
-      loading.delete(dir);
-    }
+    const request = call<Entry[]>('folder_list', { root: from, path: `${from}${dir}` })
+      .then((entries) => {
+        if (from === root) listing[dir] = entries;
+        return entries;
+      })
+      .catch((error: unknown) => {
+        if (dir === '') failure = String(error);
+        return [];
+      })
+      .finally(() => loading.delete(dir));
+    loading.set(dir, request);
+    return request;
   }
 
   /** Reads a folder again after a change in it; folders below a renamed or deleted one are forgotten. */
@@ -86,12 +96,17 @@
       listing = {};
       failure = '';
       loading.clear();
+      expandAllRun++;
+      expandAllMode = false;
+      expanded = [];
       undo.length = 0;
       if (current && inTauri()) void load('');
     });
   });
 
   let expanded = $state<string[]>([]);
+  let expandAllMode = $state(false);
+  let expandAllRun = 0;
   // An opened folder reads its entries the first time.
   $effect(() => {
     for (const id of expanded) if (!listing[id]) void load(id);
@@ -104,12 +119,16 @@
       creating && creating.dir === dir && listing[dir] ? [{ id: `${dir}${DRAFT}`, label: '', icon: (creating.folder ? 'lucideFolder' : 'lucideFile') as ZIconName }] : [];
     return draft.concat((listing[dir] ?? []).map((entry) => {
       const id = `${dir}/${entry.name}`;
+      // The parent listing knows whether a folder has any visible entries, so empty folders are leaves on first render.
+      const loaded = listing[id] !== undefined;
+      const empty = entry.dir && (!entry.has_children || (loaded && listing[id].length === 0));
+      const kids: ZTreeNode<null>[] | undefined = entry.dir && !empty ? (loaded ? fromDisk(id) : [{ id: `${id}${PLACEHOLDER}`, label: 'Loading…', icon: 'lucideLoaderCircle' as ZIconName }]) : undefined;
       return {
         id,
         label: entry.name,
         icon: (entry.dir ? 'lucideFolder' : 'lucideFile') as ZIconName,
-        // A folder not read yet shows one "Loading…" row, so it still has an arrow to open it.
-        children: entry.dir ? (listing[id] ? fromDisk(id) : [{ id: `${id}${PLACEHOLDER}`, label: 'Loading…', icon: 'lucideLoaderCircle' as ZIconName }]) : undefined,
+        children: empty ? undefined : kids,
+        isLeaf: empty || undefined,
       };
     }));
   }
@@ -126,10 +145,72 @@
   let treeHeight = $state(400);
   let box: HTMLDivElement | undefined = $state();
 
-  // A file opens as a tab over the conversation; folders only expand.
+  async function expandEveryFolder() {
+    const run = ++expandAllRun;
+    const projectRoot = root;
+    const pending = [''];
+    const visited = new Set(pending);
+    const folders = new Set<string>();
+    const opened = new Set<string>();
+
+    while (pending.length > 0) {
+      if (run !== expandAllRun || projectRoot !== root) return;
+      const batch = pending.splice(0, 8);
+      const foldersInBatch = await Promise.all(
+        batch.map(async (dir) => [dir, listing[dir] ?? await load(dir)] as const),
+      );
+      if (run !== expandAllRun || projectRoot !== root) return;
+
+      for (const [dir, entries] of foldersInBatch) {
+        if (dir) opened.add(dir);
+        for (const entry of entries) {
+          if (!entry.dir || !entry.has_children) continue;
+          const id = `${dir}/${entry.name}`;
+          folders.add(id);
+          if (visited.has(id)) continue;
+          visited.add(id);
+          pending.push(id);
+        }
+      }
+      expanded = [...opened];
+    }
+
+    if (folders.size === 0) expandAllMode = false;
+  }
+
+  function toggleExpandAll() {
+    if (expandAllMode) {
+      expandAllMode = false;
+      expandAllRun++;
+      expanded = [];
+      return;
+    }
+
+    expandAllMode = true;
+    if (inTauri()) {
+      void expandEveryFolder();
+      return;
+    }
+
+    const folders: string[] = [];
+    const collect = (items: ZTreeNode<null>[]) => {
+      for (const node of items) {
+        if (!node.children?.length) continue;
+        folders.push(node.id);
+        collect(node.children);
+      }
+    };
+    collect(nodes);
+    expanded = folders;
+    if (folders.length === 0) expandAllMode = false;
+  }
+
+  // A file opens in the viewer beside the tree; folders only expand.
   function onSelect(node: ZTreeNode<null>) {
     if (node.children || node.id.endsWith(PLACEHOLDER) || node.id.endsWith(DRAFT)) return;
-    if (root) openFileTab(`${root}${node.id}`, root);
+    // An empty folder has no children to tell it from a file: the listing of its parent does.
+    if (listing[parentOf(node.id)]?.find((item) => item.name === nameOf(node.id))?.dir) return;
+    if (root) openProjectFile(node.id.slice(1), root);
   }
 
   const parentOf = (id: string) => id.slice(0, id.lastIndexOf('/'));
@@ -138,7 +219,7 @@
   // ---------- right click: rename, delete ----------
   let menu = $state<{ x: number; y: number; id: string } | null>(null);
   let menuOpen = $state(false);
-  let openWithOptions = $state<FileOpenOption[]>([]);
+  let openWithOptions = $state<OpenWithOption[]>([]);
   $effect(() => closeOnScroll(() => menuOpen, () => (menuOpen = false)));
   let menuKey = $state(0);
   let selected = $state<string[]>([]);
@@ -156,14 +237,10 @@
     menuOpen = true;
     openWithOptions = [];
     if (id && !listing[parentOf(id)]?.find((item) => item.name === nameOf(id))?.dir) {
-      void call<FileOpenOption[]>('file_open_options', { path: `${root}${id}` }).then((options) => {
+      void getOpenWithOptions(`${root}${id}`).then((options) => {
         if (menu?.id === id) openWithOptions = options;
       }).catch((error) => toast.error(String(error)));
     }
-  }
-
-  function openWith(id: string, appId: string) {
-    void call('file_open_with', { path: `${root}${id}`, appId }).catch((error) => toast.error(String(error)));
   }
 
   async function saveAs(id: string) {
@@ -202,6 +279,12 @@
     return entry?.dir ? id : parentOf(id);
   }
 
+  function openWithMenuItems(): ZDropdownMenuItem[] {
+    const current = menu;
+    if (!current?.id || listing[parentOf(current.id)]?.find((item) => item.name === nameOf(current.id))?.dir) return [];
+    return openWithItem(`${root}${current.id}`, openWithOptions);
+  }
+
   const menuItems = $derived<ZDropdownMenuItem[]>(menu?.id === '' ? [
     { label: 'New file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => askCreate('', false) },
     { label: 'New folder', icon: 'lucideFolderPlus', iconSize: 12, class: 'text-xs! py-1', onClick: () => askCreate('', true) },
@@ -210,8 +293,8 @@
     { label: 'New file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && askCreate(folderFor(menu.id), false) },
     { label: 'New folder', icon: 'lucideFolderPlus', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && askCreate(folderFor(menu.id), true) },
     { label: 'Rename', icon: 'lucidePencil', iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => menu && askRename(menu.id) },
-    { label: 'Open file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && openFileTab(`${root}${menu.id}`, root) },
-    { label: 'Open with', icon: 'lucideExternalLink', iconSize: 12, class: 'text-xs! py-1', submenu: openWithOptions.map((option) => ({ label: option.label, class: 'text-xs! py-1', onClick: () => menu && openWith(menu.id, option.id) })) },
+    { label: 'Open file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && openProjectFile(menu.id.slice(1), root) },
+    ...openWithMenuItems(),
     { label: 'Save as…', icon: 'lucideDownload', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && void saveAs(menu.id) },
     { label: 'Copy file contents', icon: 'lucideCopy', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && void copyContents(menu.id) },
     { label: 'Reveal in File Explorer', icon: 'lucideFolder', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && void reveal(menu.id) },
@@ -303,7 +386,7 @@
       await call<string>('path_create', { root, dir: `${root}${dir}`, name, folder });
       cancelCreate();
       refresh(dir);
-      if (!folder) openFileTab(`${root}${dir}/${name}`, root);
+      if (!folder) openProjectFile(`${dir}/${name}`.replace(/^\//, ''), root);
     } catch (error) {
       createError = String(error).replace(/^(Error:\s*)+/i, '');
     } finally {
@@ -341,8 +424,12 @@
   }
 
   // ---------- find a file by name ----------
-  let findOpen = $state(false);
-  const openFound = (relative: string) => openFileTab(`${root}/${relative}`, root);
+  // Bindable: the Files tool's own search button opens it too.
+  // `from`: the element the search was opened from, when it is not the search bar (the Files tool's header button).
+  let { findOpen = $bindable(false), from = null }: { findOpen?: boolean; from?: HTMLElement | null } = $props();
+  // The search bar: the file search opens as a popover on it.
+  let findAnchor = $state<HTMLElement>();
+  const openFound = (relative: string) => openProjectFile(relative, root);
 
   // ---------- rename ----------
   // The row's name turns into an input: Enter renames, Esc leaves it as it was.
@@ -432,9 +519,12 @@
 
 {#if root && inTauri()}
   <!-- Find a file by name, or make a new file or folder in the project folder. -->
-  <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border p-1 text-xs">
-    <button type="button" class="inline-flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-2 text-left text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" title="Find a file by name" onclick={() => (findOpen = true)}>
+  <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center gap-1 border-b border-border p-1 text-xs">
+    <button type="button" class="inline-flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-2 text-left outline-none {findOpen ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" title="Find a file by name" aria-expanded={findOpen} onclick={() => (findOpen = true)}>
       <ZIcon zType={'lucideSearch' as ZIconName} zSize="15" /> <span class="truncate">Search files</span>
+    </button>
+    <button type="button" class="inline-flex size-7 cursor-pointer items-center justify-center rounded text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" title={expandAllMode ? 'Collapse all folders' : 'Expand all folders'} aria-label={expandAllMode ? 'Collapse all folders' : 'Expand all folders'} {@attach zTooltip({ content: expandAllMode ? 'Collapse all folders' : 'Expand all folders', position: 'top' })} onclick={toggleExpandAll}>
+      <ZIcon zType={(expandAllMode ? 'lucideChevronsDownUp' : 'lucideChevronsUpDown') as ZIconName} zSize="15" />
     </button>
     <button type="button" class="inline-flex size-7 cursor-pointer items-center justify-center rounded text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" title="New file" aria-label="New file" onclick={() => askCreate('', false)}>
       <ZIcon zType={'lucidePlus' as ZIconName} zSize="15" />
@@ -515,12 +605,8 @@
 
 {#if menu}
   {#key menuKey}
-    <div class="pointer-events-none fixed z-50 size-px" style:left="{menu.x}px" style:top="{menu.y}px">
-      <ZDropdownMenu zItems={menuItems} bind:open={menuOpen} zPosition="bottom-left" zOffset={4} zMinWidth={160} zContentClass="p-1 text-xs">
-        <span class="block size-px"></span>
-      </ZDropdownMenu>
-    </div>
+    <Menu items={menuItems} bind:open={menuOpen} at={{ x: menu.x, y: menu.y }} position="bottom-left" width={220} />
   {/key}
 {/if}
 
-<FileSearchPalette bind:open={findOpen} {root} onpick={openFound} />
+<FileSearchPalette bind:open={findOpen} {root} anchor={from ?? findAnchor} onpick={openFound} />

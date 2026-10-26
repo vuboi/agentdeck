@@ -2,7 +2,7 @@
 // Run with: node --test tests/agent-reply.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyAgentEvent } from '../src/lib/agent-reply.ts';
+import { addUsage, applyAgentEvent } from '../src/lib/agent-reply.ts';
 
 test('deltas join into one response block', () => {
   let blocks = [{ kind: 'loading', label: 'Thinking' }] as const;
@@ -86,4 +86,13 @@ test('stopping a run yourself is not reported as a failure', () => {
   assert.equal(u.finished, true);
   assert.equal(u.blocks.length, 1);
   assert.equal(u.blocks[0].status, 'fail');
+});
+
+test('usage adds each call input once and grows output to the latest total', () => {
+  const reply = { id: 'r', role: 'assistant', time: '', blocks: [] };
+  const usage = (input, output, newCall) => ({ kind: 'usage', input_tokens: input, output_tokens: output, cache_read_tokens: 1, cache_write_tokens: 0, new_call: newCall });
+  addUsage(reply, usage(100, 5, true));
+  addUsage(reply, usage(100, 12, false));
+  addUsage(reply, usage(50, 3, true));
+  assert.deepEqual(reply.tokens, { input: 150, output: 15, cacheRead: 2, cacheWrite: 0 });
 });

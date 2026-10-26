@@ -532,6 +532,44 @@ pub async fn screenshot(view: &Webview) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Captures the visible viewport at a higher output scale without resizing the live page.
+pub async fn screenshot_scaled(view: &Webview, scale: f64) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+
+    let scale = scale.clamp(1.0, 3.0);
+    let metrics = call(view, "Page.getLayoutMetrics", json!({}), None).await?;
+    let viewport = metrics
+        .get("cssVisualViewport")
+        .or_else(|| metrics.get("cssLayoutViewport"))
+        .ok_or("page viewport metrics are unavailable")?;
+    let width = viewport["clientWidth"]
+        .as_f64()
+        .ok_or("page viewport width is unavailable")?;
+    let height = viewport["clientHeight"]
+        .as_f64()
+        .ok_or("page viewport height is unavailable")?;
+    if width <= 0.0 || height <= 0.0 {
+        return Err("page viewport is empty".into());
+    }
+    let answer = call(
+        view,
+        "Page.captureScreenshot",
+        json!({
+            "format": "png",
+            "clip": { "x": 0, "y": 0, "width": width, "height": height, "scale": scale },
+            "captureBeyondViewport": false
+        }),
+        None,
+    )
+    .await?;
+    let data = answer["data"]
+        .as_str()
+        .ok_or("the browser returned no screenshot data")?;
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|error| error.to_string())
+}
+
 /// Only the given part of the page (CSS pixels), PNG bytes: a picture of one element.
 pub async fn screenshot_clip(
     view: &Webview,

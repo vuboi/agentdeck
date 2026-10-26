@@ -11,7 +11,8 @@
   import { colourFinished, colourStarted, eagerColour, renderMarkdown } from '../markdown';
   import { runInTerminal } from '../terminal.svelte';
   import { theme } from '../theme.svelte';
-  import { fileRootOf, openFileTab } from '../content-tabs.svelte';
+  import { fileRootOf, isAbsolutePath, resolveInProject } from '../paths';
+  import { openInViewer } from '../file-viewer.svelte';
   import { activeSession, workspace } from '../sessions.svelte';
 
   // An answer as rich text: headings, lists, tables, quotes, links and code cards with a copy button.
@@ -218,15 +219,15 @@
   function filePathOf(href: string, projectRoot: string): string | null {
     const raw = decodeURI(href.replace(/^file:\/\/\/?/i, '')).replace(/#.*$/, '');
     // `path:12` or `path:12:3` points at a line; the viewer opens the file.
-    const path = raw.replace(/:\d+(:\d+)?$/, '');
-    if (/^[a-z]:[\\/]/i.test(path) || (path.startsWith('/') && !path.startsWith('//'))) return path;
-    if (projectRoot && path && !/^[a-z][a-z0-9+.-]*:/i.test(path) && !path.startsWith('#')) return `${projectRoot}/${path.replace(/^\.\//, '')}`;
+    const path = raw.replace(/^\/([a-z]:[\\/])/i, '$1').replace(/:\d+(:\d+)?$/, '');
+    if (isAbsolutePath(path)) return path;
+    if (projectRoot && path && !/^[a-z][a-z0-9+.-]*:/i.test(path) && !path.startsWith('#')) return resolveInProject(path, projectRoot);
     return null;
   }
 
   // The viewer reads only inside a root folder: the project when the file is in it, else the file's own folder.
   function openFile(path: string, projectRoot: string) {
-    openFileTab(path, fileRootOf(path, projectRoot));
+    openInViewer(path, fileRootOf(path, projectRoot));
   }
 
   // Right click on a link: open it in the AgentDeck browser, the system browser, or copy it.

@@ -4,10 +4,10 @@ export type Tool = { value: string; label: string; icon: ZIconName };
 
 /** Workspace tools: shown in the right panel, or detached into a modal. */
 export const TOOLS: Tool[] = [
-  { value: 'Explore', label: 'Explore', icon: 'lucideFolder' as ZIconName },
+  // Files: the project tree, its git changes and the open files, in one tool.
+  { value: 'Explore', label: 'Files', icon: 'lucideFolder' as ZIconName },
   { value: 'Preview', label: 'Preview', icon: 'lucideGlobe' as ZIconName },
   { value: 'Images', label: 'Images', icon: 'lucideImage' as ZIconName },
-  { value: 'Diff', label: 'Changes', icon: 'lucideGitCompare' as ZIconName },
   { value: 'Tasks', label: 'Tasks', icon: 'lucideListChecks' as ZIconName },
   { value: 'MCP', label: 'MCP', icon: 'lucidePlug' as ZIconName },
   { value: 'Workflow', label: 'Workflow', icon: 'lucideWorkflow' as ZIconName },

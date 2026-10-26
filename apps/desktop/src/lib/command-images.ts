@@ -51,7 +51,7 @@ export function persistCommandImage(sessionId: string, message: Message, command
     const saved = record.images.find((item) => item.ordinal === ordinal);
     if (saved) Object.assign(saved, { command: commands[ordinal].command, path, image: path ? undefined : image });
     else record.images.push({ ordinal, command: commands[ordinal].command, path, image: path ? undefined : image });
-    setPref(keyOf(sessionId), records);
+    await setPref(keyOf(sessionId), records);
   });
 }
 
@@ -62,7 +62,7 @@ export function finishCommandImages(sessionId: string, message: Message) {
     const record = records.find((item) => item.messageId === message.id);
     if (!record) return;
     record.fingerprint = responseFingerprint(message);
-    setPref(keyOf(sessionId), records);
+    await setPref(keyOf(sessionId), records);
   });
 }
 
@@ -74,14 +74,30 @@ export async function restoreCommandImages(sessionId: string, messages: Message[
   const candidates = messages.filter((message) => message.role === 'assistant' && message.blocks.some((block) => block.kind === 'command'));
 
   for (const record of records) {
-    const exact = record.fingerprint ? candidates.filter((message) => responseFingerprint(message) === record.fingerprint) : [];
-    const pool = exact.length ? exact : candidates;
-    const target =
-      pool.find((message) => message.id === record.messageId) ??
-      pool
-        .map((message) => ({ message, distance: Math.abs(Date.parse(message.at ?? '') - Date.parse(record.at ?? '')) }))
-        .filter((item) => Number.isFinite(item.distance))
-        .sort((a, b) => a.distance - b.distance)[0]?.message;
+    const ranked = candidates
+      .map((message) => {
+        const commands = message.blocks.filter((block): block is Extract<Block, { kind: 'command' }> => block.kind === 'command');
+        const matchingImages = record.images.filter(
+          (saved) => commands[saved.ordinal]?.command === saved.command || commands.some((block) => block.command === saved.command),
+        ).length;
+        const distance = Math.abs(Date.parse(message.at ?? '') - Date.parse(record.at ?? ''));
+        return {
+          message,
+          matchingImages,
+          exactId: message.id === record.messageId,
+          exactResponse: Boolean(record.fingerprint && responseFingerprint(message) === record.fingerprint),
+          distance: Number.isFinite(distance) ? distance : Number.POSITIVE_INFINITY,
+        };
+      })
+      .filter((item) => item.matchingImages > 0)
+      .sort(
+        (a, b) =>
+          Number(b.exactId) - Number(a.exactId) ||
+          b.matchingImages - a.matchingImages ||
+          Number(b.exactResponse) - Number(a.exactResponse) ||
+          a.distance - b.distance,
+      );
+    const target = ranked[0]?.message;
     if (!target) continue;
     const commandIndices = target.blocks.flatMap((block, index) => (block.kind === 'command' ? [index] : []));
     for (const saved of record.images) {

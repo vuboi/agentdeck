@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PickerPopover, { type PickerItem } from './PickerPopover.svelte';
+  import { ACTIVE_ON } from '../popover';
   import { onMount, tick, untrack } from 'svelte';
   import { fade, slide } from 'svelte/transition';
   import { ZDrawer, ZIcon, ZPopover, ZSwitch, ZTabs, createVirtualizer, zHoverGlide, zTooltip } from '@shival99/z-ui-svelte';
@@ -102,15 +104,12 @@
   let settingOpen = $state(false);
   const suggestedKeywords = $derived(gen.keywords);
   const currentOptions = $derived(SETTINGS.find((item) => item.key === settingKey)?.options ?? []);
+  const settingFitsContent = $derived(settingKey === 'audience' || settingKey === 'ratio' || settingKey === 'resolution');
   let settingQuery = $state('');
-  // The option the arrow keys are on: moved by the arrows and by a new search, picked with Enter.
-  let cursor = $state(0);
-  // The options whose name holds the search text; Auto is listed only while nothing is searched.
-  const shownOptions = $derived.by(() => {
-    const query = settingQuery.trim().toLowerCase();
-    const matches = currentOptions.filter((option) => option.toLowerCase().includes(query));
-    return query ? matches : ['', ...matches];
-  });
+  // The options as the app's one list: Auto first, the chosen one ticked.
+  const settingItems = $derived<PickerItem<string>[]>(
+    ['', ...currentOptions].map((option) => ({ id: option || '::auto', label: option || 'Auto', icon: option ? OPTION_ICON[option] : undefined, selected: (settingKey ? settings[settingKey] : '') === option, data: option })),
+  );
 
   let prompt = $state(draft.prompt);
   let selectedModels = $state<string[]>(draft.selectedModels ?? ['gpt-6-luna', 'gpt-image-2']);
@@ -300,26 +299,7 @@
     settingKey = key;
     settingAnchor = anchor;
     settingQuery = '';
-    cursor = Math.max(0, shownOptions.indexOf(settings[key]));
     settingOpen = true;
-  }
-
-  // Arrow keys move through the options, Enter picks the one on, Escape closes the list.
-  function onSettingKey(event: KeyboardEvent) {
-    const count = shownOptions.length;
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (!count) return;
-      cursor = (cursor + (event.key === 'ArrowDown' ? 1 : count - 1)) % count;
-      const list = (event.currentTarget as HTMLElement).closest('[role="menu"]');
-      void tick().then(() => list?.querySelector(`[data-option-index="${cursor}"]`)?.scrollIntoView({ block: 'nearest' }));
-    } else if (event.key === 'Enter') {
-      event.preventDefault();
-      if (count) pickSetting(shownOptions[cursor]);
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      settingOpen = false;
-    }
   }
 
   function pickSetting(value: string) {
@@ -709,7 +689,7 @@
 
         <ZPopover anchor={settingsTrigger} bind:open={settingsOpen} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={256}>
           {#snippet children()}
-            <div class="flex w-full flex-col gap-4 overflow-y-auto px-2.5 py-2.5 text-xs" role="menu" aria-label="Image settings" {@attach glide()}>
+            <div class="flex w-full flex-col gap-4 overflow-x-hidden overflow-y-auto px-2.5 py-2.5 text-xs" role="menu" aria-label="Image settings" {@attach glide()}>
               <section aria-label="Image models">
                 <SectionTitle label="MODEL" />
                 <button
@@ -830,7 +810,7 @@
         <ZPopover anchor={promptModelsAnchor} bind:open={promptModelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={168}>
           {#snippet children()}
             {@const selectedGroup = promptGroups.find((group) => group.provider === promptSubProvider)}
-            <div class="flex w-full flex-col gap-0.5 overflow-y-auto py-1 pl-1 text-xs" style:max-height="320px" role="radiogroup" aria-label="Prompt models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
+            <div class="flex w-full flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1 text-xs" style:max-height="320px" role="radiogroup" aria-label="Prompt models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
               {#if !selectedGroup?.items.length}
                 <!-- The same empty state as the chat's model picker: the provider listed no models. -->
                 <div class="flex w-full flex-col items-center gap-1.5 px-2 py-3 text-center">
@@ -893,7 +873,7 @@
           {@const chosen = settings[setting.key]}
           <button
             type="button"
-            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded border border-border bg-background px-2.5 text-[11px] outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingOpen && settingKey === setting.key ? 'bg-primary/10 text-primary' : ''} {chosen ? 'text-foreground' : 'text-muted-foreground'}"
+            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded border border-border bg-background px-2.5 text-[11px] outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingOpen && settingKey === setting.key ? ACTIVE_ON : ''} {chosen ? 'text-foreground' : 'text-muted-foreground'}"
             aria-haspopup="menu"
             aria-expanded={settingOpen && settingKey === setting.key}
             onclick={(event) => openSetting(setting.key, event.currentTarget)}
@@ -906,34 +886,25 @@
         {/each}
       </div>
 
-      <ZPopover anchor={settingAnchor} bind:open={settingOpen} zTrigger="manual" zPosition="bottom-left" zOffset={6} zWidth={200}>
-        {#snippet children()}
-          <div class="flex max-h-72 w-full flex-col text-xs" role="menu" aria-label="Setting options">
-            <label class="flex shrink-0 items-center gap-2 border-b border-border px-2.5 py-2 text-muted-foreground focus-within:text-foreground">
-              <ZIcon zType="lucideSearch" class="size-3.5 shrink-0" />
-              <!-- svelte-ignore a11y_autofocus -->
-              <input bind:value={settingQuery} oninput={() => (cursor = 0)} onkeydown={onSettingKey} autofocus type="text" placeholder="Search..." aria-label="Search options" class="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground" />
-            </label>
-            <div class="flex min-h-0 flex-col gap-0.5 overflow-y-auto p-1.5">
-            {#each shownOptions as option, index (option)}
-              {@const active = (settingKey ? settings[settingKey] : '') === option}
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={active}
-                data-option-index={index}
-                class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : index === cursor ? 'bg-primary/10' : ''}"
-                onclick={() => pickSetting(option)}
-              >
-                {#if OPTION_ICON[option]}<ZIcon zType={OPTION_ICON[option]} class="size-3.5 shrink-0 text-muted-foreground" />{/if}
-                <span class="min-w-0 flex-1 truncate">{option || 'Auto'}</span>
-                {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
-              </button>
-            {/each}
-            </div>
-          </div>
-        {/snippet}
-      </ZPopover>
+      <PickerPopover
+        anchor={settingAnchor}
+        bind:open={settingOpen}
+        bind:query={settingQuery}
+        items={settingItems}
+        local
+        search
+        fitContent={settingFitsContent}
+        fillHeight={!settingFitsContent}
+        heightReduction={settingFitsContent ? 0 : 50}
+        placeholder="Search…"
+        label="Setting options"
+        empty="No option matches"
+        position="bottom-left"
+        size="sm"
+        width={230}
+        onpick={(item) => pickSetting(item.data)}
+        onclose={() => (settingQuery = '')}
+      />
 
       <div class="-mx-3 flex min-h-0 flex-1 flex-col border-t border-border pt-3">
         <div class="flex min-h-0 flex-1 flex-col px-3">

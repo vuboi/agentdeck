@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { ZButton, ZIcon, ZModal } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZModal, ZPopover } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { contentTabs, saveTab, type ContentTab } from '../content-tabs.svelte';
-  import { changeLines, countsOf, parseDiff, relativeTo, type DiffRow } from '../diff';
-  import { imageMimeOf, languageLabel, languageOf, readImageUrl, readProjectFile } from '../files';
+  import { isViewerTab } from '../file-viewer.svelte';
+  import { changeLines, countsOf, parseDiff, type DiffRow } from '../diff';
+  import { relativeTo } from '../paths';
+  import { imageMimeOf, languageLabel, languageOf, officeFormatOf, readImageUrl, readProjectFile } from '../files';
   import { canFormat, prettifyStrict } from '../format';
   import { drafts, type Draft } from '../file-buffers';
   import { diffCache, fileKey, rememberText, textCache } from '../file-cache';
@@ -19,6 +21,7 @@
   import DevEmpty from './DevEmpty.svelte';
   import DiffView from './DiffView.svelte';
   import Markdown from './Markdown.svelte';
+  import OfficePreview from './OfficePreview.svelte';
 
   let { file }: { file: Extract<ContentTab, { kind: 'file' }> } = $props();
 
@@ -110,6 +113,7 @@
     void fileWrites.tick;
     void attempt;
     if (imageMimeOf(file.name)) return; // a picture is read by the picture effect below
+    if (officeFormatOf(file.name)) return; // Office formats are binary ZIP packages; OfficePreview reads their bytes.
     const seq = ++readSeq;
     const key = fileKey(root, path);
     error = '';
@@ -168,7 +172,7 @@
     destroyed = true;
     const draft = drafts.get(file.id);
     if (!draft) return;
-    if (!dirty || !contentTabs.tabs.some((tab) => tab.id === file.id)) return void drafts.delete(file.id);
+    if (!dirty || !(contentTabs.tabs.some((tab) => tab.id === file.id) || isViewerTab(file.id))) return void drafts.delete(file.id);
     draft.text = editor?.getText() ?? draft.read?.() ?? draft.text;
     draft.read = undefined;
     draft.saved = undefined;
@@ -263,6 +267,18 @@
   let matchTotal = $state(0);
   let matchAt = $state(0);
   let findInput: HTMLInputElement | undefined = $state();
+  let findButton = $state<HTMLElement>();
+  // The bar is ready to type in as soon as it opens (the popover mounts a moment after `findOpen` turns true).
+  $effect(() => {
+    if (!findOpen) return;
+    const focus = () => findInput?.focus({ preventScroll: true });
+    const frame = requestAnimationFrame(focus);
+    const late = setTimeout(focus, 60);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(late);
+    };
+  });
   let panel: HTMLDivElement | undefined = $state();
   let formatting = $state(false);
   let copiedAll = $state(false);
@@ -304,7 +320,7 @@
     if (matchTotal > 0) matchAt = (matchAt + by + matchTotal) % matchTotal;
   };
   function save() {
-    if (dirty) void saveTab(file.id);
+    if (dirty) void saveTab(file.id, file);
   }
   function onFindKey(event: KeyboardEvent) {
     if (event.key === 'Enter') {
@@ -350,26 +366,10 @@
     });
   }
 
-  let barWidth = $state(0);
-  let compact = $state(false);
-  // The find bar's buttons keep their own padding (`tool`); the toolbar's buttons turn icon-only when the labels do not fit.
-  const toolBase = 'inline-flex h-7 cursor-pointer items-center gap-1.5 rounded text-xs outline-none disabled:opacity-40';
-  const tool = $derived(`${toolBase} ${compact ? 'w-7 justify-center' : 'px-2'}`);
+  // File actions stay compact and use tooltips for their names.
+  const toolBase = 'inline-flex h-8 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded text-xs outline-none disabled:opacity-40';
+  const tool = `${toolBase} w-8`;
   const findTool = `${toolBase} px-2`;
-  // ---------- toolbar width: labelled buttons while they fit, icons with a tooltip when they do not ----------
-  const LABEL_WIDTH = { save: 78, unsaved: 70, wrap: 66, search: 76, preview: 80, format: 76, copy: 72 };
-  const INFO_MIN = $derived(changed || !diffRead ? 230 : 24); // room kept beside the buttons before they lose their labels
-  const labelledWidth = $derived(
-    LABEL_WIDTH.wrap + LABEL_WIDTH.search + LABEL_WIDTH.copy + (dirty ? LABEL_WIDTH.save : 0) + (isMarkdown ? LABEL_WIDTH.preview : 0) + (formattable ? LABEL_WIDTH.format : 0) + 24,
-  );
-  $effect(() => {
-    if (barWidth === 0) return;
-    // A gap between the two limits, so a width on the edge does not flicker.
-    if (!compact && barWidth < labelledWidth + INFO_MIN) compact = true;
-    else if (compact && barWidth > labelledWidth + INFO_MIN + 24) compact = false;
-  });
-  /** The tooltip text: only while the buttons show no label. */
-  const tip = (text: string) => (compact ? text : undefined);
   const toolOff = 'text-muted-foreground hover:bg-primary/10 hover:text-primary';
   const toolOn = 'bg-primary/15 text-primary';
 
@@ -384,11 +384,11 @@
 {#snippet viewToggle()}
   <!-- A file with changes can be read as it is, or as its change: removed lines red, added lines green. -->
   <!-- Two equal halves with a pill that slides to the chosen one. -->
-  <div class="relative grid h-6 shrink-0 grid-cols-2 rounded-md bg-muted p-0.5 text-xs" role="radiogroup" aria-label="How to show the file">
+  <div class="relative grid h-7 w-14 shrink-0 grid-cols-2 rounded-md border border-border bg-muted p-0.5 text-xs" role="radiogroup" aria-label="How to show the file">
     <span class="pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-background shadow-sm transition-transform duration-200 ease-out" style:transform={view === 'changes' ? 'translateX(100%)' : 'translateX(0)'} aria-hidden="true"></span>
     {#each [{ value: 'file', label: 'File', glyph: 'lucideFileText' }, { value: 'changes', label: 'Changes', glyph: 'lucideGitCompare' }] as item (item.value)}
-      <button type="button" role="radio" aria-checked={view === item.value} class="relative z-10 inline-flex cursor-pointer items-center justify-center gap-1 rounded px-2.5 whitespace-nowrap outline-none transition-colors {view === item.value ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (file.view = item.value as 'file' | 'changes')}>
-        <ZIcon zType={icon(item.glyph)} zSize="12" /> {item.label}
+      <button type="button" role="radio" aria-checked={view === item.value} aria-label={item.label} title={item.label} class="relative z-10 grid size-6 cursor-pointer place-items-center rounded outline-none transition-colors {view === item.value ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (file.view = item.value as 'file' | 'changes')}>
+        <ZIcon zType={icon(item.glyph)} zSize="14" />
       </button>
     {/each}
   </div>
@@ -411,11 +411,11 @@
         </div>
         <p class="m-0 max-w-full truncate rounded-sm bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground" title={file.path}>{folder}<span class="text-foreground">{file.name}</span></p>
         <div class="flex gap-2">
-          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" onclick={() => attempt++}>
-            <ZIcon zType={icon('lucideRotateCw')} class="size-3.5" /> Try again
+          <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! p-0" aria-label="Try again" title="Try again" onclick={() => attempt++}>
+            <ZIcon zType={icon('lucideRotateCw')} class="size-3.5" />
           </ZButton>
-          <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" onclick={copyPath}>
-            <ZIcon zType={icon(copied ? 'lucideCheck' : 'lucideCopy')} class="size-3.5" /> {copied ? 'Copied' : 'Copy path'}
+          <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0" aria-label="Copy path" title={copied ? 'Copied' : 'Copy path'} onclick={copyPath}>
+            <ZIcon zType={icon(copied ? 'lucideCheck' : 'lucideCopy')} class="size-3.5" />
           </ZButton>
         </div>
       </div>
@@ -436,7 +436,7 @@
   {:else if view === 'changes'}
     {#if changed || !diffRead}
       <!-- The bar is there from the first frame (its counts fade in once git has answered), so the area is never a blank band. -->
-      <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-3 text-xs"><div class="flex items-center gap-1 transition-opacity duration-200 {diffRead ? 'opacity-100' : 'opacity-0'}" aria-hidden={!diffRead}>{@render viewToggle()}</div></div>
+      <div class="flex h-10 shrink-0 items-center gap-1 border-b border-border px-1.5 text-xs"><div class="flex items-center gap-1 transition-opacity duration-200 {diffRead ? 'opacity-100' : 'opacity-0'}" aria-hidden={!diffRead}>{@render viewToggle()}</div></div>
       <div class="min-h-0 flex-1">
         {#if changed}
           <div class="h-full" in:fade={{ duration: 200 }}><DiffView {rows} lang={language} /></div>
@@ -447,33 +447,35 @@
     {:else}
       <DevEmpty icon="lucideGitCompare" title="No changes" hint="This file is the same as in the last commit." />
     {/if}
+  {:else if officeFormatOf(file.name)}
+    <OfficePreview {file} />
   {:else if disk !== null}
-    <div bind:clientWidth={barWidth} class="flex h-9 shrink-0 items-center gap-2 overflow-hidden border-b border-border px-3 text-xs">
+    <div class="flex h-10 shrink-0 items-center gap-2 overflow-hidden border-b border-border px-1.5 text-xs">
       <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">{#if changed || !diffRead}<div class="flex items-center gap-1 transition-opacity duration-200 {diffRead ? 'opacity-100' : 'opacity-0'}" aria-hidden={!diffRead}>{@render viewToggle()}</div>{/if}</div>
       <div class="flex shrink-0 items-center gap-1">
         {#if dirty}
-          <button type="button" class="{tool} {toolOn}" aria-label="Save" title={tip('Save (Ctrl+S)')} onclick={save}>
-            <ZIcon zType={icon('lucideSave')} zSize="13" />{#if !compact} Save{/if}
+          <button type="button" class="{tool} {toolOn}" aria-label="Save" title="Save (Ctrl+S)" onclick={save}>
+            <ZIcon zType={icon('lucideSave')} zSize="14" />
           </button>
         {/if}
-        <button type="button" class="{tool} {wrap ? toolOn : toolOff}" aria-pressed={wrap} aria-label="Wrap long lines" title={tip('Wrap long lines')} onclick={() => (wrap = !wrap)}>
-          <ZIcon zType={icon('lucideType')} zSize="13" />{#if !compact} Wrap{/if}
+        <button type="button" class="{tool} {wrap ? toolOn : toolOff}" aria-pressed={wrap} aria-label="Wrap long lines" title="Wrap long lines" onclick={() => (wrap = !wrap)}>
+          <ZIcon zType={icon('lucideWrapText')} zSize="14" />
         </button>
-        <button type="button" class="{tool} {findOpen ? toolOn : toolOff}" aria-label="Find in file" title={tip('Find in file (Ctrl+F)')} onclick={() => (findOpen ? (findOpen = false) : void openFind())}>
-          <ZIcon zType={icon('lucideSearch')} zSize="13" />{#if !compact} Search{/if}
+        <button bind:this={findButton} type="button" class="{tool} {findOpen ? toolOn : toolOff}" aria-expanded={findOpen} aria-label="Find in file" title="Find in file (Ctrl+F)" onclick={() => (findOpen ? (findOpen = false) : void openFind())}>
+          <ZIcon zType={icon('lucideSearch')} zSize="14" />
         </button>
         {#if isMarkdown}
-          <button type="button" class="{tool} {toolOff}" aria-label="Preview the rendered Markdown" title={tip('Preview the rendered Markdown')} onclick={() => ((previewText = currentText()), (previewOpen = true))}>
-            <ZIcon zType={icon('lucideEye')} zSize="13" />{#if !compact} Preview{/if}
+          <button type="button" class="{tool} {toolOff}" aria-label="Preview the rendered Markdown" title="Preview the rendered Markdown" onclick={() => ((previewText = currentText()), (previewOpen = true))}>
+            <ZIcon zType={icon('lucideEye')} zSize="14" />
           </button>
         {/if}
         {#if formattable}
-          <button type="button" class="{tool} {toolOff}" disabled={formatting} aria-label="Format the file" title={tip('Format the file (an edit: Ctrl+Z undoes it, Ctrl+S saves it)')} onclick={format}>
-            <ZIcon zType={icon(formatting ? 'lucideLoaderCircle' : 'lucideBraces')} zSize="13" class={formatting ? 'animate-spin' : ''} />{#if !compact} Format{/if}
+          <button type="button" class="{tool} {toolOff}" disabled={formatting} aria-label="Format the file" title="Format the file (an edit: Ctrl+Z undoes it, Ctrl+S saves it)" onclick={format}>
+            <ZIcon zType={icon(formatting ? 'lucideLoaderCircle' : 'lucideBraces')} zSize="14" class={formatting ? 'animate-spin' : ''} />
           </button>
         {/if}
-        <button type="button" class="{tool} {toolOff}" aria-label="Copy the whole file" title={tip('Copy the whole file')} onclick={copyAll}>
-          <ZIcon zType={icon(copiedAll ? 'lucideCheck' : 'lucideCopy')} zSize="13" />{#if !compact} {copiedAll ? 'Copied' : 'Copy'}{/if}
+        <button type="button" class="{tool} {toolOff}" aria-label="Copy the whole file" title={copiedAll ? 'Copied' : 'Copy the whole file'} onclick={copyAll}>
+          <ZIcon zType={icon(copiedAll ? 'lucideCheck' : 'lucideCopy')} zSize="14" />
         </button>
       </div>
     </div>
@@ -487,26 +489,6 @@
       </div>
     {/if}
     <div class="relative min-h-0 flex-1">
-      {#if findOpen}
-        <div class="absolute top-1.5 right-3 z-20 flex items-center gap-0.5 rounded-md border border-border bg-popover p-1 text-[13px] shadow-md" role="search">
-          <input
-            bind:this={findInput}
-            bind:value={query}
-            onkeydown={onFindKey}
-            class="h-8 w-44 rounded-sm border bg-background px-2 text-[13px] outline-none focus:border-primary {invalidQuery ? 'border-destructive' : 'border-border'}"
-            placeholder="Find"
-            aria-label="Find in file"
-            spellcheck="false"
-          />
-          <button type="button" class="{findTool} h-8 px-1.5 font-mono {matchCase ? toolOn : toolOff}" aria-pressed={matchCase} title="Match case" onclick={() => (matchCase = !matchCase)}>Aa</button>
-          <button type="button" class="{findTool} h-8 px-1.5 font-mono {wholeWord ? toolOn : toolOff}" aria-pressed={wholeWord} title="Match whole word" onclick={() => (wholeWord = !wholeWord)}><span class="underline decoration-1 underline-offset-2">ab</span></button>
-          <button type="button" class="{findTool} h-8 px-1.5 font-mono {useRegex ? toolOn : toolOff}" aria-pressed={useRegex} title="Use regular expression" onclick={() => (useRegex = !useRegex)}>.*</button>
-          <span class="min-w-0 px-1.5 text-center text-xs whitespace-nowrap tabular-nums {invalidQuery ? 'text-destructive' : 'text-muted-foreground'}">{invalidQuery ? 'Invalid' : query ? (matchTotal ? `${matchAt + 1} of ${matchTotal}` : 'No results') : ''}</span>
-          <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Previous match (Shift+Enter)" aria-label="Previous match" disabled={!matchTotal} onclick={() => step(-1)}><ZIcon zType={icon('lucideChevronUp')} zSize="14" /></button>
-          <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Next match (Enter)" aria-label="Next match" disabled={!matchTotal} onclick={() => step(1)}><ZIcon zType={icon('lucideChevronDown')} zSize="14" /></button>
-          <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Close (Esc)" aria-label="Close find" onclick={() => (findOpen = false)}><ZIcon zType={icon('lucideX')} zSize="14" /></button>
-        </div>
-      {/if}
       {#if !(dirty || staleDiff) && changed}
         <ChangeRuler total={shownLines} {added} {removed} {modified} ongo={(line) => (readOnly ? viewer?.goToLine(line) : editor?.goToLine(line))} />
       {/if}
@@ -526,8 +508,25 @@
   {/if}
 </div>
 
+<!-- The find bar is a popover on the Search button: it opens with the popover's motion, stays above the toolbar and
+     the editor, and stays open while the text is edited (a press in the file does not close it; Esc or the X does). -->
+<ZPopover anchor={findButton} bind:open={findOpen} zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth="auto" zCloseOnOutside={false} zScrollClose={false} zCloseOnEscape={false}>
+  {#snippet children()}
+    <div class="flex items-center gap-0.5 p-1 text-[13px]" role="search">
+      <input bind:this={findInput} bind:value={query} onkeydown={onFindKey} class="h-8 w-44 rounded-sm border bg-background px-2 text-[13px] outline-none focus:border-primary {invalidQuery ? 'border-destructive' : 'border-border'}" placeholder="Find" aria-label="Find in file" spellcheck="false" />
+      <button type="button" class="{findTool} h-8 px-1.5 font-mono {matchCase ? toolOn : toolOff}" aria-pressed={matchCase} title="Match case" onclick={() => (matchCase = !matchCase)}>Aa</button>
+      <button type="button" class="{findTool} h-8 px-1.5 font-mono {wholeWord ? toolOn : toolOff}" aria-pressed={wholeWord} title="Match whole word" onclick={() => (wholeWord = !wholeWord)}><span class="underline decoration-1 underline-offset-2">ab</span></button>
+      <button type="button" class="{findTool} h-8 px-1.5 font-mono {useRegex ? toolOn : toolOff}" aria-pressed={useRegex} title="Use regular expression" onclick={() => (useRegex = !useRegex)}>.*</button>
+      <span class="min-w-0 px-1.5 text-center text-xs whitespace-nowrap tabular-nums {invalidQuery ? 'text-destructive' : 'text-muted-foreground'}">{invalidQuery ? 'Invalid' : query ? (matchTotal ? `${matchAt + 1} of ${matchTotal}` : 'No results') : ''}</span>
+      <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Previous match (Shift+Enter)" aria-label="Previous match" disabled={!matchTotal} onclick={() => step(-1)}><ZIcon zType={icon('lucideChevronUp')} zSize="14" /></button>
+      <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Next match (Enter)" aria-label="Next match" disabled={!matchTotal} onclick={() => step(1)}><ZIcon zType={icon('lucideChevronDown')} zSize="14" /></button>
+      <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Close (Esc)" aria-label="Close find" onclick={() => (findOpen = false)}><ZIcon zType={icon('lucideX')} zSize="14" /></button>
+    </div>
+  {/snippet}
+</ZPopover>
+
 {#if isMarkdown}
-  <ZModal bind:open={previewOpen} zTitle={file.name} zWidth="860px" zBodyClass="max-h-[70vh] overflow-auto py-3" zOkText="Close" zCancelText={null} onOk={() => (previewOpen = false)}>
+  <ZModal bind:open={previewOpen} zTitle={file.name} zWidth="860px" zBodyClass="max-h-[70vh] py-3" zOkText="Close" zCancelText={null} onOk={() => (previewOpen = false)}>
     <Markdown text={previewText} />
   </ZModal>
 {/if}

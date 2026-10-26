@@ -190,6 +190,7 @@ Mỗi module có Definition of Done (DoD). Làm tuần tự, mỗi module = 1 co
 > (html-to-image), element picker, gửi về app qua URL scheme `agentdeck` -> event `browser-report`. UI: thanh địa chỉ, thiết bị Mobile/Tablet/Desktop
 > (zoom để đúng bề rộng), pick element, Console/Network, Annotate (freeze-frame: mũi tên, ô vuông, nét vẽ, note đánh số) rồi "Add to chat"
 > (ảnh + DOM + lỗi console vào composer). Chưa có: CDP/chromiumoxide, debugger, network body, tool browser cho agent qua MCP, macOS/Linux chưa thử.
+- Guide authoring riêng trong Preview: lưu các bước ảnh kèm mô tả/chú thích (tô vùng, khung, tròn, mũi tên, chữ), quay luồng thao tác thành video có lớp highlight, chỉnh zoom và xuất một HTML tự chứa.
 - Trait `PreviewBackend`; impl `Webview2Native` (Tauri `add_child`, `--remote-debugging-port=0`, đọc `DevToolsActivePort`, `chromiumoxide`) và `CdpScreencast` (headless Chromium + canvas).
 - Console, network (kèm body), element picker (isolated world), annotate kiểu freeze-frame, context chip gửi vào chat (selector, outerHTML, computed style, box, ảnh crop, source file nếu có).
 - Tool browser expose cho agent qua hub MCP: click/type/screenshot/read_dom/console/network.

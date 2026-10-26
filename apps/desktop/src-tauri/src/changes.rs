@@ -9,7 +9,11 @@ use serde::Serialize;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct Change {
+    /// Relative to the repository's top folder (what `change_diff`, `change_stage` and `change_revert` take).
     pub path: String,
+    /// The same file as a full path: the project folder the chat works in can be a folder inside the repository, so a
+    /// path joined onto it would point at a place that does not exist.
+    pub abs: String,
     /// `M` modified, `A` added, `D` deleted, `?` untracked.
     pub status: String,
     pub staged: bool,
@@ -147,6 +151,7 @@ fn list(root: &str) -> Result<Vec<Change>, String> {
         };
         changes.push(Change {
             path: path.to_string(),
+            abs: top.join(path).to_string_lossy().into_owned(),
             status: status.to_string(),
             staged: !untracked && index != ' ',
             added,

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProjectSelect from './ProjectSelect.svelte';
   import DevEmpty from './DevEmpty.svelte';
   import LiveCommand from './LiveCommand.svelte';
   import { ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
@@ -12,9 +13,8 @@
   import { workspace } from '../sessions.svelte';
   import { toast } from '../toast';
 
-  // One list for everything the agents run: every tool call and chat error, kept on disk, grouped by day. A call
-  // that is working now (background shells and sub-agents included) sits in its day with a spinner and turns into
-  // a check or a cross when it ends. Days fold; a range keeps it short. Only the rows in view are rendered.
+  // One list for everything the agents run: live calls and chat errors appear as they happen; the final call
+  // snapshot is kept on disk. Rows are grouped by day, and only the selected range is rendered.
 
   /** Brings the chat a call belongs to to the front. The chat may be gone (deleted, or a chat that was only here). */
   function openChat(sessionId: string) {
@@ -69,11 +69,19 @@
   const projects = $derived([...new Set([...inRange, ...activity.filter(live)].map((item) => item.project ?? ''))].sort());
   const chosenProject = $derived(project !== null && projects.includes(project) ? project : null);
   const inProject = (item: Activity) => chosenProject === null || (item.project ?? '') === chosenProject;
+  const liveItems = $derived.by(() => {
+    const seen = new Set<string>();
+    return [...audit.filter(live), ...activity.filter(live)].filter((item) => {
+      if (seen.has(item.key)) return false;
+      seen.add(item.key);
+      return inProject(item);
+    });
+  });
   // Newest first: the calls still running are the newest, so they open their day.
   const shown = $derived(
     [
-      ...inRange.filter((item) => inProject(item) && (!failedOnly || item.status === 'fail')),
-      ...(failedOnly ? [] : activity.filter((item) => live(item) && inProject(item))),
+      ...inRange.filter((item) => item.status !== 'running' && item.status !== 'background' && inProject(item) && (!failedOnly || item.status === 'fail')),
+      ...(!failedOnly ? liveItems : []),
     ].sort((a, b) => b.startedAt - a.startedAt),
   );
   type Group = { key: string; at: number; items: Activity[]; failed: number };
@@ -324,21 +332,17 @@
       <ZIcon zType={'lucideBan' as ZIconName} class="size-4" />
     </button>
   </div>
-  <!-- How far back the history reaches. -->
-  <div class="flex shrink-0 flex-wrap gap-1 border-b border-border px-3 py-2" role="tablist" aria-label="Range">
-    {#each RANGES as item (item.value)}
-      <button type="button" role="tab" aria-selected={range === item.value} class="shrink-0 cursor-pointer rounded px-3 py-1 text-xs {range === item.value ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
-    {/each}
-  </div>
-  {#if projects.length > 1}
-    <!-- Projects with entries in the range. -->
-    <div class="flex shrink-0 flex-wrap gap-1 border-b border-border px-3 py-2" role="tablist" aria-label="Projects">
-      <button type="button" role="tab" aria-selected={chosenProject === null} class="shrink-0 cursor-pointer rounded px-3 py-1 text-xs {chosenProject === null ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = null)}>All projects</button>
-      {#each projects as name (name)}
-        <button type="button" role="tab" aria-selected={chosenProject === name} class="shrink-0 cursor-pointer rounded px-3 py-1 text-xs {chosenProject === name ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (project = name)}>{name || 'No project'}</button>
+  <!-- How far back the history reaches (left) and which project (right); the select drops under the range when narrow. -->
+  <div class="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-xs">
+    <div class="flex rounded-md bg-muted p-0.5" role="tablist" aria-label="Range">
+      {#each RANGES as item (item.value)}
+        <button type="button" role="tab" aria-selected={range === item.value} class="cursor-pointer rounded px-2.5 py-0.5 {range === item.value ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
       {/each}
     </div>
-  {/if}
+    {#if projects.length > 1}
+      <ProjectSelect bind:value={project} options={projects} label={(name) => name || 'No project'} class="ml-auto" />
+    {/if}
+  </div>
   <div bind:this={scroller} bind:clientHeight={viewport} class="min-h-0 flex-1 overflow-y-auto" style="overflow-anchor: none" onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)}>
     {#if days.length === 0}
       <DevEmpty icon={failedOnly ? 'lucideCircleCheck' : 'lucideListChecks'} title={failedOnly ? 'No failures' : 'Nothing in this range'} hint={failedOnly ? 'No tool call failed in this range.' : 'Tool calls of the agents show up here as they run.'} />

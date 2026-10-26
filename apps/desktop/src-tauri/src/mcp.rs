@@ -5,9 +5,12 @@
 //! bridge route: the work itself stays in `bridge.rs`.
 
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
+use tokio::sync::oneshot;
 
 struct Tool {
     name: &'static str,
@@ -18,6 +21,9 @@ struct Tool {
 }
 
 const TOOLS: &[Tool] = &[
+    Tool { name: "browser_record_start", route: "/guide-record/start", description: "Starts an automatic continuous recording of the current Preview at up to 4 fps and 1.5× capture scale. Call before the walkthrough, operate the page, then call browser_record_stop to save a .webm in docs/user-guides/ under the project root.", args: &[("root", "string", "absolute path of the current project folder", true), ("file_name", "string", "output filename ending in .webm; defaults to a timestamped name", false)] },
+    Tool { name: "browser_record_stop", route: "/guide-record/stop", description: "Stops the active guide recording and saves its .webm file in the project. Call after the walkthrough actions are complete.", args: &[] },
+    Tool { name: "browser_zoom", route: "/zoom", description: "Changes the Preview page zoom for clear guide shots. Use a factor such as 1.25 to zoom in or 0.8 to zoom out; valid range is 0.25–3.0.", args: &[ ("factor", "number", "page zoom, where 1.0 is 100%", true) ] },
     Tool { name: "browser_page", route: "/page", description: "Address and title of the page open in AgentDeck's Preview panel (the browser the user sees).", args: &[] },
     Tool { name: "browser_screenshot", route: "/shot", description: "A picture of the Preview page as the user sees it now, menus included. Look before and after every action.", args: &[] },
     Tool { name: "browser_click", route: "/click", description: "Clicks at a point of the page, in CSS pixels of the screenshot. Real mouse events; reaches iframes.", args: &[("x", "number", "from the left of the page", true), ("y", "number", "from the top of the page", true)] },
@@ -277,6 +283,42 @@ fn tool_list() -> Value {
 }
 
 async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Value {
+    if name == "browser_record_start" {
+        let Some(root) = args["root"].as_str().filter(|root| !root.trim().is_empty()) else {
+            return error_reply("root must be the absolute path of the project folder".into());
+        };
+        if !std::path::Path::new(root).is_absolute() || !std::path::Path::new(root).is_dir() {
+            return error_reply("root must be an existing absolute project folder".into());
+        }
+        let file_name = args["file_name"].as_str().unwrap_or_default();
+        if !file_name.is_empty()
+            && (std::path::Path::new(file_name).components().count() != 1
+                || std::path::Path::new(file_name).file_name().map(|name| name != file_name).unwrap_or(true)
+                || !file_name.ends_with(".webm"))
+        {
+            return error_reply("file_name must be a simple filename ending in .webm".into());
+        }
+        return match control_guide_recording(app, chat, "start", root, file_name).await {
+            Ok(text) => text_reply(text),
+            Err(error) => error_reply(error),
+        };
+    }
+    if name == "browser_record_stop" {
+        return match control_guide_recording(app, chat, "stop", "", "").await {
+            Ok(text) => text_reply(text),
+            Err(error) => error_reply(error),
+        };
+    }
+    if name == "browser_zoom" {
+        let Some(factor) = args["factor"].as_f64() else {
+            return error_reply("factor must be a number".into());
+        };
+        let tab = crate::bridge::active_tab();
+        return match crate::browser::browser_zoom(app.clone(), tab, factor) {
+            Ok(()) => text_reply(format!("Preview zoom set to {:.0}%", factor.clamp(0.25, 3.0) * 100.0)),
+            Err(error) => error_reply(error),
+        };
+    }
     if name.starts_with("computer_") {
         return computer_tool(app, name, args, chat).await;
     }
@@ -335,6 +377,56 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Val
         }
         Err(error) => json!({ "content": [{ "type": "text", "text": error }], "isError": true }),
     }
+}
+
+type GuideRecordingReplies = Mutex<HashMap<String, oneshot::Sender<Result<String, String>>>>;
+
+static GUIDE_RECORDING_REPLIES: LazyLock<GuideRecordingReplies> = LazyLock::new(Default::default);
+
+/// Sends a start/stop request to the app-shell recorder and waits for its saved-path result.
+async fn control_guide_recording(
+    app: &AppHandle,
+    chat: &str,
+    action: &str,
+    root: &str,
+    file_name: &str,
+) -> Result<String, String> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (sender, receiver) = oneshot::channel();
+    GUIDE_RECORDING_REPLIES
+        .lock()
+        .map_err(|_| "guide recorder is busy".to_string())?
+        .insert(request_id.clone(), sender);
+    let event = json!({
+        "requestId": request_id,
+        "action": action,
+        "root": root,
+        "fileName": file_name,
+        "chat": chat,
+    });
+    if let Err(error) = app.emit("agentdeck:guide-record-control", event) {
+        GUIDE_RECORDING_REPLIES.lock().ok().and_then(|mut replies| replies.remove(&request_id));
+        return Err(error.to_string());
+    }
+    match tokio::time::timeout(Duration::from_secs(90), receiver).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("the guide recorder closed before replying".into()),
+        Err(_) => {
+            GUIDE_RECORDING_REPLIES.lock().ok().and_then(|mut replies| replies.remove(&request_id));
+            Err("the guide recorder did not respond within 90 seconds".into())
+        }
+    }
+}
+
+/// Completes one pending browser_record_start or browser_record_stop tool call.
+pub(crate) fn guide_recording_reply(request_id: String, ok: bool, message: String) -> Result<(), String> {
+    let sender = GUIDE_RECORDING_REPLIES
+        .lock()
+        .map_err(|_| "guide recorder is busy".to_string())?
+        .remove(&request_id)
+        .ok_or_else(|| "the recording request expired".to_string())?;
+    let result = if ok { Ok(message) } else { Err(message) };
+    sender.send(result).map_err(|_| "the browser tool already ended".to_string())
 }
 
 async fn computer_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Value {
@@ -469,7 +561,7 @@ pub async fn handle(app: &AppHandle, body: &str, chat: &str) -> Option<String> {
             "protocolVersion": params["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "agentdeck", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "The page open in AgentDeck's Preview panel, the browser the user is looking at. Use these tools to see it and act on it as a user would: screenshot, then click / type / scroll, then screenshot again and check browser_console and browser_network for errors. If Computer use is enabled in Settings, use computer_screenshot, computer_click, computer_type, computer_press_key and computer_scroll to operate the user's Windows desktop. Every screen share or input operation waits for the user to approve it in the chat before it runs. The code_* tools search an index of the project (symbols, outlines, definitions, references, imports): use them before grepping the tree. delegate_task hands big or clearly separable work to another agent (see list_agents): never small things or the final answer.",
+            "instructions": "The page open in AgentDeck's Preview panel, the browser the user is looking at. Use these tools to see it and act on it as a user would: screenshot, then click / type / scroll, then screenshot again and check browser_console and browser_network for errors. For a requested video guide, call browser_record_start with the absolute project root before operating the page, then browser_record_stop when finished; it saves the WebM under docs/user-guides. If Computer use is enabled in Settings, use computer_screenshot, computer_click, computer_type, computer_press_key and computer_scroll to operate the user's Windows desktop. Every screen share or input operation waits for the user to approve it in the chat before it runs. The code_* tools search an index of the project (symbols, outlines, definitions, references, imports): use them before grepping the tree. delegate_task hands big or clearly separable work to another agent (see list_agents): never small things or the final answer.",
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tool_list() }),

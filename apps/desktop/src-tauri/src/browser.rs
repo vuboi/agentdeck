@@ -7,12 +7,17 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
+
 use tauri::webview::PageLoadEvent;
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Webview, WebviewBuilder, WebviewUrl,
 };
 
 const PREFIX: &str = "browser-";
+/// The main app and Preview must agree because WebView2 shares one user data folder.
+pub const EXTENSIONS_ENABLED: bool = cfg!(windows);
 
 /// Opening can be asked for twice at once (resize and navigation); only one may create a webview.
 static CREATING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -436,6 +441,7 @@ pub async fn browser_show(
     let mut builder =
         WebviewBuilder::new(label(&tab), WebviewUrl::External(destination(&tab, &url)?))
             .initialization_script(injected_script(&tab))
+            .browser_extensions_enabled(EXTENSIONS_ENABLED)
             .on_page_load(|view, payload| {
                 let event = match payload.event() {
                     PageLoadEvent::Started => "started",
@@ -477,6 +483,17 @@ pub async fn browser_show(
                     }),
                 );
             });
+    #[cfg(windows)]
+    {
+        let extension_root = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())?
+            .join("browser-extensions");
+        std::fs::create_dir_all(&extension_root).map_err(|error| error.to_string())?;
+        builder = builder
+            .extensions_path(extension_root);
+    }
     // Opaque white under the page: while the page's window is resized (the mark-up bar or the developer tools open and
     // shrink the area) the strip not yet painted shows this, not black.
     builder = builder.background_color(tauri::window::Color(255, 255, 255, 255));
@@ -497,6 +514,169 @@ pub async fn browser_show(
     crate::cdp::watch_network(&view);
     layer(&view, BELOW.load(Ordering::Relaxed));
     hide_others(&app, &tab);
+    Ok(())
+}
+
+/// Opens the system folder picker for an unpacked Chrome extension.
+#[tauri::command]
+pub async fn browser_pick_extension(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("Select an unpacked browser extension")
+            .blocking_pick_folder()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+
+    picked
+        .map(|path| {
+            path.into_path()
+                .map(|path| path.display().to_string())
+                .map_err(|error| error.to_string())
+        })
+        .transpose()
+}
+
+/// Copies an unpacked extension into AgentDeck's persistent extension folder and installs it in the Preview profile.
+#[tauri::command]
+pub async fn browser_add_extension(
+    app: AppHandle,
+    tab: String,
+    path: String,
+) -> Result<String, String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (app, tab, path);
+        return Err("Browser extensions are currently supported only on Windows.".into());
+    }
+
+    #[cfg(windows)]
+    {
+        let source = PathBuf::from(path)
+            .canonicalize()
+            .map_err(|error| format!("Could not open the extension folder: {error}"))?;
+        let manifest = read_extension_manifest(&source)?;
+        let name = manifest
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .ok_or("The extension manifest must have a valid name.")?;
+
+        let root = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())?
+            .join("browser-extensions");
+        std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+        let destination = root.join(extension_folder_name(&source));
+        if !destination.exists() {
+            if let Err(error) = copy_extension(&source, &destination) {
+                let _ = std::fs::remove_dir_all(&destination);
+                return Err(error);
+            }
+        }
+
+        let view = webview(&app, &tab)?;
+        let extension_path = destination.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        view.with_webview(move |platform| {
+            use webview2_com::{
+                Microsoft::Web::WebView2::Win32::{ICoreWebView2Profile7, ICoreWebView2_13},
+                ProfileAddBrowserExtensionCompletedHandler,
+            };
+            use windows::core::{Interface, HSTRING};
+
+            let result = (|| unsafe {
+                let webview = platform
+                    .controller()
+                    .CoreWebView2()
+                    .map_err(|error| error.to_string())?;
+                let profile = webview
+                    .cast::<ICoreWebView2_13>()
+                    .map_err(|error| error.to_string())?
+                    .Profile()
+                    .map_err(|error| error.to_string())?
+                    .cast::<ICoreWebView2Profile7>()
+                    .map_err(|error| error.to_string())?;
+                let path = HSTRING::from(extension_path.as_path());
+                ProfileAddBrowserExtensionCompletedHandler::wait_for_async_operation(
+                    Box::new(move |handler| {
+                        profile
+                            .AddBrowserExtension(&path, &handler)
+                            .map_err(webview2_com::Error::WindowsError)
+                    }),
+                    Box::new(|error, _extension| error),
+                )
+                .map_err(|error| error.to_string())
+            })();
+            let _ = sender.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+        receiver.await.map_err(|error| error.to_string())??;
+
+        Ok(name.to_owned())
+    }
+}
+
+#[cfg(windows)]
+fn read_extension_manifest(path: &Path) -> Result<serde_json::Value, String> {
+    let manifest_path = path.join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("Could not read manifest.json: {error}"))?;
+    let manifest: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("manifest.json is not valid JSON: {error}"))?;
+    if !manifest
+        .get("manifest_version")
+        .is_some_and(|version| matches!(version.as_u64(), Some(2 | 3)))
+    {
+        return Err("The extension must use manifest version 2 or 3.".into());
+    }
+    if manifest
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .is_none()
+    {
+        return Err("The extension manifest must include a name.".into());
+    }
+    Ok(manifest)
+}
+
+#[cfg(windows)]
+fn extension_folder_name(source: &Path) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(source.to_string_lossy().as_bytes());
+    let prefix = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("extension-{prefix}")
+}
+
+#[cfg(windows)]
+fn copy_extension(source: &Path, destination: &Path) -> Result<(), String> {
+    for entry in walkdir::WalkDir::new(source).follow_links(false) {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if entry.file_type().is_symlink() {
+            return Err("The extension folder cannot contain symbolic links.".into());
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(source)
+            .map_err(|error| error.to_string())?;
+        let target = destination.join(relative);
+        if entry.file_type().is_dir() {
+            std::fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+        } else {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            std::fs::copy(entry.path(), &target).map_err(|error| error.to_string())?;
+        }
+    }
     Ok(())
 }
 
@@ -779,8 +959,20 @@ pub fn browser_zoom(app: AppHandle, tab: String, factor: f64) -> Result<(), Stri
 /// A picture of what a tab shows now, taken by the browser engine itself (works on any page, whatever its
 /// policies), as a PNG data URL. The app shows it in place of the page while a menu is open over it.
 #[tauri::command]
-pub async fn browser_capture(app: AppHandle, tab: String) -> Result<String, String> {
+pub async fn browser_capture(
+    app: AppHandle,
+    tab: String,
+    scale: Option<f64>,
+) -> Result<String, String> {
     let view = webview(&app, &tab)?;
+    if scale.unwrap_or(1.0) > 1.0 {
+        let bytes = crate::cdp::screenshot_scaled(&view, scale.unwrap_or(1.0)).await?;
+        use base64::Engine;
+        return Ok(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ));
+    }
     let (sender, receiver) = tokio::sync::oneshot::channel::<Result<Vec<u8>, String>>();
     capture(&view, sender)?;
     let bytes = receiver

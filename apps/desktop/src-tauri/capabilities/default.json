@@ -17,6 +17,9 @@
     "notification:default",
     "allow-file-open-options",
     "allow-file-open-with",
-    "allow-file-save-as"
+    "allow-file-save-as",
+    "allow-browser-save-guide",
+    "allow-browser-save-recording",
+    "allow-browser-guide-record-reply"
   ]
 }

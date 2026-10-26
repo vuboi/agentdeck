@@ -36,7 +36,7 @@
           <ZIcon zType="lucideGripVertical" class="size-4" />
         </span>
         <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Dock back to the tools panel" title="Dock back" onclick={() => undockTool(tool)}>
-          <ZIcon zType="lucidePanelRight" class="size-4" />
+          <ZIcon zType="lucideUndo2" class="size-4" />
         </ZButton>
       </div>
       <div class="flex min-h-0 flex-1 flex-col">

@@ -370,7 +370,7 @@ export const parkBrowser = () => call('browser_park').catch(() => {});
 // Not from the Preview's own copy of the app: it would close the very pages it is shown in.
 export const resetBrowser = () => (inTauri() && !isPreviewCopy() ? call('browser_reset').catch(() => {}) : Promise.resolve());
 /** A picture of the front page taken by the engine (PNG data URL). */
-export const capturePage = () => call<string>('browser_capture', { tab: activeTab().id });
+export const capturePage = (scale = 1) => call<string>('browser_capture', { tab: activeTab().id, scale });
 export const zoomBrowser = (factor: number) => call('browser_zoom', { tab: activeTab().id, factor });
 
 export async function goTo(url: string) {
@@ -432,10 +432,10 @@ export async function captureElement(tab: string, box: PickedElement['box']): Pr
 }
 
 /** A PNG of the whole page as it is now, or undefined when it cannot be captured (or does not answer in time). */
-export async function capturePageIfPossible(): Promise<string | undefined> {
+export async function capturePageIfPossible(scale = 1): Promise<string | undefined> {
   try {
     const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 5000));
-    return await Promise.race([capturePage(), timeout]);
+    return await Promise.race([capturePage(scale), timeout]);
   } catch {
     return undefined;
   }
@@ -486,6 +486,13 @@ export function addComment(element: Pick<PickedElement, 'selector' | 'html' | 'b
 }
 
 export const openExternal = (url: string) => call('open_external', { url });
+
+/** Adds an unpacked Chrome extension to the persistent Windows Browser Preview profile. */
+export async function addBrowserExtension(tab: string): Promise<string | null> {
+  const path = await call<string | null>('browser_pick_extension');
+  if (!path) return null;
+  return call<string>('browser_add_extension', { tab, path });
+}
 
 /** A local address (a dev server) is opened in the AgentDeck browser instead of leaving the app. */
 export const isLocalUrl = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(url);

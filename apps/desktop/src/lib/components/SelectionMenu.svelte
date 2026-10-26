@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Menu from './Menu.svelte';
   import { closeOnScroll } from '../close-on-scroll';
   import { tick } from 'svelte';
   import { ZDropdownMenu } from '@shival99/z-ui-svelte';
@@ -30,9 +31,5 @@
 </script>
 
 {#key key}
-  <div class="pointer-events-none fixed z-50 size-px" style:left="{selectionMenu.x}px" style:top="{selectionMenu.y}px">
-    <ZDropdownMenu zItems={items} bind:open zPosition="bottom-left" zOffset={4} zMinWidth={200} zContentClass="p-1 text-xs">
-      <span class="block size-px"></span>
-    </ZDropdownMenu>
-  </div>
+  <Menu items={items} bind:open={open} at={{ x: selectionMenu.x, y: selectionMenu.y }} position="bottom-left" width={220} />
 {/key}

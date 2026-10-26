@@ -4,7 +4,7 @@ import { getPref, setPref } from './prefs';
 import { disposeSession, noteCommand, resumeRun, watchRuns, writeToSession, type SessionHooks, type SessionStatus } from './terminal-session';
 import { inTauri } from './history';
 
-export type TerminalTab = { id: string; name: string; status: SessionStatus };
+export type TerminalTab = { id: string; name: string; status: SessionStatus; /** The shell profile it runs (an id from `pty_shells`); none: the default. */ shell?: string };
 
 let counter = 1;
 
@@ -17,11 +17,11 @@ export const terminal = $state({
 
 // Open or closed, the tabs and the active one are kept in IndexedDB: a reload brings the terminal back as it was.
 // A shell does not survive a reload, so a tab comes back with a new one in it (older saves also had its lines).
-type SavedTerminal = { open: boolean; active: string; tabs: { id: string; name: string }[] };
+type SavedTerminal = { open: boolean; active: string; tabs: { id: string; name: string; shell?: string }[] };
 let terminalHydrated = false;
 Promise.all([getPref<SavedTerminal>('terminal.state'), getPref<boolean>('terminal.open')]).then(([saved, legacyOpen]) => {
   if (saved && Array.isArray(saved.tabs) && saved.tabs.length > 0) {
-    terminal.tabs = saved.tabs.map((tab) => ({ id: tab.id, name: tab.name, status: 'starting' as SessionStatus }));
+    terminal.tabs = saved.tabs.map((tab) => ({ id: tab.id, name: tab.name, shell: tab.shell, status: 'starting' as SessionStatus }));
     terminal.active = saved.tabs.some((tab) => tab.id === saved.active) ? saved.active : saved.tabs[0].id;
     terminal.open = saved.open === true;
     // New tabs must not take an id a restored one has.
@@ -70,7 +70,7 @@ $effect.root(() => {
     const snapshot: SavedTerminal = {
       open: terminal.open,
       active: terminal.active,
-      tabs: terminal.tabs.map((tab) => ({ id: tab.id, name: tab.name })),
+      tabs: terminal.tabs.map((tab) => ({ id: tab.id, name: tab.name, shell: tab.shell })),
     };
     if (terminalHydrated) setPref('terminal.state', snapshot);
   });
@@ -124,10 +124,37 @@ export function stopTerminalRun(id: string) {
   writeToSession(id, '\x03');
 }
 
-export function newTerminal() {
+// The shells of this machine (for the profile menu) and the one new terminals start with.
+export type ShellProfile = { id: string; name: string; path: string };
+export const shells = $state<{ list: ShellProfile[]; chosen: string | null }>({ list: [], chosen: null });
+void getPref<string>('terminal.shell').then((saved) => {
+  if (saved) shells.chosen = saved;
+});
+let shellsLoaded = false;
+/** Reads the installed shells once. */
+export async function loadShells() {
+  if (shellsLoaded || !inTauri()) return;
+  shellsLoaded = true;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    shells.list = await invoke<ShellProfile[]>('pty_shells');
+  } catch {
+    shellsLoaded = false;
+  }
+}
+/** The profile new terminals use: the one picked last when it is still installed, else the first (the default). */
+export const defaultShell = () => (shells.chosen && shells.list.some((item) => item.id === shells.chosen) ? shells.chosen : shells.list[0]?.id);
+
+/** A new terminal tab. With `shell`, that profile runs in it and becomes the one new terminals start with. */
+export function newTerminal(shell?: string) {
   counter += 1;
   const id = `term-${counter}`;
-  terminal.tabs.push({ id, name: 'shell', status: 'starting' });
+  if (shell) {
+    shells.chosen = shell;
+    setPref('terminal.shell', shell);
+  }
+  const profile = shell ?? defaultShell();
+  terminal.tabs.push({ id, name: shells.list.find((item) => item.id === profile)?.name ?? 'shell', shell: profile, status: 'starting' });
   terminal.active = id;
   terminal.open = true;
 }

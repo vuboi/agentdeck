@@ -111,15 +111,15 @@ export async function listPrefs<T>(prefix: string): Promise<[string, T][]> {
 }
 
 /** Saves a value; `null` (or `undefined`) removes the entry instead of keeping an empty one. */
-export function setPref(key: string, value: unknown): void {
+export function setPref(key: string, value: unknown): Promise<void> {
   // The Preview's copy of the app shares this storage with the real window: it must not overwrite what that one saved.
-  if (isPreviewCopy()) return;
+  if (isPreviewCopy()) return Promise.resolve();
   // Callers pass plain objects of primitives, so structuredClone gives IndexedDB a copy it can store.
   const done =
     value == null
       ? run<undefined>(key, 'readwrite', (store) => store.delete(key))
       : run<IDBValidKey>(key, 'readwrite', (store) => store.put(structuredClone(value), key));
-  done.catch(() => {
+  return done.then(() => undefined).catch(() => {
     // Persisting is best-effort.
   });
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Menu from './Menu.svelte';
   import { closeOnScroll } from '../close-on-scroll';
   import { customProviderName } from '../models.svelte';
   import { tick, untrack } from 'svelte';
@@ -11,7 +12,7 @@
   import SearchPalette from './SearchPalette.svelte';
   import DockZone from './DockZone.svelte';
   import Splitter from './Splitter.svelte';
-  import { layout, setSidebarCollapsed, sidebarTree } from '../layout.svelte';
+  import { layout, pinSidebar, setSidebarCollapsed, sidebarTree } from '../layout.svelte';
   import { getPref, setPref } from '../prefs';
   import { appInfo, checkForUpdate, FAKE_UPDATE, installUpdate, startUpdateChecks, updater, useFakeUpdate } from '../updater.svelte';
   import Markdown from './Markdown.svelte';
@@ -664,7 +665,7 @@
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 pl-3" data-tauri-drag-region>
     <Logo class="size-5" />
     <span class="text-xs font-semibold" data-tauri-drag-region>AgentDeck</span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-7! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : layout.sidebarCollapsed && layout.sidebarDrawer ? ((layout.sidebarDrawer = false), setSidebarCollapsed(false)) : setSidebarCollapsed(true))}>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-7! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : layout.sidebarCollapsed && layout.sidebarDrawer ? pinSidebar() : setSidebarCollapsed(true))}>
       <ZIcon zType={'lucidePanelLeft' as ZIconName} class="size-3.5" />
     </ZButton>
   </div>
@@ -838,11 +839,7 @@
   <!-- One shared menu, anchored to a 1px box at the click (or at the three dots). -->
   {#if menu}
     {#key menuKey}
-    <div class="pointer-events-none fixed z-50 size-px" style:left="{menu.x}px" style:top="{menu.y}px">
-      <ZDropdownMenu zItems={menuItems} bind:open={menuOpen} zPosition={menu.align} zOffset={4} zMinWidth={160} zContentClass="p-1 text-xs">
-        <span class="block size-px"></span>
-      </ZDropdownMenu>
-    </div>
+    <Menu items={menuItems} bind:open={menuOpen} at={{ x: menu.x, y: menu.y }} position={menu.align} width={220} />
     {/key}
   {/if}
 </aside>

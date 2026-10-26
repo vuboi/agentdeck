@@ -122,7 +122,7 @@
     <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Reload the list" title="Reload the list" onclick={() => void loadMcp()}>
       <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5 {mcp.loading ? 'animate-spin' : ''}" />
     </ZButton>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1 px-2 text-xs {adding ? 'bg-primary/10 text-primary' : ''}" aria-expanded={adding} onclick={() => (adding = !adding)}>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1 px-2 text-xs {adding ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : ''}" aria-expanded={adding} onclick={() => (adding = !adding)}>
       <ZIcon zType={icon('lucidePlus')} class="size-3.5" /> Add
     </ZButton>
   </div>
@@ -321,30 +321,30 @@
     </div>
     <label class="flex flex-col gap-1 text-[11px]">
       {@render caption("Name")}
-      <ZInput zSize="sm" bind:value={form.name} zPlaceholder="github" />
+      <ZInput bind:value={form.name} zPlaceholder="github" />
     </label>
     {#if form.transport === 'stdio'}
       <label class="flex flex-col gap-1 text-[11px]">
         {@render caption("Command")}
-        <ZInput zSize="sm" bind:value={form.target} zPlaceholder="npx" />
+        <ZInput bind:value={form.target} zPlaceholder="npx" />
       </label>
       <label class="flex flex-col gap-1 text-[11px]">
         {@render caption("Arguments")}
-        <ZInput zSize="sm" bind:value={form.args} zPlaceholder="-y @modelcontextprotocol/server-github" />
+        <ZInput bind:value={form.args} zPlaceholder="-y @modelcontextprotocol/server-github" />
       </label>
     {:else}
       <label class="flex flex-col gap-1 text-[11px]">
         {@render caption("Address")}
-        <ZInput zSize="sm" bind:value={form.target} zPlaceholder="https://example.com/mcp" />
+        <ZInput bind:value={form.target} zPlaceholder="https://example.com/mcp" />
       </label>
       <label class="flex flex-col gap-1 text-[11px]">
         {@render caption("Headers", "Name: value, one per line")}
-        <ZInput zSize="sm" bind:value={form.headers} zType="textarea" zPlaceholder="Authorization: Bearer …" />
+        <ZInput bind:value={form.headers} zType="textarea" zPlaceholder="Authorization: Bearer …" />
       </label>
     {/if}
     <label class="flex flex-col gap-1 text-[11px]">
       {@render caption("Environment", "KEY=value, one per line")}
-      <ZInput zSize="sm" bind:value={form.env} zType="textarea" zPlaceholder="GITHUB_TOKEN=…" />
+      <ZInput bind:value={form.env} zType="textarea" zPlaceholder="GITHUB_TOKEN=…" />
     </label>
     <ZDivider zAlign="center" class="my-0">
       <span class="inline-flex items-center gap-1.5 text-[10px] leading-none font-semibold tracking-wider text-muted-foreground uppercase">
@@ -352,9 +352,9 @@
         <span class="leading-none">Use with agents</span>
       </span>
     </ZDivider>
-    <fieldset class="m-0 flex flex-col gap-1.5 border-0 p-0" aria-label="Agents">
+    <fieldset class="m-0 flex flex-col gap-2 border-0 p-0" aria-label="Agents">
       {#each Object.keys(form.agents) as agent (agent)}
-        <div class="flex items-center gap-2 text-xs">
+        <div class="flex min-h-9 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs">
           {#if agent === 'codex'}
             <ZIcon zSvg={OPENAI_SVG} class="size-4 shrink-0 text-foreground" />
           {:else}

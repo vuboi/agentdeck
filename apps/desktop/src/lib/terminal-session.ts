@@ -29,7 +29,11 @@ type Live = {
   fit: FitAddon;
   search: SearchAddon;
   cwd?: string;
+  /** The shell profile this tab asked for (an id from `pty_shells`); none: the default shell. */
+  shell?: string;
   hooks: SessionHooks;
+  /** The buffer line each Enter was pressed on, newest last: where the output of the last commands starts. */
+  marks: number[];
   exited: boolean;
   /** The foreground command being watched (see `evaluate`), the address it printed, and the timer of the next look. */
   run?: { runId: number; command: string; cwd?: string; startedAt: number; line: number };
@@ -323,7 +327,9 @@ async function begin(id: string, session: Live) {
   session.hooks.status('starting');
   try {
     let name: string | null = null;
-    if (!(await adopt(id, session))) name = await call<string>('pty_open', { id, cwd: session.cwd ?? null, cols: session.term.cols, rows: session.term.rows });
+    if (!(await adopt(id, session))) {
+      name = await call<string>('pty_open', { id, cwd: session.cwd ?? null, cols: session.term.cols, rows: session.term.rows, shell: session.shell ?? null });
+    }
     if (name !== null) session.hooks.title(name);
     session.up = true;
     session.hooks.status('running');
@@ -366,7 +372,7 @@ function create(id: string, cwd: string | undefined, hooks: SessionHooks): Live 
       void call('open_external', { url: uri }).catch(() => {});
     }),
   );
-  const session: Live = { term, fit, search, cwd, hooks, exited: false, url: null, timer: 0, replaying: false, held: [], up: false, fitFrame: 0, watchers: new Set(), pushTimer: 0, reportScroll: () => {} };
+  const session: Live = { term, fit, search, cwd, hooks, marks: [], exited: false, url: null, timer: 0, replaying: false, held: [], up: false, fitFrame: 0, watchers: new Set(), pushTimer: 0, reportScroll: () => {} };
 
   term.onData((data) => {
     if (session.replaying) return;
@@ -375,6 +381,11 @@ function create(id: string, cwd: string | undefined, hooks: SessionHooks): Live 
       return;
     }
     if (data.includes('\r')) {
+      const active = term.buffer.active;
+      if (active.type !== 'alternate') {
+        session.marks.push(active.baseY + active.cursorY);
+        if (session.marks.length > 20) session.marks.shift();
+      }
       // Enter: the cursor line still holds the prompt and what was typed after it.
       const line = cursorLine(term);
       const match = line === null ? null : PROMPT.exec(line);
@@ -461,7 +472,7 @@ function settled(container: HTMLElement) {
 }
 
 /** Shows the terminal of tab `id` in `container`, starting its shell the first time. */
-export function attachSession(id: string, container: HTMLElement, cwd: string | undefined, hooks: SessionHooks) {
+export function attachSession(id: string, container: HTMLElement, cwd: string | undefined, hooks: SessionHooks, shell?: string) {
   if (!terminalAvailable()) return;
   watchTheme();
   void listenToShells();
@@ -481,6 +492,7 @@ export function attachSession(id: string, container: HTMLElement, cwd: string | 
     return;
   }
   const session = create(id, cwd, hooks);
+  session.shell = shell;
   session.term.open(container);
   try {
     const gl = new WebglAddon();
@@ -489,7 +501,9 @@ export function attachSession(id: string, container: HTMLElement, cwd: string | 
   } catch {
     // No WebGL: the canvas-less DOM renderer stays.
   }
-  // The shell starts at the size of the box once it has settled, not at the size of a panel that is still opening.
+  // The shell starts at the size of the box once it has settled, not at the size of a panel that is still opening: a
+  // shell that draws its prompt with cursor queries (Nushell) was born at one size and resized a moment later, and
+  // left a blank gap above its first line. The wait is the panel's slide (about a quarter of a second).
   session.ready = settled(container).then(() => {
     if (live.get(id) !== session) return;
     if (container.isConnected) fitNow(session);
@@ -577,6 +591,37 @@ export function sessionTail(id: string, lines: number): string | null {
   }
   while (out.length > 0 && !out[out.length - 1].trim()) out.pop();
   return (first > 0 ? '(Earlier output not shown)\n' : '') + out.join('\n');
+}
+
+/** The most text taken from a tab's buffer to attach to a chat. */
+const ATTACH_MAX = 200_000;
+
+/**
+ * The last command of a tab with what it printed, as plain text: from the line it was typed on to the prompt that came back
+ * (while it still runs: to the end). Enters on an empty prompt are passed over. Null when nothing was run yet.
+ */
+export function lastCommandOutput(id: string): string | null {
+  const session = live.get(id);
+  if (!session) return null;
+  const buffer = session.term.buffer.active;
+  const cursor = buffer.baseY + buffer.cursorY;
+  const read = (from: number, to: number) => {
+    const out: string[] = [];
+    for (let y = Math.max(0, from); y < Math.min(to, buffer.length); y++) {
+      const line = buffer.getLine(y);
+      if (!line) continue;
+      const text = line.translateToString(true);
+      if (line.isWrapped && out.length > 0) out[out.length - 1] += text;
+      else out.push(text);
+    }
+    return out.join('\n').trimEnd();
+  };
+  for (let index = session.marks.length - 1; index >= 0; index--) {
+    // The cursor row holds the prompt that came back (unless the command is still running).
+    const text = read(session.marks[index], session.run ? cursor + 1 : cursor);
+    if (text.split('\n').filter((line) => line.trim()).length > 1) return text.length > ATTACH_MAX ? text.slice(-ATTACH_MAX) : text;
+  }
+  return null;
 }
 
 /** How soon after output arrives the watchers are told (several chunks in that time are one push). */

@@ -4,7 +4,7 @@
 // A block is "streaming" while the CLI is still writing it: only the last thinking or response block can be.
 // Starting any other block, or ending the turn, closes it. A command stays "running" until the turn ends.
 
-import type { Block } from './mock';
+import type { Block, Message } from './mock';
 import type { AgentEvent } from './agent';
 
 export type ReplyUpdate = {
@@ -69,6 +69,13 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
       }
       return { blocks, finished: false };
     }
+    case 'tool_output_delta': {
+      const call = blocks.find((block) => block.kind === 'command' && block.id === event.id);
+      if (call?.kind === 'command') {
+        call.output = `${call.output}${event.delta}`.slice(-6000);
+      }
+      return { blocks, finished: false };
+    }
     case 'permission_denied':
       close(blocks, false);
       blocks.push({ kind: 'permission', requests: event.requests, state: 'pending' });
@@ -91,4 +98,18 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
       // Only for the Audit log: the chat shows nothing of it.
       return { blocks: current, finished: false };
   }
+}
+
+/** Counts a `usage` event on the reply: a new model call adds its input, the output grows to the call's latest total. */
+export function addUsage(reply: Message, event: Extract<AgentEvent, { kind: 'usage' }>) {
+  reply.tokens ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const tokens = reply.tokens;
+  if (event.new_call) {
+    tokens.input += event.input_tokens;
+    tokens.cacheRead += event.cache_read_tokens;
+    tokens.cacheWrite += event.cache_write_tokens;
+    reply.callOutput = 0;
+  }
+  tokens.output += Math.max(0, event.output_tokens - (reply.callOutput ?? 0));
+  reply.callOutput = event.output_tokens;
 }

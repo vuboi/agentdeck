@@ -12,7 +12,9 @@
   import { openExternal } from '../browser.svelte';
   import {
     addAccount,
+    cancelAccountAdd,
     allowSystemNotifications,
+    cancelLogin,
     connectors,
     consumeCodexResetCredit,
     install,
@@ -23,7 +25,6 @@
     providerName,
     refreshAccounts,
     refreshAgyQuota,
-    refreshAgyAccounts,
     retrySaveAgyAccount,
     switchAgyAccount,
     refreshAll,
@@ -461,6 +462,10 @@
                         <ZButton zWave={false} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={Boolean(working)} onclick={() => void install(card.id, card.label)}>
                           <ZIcon zType={icon(working ? 'lucideLoaderCircle' : 'lucideDownload')} class="size-3.5 {working ? 'animate-spin' : ''}" /> Install
                         </ZButton>
+                      {:else if path && connectors.busy[`login:${card.id}`]}
+                        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs" onclick={() => void cancelLogin(card.id)}>
+                          Cancel
+                        </ZButton>
                       {:else if path && (card.id !== 'agy' || info?.logged_in !== true)}
                         <ZButton zWave={false} zType={info?.logged_in || card.id === 'agy' ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={Boolean(working)} onclick={() => void login(card.id, card.label)}>
                           <ZIcon zType={icon(connectors.busy[`login:${card.id}`] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy[`login:${card.id}`] ? 'animate-spin' : ''}" />
@@ -488,9 +493,11 @@
                       <div class="mb-2 flex items-center gap-2">
                         <h4 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Antigravity accounts</h4>
                         <span class="ml-auto"></span>
-                        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0" title="Refresh Antigravity accounts" disabled={Boolean(connectors.busy['accounts:agy'])} onclick={() => void refreshAgyAccounts()}>
-                          <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5" />
-                        </ZButton>
+                        {#if connectors.errors['login:agy'] && info?.logged_in && info.email}
+                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2.5 text-xs" disabled={Boolean(connectors.busy['save:agy'])} onclick={() => void retrySaveAgyAccount()}>
+                            {connectors.busy['save:agy'] ? 'Saving…' : 'Retry save'}
+                          </ZButton>
+                        {/if}
                         {#if info?.logged_in === true}
                           <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={!path || Boolean(connectors.busy['login:agy'])} title="Open Antigravity to sign in with another Google account" onclick={() => void login('agy', card.label)}>
                             <ZIcon zType={icon(connectors.busy['login:agy'] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy['login:agy'] ? 'animate-spin' : ''}" /> Sign in another account
@@ -518,14 +525,9 @@
                           {/each}
                         </ul>
                       {/if}
-                      {#if connectors.errors['accounts:agy'] || connectors.errors['login:agy'] || connectors.errors['switch:agy']}
+                      {#if connectors.errors['accounts:agy'] || connectors.errors['switch:agy']}
                         <div class="mb-3 flex items-center gap-2 text-xs text-destructive" role="alert">
-                          <p class="min-w-0 flex-1">{connectors.errors['accounts:agy'] ?? connectors.errors['login:agy'] ?? connectors.errors['switch:agy']}</p>
-                          {#if connectors.errors['login:agy'] && info?.logged_in && info.email}
-                            <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2.5 text-xs" disabled={Boolean(connectors.busy['save:agy'])} onclick={() => void retrySaveAgyAccount()}>
-                              {connectors.busy['save:agy'] ? 'Saving…' : 'Retry save'}
-                            </ZButton>
-                          {/if}
+                          <p class="min-w-0 flex-1">{connectors.errors['accounts:agy'] ?? connectors.errors['switch:agy'] ?? ''}</p>
                         </div>
                       {/if}
                       <h4 class="mt-4 mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
@@ -585,12 +587,9 @@
                         {/if}
                         <span class="ml-auto"></span>
                         {#if managerInstalled}
-                          <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1.5 px-2 text-xs" disabled={Boolean(busyOf(`accounts:${provider}`))} title="Reload usage figures" onclick={() => void refreshAccounts(provider, true)}>
-                            <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5 {connectors.busy[`accounts:${provider}`] ? 'animate-spin' : ''}" />
-                          </ZButton>
-                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={Boolean(busyOf(`add:${provider}`))} onclick={() => void addAccount(provider, card.label)}>
-                            <ZIcon zType={icon(busyOf(`add:${provider}`) ? 'lucideLoaderCircle' : 'lucideUserPlus')} class="size-3.5 {busyOf(`add:${provider}`) ? 'animate-spin' : ''}" />
-                            {busyOf(`add:${provider}`) ? 'Adding…' : 'Add account'}
+                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" onclick={() => busyOf(`add:${provider}`) ? void cancelAccountAdd(provider) : void addAccount(provider, card.label)}>
+                            <ZIcon zType={icon(busyOf(`add:${provider}`) ? 'lucideX' : 'lucideUserPlus')} class="size-3.5" />
+                            {busyOf(`add:${provider}`) ? 'Cancel' : 'Add account'}
                           </ZButton>
                         {/if}
                       </div>

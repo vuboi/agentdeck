@@ -59,9 +59,3 @@ export function changeLines(rows: DiffRow[]): { added: Set<number>; modified: Se
   flush();
   return { added, modified, removed };
 }
-
-export function relativeTo(root: string, path: string): string {
-  const clean = (text: string) => text.replace(/\\/g, '/').replace(/\/+$/, '');
-  const [r, p] = [clean(root), clean(path)];
-  return p.toLowerCase().startsWith(r.toLowerCase() + '/') ? p.slice(r.length + 1) : p;
-}

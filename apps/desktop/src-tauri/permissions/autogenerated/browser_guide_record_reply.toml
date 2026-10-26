@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-guide-record-reply"
+description = "Enables the browser_guide_record_reply command without any pre-configured scope."
+commands.allow = ["browser_guide_record_reply"]
+
+[[permission]]
+identifier = "deny-browser-guide-record-reply"
+description = "Denies the browser_guide_record_reply command without any pre-configured scope."
+commands.deny = ["browser_guide_record_reply"]

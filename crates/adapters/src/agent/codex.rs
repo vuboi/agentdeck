@@ -21,9 +21,27 @@ const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app with 
 struct Turn {
     thread: Option<String>,
     started: HashSet<String>,
+    /// What each running command has printed so far: Codex reports the whole output every time.
+    command_output: std::collections::HashMap<String, String>,
     last_was_text: bool,
     /// Folder the turn runs in: a changed file is read from here.
     cwd: Option<PathBuf>,
+}
+
+impl Turn {
+    /// The part of a command's `output` not sent yet, as a [`AgentEvent::ToolOutputDelta`].
+    fn output_delta(&mut self, id: &str, output: &str) -> Option<AgentEvent> {
+        let previous = self.command_output.entry(id.to_owned()).or_default();
+        let delta = output
+            .strip_prefix(previous.as_str())
+            .filter(|delta| !delta.is_empty())
+            .map(|delta| AgentEvent::ToolOutputDelta {
+                id: id.to_owned(),
+                delta: delta.to_owned(),
+            });
+        *previous = output.to_owned();
+        delta
+    }
 }
 
 #[derive(Default)]
@@ -266,6 +284,7 @@ impl Provider for Codex {
             ("thread.started", _) => turn.thread = value["thread_id"].as_str().map(str::to_owned),
             ("item.started", "command_execution") => {
                 turn.started.insert(id.clone());
+                turn.command_output.insert(id.clone(), String::new());
                 turn.last_was_text = false;
                 events.push(AgentEvent::ToolCall {
                     id,
@@ -274,6 +293,10 @@ impl Provider for Codex {
                     change: None,
                     background: false,
                 });
+            }
+            ("item.updated", "command_execution") => {
+                let output = item["aggregated_output"].as_str().unwrap_or_default();
+                events.extend(turn.output_delta(&id, output));
             }
             ("item.completed", "command_execution") => {
                 if turn.started.insert(id.clone()) {
@@ -287,12 +310,12 @@ impl Provider for Codex {
                 }
                 let failed = item["exit_code"].as_i64().is_some_and(|code| code != 0)
                     || item["status"] == "failed";
+                // The result carries the whole output, so no last delta is sent: the streamed copy is dropped.
+                let output = item["aggregated_output"].as_str().unwrap_or_default();
+                turn.command_output.remove(&id);
                 events.push(AgentEvent::ToolResult {
                     id,
-                    output: item["aggregated_output"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
+                    output: output.to_string(),
                     is_error: failed,
                     image: None,
                 });

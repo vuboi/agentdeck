@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-add-extension"
+description = "Enables the browser_add_extension command without any pre-configured scope."
+commands.allow = ["browser_add_extension"]
+
+[[permission]]
+identifier = "deny-browser-add-extension"
+description = "Denies the browser_add_extension command without any pre-configured scope."
+commands.deny = ["browser_add_extension"]

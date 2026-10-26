@@ -1,15 +1,16 @@
 <script lang="ts">
+  import Menu from './Menu.svelte';
   import { closeOnScroll } from '../close-on-scroll';
   import { tick } from 'svelte';
   import { ZDropdownMenu, zModalService } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
   import { linkMenu, openExternal, openInPreview } from '../browser.svelte';
-  import { openFileTab } from '../content-tabs.svelte';
+  import { openInViewer } from '../file-viewer.svelte';
   import { fileWrites } from '../activity.svelte';
   import { toast } from '../toast';
+  import { openWithItem, openWithOptions as getOpenWithOptions, type OpenWithOption } from '../open-with';
 
-  type FileOpenOption = { id: string; label: string };
-  let openWithOptions = $state<FileOpenOption[]>([]);
+  let openWithOptions = $state<OpenWithOption[]>([]);
 
   // The right-click menu of any link in an answer: a web address (where to open it, or copy it), or a file of the
   // project (open it, copy its path, or delete it to the trash).
@@ -27,8 +28,7 @@
     void (async () => {
       if (file) {
         try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          openWithOptions = await invoke<FileOpenOption[]>('file_open_options', { path: file });
+          openWithOptions = await getOpenWithOptions(file);
         } catch (error) {
           toast.error(String(error));
         }
@@ -37,17 +37,6 @@
       open = true;
     })();
   });
-
-  function openWith(appId: string) {
-    void (async () => {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('file_open_with', { path: linkMenu.file, appId });
-      } catch (error) {
-        toast.error(String(error));
-      }
-    })();
-  }
 
   async function saveAs() {
     try {
@@ -96,8 +85,8 @@
   }
 
   const fileItems = $derived<ZDropdownMenuItem[]>([
-    { label: 'Open file', icon: 'lucideFile', iconSize: '12', class: 'text-xs! py-1', onClick: () => openFileTab(linkMenu.file, linkMenu.root) },
-    { label: 'Open with', icon: 'lucideExternalLink', iconSize: '12', class: 'text-xs! py-1', submenu: openWithOptions.map((option) => ({ label: option.label, class: 'text-xs! py-1', onClick: () => openWith(option.id) })) },
+    { label: 'Open file', icon: 'lucideFile', iconSize: '12', class: 'text-xs! py-1', onClick: () => openInViewer(linkMenu.file, linkMenu.root) },
+    ...openWithItem(linkMenu.file, openWithOptions),
     { label: 'Save as…', icon: 'lucideDownload', iconSize: '12', class: 'text-xs! py-1', onClick: () => void saveAs() },
     { label: 'Copy file contents', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => void copyContents() },
     {
@@ -142,9 +131,5 @@
 </script>
 
 {#key key}
-  <div class="pointer-events-none fixed z-50 size-px" style:left="{linkMenu.x}px" style:top="{linkMenu.y}px">
-    <ZDropdownMenu zItems={linkMenu.file ? fileItems : webItems} bind:open zPosition="bottom-left" zOffset={4} zMinWidth={200} zContentClass="p-1 text-xs">
-      <span class="block size-px"></span>
-    </ZDropdownMenu>
-  </div>
+  <Menu items={linkMenu.file ? fileItems : webItems} bind:open={open} at={{ x: linkMenu.x, y: linkMenu.y }} position="bottom-left" width={220} />
 {/key}

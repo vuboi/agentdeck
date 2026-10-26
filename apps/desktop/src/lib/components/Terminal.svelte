@@ -1,16 +1,94 @@
 <script lang="ts">
+  import Menu from './Menu.svelte';
   import { closeOnScroll } from '../close-on-scroll';
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { ZButton, ZDropdownMenu, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDropdownMenu, ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
-  import { terminal, newTerminal, closeTerminal, toggleTerminal } from '../terminal.svelte';
+  import { terminal, newTerminal, closeTerminal, toggleTerminal, shells, loadShells, defaultShell } from '../terminal.svelte';
+  import PickerPopover, { type PickerItem } from './PickerPopover.svelte';
+  import { TRIGGER_ON } from '../popover';
   import { activeSession, projectOf } from '../sessions.svelte';
-  import { attachSession, clearSession, copySelection, findInSession, fitSession, focusSession, hasSelection, pasteInto, scrollSession, selectAllIn, terminalAvailable, type SessionHooks } from '../terminal-session';
+  import { saveFileAttachment } from '../agent';
+  import { toast } from '../toast';
+  import { activeSession as openChat, draftFiles } from '../sessions.svelte';
+  import { lastCommandOutput, attachSession, clearSession, copySelection, findInSession, fitSession, focusSession, hasSelection, pasteInto, scrollSession, selectAllIn, terminalAvailable, type SessionHooks } from '../terminal-session';
+
+  // The profile menu: the shells installed here, the one new terminals start with ticked.
+  let shellAnchor = $state<HTMLElement | null>(null);
+  let shellOpen = $state(false);
+  $effect(() => {
+    if (terminal.open) void loadShells();
+  });
+  const shellItems = $derived<PickerItem<string>[]>(
+    shells.list.map((item) => ({ id: item.id, label: item.name, hint: item.id === defaultShell() ? 'default' : undefined, icon: (item.id === defaultShell() ? 'lucideCheck' : 'lucideSquareTerminal') as ZIconName, data: item.id })),
+  );
+  function pickShell(item: PickerItem<string>) {
+    shellOpen = false;
+    newTerminal(item.data);
+  }
+
+  /** The last command and what it printed goes to the open chat as a file attachment (the agent reads it with its tools). */
+  async function attachLastOutput() {
+    const text = lastCommandOutput(terminal.active);
+    if (!text) return void toast.info('Nothing to attach yet: run a command first');
+    const chat = openChat();
+    if (!chat) return void toast.info('Open a chat to attach it to');
+    try {
+      const bytes = new TextEncoder().encode(text);
+      let binary = '';
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const path = await saveFileAttachment(`terminal-${stamp}.log`, btoa(binary));
+      draftFiles[chat.id] = [...(draftFiles[chat.id] ?? []), { id: crypto.randomUUID(), name: 'terminal-output.log', path, size: bytes.length }];
+      toast.success('Last command and its output added to the message');
+    } catch (failure) {
+      toast.error(`Could not attach the output: ${String(failure)}`);
+    }
+  }
+
+  // The row of buttons folds into a menu when it is short.
+  let headWidth = $state(0);
+  const compact = $derived(headWidth > 0 && headWidth < 460);
+  let toolsAnchor = $state<HTMLElement | null>(null);
+  let toolsOpen = $state(false);
+  const toolsItems = $derived<PickerItem<string>[]>([
+    { id: 'new', label: 'New terminal', hint: 'Ctrl+Shift+`', icon: 'lucidePlus' as ZIconName, group: 'Terminal', data: 'new' },
+    ...(terminalAvailable()
+      ? [
+          { id: 'find', label: 'Find', hint: 'Ctrl+F', icon: 'lucideSearch' as ZIconName, group: 'Terminal', data: 'find' },
+          { id: 'attach', label: 'Attach last output to chat', icon: 'lucidePaperclip' as ZIconName, group: 'Terminal', data: 'attach' },
+          { id: 'clear', label: 'Clear', icon: 'lucideBan' as ZIconName, group: 'Terminal', data: 'clear' },
+        ]
+      : []),
+    ...(shells.list.length > 1 ? shells.list.map((item) => ({ id: `shell:${item.id}`, label: item.name, hint: item.id === defaultShell() ? 'default' : undefined, icon: 'lucideSquareTerminal' as ZIconName, group: 'New terminal with', data: `shell:${item.id}` })) : []),
+  ]);
+  function pickTools(item: PickerItem<string>) {
+    toolsOpen = false;
+    if (item.data === 'new') newTerminal();
+    else if (item.data === 'find') openFind();
+    else if (item.data === 'attach') void attachLastOutput();
+    else if (item.data === 'clear') {
+      clearSession(terminal.active);
+      focusSession(terminal.active);
+    } else if (item.data.startsWith('shell:')) newTerminal(item.data.slice(6));
+  }
 
   let searching = $state(false);
   let query = $state('');
   let finder: HTMLInputElement | undefined = $state();
+  let findButton = $state<HTMLElement | null>(null);
+  // The box is ready to type in as soon as the popover is up.
+  $effect(() => {
+    if (!searching) return;
+    const focus = () => finder?.focus({ preventScroll: true });
+    const frame = requestAnimationFrame(focus);
+    const late = setTimeout(focus, 60);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(late);
+    };
+  });
 
   /** The folder of the open chat's project: a new shell starts there. */
   const folder = () => {
@@ -56,7 +134,7 @@
 
   /** Puts a tab's terminal into its box, keeps it fitted to it, and gives it the keyboard when it is the open one. */
   function mount(element: HTMLElement, id: string) {
-    attachSession(id, element, folder(), hooksOf(id));
+    attachSession(id, element, folder(), hooksOf(id), terminal.tabs.find((item) => item.id === id)?.shell);
     let frame = 0;
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame);
@@ -141,7 +219,7 @@
     transition:slide={{ duration: 260, easing: cubicOut }}
     aria-label="Terminal"
   >
-    <div class="flex h-9 shrink-0 items-center gap-1 px-2">
+    <div class="flex h-9 shrink-0 items-center gap-1 px-2" bind:clientWidth={headWidth}>
       <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Terminals">
         {#each terminal.tabs as tab (tab.id)}
           <ZButton zWave={false}
@@ -149,7 +227,7 @@
             aria-selected={tab.id === terminal.active}
             zType="ghost"
             zSize="sm"
-            class="h-7 gap-1.5 px-2 text-xs {tab.id === terminal.active ? 'bg-primary/15 text-primary hover:bg-primary/20' : 'hover:bg-primary/10 hover:text-primary'}"
+            class="h-7 gap-1.5 px-2 text-xs {tab.id === terminal.active ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : 'hover:bg-primary/10 hover:text-primary'}"
             onclick={() => (terminal.active = tab.id)}
           >
             <ZIcon zType="lucideSquareTerminal" class="size-3.5" />
@@ -166,19 +244,35 @@
           </ZButton>
         {/each}
       </div>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class={iconButton} aria-label="New terminal" {@attach zTooltip({ content: 'New terminal (Ctrl+Shift+`)', position: 'top' })} onclick={newTerminal}>
-        <ZIcon zType="lucidePlus" class="size-4" />
-      </ZButton>
-      {#if terminalAvailable()}
-        <ZButton zWave={false} zType="ghost" zSize="sm" class={iconButton} aria-label="Find" {@attach zTooltip({ content: 'Find (Ctrl+F)', position: 'top' })} onclick={openFind}>
-          <ZIcon zType="lucideSearch" class="size-4" />
+      {#if compact}
+        <!-- Short row: the actions go into one menu (the same list as everywhere, icon and text). -->
+        <ZButton bind:ref={toolsAnchor} zWave={false} zType="ghost" zSize="sm" class="{iconButton} {toolsOpen ? TRIGGER_ON : ''}" aria-label="Terminal menu" aria-haspopup="listbox" aria-expanded={toolsOpen} onclick={() => (toolsOpen = !toolsOpen)}>
+          <ZIcon zType={'lucideMenu' as ZIconName} class="size-4" />
         </ZButton>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class={iconButton} aria-label="Clear" {@attach zTooltip({ content: 'Clear', position: 'top' })} onclick={() => { clearSession(terminal.active); focusSession(terminal.active); }}>
-          <ZIcon zType={'lucideBan' as ZIconName} class="size-4" />
+      {:else}
+        <ZButton zWave={false} zType="ghost" zSize="sm" class={iconButton} aria-label="New terminal" {@attach zTooltip({ content: 'New terminal (Ctrl+Shift+`)', position: 'top' })} onclick={() => newTerminal()}>
+          <ZIcon zType="lucidePlus" class="size-4" />
         </ZButton>
+        {#if shells.list.length > 1}
+          <!-- The shell new terminals start with, and a list of the others installed here (PowerShell, Git Bash, WSL, …). -->
+          <ZButton bind:ref={shellAnchor} zWave={false} zType="ghost" zSize="sm" class="{iconButton} {shellOpen ? TRIGGER_ON : ''}" aria-label="Choose a shell" aria-haspopup="listbox" aria-expanded={shellOpen} {@attach zTooltip({ content: 'Choose a shell', position: 'top' })} onclick={() => (shellOpen = !shellOpen)}>
+            <ZIcon zType={'lucideChevronsUpDown' as ZIconName} class="size-4" />
+          </ZButton>
+        {/if}
+        {#if terminalAvailable()}
+          <ZButton bind:ref={findButton} zWave={false} zType="ghost" zSize="sm" class="{iconButton} {searching ? TRIGGER_ON : ''}" aria-label="Find" aria-expanded={searching} {@attach zTooltip({ content: 'Find (Ctrl+F)', position: 'top' })} onclick={() => (searching ? closeFind() : openFind())}>
+            <ZIcon zType="lucideSearch" class="size-4" />
+          </ZButton>
+          <ZButton zWave={false} zType="ghost" zSize="sm" class={iconButton} aria-label="Attach the last command's output to the chat" {@attach zTooltip({ content: "Attach the last command's output to the chat", position: 'top' })} onclick={() => void attachLastOutput()}>
+            <ZIcon zType={'lucidePaperclip' as ZIconName} class="size-4" />
+          </ZButton>
+          <ZButton zWave={false} zType="ghost" zSize="sm" class={iconButton} aria-label="Clear" {@attach zTooltip({ content: 'Clear', position: 'top' })} onclick={() => { clearSession(terminal.active); focusSession(terminal.active); }}>
+            <ZIcon zType={'lucideBan' as ZIconName} class="size-4" />
+          </ZButton>
+        {/if}
       {/if}
       <ZButton zWave={false} zType="ghost" zSize="sm" class={iconButton} aria-label="Hide terminal" {@attach zTooltip({ content: 'Hide (Ctrl+`)', position: 'top' })} onclick={toggleTerminal}>
-        <ZIcon zType="lucideChevronDown" class="size-4" />
+        <ZIcon zType="lucideX" class="size-4" />
       </ZButton>
     </div>
 
@@ -186,30 +280,6 @@
       <div class="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-xs text-muted-foreground">The terminal runs in the desktop app.</div>
     {:else}
       <div class="relative min-h-0 flex-1">
-        {#if searching}
-          <div class="absolute top-1 right-4 z-10 flex items-center gap-1 rounded-md border border-border bg-popover p-1 shadow-md">
-            <input
-              bind:this={finder}
-              bind:value={query}
-              aria-label="Find in terminal"
-              placeholder="Find"
-              class="h-6 w-44 rounded bg-transparent px-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
-              autocomplete="off"
-              spellcheck="false"
-              oninput={() => findInSession(terminal.active, query)}
-              onkeydown={findKey}
-            />
-            <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Previous match" onclick={() => findInSession(terminal.active, query, true)}>
-              <ZIcon zType={'lucideChevronUp' as ZIconName} class="size-3.5" />
-            </button>
-            <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Next match" onclick={() => findInSession(terminal.active, query)}>
-              <ZIcon zType="lucideChevronDown" class="size-3.5" />
-            </button>
-            <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Close find" onclick={closeFind}>
-              <ZIcon zType="lucideX" class="size-3.5" />
-            </button>
-          </div>
-        {/if}
         {#each terminal.tabs as tab (tab.id)}
           <!-- Every tab keeps its box (a hidden one has no size), so its shell and scrollback stay. -->
           <div
@@ -236,10 +306,39 @@
 
 {#if menu}
   {#key menuKey}
-    <div class="pointer-events-none fixed z-50 size-px" style:left="{menu.x}px" style:top="{menu.y}px">
-      <ZDropdownMenu zItems={menuItems} bind:open={menuOpen} zPosition="bottom-left" zOffset={4} zMinWidth={190} zContentClass="p-1 text-xs">
-        <span class="block size-px"></span>
-      </ZDropdownMenu>
-    </div>
+    <Menu items={menuItems} bind:open={menuOpen} at={{ x: menu.x, y: menu.y }} position="bottom-left" width={220} />
   {/key}
 {/if}
+
+<PickerPopover anchor={shellAnchor} bind:open={shellOpen} items={shellItems} label="Shells" position="top-right" size="sm" width={200} onpick={pickShell} />
+
+<!-- Find is a popover on its button: it opens with the popover's motion, over the terminal, and stays open while you
+     work in the terminal (a press there does not close it; Esc or the X does). -->
+<ZPopover anchor={findButton ?? toolsAnchor} bind:open={searching} zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth="auto" zCloseOnOutside={false} zScrollClose={false} zCloseOnEscape={false}>
+  {#snippet children()}
+    <div class="flex items-center gap-1 p-1" role="search">
+      <input
+        bind:this={finder}
+        bind:value={query}
+        aria-label="Find in terminal"
+        placeholder="Find"
+        class="h-6 w-44 rounded bg-transparent px-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+        autocomplete="off"
+        spellcheck="false"
+        oninput={() => findInSession(terminal.active, query)}
+        onkeydown={findKey}
+      />
+      <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Previous match" onclick={() => findInSession(terminal.active, query, true)}>
+        <ZIcon zType={'lucideChevronUp' as ZIconName} class="size-3.5" />
+      </button>
+      <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Next match" onclick={() => findInSession(terminal.active, query)}>
+        <ZIcon zType="lucideChevronDown" class="size-3.5" />
+      </button>
+      <button type="button" class="grid size-6 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Close find" onclick={closeFind}>
+        <ZIcon zType="lucideX" class="size-3.5" />
+      </button>
+    </div>
+  {/snippet}
+</ZPopover>
+
+<PickerPopover anchor={toolsAnchor} bind:open={toolsOpen} items={toolsItems} label="Terminal menu" position="bottom-right" size="md" width={240} onpick={pickTools} />

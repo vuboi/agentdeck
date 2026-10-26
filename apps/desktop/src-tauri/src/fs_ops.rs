@@ -1,7 +1,10 @@
 // File-explorer helpers beyond rename/trash (those live in lib.rs): creating files and folders, and a file-name
 // search over the project. Every path is checked to stay inside the project root.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use ignore::WalkBuilder;
 
@@ -47,6 +50,10 @@ pub async fn path_create(
                 .map(|_| ())
         }
         .map_err(|error| error.to_string())?;
+        // The file search must see the new entry at once, not when its list expires.
+        if let Ok(mut cache) = LISTINGS.lock() {
+            cache.clear();
+        }
         Ok(target.to_string_lossy().into_owned())
     })
     .await
@@ -74,6 +81,43 @@ fn relative(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// How long the list of a project's files is trusted. Walking a big repository takes a good while; a file made a moment ago
+/// shows up in the search once this has passed (the UI also asks for it ahead of time, see `warm`).
+const LISTING_TTL: Duration = Duration::from_secs(20);
+
+type Listing = Arc<Vec<String>>;
+static LISTINGS: LazyLock<Mutex<HashMap<PathBuf, (Instant, Listing)>>> = LazyLock::new(Default::default);
+
+/// Every file of the project as a path relative to `root`, shortest first: the walk is done once per `LISTING_TTL`.
+fn listing(root: &Path) -> Listing {
+    if let Ok(cache) = LISTINGS.lock() {
+        if let Some((at, files)) = cache.get(root) {
+            if at.elapsed() < LISTING_TTL {
+                return Arc::clone(files);
+            }
+        }
+    }
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .filter_entry(|entry| {
+            let name = entry.file_name();
+            name != ".git" && name != "node_modules" && name != "target"
+        })
+        .build();
+    let mut files: Vec<String> = walker
+        .filter_map(Result::ok)
+        .take(200_000)
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .map(|entry| relative(root, entry.path()))
+        .collect();
+    files.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+    let files = Arc::new(files);
+    if let Ok(mut cache) = LISTINGS.lock() {
+        cache.insert(root.to_path_buf(), (Instant::now(), Arc::clone(&files)));
+    }
+    files
+}
+
 /// Files of the project whose path matches `query` (best first, at most `limit`), as paths relative to `root`
 /// with `/` separators. Honours .gitignore; `.git`, `node_modules` and `target` are skipped.
 #[tauri::command]
@@ -88,39 +132,29 @@ pub async fn project_files(
             .map_err(|error| error.to_string())?;
         let needle = query.trim().to_lowercase().replace('\\', "/");
         let limit = limit.unwrap_or(50).clamp(1, 500);
-        let mut found: Vec<(usize, usize, String)> = Vec::new();
-        let walker = WalkBuilder::new(&root)
-            .hidden(false)
-            .filter_entry(|entry| {
-                let name = entry.file_name();
-                name != ".git" && name != "node_modules" && name != "target"
-            })
-            .build();
-        for entry in walker.filter_map(Result::ok).take(200_000) {
-            if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-                continue;
-            }
-            let rel = relative(&root, entry.path());
-            if needle.is_empty() {
-                found.push((0, rel.len(), rel));
-                continue;
-            }
-            let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
+        let files = listing(&root);
+        // Nothing typed: the shortest paths, which are already first.
+        if needle.is_empty() {
+            return Ok(files.iter().take(limit).cloned().collect());
+        }
+        let mut found: Vec<(usize, usize, &str)> = Vec::new();
+        for rel in files.iter() {
+            let name = rel.rsplit('/').next().unwrap_or(rel);
             // A hit in the file name beats a hit in the folders.
-            let score = match fit(&name, &needle) {
+            let score = match fit(name, &needle) {
                 Some(at) => at,
-                None => match fit(&rel, &needle) {
+                None => match fit(rel, &needle) {
                     Some(at) => 5000 + at,
                     None => continue,
                 },
             };
-            found.push((score, rel.len(), rel));
+            found.push((score, rel.len(), rel.as_str()));
         }
         found.sort();
         Ok(found
             .into_iter()
             .take(limit)
-            .map(|(_, _, rel)| rel)
+            .map(|(_, _, rel)| rel.to_string())
             .collect())
     })
     .await
@@ -160,4 +194,28 @@ pub async fn file_write(root: String, path: String, text: String) -> Result<(), 
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_file_list_is_walked_once_shortest_first_and_skips_ignored_folders() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src/deep")).unwrap();
+        std::fs::create_dir_all(dir.join("node_modules/x")).unwrap();
+        std::fs::write(dir.join("a.rs"), "").unwrap();
+        std::fs::write(dir.join("src/deep/long_name.rs"), "").unwrap();
+        std::fs::write(dir.join("node_modules/x/skip.js"), "").unwrap();
+        let root = dir.canonicalize().unwrap();
+
+        let first = listing(&root);
+        assert_eq!(first.as_slice(), ["a.rs", "src/deep/long_name.rs"]);
+        // A second call inside the trust time is the same list, not a new walk.
+        assert!(Arc::ptr_eq(&first, &listing(&root)));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

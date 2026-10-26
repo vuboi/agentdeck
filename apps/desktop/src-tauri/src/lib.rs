@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
+mod agent_runs;
 mod bridge;
 mod browser;
 mod cdp;
@@ -21,11 +24,8 @@ mod servers;
 mod slash_commands;
 
 use ag_adapters::agent::antigravity::Antigravity;
-use ag_adapters::agent::claude::Claude;
-use ag_adapters::agent::codex::Codex;
 use ag_adapters::agent::opencode::OpenCode;
-use ag_adapters::agent::runner::{drive_turn, resolve_binary};
-use ag_adapters::agent::{AgentEvent, Provider, TurnRequest};
+use ag_adapters::agent::runner::resolve_binary;
 use ag_adapters::history::{self, HistoryMessage, HistoryPage, HistorySession, Roots, Source};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -185,6 +185,123 @@ async fn attachment_save_file(name: String, data: String) -> Result<String, Stri
     .map_err(|error| error.to_string())?
 }
 
+/// Saves a self-contained visual guide through the native Save As dialog.
+#[tauri::command]
+async fn browser_save_guide(app: AppHandle, title: String, html: String) -> Result<Option<String>, String> {
+    const MAX_BYTES: usize = 120 * 1024 * 1024;
+    if html.len() > MAX_BYTES {
+        return Err("The guide is larger than 120 MB. Remove some video or screenshots and try again.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+
+        let mut name: String = title
+            .chars()
+            .map(|character| if character.is_alphanumeric() || matches!(character, ' ' | '-' | '_') { character } else { '_' })
+            .collect();
+        name = name.trim().trim_matches('.').to_owned();
+        if name.is_empty() { name = "user-guide".into(); }
+        name.push_str(".html");
+        let destination = app.dialog().file().set_title("Save visual guide").set_file_name(name).blocking_save_file();
+        let Some(destination) = destination else { return Ok(None); };
+        let destination = destination.into_path().map_err(|error| error.to_string())?;
+        std::fs::write(&destination, html).map_err(|error| error.to_string())?;
+        Ok(Some(destination.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Stores an agent-recorded WebM walkthrough in the project's guide folder without opening a dialog.
+#[tauri::command]
+async fn browser_save_recording(
+    root: String,
+    relative_path: String,
+    data_url: String,
+) -> Result<String, String> {
+    const MAX_BYTES: usize = 500 * 1024 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine;
+
+        let root = PathBuf::from(root)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let relative = Path::new(&relative_path);
+        if relative.is_absolute()
+            || relative.components().any(|component| !matches!(component, std::path::Component::Normal(_)))
+            || relative.extension() != Some(std::ffi::OsStr::new("webm"))
+        {
+            return Err("recording path must be a relative .webm file inside the project".into());
+        }
+        let (header, encoded) = data_url
+            .split_once(',')
+            .ok_or("recording data is malformed")?;
+        if !header.starts_with("data:video/webm") || !header.ends_with(";base64") {
+            return Err("recording must be a base64-encoded WebM video".into());
+        }
+        if encoded.len() > MAX_BYTES * 4 / 3 + 8 {
+            return Err("recording exceeds the 500 MB size limit".into());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() > MAX_BYTES {
+            return Err("recording exceeds the 500 MB size limit".into());
+        }
+
+        let file_name = relative.file_name().ok_or("recording filename is missing")?;
+        if relative != Path::new("docs").join("user-guides").join(file_name) {
+            return Err("recordings must be saved under docs/user-guides".into());
+        }
+        let docs = root.join("docs");
+        let docs = match std::fs::symlink_metadata(&docs) {
+            Ok(_) => docs.canonicalize().map_err(|error| error.to_string())?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&docs).map_err(|error| error.to_string())?;
+                docs.canonicalize().map_err(|error| error.to_string())?
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        if !docs.starts_with(&root) {
+            return Err("recording folder is outside the project".into());
+        }
+        let guides = docs.join("user-guides");
+        let parent = match std::fs::symlink_metadata(&guides) {
+            Ok(_) => guides.canonicalize().map_err(|error| error.to_string())?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&guides).map_err(|error| error.to_string())?;
+                guides.canonicalize().map_err(|error| error.to_string())?
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        if !parent.starts_with(&root) {
+            return Err("recording folder is outside the project".into());
+        }
+        let mut output = parent.join(file_name);
+        if output.exists() {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis());
+            let stem = output.file_stem().unwrap_or_default().to_string_lossy();
+            output.set_file_name(format!("{stem}-{stamp}.webm"));
+        }
+        let temp = output.with_extension("webm.agentdeck-tmp");
+        if let Err(error) = std::fs::write(&temp, bytes).and_then(|()| std::fs::rename(&temp, &output)) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error.to_string());
+        }
+        Ok(output.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Resolves an agent's pending recording control request after the UI recorder handles it.
+#[tauri::command]
+fn browser_guide_record_reply(request_id: String, ok: bool, message: String) -> Result<(), String> {
+    mcp::guide_recording_reply(request_id, ok, message)
+}
+
 /// Size of a file dropped onto the window (its path comes from the system's drop event), `None` for a folder.
 #[tauri::command]
 fn attachment_stat(path: String) -> Result<Option<u64>, String> {
@@ -196,11 +313,11 @@ fn attachment_stat(path: String) -> Result<Option<u64>, String> {
     })
 }
 
-/// A picture a tool saved on disk (a screenshot), as a data URL for the chat to show. Image files only, at most 8 MB.
+/// A picture a tool saved on disk (a screenshot), as a data URL for the chat to show. Image files only, at most 15 MB.
 #[tauri::command]
 async fn read_image_data_url(path: String) -> Result<String, String> {
     use base64::Engine;
-    const MAX_BYTES: u64 = 8 * 1024 * 1024;
+    const MAX_BYTES: u64 = 15 * 1024 * 1024;
     tauri::async_runtime::spawn_blocking(move || {
         let mime = match Path::new(&path)
             .extension()
@@ -648,6 +765,7 @@ async fn run_file_read(root: Option<String>, run: String, name: String) -> Resul
 struct FolderEntry {
     name: String,
     dir: bool,
+    has_children: bool,
 }
 
 /// The entries of one folder for the Explore panel: folders first, then files, by name. Same rule as `file_read`:
@@ -670,7 +788,22 @@ async fn folder_list(root: String, path: String) -> Result<Vec<FolderEntry>, Str
             .filter_map(|entry| {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let dir = entry.file_type().ok()?.is_dir();
-                (name != ".git").then_some(FolderEntry { name, dir })
+                let has_children = if dir {
+                    std::fs::read_dir(entry.path())
+                        .map(|children| {
+                            children.filter_map(Result::ok).any(|child| {
+                                child.file_name().to_string_lossy() != ".git"
+                            })
+                        })
+                        .unwrap_or(true)
+                } else {
+                    false
+                };
+                (name != ".git").then_some(FolderEntry {
+                    name,
+                    dir,
+                    has_children,
+                })
             })
             .collect();
         entries.sort_by(|a, b| {
@@ -827,16 +960,272 @@ async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     }
 }
 
+/// Asks for an application executable with the system picker. `None` when the picker is cancelled.
+#[tauri::command]
+async fn file_pick_app(app: AppHandle, path: String) -> Result<Option<String>, String> {
+    if !Path::new(&path).is_file() {
+        return Err("file does not exist".to_string());
+    }
+    use tauri_plugin_dialog::DialogExt;
+    let dialog_app = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        let dialog = dialog_app
+            .dialog()
+            .file()
+            .set_title("Choose an application");
+        #[cfg(windows)]
+        let dialog = dialog.add_filter("Applications", &["exe"]);
+        dialog.blocking_pick_file()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    match picked {
+        Some(picked) => {
+            let app_path = picked
+                .into_path()
+                .map_err(|error| error.to_string())?;
+            if !app_path.is_file() {
+                return Err("application path is not a file".to_string());
+            }
+            persist_file_open_app(&app, &path, &app_path)?;
+            Ok(Some(app_path.display().to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FileOpenOption {
     id: String,
     label: String,
+    icon: Option<String>,
+}
+
+static FILE_APP_ICONS: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+
+fn app_icon_cache() -> &'static Mutex<HashMap<String, Option<String>>> {
+    FILE_APP_ICONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn image_data_url(path: &Path) -> Option<String> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    let mime = match extension.as_str() {
+        "png" => "image/png",
+        "svg" => "image/svg+xml",
+        "jpg" | "jpeg" => "image/jpeg",
+        _ => return None,
+    };
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    use base64::Engine;
+    Some(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+#[cfg(windows)]
+fn extract_windows_app_icon(path: &Path) -> Option<String> {
+    use base64::Engine;
+    let encoded_path = base64::engine::general_purpose::STANDARD
+        .encode(path.as_os_str().to_string_lossy().as_bytes());
+    let script = format!(
+        "$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_path}')); Add-Type -AssemblyName System.Drawing; try {{ $i=[System.Drawing.Icon]::ExtractAssociatedIcon($p); if ($null -eq $i) {{ exit 1 }}; $b=$i.ToBitmap(); $s=New-Object System.IO.MemoryStream; $b.Save($s,[System.Drawing.Imaging.ImageFormat]::Png); [Console]::Out.Write([Convert]::ToBase64String($s.ToArray())); $s.Dispose(); $b.Dispose(); $i.Dispose() }} catch {{ exit 1 }}"
+    );
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let encoded = String::from_utf8(output.stdout).ok()?;
+    let encoded = encoded.trim();
+    if encoded.is_empty() {
+        return None;
+    }
+    Some(format!("data:image/png;base64,{encoded}"))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_icon(label: &str) -> Option<String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let roots = [
+        Some(PathBuf::from("/Applications")),
+        Some(PathBuf::from("/System/Applications")),
+        Some(PathBuf::from("/Applications/Utilities")),
+        home.map(|path| path.join("Applications")),
+    ];
+    let app = roots
+        .into_iter()
+        .flatten()
+        .map(|root| root.join(format!("{label}.app")))
+        .find(|path| path.is_dir())?;
+    let resources = app.join("Contents/Resources");
+    let mut candidates = std::fs::read_dir(&resources)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "icns" | "png"))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|path| {
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+        (!name.contains("appicon"), !name.contains("icon"), name)
+    });
+    let source = candidates.into_iter().next()?;
+    if source.extension().and_then(|value| value.to_str()) == Some("png") {
+        return image_data_url(&source);
+    }
+    let output = std::env::temp_dir().join(format!("agentdeck-app-icon-{}.png", uuid::Uuid::new_v4()));
+    let result = std::process::Command::new("sips")
+        .args(["-s", "format", "png"])
+        .arg(&source)
+        .arg("--out")
+        .arg(&output)
+        .output()
+        .ok()?;
+    if !result.status.success() {
+        let _ = std::fs::remove_file(output);
+        return None;
+    }
+    let data = image_data_url(&output);
+    let _ = std::fs::remove_file(output);
+    data
+}
+
+#[cfg(target_os = "linux")]
+fn linux_app_icon(app_id: &str) -> Option<String> {
+    let desktop_ids: &[&str] = match app_id {
+        "gedit" => &["org.gnome.gedit", "gedit"],
+        "evince" => &["org.gnome.Evince", "evince"],
+        "eog" => &["org.gnome.eog", "eog"],
+        _ => &[app_id],
+    };
+    let mut data_dirs = Vec::new();
+    if let Some(home) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
+        data_dirs.push(home);
+    } else if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        data_dirs.push(home.join(".local/share"));
+    }
+    data_dirs.extend(
+        std::env::var_os("XDG_DATA_DIRS")
+            .unwrap_or_else(|| "/usr/local/share:/usr/share".into())
+            .to_string_lossy()
+            .split(':')
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from),
+    );
+    let desktop = data_dirs
+        .iter()
+        .flat_map(|root| desktop_ids.iter().map(move |id| root.join(format!("applications/{id}.desktop"))))
+        .find(|path| path.is_file())?;
+    let contents = std::fs::read_to_string(desktop).ok()?;
+    let icon = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("Icon=").map(str::trim))?;
+    let icon_path = Path::new(icon);
+    if icon_path.is_absolute() {
+        return image_data_url(icon_path);
+    }
+    let names = [format!("{icon}.png"), format!("{icon}.svg"), format!("{icon}.jpg")];
+    for root in &data_dirs {
+        for name in &names {
+            for size in ["scalable/apps", "256x256/apps", "128x128/apps", "96x96/apps", "64x64/apps", "48x48/apps", "32x32/apps", "24x24/apps", "16x16/apps"] {
+                let candidate = root.join("icons/hicolor").join(size).join(name);
+                if candidate.is_file() {
+                    return image_data_url(&candidate);
+                }
+            }
+            let pixmap = root.join("pixmaps").join(name);
+            if pixmap.is_file() {
+                return image_data_url(&pixmap);
+            }
+        }
+    }
+    None
+}
+
+fn icon_for_app(path: &Path, app_id: &str, _label: &str) -> Option<String> {
+    let key = format!("{}|{app_id}", path.display());
+    if let Ok(cache) = app_icon_cache().lock() {
+        if let Some(icon) = cache.get(&key) {
+            return icon.clone();
+        }
+    }
+    #[cfg(windows)]
+    let icon = extract_windows_app_icon(path);
+    #[cfg(target_os = "macos")]
+    let icon = macos_app_icon(_label);
+    #[cfg(target_os = "linux")]
+    let icon = linux_app_icon(app_id);
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    let icon: Option<String> = None;
+    if let Ok(mut cache) = app_icon_cache().lock() {
+        cache.insert(key, icon.clone());
+    }
+    icon
+}
+
+#[derive(serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedFileOpenApp {
+    path: String,
+    label: String,
+}
+
+fn file_open_apps_config(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("open-with.json"))
+}
+
+fn saved_file_open_apps(app: &AppHandle) -> std::collections::HashMap<String, SavedFileOpenApp> {
+    let Some(config) = file_open_apps_config(app) else {
+        return std::collections::HashMap::new();
+    };
+    std::fs::read_to_string(config)
+        .ok()
+        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .unwrap_or_default()
+}
+
+fn persist_file_open_app(app: &AppHandle, file: &str, program: &Path) -> Result<(), String> {
+    let extension = Path::new(file)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if extension.is_empty() {
+        return Ok(());
+    }
+    let config = file_open_apps_config(app).ok_or("could not locate AgentDeck config folder")?;
+    let parent = config.parent().ok_or("invalid AgentDeck config folder")?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let mut saved = saved_file_open_apps(app);
+    saved.insert(
+        extension,
+        SavedFileOpenApp {
+            path: program.display().to_string(),
+            label: program
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        },
+    );
+    let contents = serde_json::to_vec_pretty(&saved).map_err(|error| error.to_string())?;
+    std::fs::write(config, contents).map_err(|error| error.to_string())
 }
 
 /// Returns installed applications that make sense for this file type, plus the OS app chooser.
 #[tauri::command]
-fn file_open_options(path: String) -> Result<Vec<FileOpenOption>, String> {
+fn file_open_options(app: AppHandle, path: String) -> Result<Vec<FileOpenOption>, String> {
     if !Path::new(&path).is_file() {
         return Err("file does not exist".to_string());
     }
@@ -878,7 +1267,19 @@ fn file_open_options(path: String) -> Result<Vec<FileOpenOption>, String> {
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico"
     );
     let pdf = extension == "pdf";
+    let word = matches!(extension.as_str(), "doc" | "docx" | "docm" | "dot" | "dotx" | "rtf");
+    let excel = matches!(extension.as_str(), "xls" | "xlsx" | "xlsm" | "xlsb" | "xltx");
+    let powerpoint = matches!(extension.as_str(), "ppt" | "pptx" | "pptm" | "ppsx" | "potx");
     let mut options = Vec::new();
+    if let Some(saved) = saved_file_open_apps(&app).get(&extension) {
+        if Path::new(&saved.path).is_file() {
+            options.push(FileOpenOption {
+                id: format!("custom:{}", saved.path),
+                label: saved.label.clone(),
+                icon: icon_for_app(Path::new(&saved.path), "custom", &saved.label),
+            });
+        }
+    }
     #[cfg(windows)]
     {
         let mut candidates: Vec<(&str, &str, Vec<PathBuf>)> = vec![];
@@ -888,6 +1289,27 @@ fn file_open_options(path: String) -> Result<Vec<FileOpenOption>, String> {
         let programs = std::env::var_os("ProgramFiles")
             .map(PathBuf::from)
             .unwrap_or_default();
+        let programs_x86 = std::env::var_os("ProgramFiles(x86)")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        if word || excel || powerpoint {
+            let (app, label, exe) = if word {
+                ("word", "Microsoft Word", "WINWORD.EXE")
+            } else if excel {
+                ("excel", "Microsoft Excel", "EXCEL.EXE")
+            } else {
+                ("powerpoint", "Microsoft PowerPoint", "POWERPNT.EXE")
+            };
+            let paths = [
+                programs.join(format!("Microsoft Office/root/Office16/{exe}")),
+                programs_x86.join(format!("Microsoft Office/root/Office16/{exe}")),
+                programs.join(format!("Microsoft Office/Office16/{exe}")),
+                programs_x86.join(format!("Microsoft Office/Office16/{exe}")),
+            ];
+            if paths.iter().any(|candidate| candidate.is_file()) || which_app(exe).is_some() {
+                candidates.push((app, label, paths.to_vec()));
+            }
+        }
         if text {
             candidates.extend([
                 (
@@ -937,16 +1359,23 @@ fn file_open_options(path: String) -> Result<Vec<FileOpenOption>, String> {
             ]);
         }
         for (id, label, paths) in candidates {
-            if paths.iter().any(|candidate| candidate.is_file()) || which_app(id).is_some() {
+            let executable = paths
+                .iter()
+                .find(|candidate| candidate.is_file())
+                .cloned()
+                .or_else(|| which_app(id));
+            if let Some(executable) = executable {
                 options.push(FileOpenOption {
                     id: id.to_string(),
                     label: label.to_string(),
+                    icon: icon_for_app(&executable, id, label),
                 });
             }
         }
         options.push(FileOpenOption {
             id: "system".to_string(),
-            label: "Choose another app…".to_string(),
+            label: "Open with Windows…".to_string(),
+            icon: None,
         });
     }
     #[cfg(target_os = "macos")]
@@ -980,12 +1409,14 @@ fn file_open_options(path: String) -> Result<Vec<FileOpenOption>, String> {
                 options.push(FileOpenOption {
                     id: (*id).to_string(),
                     label: (*label).to_string(),
+                    icon: icon_for_app(Path::new(app_name), id, label),
                 });
             }
         }
         options.push(FileOpenOption {
             id: "system".to_string(),
             label: "Open with system app".to_string(),
+            icon: None,
         });
     }
     #[cfg(target_os = "linux")]
@@ -1013,12 +1444,14 @@ fn file_open_options(path: String) -> Result<Vec<FileOpenOption>, String> {
                 options.push(FileOpenOption {
                     id: (*id).to_string(),
                     label: (*label).to_string(),
+                    icon: icon_for_app(Path::new(id), id, label),
                 });
             }
         }
         options.push(FileOpenOption {
             id: "system".to_string(),
             label: "Open with system app".to_string(),
+            icon: None,
         });
     }
     Ok(options)
@@ -1037,18 +1470,24 @@ fn which_app(name: &str) -> Option<PathBuf> {
 
 /// Opens a file in a detected application or the operating system's app chooser.
 #[tauri::command]
-fn file_open_with(path: String, app_id: String) -> Result<(), String> {
+fn file_open_with(app: AppHandle, path: String, app_id: String) -> Result<(), String> {
     if !Path::new(&path).is_file() {
         return Err("file does not exist".to_string());
     }
     #[cfg(windows)]
     let result = {
-        if app_id == "system" {
+        if let Some(program) = app_id.strip_prefix("custom:") {
+            let program = PathBuf::from(program);
+            if !program.is_file() {
+                return Err("application is not available".to_string());
+            }
+            std::process::Command::new(program).arg(&path).spawn()
+        } else if app_id == "system" {
             std::process::Command::new("rundll32.exe")
                 .args(["shell32.dll,OpenAs_RunDLL", &path])
                 .spawn()
         } else {
-            let options = file_open_options(path.clone())?;
+            let options = file_open_options(app.clone(), path.clone())?;
             if !options
                 .iter()
                 .any(|option| option.id == app_id && app_id != "system")
@@ -1059,6 +1498,9 @@ fn file_open_with(path: String, app_id: String) -> Result<(), String> {
                 .map(PathBuf::from)
                 .unwrap_or_default();
             let programs = std::env::var_os("ProgramFiles")
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            let programs_x86 = std::env::var_os("ProgramFiles(x86)")
                 .map(PathBuf::from)
                 .unwrap_or_default();
             let candidates = match app_id.as_str() {
@@ -1083,6 +1525,27 @@ fn file_open_with(path: String, app_id: String) -> Result<(), String> {
                     PathBuf::from("msedge.exe"),
                 ],
                 "acrobat" => vec![programs.join("Adobe/Acrobat DC/Acrobat/Acrobat.exe")],
+                "word" => vec![
+                    programs.join("Microsoft Office/root/Office16/WINWORD.EXE"),
+                    programs_x86.join("Microsoft Office/root/Office16/WINWORD.EXE"),
+                    programs.join("Microsoft Office/Office16/WINWORD.EXE"),
+                    programs_x86.join("Microsoft Office/Office16/WINWORD.EXE"),
+                    PathBuf::from("WINWORD.EXE"),
+                ],
+                "excel" => vec![
+                    programs.join("Microsoft Office/root/Office16/EXCEL.EXE"),
+                    programs_x86.join("Microsoft Office/root/Office16/EXCEL.EXE"),
+                    programs.join("Microsoft Office/Office16/EXCEL.EXE"),
+                    programs_x86.join("Microsoft Office/Office16/EXCEL.EXE"),
+                    PathBuf::from("EXCEL.EXE"),
+                ],
+                "powerpoint" => vec![
+                    programs.join("Microsoft Office/root/Office16/POWERPNT.EXE"),
+                    programs_x86.join("Microsoft Office/root/Office16/POWERPNT.EXE"),
+                    programs.join("Microsoft Office/Office16/POWERPNT.EXE"),
+                    programs_x86.join("Microsoft Office/Office16/POWERPNT.EXE"),
+                    PathBuf::from("POWERPNT.EXE"),
+                ],
                 _ => return Err("unsupported application".to_string()),
             };
             let program = candidates
@@ -1095,6 +1558,7 @@ fn file_open_with(path: String, app_id: String) -> Result<(), String> {
     };
     #[cfg(target_os = "macos")]
     let result = {
+        let _ = app;
         let app = match app_id.as_str() {
             "system" => None,
             "code" => Some("Visual Studio Code"),
@@ -1104,9 +1568,14 @@ fn file_open_with(path: String, app_id: String) -> Result<(), String> {
             "preview" => Some("Preview"),
             "photos" => Some("Photos"),
             "chrome" => Some("Google Chrome"),
+            value if value.starts_with("custom:") => None,
             _ => return Err("unsupported application".to_string()),
         };
+        let custom = app_id.strip_prefix("custom:");
         let mut command = std::process::Command::new("open");
+        if let Some(program) = custom {
+            command.args(["-a", program]);
+        }
         if let Some(app) = app {
             command.args(["-a", app]);
         }
@@ -1114,7 +1583,14 @@ fn file_open_with(path: String, app_id: String) -> Result<(), String> {
     };
     #[cfg(target_os = "linux")]
     let result = {
-        if app_id == "system" {
+        let _ = app;
+        if let Some(program) = app_id.strip_prefix("custom:") {
+            let program = PathBuf::from(program);
+            if !program.is_file() {
+                return Err("application is not available".to_string());
+            }
+            std::process::Command::new(program).arg(&path).spawn()
+        } else if app_id == "system" {
             std::process::Command::new("xdg-open").arg(&path).spawn()
         } else {
             let app = match app_id.as_str() {
@@ -1225,154 +1701,6 @@ async fn file_read_bytes(root: String, path: String) -> Result<String, String> {
     .map_err(|error| error.to_string())?
 }
 
-/// One event of one chat, sent to the UI on the `agent-event` channel.
-#[derive(Clone, Serialize)]
-struct AgentEnvelope {
-    session: String,
-    /// Which run of the chat the event belongs to, so a stopped run's last events are never mistaken for the next one's.
-    turn: String,
-    event: AgentEvent,
-}
-
-/// The runs in progress, per chat, so one can be stopped.
-static RUNNING: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
-> = std::sync::LazyLock::new(Default::default);
-
-fn provider_for(agent: &str) -> Result<Box<dyn Provider>, String> {
-    match agent {
-        "claude" => Ok(Box::new(Claude)),
-        "codex" => Ok(Box::new(Codex::default())),
-        "antigravity" => Ok(Box::new(Antigravity::default())),
-        "opencode" => Ok(Box::new(OpenCode::default())),
-        other => Err(format!("no agent provider for `{other}` yet")),
-    }
-}
-
-/// Runs one turn for the app: resolves the binary, then forwards every event to the UI.
-async fn run_turn(
-    app: AppHandle,
-    session: String,
-    turn: String,
-    provider: Box<dyn Provider>,
-    req: TurnRequest,
-) {
-    if provider.id() == "antigravity" {
-        mcp_manage::ensure_agy_link().await;
-    }
-    let binary = resolve_binary(provider.as_ref());
-    drive_turn(binary, provider.as_ref(), &req, |event| {
-        let _ = app.emit(
-            "agent-event",
-            AgentEnvelope {
-                session: session.clone(),
-                turn: turn.clone(),
-                event,
-            },
-        );
-    })
-    .await;
-}
-
-/// Sends one user message to an agent CLI. Returns at once; the answer arrives as `agent-event`s.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)] // one parameter per field the frontend sends
-async fn agent_send(
-    app: AppHandle,
-    session: String,
-    turn: String,
-    agent: String,
-    prompt: String,
-    agent_session: Option<String>,
-    resume: bool,
-    model: Option<String>,
-    permission_mode: Option<String>,
-    effort: Option<String>,
-    allowed_tools: Vec<String>,
-    cwd: Option<String>,
-) -> Result<(), String> {
-    let provider = provider_for(&agent)?;
-    let req = TurnRequest {
-        prompt,
-        session_id: agent_session,
-        resume,
-        model,
-        permission_mode,
-        effort,
-        allowed_tools,
-        cwd: cwd.map(Into::into),
-        owner: Some(session.clone()),
-    };
-    let handle = tauri::async_runtime::spawn(run_turn(app, session.clone(), turn, provider, req));
-    if let Ok(mut running) = RUNNING.lock() {
-        if let Some(previous) = running.insert(session, handle) {
-            previous.abort(); // a chat runs one turn at a time
-        }
-    }
-    Ok(())
-}
-
-/// Sends a message to a custom provider (an OpenAI-compatible server). Same contract as `agent_send`: returns
-/// at once and the answer arrives as `agent-event`s. The whole conversation goes along: there is no CLI session.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)] // one parameter per field the frontend sends
-async fn custom_send(
-    app: AppHandle,
-    session: String,
-    turn: String,
-    kind: String,
-    base_url: String,
-    api_key: Option<String>,
-    model: String,
-    messages: Vec<custom_chat::ChatMessage>,
-    permission_mode: Option<String>,
-    allowed_tools: Vec<String>,
-    cwd: Option<String>,
-    effort: Option<String>,
-) -> Result<(), String> {
-    let chat = session.clone();
-    let config = custom_chat::Turn {
-        kind,
-        base_url,
-        api_key,
-        model,
-        cwd: cwd.map(Into::into),
-        permission_mode,
-        allowed: allowed_tools,
-        chat: session.clone(),
-        effort,
-    };
-    let handle = tauri::async_runtime::spawn(async move {
-        custom_chat::run_turn(&app.clone(), config, messages, |event| {
-            let _ = app.emit(
-                "agent-event",
-                AgentEnvelope {
-                    session: chat.clone(),
-                    turn: turn.clone(),
-                    event,
-                },
-            );
-        })
-        .await;
-    });
-    if let Ok(mut running) = RUNNING.lock() {
-        if let Some(previous) = running.insert(session, handle) {
-            previous.abort();
-        }
-    }
-    Ok(())
-}
-
-/// Stops the run of a chat: its CLI process is killed with the task.
-#[tauri::command]
-fn agent_stop(session: String) {
-    if let Ok(mut running) = RUNNING.lock() {
-        if let Some(handle) = running.remove(&session) {
-            handle.abort();
-        }
-    }
-}
-
 /// Starts the AgentDeck desktop window.
 pub fn run() {
     tauri::Builder::default()
@@ -1418,6 +1746,18 @@ pub fn run() {
                 .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
         })
         .setup(|app| {
+            // Create the main webview with the same WebView2 extension setting used by Preview child views.
+            let main_window = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .ok_or_else(|| std::io::Error::other("the main window configuration is missing"))?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), main_window)?
+                .browser_extensions_enabled(browser::EXTENSIONS_ENABLED)
+                .build()?;
+
             app.manage(TrayState::default());
             let tray_menu = tray_menu(app.handle(), &[])?;
             let tray_icon = app
@@ -1519,6 +1859,7 @@ pub fn run() {
             connectors::codex_consume_reset_credit,
             connectors::account_switch,
             connectors::account_add,
+            connectors::account_add_cancel,
             connectors::agy_modes,
             mcp_manage::mcp_list,
             slash_commands::commands_list,
@@ -1549,6 +1890,7 @@ pub fn run() {
             file_save_as,
             audit_prune,
             pick_folder,
+            file_pick_app,
             path_rename,
             path_trash,
             path_restore,
@@ -1564,13 +1906,16 @@ pub fn run() {
             run_file_write,
             run_file_read,
             file_read_bytes,
-            agent_send,
-            custom_send,
-            agent_stop,
+            agent_runs::agent_send,
+            agent_runs::custom_send,
+            agent_runs::agent_stop,
             delegate::delegate_reply,
             delegate::delegate_ready,
             attachment_save,
             attachment_save_file,
+            browser_save_guide,
+            browser_save_recording,
+            browser_guide_record_reply,
             attachment_stat,
             attachment_reveal,
             read_image_data_url,
@@ -1585,6 +1930,8 @@ pub fn run() {
             server_log,
             detect::run_target,
             browser::browser_show,
+            browser::browser_pick_extension,
+            browser::browser_add_extension,
             browser::browser_bounds,
             browser::browser_hide,
             browser::browser_navigate,
@@ -1604,6 +1951,7 @@ pub fn run() {
             computer::computer_use_set_enabled,
             computer::computer_use_approval,
             pty::pty_open,
+            pty::pty_shells,
             pty::pty_attach,
             pty::pty_write,
             pty::pty_resize,

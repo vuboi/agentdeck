@@ -6,6 +6,7 @@ export type AgentEvent =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool_call'; id: string; name: string; input: string; change: FileChange | null; background: boolean }
   | { kind: 'tool_result'; id: string; output: string; is_error: boolean; image?: string }
+  | { kind: 'tool_output_delta'; id: string; delta: string }
   | { kind: 'permission_denied'; requests: PermissionRequest[] }
   | { kind: 'done'; session_id: string | null; text: string; cost_usd: number | null }
   | { kind: 'usage'; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number; new_call: boolean }
@@ -166,10 +167,10 @@ export async function listenAgentEvents(onEvent: (envelope: AgentEnvelope) => vo
   return listen<AgentEnvelope>('agent-event', (event) => onEvent(event.payload));
 }
 
-/** Stops the run of a chat. */
-export async function stopAgentTurn(session: string): Promise<void> {
+/** Stops the run of a chat. With `turn`, only that run: a stop that arrives late never ends the chat's next run. */
+export async function stopAgentTurn(session: string, turn?: string): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('agent_stop', { session });
+  await invoke('agent_stop', { session, turn: turn ?? null });
 }
 
 /** A delegation tool called by an agent through the app's MCP server (src-tauri/src/delegate.rs). */

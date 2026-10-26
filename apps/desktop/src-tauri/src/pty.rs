@@ -112,8 +112,114 @@ fn find_in(path: &std::ffi::OsStr, names: &[&str]) -> Option<PathBuf> {
     })
 }
 
-/// The shell to start and its arguments: PowerShell 7 when it is installed, else Windows PowerShell; `$SHELL` elsewhere.
-fn shell() -> (PathBuf, Vec<&'static str>) {
+/// A shell the terminal can start: its id (what a tab remembers), the name it is shown by, how to start it.
+#[derive(Clone)]
+struct Profile {
+    id: String,
+    name: String,
+    path: PathBuf,
+    args: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+pub struct ProfileInfo {
+    id: String,
+    name: String,
+    path: String,
+}
+
+/// The shells found on this machine. Windows: PowerShell 7, Windows PowerShell, Command Prompt, Git Bash, WSL, Nushell;
+/// elsewhere what `/etc/shells` lists, and Nushell when it is installed. The first is the default.
+fn profiles() -> Vec<Profile> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut found: Vec<Profile> = Vec::new();
+    let mut add = |id: &str, name: &str, file: Option<PathBuf>, args: Vec<&'static str>| {
+        if let Some(file) = file.filter(|file| file.is_file()) {
+            if !found.iter().any(|item| item.id == id) {
+                found.push(Profile {
+                    id: id.into(),
+                    name: name.into(),
+                    path: file,
+                    args,
+                });
+            }
+        }
+    };
+    if cfg!(windows) {
+        add("pwsh", "PowerShell 7", find_in(&path, &["pwsh.exe"]), vec!["-NoLogo"]);
+        add("powershell", "Windows PowerShell", find_in(&path, &["powershell.exe"]), vec!["-NoLogo"]);
+        add("cmd", "Command Prompt", find_in(&path, &["cmd.exe"]), vec![]);
+        // Git for Windows: its bash sits beside git.exe's folder, whatever drive it was installed to.
+        let git_bash = find_in(&path, &["git.exe"])
+            .and_then(|git| {
+                git.parent()
+                    .and_then(Path::parent)
+                    .map(|root| root.join("bin").join("bash.exe"))
+            })
+            .filter(|bash| bash.is_file())
+            .or_else(|| {
+                ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+                    .iter()
+                    .filter_map(|key| std::env::var_os(key).map(PathBuf::from))
+                    .flat_map(|base| {
+                        [
+                            base.join("Git").join("bin").join("bash.exe"),
+                            base.join("Programs").join("Git").join("bin").join("bash.exe"),
+                        ]
+                    })
+                    .find(|bash| bash.is_file())
+            });
+        add("git-bash", "Git Bash", git_bash, vec!["--login", "-i"]);
+        add("wsl", "WSL", find_in(&path, &["wsl.exe"]), vec![]);
+        add("nu", "Nushell", find_in(&path, &["nu.exe"]), vec![]);
+    } else {
+        let listed = std::fs::read_to_string("/etc/shells").unwrap_or_default();
+        let mut paths: Vec<PathBuf> = std::env::var_os("SHELL")
+            .map(PathBuf::from)
+            .into_iter()
+            .collect();
+        paths.extend(
+            listed
+                .lines()
+                .map(str::trim)
+                .filter(|line| line.starts_with('/'))
+                .map(PathBuf::from),
+        );
+        for file in paths {
+            let stem = file
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            if matches!(stem.as_str(), "" | "nologin" | "false" | "git-shell") {
+                continue;
+            }
+            add(&stem, &stem, Some(file), vec!["-l"]);
+        }
+        add("nu", "Nushell", find_in(&path, &["nu"]), vec![]);
+    }
+    found
+}
+
+/// The shells this machine has, for the terminal's profile menu.
+#[tauri::command]
+pub fn pty_shells() -> Vec<ProfileInfo> {
+    profiles()
+        .into_iter()
+        .map(|item| ProfileInfo {
+            id: item.id,
+            name: item.name,
+            path: item.path.to_string_lossy().into_owned(),
+        })
+        .collect()
+}
+
+/// The shell to start and its arguments: the profile asked for when it is installed, else PowerShell 7 or Windows
+/// PowerShell (`$SHELL` elsewhere).
+fn shell(wanted: Option<&str>) -> (PathBuf, Vec<&'static str>) {
+    if let Some(profile) = wanted.and_then(|id| profiles().into_iter().find(|item| item.id == id)) {
+        return (profile.path, profile.args);
+    }
     if cfg!(windows) {
         let path = std::env::var_os("PATH").unwrap_or_default();
         let found = find_in(&path, &["pwsh.exe"]).or_else(|| find_in(&path, &["powershell.exe"]));
@@ -145,13 +251,29 @@ fn size(cols: u16, rows: u16) -> PtySize {
 }
 
 /// Starts a shell for the tab `id` in `cwd` (the home folder when that is missing) and returns its name.
+/// Async, and the start itself on a blocking thread: a command without `async` runs on the main thread, and starting
+/// ConPTY and the shell there froze the window for that moment.
 #[tauri::command]
-pub fn pty_open(
+pub async fn pty_open(
     app: AppHandle,
     id: String,
     cwd: Option<String>,
     cols: u16,
     rows: u16,
+    shell: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || open_shell(app, id, cwd, cols, rows, shell))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn open_shell(
+    app: AppHandle,
+    id: String,
+    cwd: Option<String>,
+    cols: u16,
+    rows: u16,
+    wanted: Option<String>,
 ) -> Result<String, String> {
     if SESSIONS
         .lock()
@@ -163,7 +285,7 @@ pub fn pty_open(
     let pair = native_pty_system()
         .openpty(size(cols, rows))
         .map_err(|error| error.to_string())?;
-    let (program, args) = shell();
+    let (program, args) = shell(wanted.as_deref());
     let mut command = CommandBuilder::new(&program);
     command.args(args);
     command.env("TERM", "xterm-256color");
@@ -311,9 +433,25 @@ mod tests {
 
     #[test]
     fn the_shell_is_found_and_started_with_arguments() {
-        let (program, args) = shell();
+        let (program, args) = shell(None);
         assert!(!program.as_os_str().is_empty());
         assert!(!args.is_empty());
+    }
+
+    #[test]
+    fn a_profile_that_is_not_installed_falls_back_to_the_default_shell() {
+        let (program, _) = shell(Some("no-such-shell"));
+        assert_eq!(program, shell(None).0);
+    }
+
+    #[test]
+    fn profiles_are_unique_and_exist() {
+        let found = profiles();
+        let mut ids: Vec<&str> = found.iter().map(|item| item.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), found.len());
+        assert!(found.iter().all(|item| item.path.is_file()));
     }
 
     #[test]

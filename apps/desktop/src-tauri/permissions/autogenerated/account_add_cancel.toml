@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-add-cancel"
+description = "Enables the account_add_cancel command without any pre-configured scope."
+commands.allow = ["account_add_cancel"]
+
+[[permission]]
+identifier = "deny-account-add-cancel"
+description = "Denies the account_add_cancel command without any pre-configured scope."
+commands.deny = ["account_add_cancel"]

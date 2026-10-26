@@ -1131,7 +1131,10 @@ struct Step {
     finish: String,
     text: String,
     calls: Vec<Call>,
+    /// Prompt tokens not served from the provider's prompt cache.
     input_tokens: u64,
+    /// Prompt tokens the provider read from its cache (billed at a fraction, and a sign the prefix stayed stable).
+    cached_tokens: u64,
     output_tokens: u64,
 }
 
@@ -1175,7 +1178,15 @@ fn read_chunk(data: &str, step: &mut Step, emit: &mut impl FnMut(AgentEvent)) {
         }
     }
     if let Some(usage) = json.get("usage").filter(|usage| usage.is_object()) {
-        step.input_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0);
+        let prompt = usage["prompt_tokens"].as_u64().unwrap_or(0);
+        // OpenAI names the cached part `prompt_tokens_details.cached_tokens`; DeepSeek `prompt_cache_hit_tokens`.
+        let cached = usage["prompt_tokens_details"]["cached_tokens"]
+            .as_u64()
+            .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
+            .unwrap_or(0)
+            .min(prompt);
+        step.input_tokens = prompt - cached;
+        step.cached_tokens = cached;
         step.output_tokens = usage["completion_tokens"].as_u64().unwrap_or(0);
     }
 }
@@ -1462,7 +1473,7 @@ pub async fn run_turn(
         emit(AgentEvent::Usage {
             input_tokens: step.input_tokens,
             output_tokens: step.output_tokens,
-            cache_read_tokens: 0,
+            cache_read_tokens: step.cached_tokens,
             cache_write_tokens: 0,
             new_call: true,
         });
@@ -1766,6 +1777,24 @@ mod tests {
             chat_url("ollama", "http://h:11434"),
             "http://h:11434/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn cached_prompt_tokens_are_counted_apart() {
+        let mut step = Step::default();
+        let mut emit = |_| {};
+        read_chunk(
+            r#"{"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":9,"prompt_tokens_details":{"cached_tokens":800}}}"#,
+            &mut step,
+            &mut emit,
+        );
+        assert_eq!((step.input_tokens, step.cached_tokens, step.output_tokens), (200, 800, 9));
+        read_chunk(
+            r#"{"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":1,"prompt_cache_hit_tokens":30}}"#,
+            &mut step,
+            &mut emit,
+        );
+        assert_eq!((step.input_tokens, step.cached_tokens), (20, 30));
     }
 
     #[test]

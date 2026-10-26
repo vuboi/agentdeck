@@ -1,4 +1,5 @@
 import { archiveTurn } from './archive';
+import { samePath } from './paths';
 import { expandSlash } from './slash.svelte';
 import type { ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
 import {
@@ -16,22 +17,78 @@ import { messages as mockMessages, type Block, type Message } from './mock';
 import { openInPreview } from './browser.svelte';
 import { trackActivity } from './activity.svelte';
 import { logTalk } from './activity.svelte';
+import { guide } from './guide.svelte';
 import { parseQuestions, QUESTION_RULE } from './questions';
 import { attachmentBlocks, splitAttachments } from './attachments';
-import { deleteCommandImages, finishCommandImages, persistCommandImage, restoreCommandImages, stripCommandImageData } from './command-images';
-import { delegateReady, listenDelegateAborts, listenDelegateCalls, listenAgentEvents, replyDelegateCall, saveAttachment, sendAgentTurn, sendCustomTurn, stopAgentTurn, type AgentEvent, type DelegateCall } from './agent';
-import { agentdeckLead, argsOfCall, DELEGATE_HINT, parseHandoff, reportDigest, findAgent, formatAgents, formatTaskResult, handoffOf, isTaskId, kindOfCommand, newTaskId, parseDelegateArgs, pickTask, reasonLine, REPORT_RULE, resolveModel, startedText, toolKindOf, type AgentRow, type HandoffReport, type TaskRecord, type Verdict } from './delegate-task';
+import {
+  deleteCommandImages,
+  finishCommandImages,
+  persistCommandImage,
+  restoreCommandImages,
+  stripCommandImageData,
+} from './command-images';
+import {
+  delegateReady,
+  listenDelegateAborts,
+  listenDelegateCalls,
+  listenAgentEvents,
+  replyDelegateCall,
+  saveAttachment,
+  sendAgentTurn,
+  sendCustomTurn,
+  stopAgentTurn,
+  type AgentEvent,
+  type DelegateCall,
+} from './agent';
+import {
+  agentdeckLead,
+  argsOfCall,
+  DELEGATE_HINT,
+  parseHandoff,
+  reportDigest,
+  findAgent,
+  formatAgents,
+  formatTaskResult,
+  handoffOf,
+  isTaskId,
+  kindOfCommand,
+  newTaskId,
+  parseDelegateArgs,
+  pickTask,
+  reasonLine,
+  REPORT_RULE,
+  resolveModel,
+  startedText,
+  toolKindOf,
+  type AgentRow,
+  type HandoffReport,
+  type TaskRecord,
+  type Verdict,
+} from './delegate-task';
 import { elapsed } from './blocks';
-import { applyAgentEvent } from './agent-reply';
+import { addUsage, applyAgentEvent } from './agent-reply';
 import { getPref, setPref } from './prefs';
 import { estimateCost, recordUsage } from './usage';
-import { customModelId, customProviderName, modelCatalog, modelLabel, parseCustomModel } from './models.svelte';
+import {
+  customModelId,
+  customProviderName,
+  modelCatalog,
+  modelLabel,
+  parseCustomModel,
+} from './models.svelte';
 import { connectors } from './connectors.svelte';
 import { sendSystemNotification } from './system-notifications';
 import { dequeue, enqueue } from './queue';
 import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from './handback';
 import { joinContinuations } from './continuations';
-import { inputsOf, normalizeGraph, presetOf, stepGroups, type WorkflowPreset, type WorkflowStep } from './workflows.svelte';
+import {
+  inputsOf,
+  normalizeGraph,
+  presetOf,
+  stepGroups,
+  type WorkflowPreset,
+  type WorkflowStep,
+} from './workflows.svelte';
 import { agentDisplayName, BUILT_IN_AGENTS } from './provider-registry';
 import { listen } from './tauri-event';
 
@@ -39,7 +96,8 @@ import { listen } from './tauri-event';
 export type Agent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'custom';
 export type Status = 'working' | 'idle' | 'waiting';
 /** Reasoning effort and the approval modes shared by the agent CLIs. */
-export type Effort = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+export type Effort =
+  'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 export type Permission = 'ask' | 'edits' | 'plan' | 'auto' | 'yolo';
 
 export type Project = { id: string; name: string; path: string };
@@ -88,7 +146,9 @@ export const AGENT_TEXT: Record<Agent, string> = {
   claude: 'text-orange-500',
   codex: 'text-emerald-500 [&_path]:fill-current',
   antigravity: 'text-sky-500',
-  opencode: BUILT_IN_AGENTS.find((item) => item.id === 'opencode')?.tone ?? 'text-foreground',
+  opencode:
+    BUILT_IN_AGENTS.find((item) => item.id === 'opencode')?.tone ??
+    'text-foreground',
   custom: 'text-violet-500',
 };
 
@@ -97,7 +157,9 @@ export const AGENT_ICON: Record<Agent, ZIconName> = {
   claude: 'brandClaude' as ZIconName,
   codex: 'brandOpenai' as ZIconName,
   antigravity: 'brandGemini' as ZIconName,
-  opencode: BUILT_IN_AGENTS.find((item) => item.id === 'opencode')?.icon ?? ('lucideTerminal' as ZIconName),
+  opencode:
+    BUILT_IN_AGENTS.find((item) => item.id === 'opencode')?.icon ??
+    ('lucideTerminal' as ZIconName),
   custom: 'lucideServer' as ZIconName,
 };
 
@@ -113,43 +175,142 @@ const mockWorkspace = {
   projects: [
     { id: 'p1', name: 'agentdeck', path: 'E:\\WORK\\PROJECTS\\agentdeck' },
     { id: 'p2', name: 'z-ui', path: 'E:\\WORK\\PROJECTS\\z-ui' },
-    { id: 'p3', name: 'msg-new-template', path: 'E:\\WORK\\PROJECTS\\msg-new-template' },
+    {
+      id: 'p3',
+      name: 'msg-new-template',
+      path: 'E:\\WORK\\PROJECTS\\msg-new-template',
+    },
   ] as Project[],
   sessions: [
-    { id: 's1', projectId: 'p1', title: 'Build the settings panel', agent: 'claude', model: 'claude-sonnet-5-5', gitBranch: 'main', status: 'working' },
-    { id: 's2', projectId: 'p1', title: 'Try it with Codex', agent: 'codex', agents: ['claude', 'codex'], model: 'gpt-6-luna', gitBranch: 'main', status: 'waiting', parentId: 's1' },
-    { id: 's3', projectId: 'p1', title: 'Codex, second attempt', agent: 'codex', model: 'gpt-5.6-luna', gitBranch: 'main', status: 'idle', parentId: 's2' },
-    { id: 's4', projectId: 'p1', title: 'Virtual chat list', agent: 'claude', agents: ['claude', 'codex', 'antigravity'], model: 'claude-opus-5-5', gitBranch: 'feat/chat-virtual', status: 'idle' },
-    { id: 's5', projectId: 'p2', title: 'Svelte 5 z-tabs styling', agent: 'claude', model: 'claude-sonnet-5-5', gitBranch: 'main', status: 'idle' },
-    { id: 's6', projectId: 'p2', title: 'Review the carousel API', agent: 'antigravity', model: 'gemini-4-argon', gitBranch: 'feat/carousel', status: 'idle' },
-    { id: 's7', projectId: 'p3', title: 'Zoom check on mobile table', agent: 'claude', model: 'claude-haiku-5-5', gitBranch: 'fix/mobile-zoom', status: 'waiting' },
+    {
+      id: 's1',
+      projectId: 'p1',
+      title: 'Build the settings panel',
+      agent: 'claude',
+      model: 'claude-sonnet-5-5',
+      gitBranch: 'main',
+      status: 'working',
+    },
+    {
+      id: 's2',
+      projectId: 'p1',
+      title: 'Try it with Codex',
+      agent: 'codex',
+      agents: ['claude', 'codex'],
+      model: 'gpt-6-luna',
+      gitBranch: 'main',
+      status: 'waiting',
+      parentId: 's1',
+    },
+    {
+      id: 's3',
+      projectId: 'p1',
+      title: 'Codex, second attempt',
+      agent: 'codex',
+      model: 'gpt-5.6-luna',
+      gitBranch: 'main',
+      status: 'idle',
+      parentId: 's2',
+    },
+    {
+      id: 's4',
+      projectId: 'p1',
+      title: 'Virtual chat list',
+      agent: 'claude',
+      agents: ['claude', 'codex', 'antigravity'],
+      model: 'claude-opus-5-5',
+      gitBranch: 'feat/chat-virtual',
+      status: 'idle',
+    },
+    {
+      id: 's5',
+      projectId: 'p2',
+      title: 'Svelte 5 z-tabs styling',
+      agent: 'claude',
+      model: 'claude-sonnet-5-5',
+      gitBranch: 'main',
+      status: 'idle',
+    },
+    {
+      id: 's6',
+      projectId: 'p2',
+      title: 'Review the carousel API',
+      agent: 'antigravity',
+      model: 'gemini-4-argon',
+      gitBranch: 'feat/carousel',
+      status: 'idle',
+    },
+    {
+      id: 's7',
+      projectId: 'p3',
+      title: 'Zoom check on mobile table',
+      agent: 'claude',
+      model: 'claude-haiku-5-5',
+      gitBranch: 'fix/mobile-zoom',
+      status: 'waiting',
+    },
   ] as SessionItem[],
 };
 
 // In the desktop app start empty and show the real history; the mock only serves plain-browser dev.
 export const workspace = $state(
-  inTauri() ? { activeId: '', projects: [] as Project[], sessions: [] as SessionItem[] } : mockWorkspace,
+  inTauri()
+    ? {
+        activeId: '',
+        projects: [] as Project[],
+        sessions: [] as SessionItem[],
+      }
+    : mockWorkspace,
 );
 
-export const activeSession = () => workspace.sessions.find((item) => item.id === workspace.activeId);
-export const projectOf = (session: SessionItem) => workspace.projects.find((item) => item.id === session.projectId);
+export const activeSession = () =>
+  workspace.sessions.find((item) => item.id === workspace.activeId);
+export const projectOf = (session: SessionItem) =>
+  workspace.projects.find((item) => item.id === session.projectId);
 
-export type Mention = { kind: 'session' | 'project' | 'ai'; id: string; label: string };
+export type Mention = {
+  kind: 'session' | 'project' | 'ai';
+  id: string;
+  label: string;
+};
 
 /** What was typed but not sent, per session: switch away and back and it is still there. */
 export const drafts = $state<Record<string, string>>({});
 export const draftMentions = $state<Record<string, Mention[]>>({});
 
 /** An image waiting to be sent: a data URL, already scaled down. */
-export type Attachment = { id: string; name: string; mime: string; src: string };
+export type Attachment = {
+  id: string;
+  name: string;
+  mime: string;
+  src: string;
+};
 export const draftImages = $state<Record<string, Attachment[]>>({});
 
 /** A document waiting to be sent (docx, pdf, xlsx, text, code...): it lives on disk and the agent is given its path. */
-export type FileAttachment = { id: string; name: string; path: string; size: number };
+export type FileAttachment = {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+};
 export const draftFiles = $state<Record<string, FileAttachment[]>>({});
 
 /** A part of a web page picked in the AgentDeck browser, waiting to go with the next message. */
-export type PageElement = { id: string; tag: string; text: string; selector: string; html: string; /** Its place among its neighbours. */ around?: string; box: { x: number; y: number; w: number; h: number }; style: Record<string, string>; url: string; title: string; /** What was written about it while marking up the page. */ note?: string; /** A PNG of the element alone (a data URL), taken when it was picked. */ picture?: string };
+export type PageElement = {
+  id: string;
+  tag: string;
+  text: string;
+  selector: string;
+  html: string;
+  /** Its place among its neighbours. */ around?: string;
+  box: { x: number; y: number; w: number; h: number };
+  style: Record<string, string>;
+  url: string;
+  title: string;
+  /** What was written about it while marking up the page. */ note?: string;
+  /** A PNG of the element alone (a data URL), taken when it was picked. */ picture?: string;
+};
 export const draftElements = $state<Record<string, PageElement[]>>({});
 /** Messages of sessions that live only in this app (new chats), by session id. */
 const localMessages: Record<string, Message[]> = {};
@@ -166,7 +327,11 @@ void getPref<Record<string, string>>('chat.parents').then((saved) => {
 function rememberParents() {
   let changed = false;
   for (const item of workspace.sessions) {
-    if (item.parentId && item.parentId !== item.id && parents[item.id] !== item.parentId) {
+    if (
+      item.parentId &&
+      item.parentId !== item.id &&
+      parents[item.id] !== item.parentId
+    ) {
       parents[item.id] = item.parentId;
       changed = true;
     }
@@ -176,7 +341,12 @@ function rememberParents() {
   for (const [parentId, list] of Object.entries(localMessages)) {
     for (const message of list) {
       for (const block of message.blocks ?? []) {
-        if (block.kind === 'delegate' && block.childId && block.childId !== parentId && parents[block.childId] === undefined) {
+        if (
+          block.kind === 'delegate' &&
+          block.childId &&
+          block.childId !== parentId &&
+          parents[block.childId] === undefined
+        ) {
           parents[block.childId] = parentId;
           changed = true;
         }
@@ -188,22 +358,47 @@ function rememberParents() {
 
 /** Sessions that only exist in the app (drafts, new chats, live agent chats) and their messages. */
 function localSessions(): SessionItem[] {
-  return workspace.sessions.filter((item) => !item.path && (item.draft || localMessages[item.id]) && !isEmptyDraft(item));
+  return workspace.sessions.filter(
+    (item) =>
+      !item.path &&
+      (item.draft || localMessages[item.id]) &&
+      !isEmptyDraft(item),
+  );
 }
 
 /** Save the local sessions, their messages and the open session to IndexedDB. Call after any change. */
 export function persistLocal() {
   rememberParents();
   const sessions = localSessions();
-  const messages = Object.fromEntries(sessions.map((item) => [item.id, localMessages[item.id] ?? []]));
+  const messages = Object.fromEntries(
+    sessions.map((item) => [item.id, localMessages[item.id] ?? []]),
+  );
   // Plain copies: the store holds proxies that IndexedDB cannot store.
-  setPref('local.state', JSON.parse(JSON.stringify({ sessions, messages, activeId: workspace.activeId })));
+  setPref(
+    'local.state',
+    JSON.parse(
+      JSON.stringify({
+        sessions,
+        messages,
+        activeId: workspace.activeId,
+      }),
+    ),
+  );
 }
 
 /** The Gemini placeholder became Antigravity: chats saved under the old name move to the new one. */
-const renamedAgent = <T extends string | undefined>(agent: T): T => ((agent as string | undefined) === 'gemini' ? ('antigravity' as T) : agent);
+const renamedAgent = <T extends string | undefined>(agent: T): T =>
+  (agent as string | undefined) === 'gemini' ? ('antigravity' as T) : agent;
 function renamedSession(item: SessionItem): SessionItem {
-  const moved = (map?: Record<string, unknown>) => (map && 'gemini' in map ? Object.fromEntries(Object.entries(map).map(([key, value]) => [key === 'gemini' ? 'antigravity' : key, value])) : map);
+  const moved = (map?: Record<string, unknown>) =>
+    map && 'gemini' in map
+      ? Object.fromEntries(
+          Object.entries(map).map(([key, value]) => [
+            key === 'gemini' ? 'antigravity' : key,
+            value,
+          ]),
+        )
+      : map;
   return {
     ...item,
     agent: renamedAgent(item.agent),
@@ -217,18 +412,29 @@ function renamedSession(item: SessionItem): SessionItem {
 }
 
 /** Read the saved local sessions back. Runs once at start-up, before the history import merges them. */
-const localReady = getPref<{ sessions: SessionItem[]; messages: Record<string, Message[]>; activeId?: string }>('local.state').then(
+const localReady = getPref<{
+  sessions: SessionItem[];
+  messages: Record<string, Message[]>;
+  activeId?: string;
+}>('local.state').then(
   (saved) => {
     if (!saved) return;
     // A reply that was still running when the app closed is not running any more.
-    for (const [id, list] of Object.entries(saved.messages ?? {})) localMessages[id] = list.map((message) => ({ ...message, agent: renamedAgent(message.agent), live: false }));
+    for (const [id, list] of Object.entries(saved.messages ?? {}))
+      localMessages[id] = list.map((message) => ({
+        ...message,
+        agent: renamedAgent(message.agent),
+        live: false,
+      }));
     for (const savedItem of saved.sessions ?? []) {
       const item = renamedSession(savedItem);
       // Empty new chats saved by an earlier version are not restored.
       if (isEmptyDraft(item)) continue;
-      if (!workspace.sessions.some((existing) => existing.id === item.id)) workspace.sessions.push(item);
+      if (!workspace.sessions.some((existing) => existing.id === item.id))
+        workspace.sessions.push(item);
     }
-    if (saved.activeId && !workspace.activeId) workspace.activeId = saved.activeId;
+    if (saved.activeId && !workspace.activeId)
+      workspace.activeId = saved.activeId;
   },
   () => {
     // Nothing saved, or no IndexedDB: start empty.
@@ -258,7 +464,10 @@ export const NO_PROJECT = 'none';
 /** Projects removed from the sidebar, by folder path. Their chats stay on disk; the list just leaves them out. */
 export const hiddenProjects = $state<string[]>([]);
 void getPref<string[]>('sidebar.hiddenProjects').then((saved) => {
-  if (Array.isArray(saved)) hiddenProjects.push(...saved.filter((path) => !hiddenProjects.includes(path)));
+  if (Array.isArray(saved))
+    hiddenProjects.push(
+      ...saved.filter((path) => !hiddenProjects.includes(path)),
+    );
 });
 export function hideProject(id: string) {
   const path = workspace.projects.find((project) => project.id === id)?.path;
@@ -266,32 +475,41 @@ export function hideProject(id: string) {
   hiddenProjects.push(path);
   setPref('sidebar.hiddenProjects', [...hiddenProjects]);
 }
-const nextId = () => `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+const nextId = () =>
+  `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 /** The row for chats outside any project; always first in the list. */
-const noProjectRow = (): Project => ({ id: NO_PROJECT, name: 'This computer', path: '' });
+const noProjectRow = (): Project => ({
+  id: NO_PROJECT,
+  name: 'This computer',
+  path: '',
+});
 function ensureNoProject() {
-  if (!workspace.projects.some((item) => item.id === NO_PROJECT)) workspace.projects.unshift(noProjectRow());
+  if (!workspace.projects.some((item) => item.id === NO_PROJECT))
+    workspace.projects.unshift(noProjectRow());
 }
 ensureNoProject();
 
-/** Same folder whatever the separators, the case (Windows) or a trailing slash. */
-export const samePath = (a: string, b: string) => {
-  const clean = (path: string) => path.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase();
-  return clean(a) === clean(b);
-};
+export { samePath };
 
 /** Folders added by hand (no chat history yet, or never used by an agent) and the folders the user trusts. */
 export const addedProjects = $state<string[]>([]);
 export const trustedFolders = $state<string[]>([]);
 const addedReady = Promise.all([
-  getPref<string[]>('sidebar.addedProjects').then((saved) => Array.isArray(saved) && addedProjects.push(...saved)),
-  getPref<string[]>('sidebar.trustedFolders').then((saved) => Array.isArray(saved) && trustedFolders.push(...saved)),
+  getPref<string[]>('sidebar.addedProjects').then(
+    (saved) => Array.isArray(saved) && addedProjects.push(...saved),
+  ),
+  getPref<string[]>('sidebar.trustedFolders').then(
+    (saved) => Array.isArray(saved) && trustedFolders.push(...saved),
+  ),
 ]).catch(() => undefined);
 
 /** A folder agents already worked in (it has chats) counts as trusted: Claude and Codex asked about it then. */
 export const isTrusted = (path: string) =>
-  trustedFolders.some((item) => samePath(item, path)) || workspace.sessions.some((item) => item.path && samePath(projectOf(item)?.path ?? '', path));
+  trustedFolders.some((item) => samePath(item, path)) ||
+  workspace.sessions.some(
+    (item) => item.path && samePath(projectOf(item)?.path ?? '', path),
+  );
 
 export function trustFolder(path: string) {
   if (trustedFolders.some((item) => samePath(item, path))) return;
@@ -300,22 +518,36 @@ export function trustFolder(path: string) {
 }
 
 /** Chats (by id) and project folders (by path) pinned to the top of the sidebar. */
-export const pinned = $state<{ sessions: string[]; projects: string[] }>({ sessions: [], projects: [] });
-void getPref<{ sessions: string[]; projects: string[] }>('sidebar.pinned').then((saved) => {
-  if (Array.isArray(saved?.sessions)) pinned.sessions = saved.sessions;
-  if (Array.isArray(saved?.projects)) pinned.projects = saved.projects;
+export const pinned = $state<{ sessions: string[]; projects: string[] }>({
+  sessions: [],
+  projects: [],
 });
-const savePins = () => setPref('sidebar.pinned', { sessions: [...pinned.sessions], projects: [...pinned.projects] });
+void getPref<{ sessions: string[]; projects: string[] }>('sidebar.pinned').then(
+  (saved) => {
+    if (Array.isArray(saved?.sessions)) pinned.sessions = saved.sessions;
+    if (Array.isArray(saved?.projects)) pinned.projects = saved.projects;
+  },
+);
+const savePins = () =>
+  setPref('sidebar.pinned', {
+    sessions: [...pinned.sessions],
+    projects: [...pinned.projects],
+  });
 export const isPinnedSession = (id: string) => pinned.sessions.includes(id);
-export const isPinnedProject = (path: string) => Boolean(path) && pinned.projects.some((item) => samePath(item, path));
+export const isPinnedProject = (path: string) =>
+  Boolean(path) && pinned.projects.some((item) => samePath(item, path));
 export function togglePinSession(id: string) {
-  pinned.sessions = isPinnedSession(id) ? pinned.sessions.filter((item) => item !== id) : [...pinned.sessions, id];
+  pinned.sessions = isPinnedSession(id)
+    ? pinned.sessions.filter((item) => item !== id)
+    : [...pinned.sessions, id];
   savePins();
 }
 export function togglePinProject(id: string) {
   const path = workspace.projects.find((project) => project.id === id)?.path;
   if (!path) return;
-  pinned.projects = isPinnedProject(path) ? pinned.projects.filter((item) => !samePath(item, path)) : [...pinned.projects, path];
+  pinned.projects = isPinnedProject(path)
+    ? pinned.projects.filter((item) => !samePath(item, path))
+    : [...pinned.projects, path];
   savePins();
 }
 
@@ -329,11 +561,14 @@ export function addProject(path: string) {
     hiddenProjects.splice(hidden, 1);
     setPref('sidebar.hiddenProjects', [...hiddenProjects]);
   }
-  let project = workspace.projects.find((item) => item.path && samePath(item.path, path));
+  let project = workspace.projects.find(
+    (item) => item.path && samePath(item.path, path),
+  );
   if (!project) {
     project = { id: `dir:${path}`, name: folderName(path), path };
     // Right under "This computer", where it is seen.
-    const at = workspace.projects.findIndex((item) => item.id === NO_PROJECT) + 1;
+    const at =
+      workspace.projects.findIndex((item) => item.id === NO_PROJECT) + 1;
     workspace.projects.splice(at, 0, project);
   }
   if (!addedProjects.some((item) => samePath(item, path))) {
@@ -351,28 +586,16 @@ export function addProject(path: string) {
  */
 /** A new chat nobody wrote in is not kept: Codex does the same, so empty tabs never pile up in the list. */
 function isEmptyDraft(item: SessionItem) {
-  return item.draft && !(localMessages[item.id]?.length);
+  return item.draft && !localMessages[item.id]?.length;
 }
 /** Told which sessions went when empty drafts are dropped, so a tab left open on one can go too. */
 let onDraftsDropped: ((ids: string[]) => void) | undefined;
 export function watchDroppedDrafts(listener: (ids: string[]) => void) {
   onDraftsDropped = listener;
 }
-function dropEmptyDrafts() {
-  const dropped: string[] = [];
-  for (let index = workspace.sessions.length - 1; index >= 0; index--) {
-    const item = workspace.sessions[index];
-    // A new session with words typed in it is kept: its project's "New session" brings it back.
-    if (item.id !== workspace.activeId && isEmptyDraft(item) && !drafts[item.id]?.trim()) {
-      workspace.sessions.splice(index, 1);
-      dropped.push(item.id);
-    }
-  }
-  if (dropped.length) onDraftsDropped?.(dropped);
-}
-
 /** Whether the chat is a new one nobody wrote in yet: only such a chat can still be moved to another project. */
-export const isUnstarted = (item: SessionItem | undefined) => Boolean(item && isEmptyDraft(item));
+export const isUnstarted = (item: SessionItem | undefined) =>
+  Boolean(item && isEmptyDraft(item));
 
 /** Moves a new, unsent chat to another project (or "This computer"). A chat that has started keeps its folder. */
 export function moveDraftToProject(sessionId: string, projectId: string) {
@@ -382,7 +605,12 @@ export function moveDraftToProject(sessionId: string, projectId: string) {
   // One unsent chat per project: the one already there is dropped in favour of this one (its text is lost only if empty).
   for (let index = workspace.sessions.length - 1; index >= 0; index--) {
     const other = workspace.sessions[index];
-    if (other.id !== sessionId && other.projectId === projectId && isEmptyDraft(other) && !drafts[other.id]?.trim()) {
+    if (
+      other.id !== sessionId &&
+      other.projectId === projectId &&
+      isEmptyDraft(other) &&
+      !drafts[other.id]?.trim()
+    ) {
       workspace.sessions.splice(index, 1);
       onDraftsDropped?.([other.id]);
     }
@@ -393,18 +621,16 @@ export function moveDraftToProject(sessionId: string, projectId: string) {
 }
 
 // A new chat starts on "This computer" unless a project is named: the project is picked under the message box.
-export function newSession(projectId = NO_PROJECT, { reuseDraft = true } = {}) {
+export function newSession(projectId = NO_PROJECT) {
   if (projectId === NO_PROJECT) ensureNoProject();
-  // One unsent new session per project (or "This computer"): pressing "New session" there again returns to it,
-  // typed text included; another project gets its own.
-  const empty = reuseDraft ? workspace.sessions.find((item) => item.projectId === projectId && isEmptyDraft(item)) : undefined;
+  // One unsent new session at a time: all new-session entry points return to it, preserving typed text and context.
+  const empty = workspace.sessions.find(isEmptyDraft);
   if (empty) {
+    moveDraftToProject(empty.id, projectId);
     workspace.activeId = empty.id;
     return;
   }
   const base = workspace.sessions.find((item) => item.projectId === projectId);
-  // Explicit new-tab and tray actions must keep earlier empty drafts as separate chats.
-  if (reuseDraft) dropEmptyDrafts();
   const uuid = crypto.randomUUID();
   const id = `claude:${uuid}`;
   const start = startingPoint();
@@ -425,7 +651,10 @@ export function newSession(projectId = NO_PROJECT, { reuseDraft = true } = {}) {
 
 /** Agent and model a new chat starts with: the last ones the user chatted with, else Claude's default. */
 function startingPoint(): { agent: Agent; model: string } {
-  if (lastChat.agent && (MODELS[lastChat.agent] ?? []).some((item) => item.value === lastChat.model)) {
+  if (
+    lastChat.agent &&
+    (MODELS[lastChat.agent] ?? []).some((item) => item.value === lastChat.model)
+  ) {
     return { agent: lastChat.agent, model: lastChat.model };
   }
   return { agent: 'claude', model: 'claude-sonnet-5-5' };
@@ -440,27 +669,43 @@ export function newChat() {
 // list; selecting one sends its id back through the tray-action event and this module activates that chat.
 let trayMenuUpdates = Promise.resolve();
 if (inTauri()) {
-  void listen<{ action: string; sessionId?: string }>('tray-action', ({ payload }) => {
-    if (payload.action === 'new-chat') {
-      newSession(NO_PROJECT, { reuseDraft: false });
-      window.dispatchEvent(new Event('agentdeck:new-chat-requested'));
-    } else if (payload.action === 'open-session' && payload.sessionId && workspace.sessions.some((item) => item.id === payload.sessionId)) {
-      workspace.activeId = payload.sessionId;
-    }
-  });
+  void listen<{ action: string; sessionId?: string }>(
+    'tray-action',
+    ({ payload }) => {
+      if (payload.action === 'new-chat') {
+        newSession(NO_PROJECT);
+        window.dispatchEvent(new Event('agentdeck:new-chat-requested'));
+      } else if (
+        payload.action === 'open-session' &&
+        payload.sessionId &&
+        workspace.sessions.some((item) => item.id === payload.sessionId)
+      ) {
+        workspace.activeId = payload.sessionId;
+      }
+    },
+  );
 
   $effect.root(() => {
     $effect(() => {
       const recent = workspace.sessions
         .filter((item) => !item.draft)
         .slice()
-        .sort((a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''))
+        .sort(
+          (a, b) =>
+            Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''),
+        )
         .slice(0, 6)
-        .map(({ id, title, agent }) => ({ id, title, agent: agentDisplayName(agent) }));
-      trayMenuUpdates = trayMenuUpdates.then(async () => {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('tray_update_recent', { sessions: recent });
-      }).catch(() => {});
+        .map(({ id, title, agent }) => ({
+          id,
+          title,
+          agent: agentDisplayName(agent),
+        }));
+      trayMenuUpdates = trayMenuUpdates
+        .then(async () => {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('tray_update_recent', { sessions: recent });
+        })
+        .catch(() => {});
     });
   });
 }
@@ -473,21 +718,44 @@ if (inTauri()) {
 const AGENTDECK_HINT =
   '[AgentDeck] You run inside AgentDeck. To start a dev server or open a page, use the agentdeck tools: browser_serve (starts the server so it keeps running after your turn, and opens it in the Preview) or browser_open for an address that already answers. Then use browser_screenshot, browser_console and browser_network to look at it. Do not start servers in your own shell and do not open the system browser or Chrome: that server would stop when your command ends, and the user is looking at the AgentDeck Preview.';
 
-/** Chats (and the agent in them) already told how to delegate during this run of the app. */
+/**
+ * Chats (and the agent in them) already told how to delegate. Kept between runs of the app: a resumed conversation
+ * still has the hint in its history, so sending it again after every restart only costs tokens.
+ */
 const delegateHinted = new Set<string>();
+void getPref<string[]>('chat.delegateHinted').then((saved) => {
+  for (const key of saved ?? []) delegateHinted.add(key);
+});
+function rememberDelegateHint(key: string) {
+  delegateHinted.add(key);
+  setPref('chat.delegateHinted', [...delegateHinted].slice(-500));
+}
+
+/** Agents whose own system prompt already says how to use the Preview (claude.rs, codex.rs, custom_chat.rs). */
+const KNOWS_PREVIEW = new Set<Agent>(['claude', 'codex', 'custom']);
 
 /** The last thing asked in each chat: "open it", "run the app" decides whether a served page opens by itself. */
 const lastPrompt: Record<string, string> = {};
-const OPEN_WORDS = /\b(open|opened|preview|browser|run|running|start|started|serve)\b|mở|chạy|xem thử/i;
+const OPEN_WORDS =
+  /\b(open|opened|preview|browser|run|running|start|started|serve)\b|mở|chạy|xem thử/i;
 
 /** Pick the requested framework's address when a turn starts more than one local dev server. */
 function previewUrl(text: string, prompt: string): string | undefined {
-  const wantsSvelte = /\bsvelte(?:\s*5)?\b|z-ui-svelte/i.test(`${prompt}\n${text}`);
-  const urls = [...text.matchAll(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?[^\s`'")\]>]*/gi)].map((match) => ({
+  const wantsSvelte = /\bsvelte(?:\s*5)?\b|z-ui-svelte/i.test(
+    `${prompt}\n${text}`,
+  );
+  const urls = [
+    ...text.matchAll(
+      /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?[^\s`'")\]>]*/gi,
+    ),
+  ].map((match) => ({
     url: match[0],
     at: match.index ?? 0,
   }));
-  const unique = urls.filter((item, index) => urls.findIndex((other) => other.url === item.url) === index);
+  const unique = urls.filter(
+    (item, index) =>
+      urls.findIndex((other) => other.url === item.url) === index,
+  );
   return unique
     .map((item) => {
       const lineStart = text.lastIndexOf('\n', item.at) + 1;
@@ -509,18 +777,37 @@ function openServedPage(sessionId: string, reply: Message) {
   if (!inTauri()) return;
   // A flow's steps and the turn that writes its final answer only report: an address they mention (an API a search
   // found, a URL in a README) is not a page the user asked to see, and opening it showed a refused connection.
-  if (isWorkerChat(sessionId) || delegateRuns.some((run) => run.main === sessionId && !run.endedAt)) return;
+  if (
+    isWorkerChat(sessionId) ||
+    delegateRuns.some((run) => run.main === sessionId && !run.endedAt)
+  )
+    return;
   const text = reply.blocks
-    .map((block) => (block.kind === 'response' ? block.text : block.kind === 'command' ? `${block.command}\n${block.output}` : ''))
+    .map((block) =>
+      block.kind === 'response'
+        ? block.text
+        : block.kind === 'command'
+          ? `${block.command}\n${block.output}`
+          : '',
+    )
     .join('\n');
   const asked = OPEN_WORDS.test(lastPrompt[sessionId] ?? '');
   // You asked for it, or the answer says the page is open or running.
   if (!asked && !OPEN_WORDS.test(text)) return;
   // Without that ask, only an address a command printed (a server that was started) counts, not one the prose mentions.
-  const source = asked ? text : reply.blocks.map((block) => (block.kind === 'command' ? `${block.command}\n${block.output}` : '')).join('\n');
+  const source = asked
+    ? text
+    : reply.blocks
+        .map((block) =>
+          block.kind === 'command' ? `${block.command}\n${block.output}` : '',
+        )
+        .join('\n');
   const found = previewUrl(source, lastPrompt[sessionId] ?? '');
   // An agent that opened the page itself (browser_open, browser_serve) has put it where it wanted: nothing to add.
-  const opened = reply.blocks.some((block) => block.kind === 'command' && /browser_(open|serve)/.test(block.command));
+  const opened = reply.blocks.some(
+    (block) =>
+      block.kind === 'command' && /browser_(open|serve)/.test(block.command),
+  );
   if (found && !opened) openInPreview(found);
 }
 
@@ -536,9 +823,15 @@ function searchHints(item: PageElement): string[] {
     if (word.length >= min && word.length <= 60) hints.add(word);
   };
   add(item.text.length <= 60 ? item.text : item.text.slice(0, 40), 2);
-  for (const match of item.html.matchAll(/\b(?:id|aria-label|title|placeholder|formcontrolname|name|data-[\w-]+|routerlink|ng-reflect-[\w-]+)="([^"]{2,60})"/gi)) add(match[1]);
-  const generic = /^(flex|grid|block|inline|hidden|relative|absolute|items-|justify-|gap-|p[xytblr]?-|m[xytblr]?-|w-|h-|min-|max-|text-|bg-|border|rounded|shadow|font-|size-|z-|overflow|cursor|transition|hover:|focus:|disabled:|ring|outline|opacity|sr-only|truncate|shrink|grow|self-|col-|row-|space-|divide-)/;
-  for (const match of item.html.matchAll(/\bclass="([^"]*)"/gi)) for (const name of match[1].split(/\s+/)) if (name && !generic.test(name) && !/^\d/.test(name)) add(name, 4);
+  for (const match of item.html.matchAll(
+    /\b(?:id|aria-label|title|placeholder|formcontrolname|name|data-[\w-]+|routerlink|ng-reflect-[\w-]+)="([^"]{2,60})"/gi,
+  ))
+    add(match[1]);
+  const generic =
+    /^(flex|grid|block|inline|hidden|relative|absolute|items-|justify-|gap-|p[xytblr]?-|m[xytblr]?-|w-|h-|min-|max-|text-|bg-|border|rounded|shadow|font-|size-|z-|overflow|cursor|transition|hover:|focus:|disabled:|ring|outline|opacity|sr-only|truncate|shrink|grow|self-|col-|row-|space-|divide-)/;
+  for (const match of item.html.matchAll(/\bclass="([^"]*)"/gi))
+    for (const name of match[1].split(/\s+/))
+      if (name && !generic.test(name) && !/^\d/.test(name)) add(name, 4);
   const custom = item.html.match(/^<([a-z]+-[a-z0-9-]+)/i)?.[1];
   add(custom, 4);
   return [...hints].slice(0, 12);
@@ -553,15 +846,24 @@ function withElements(text: string, elements: PageElement[]): string {
       `Element ${index + 1} on ${item.title || 'the page'} (${item.url}): \`${item.selector}\` ${item.box.w}×${item.box.h}`,
       ...(item.note ? [`Note: ${item.note}`] : []),
       `Text: ${item.text || '(none)'}`,
-      `Styles: ${Object.entries(item.style).map(([key, value]) => `${key}: ${value}`).join('; ')}`,
+      `Styles: ${Object.entries(item.style)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join('; ')}`,
       '```html',
       item.html,
       '```',
-      ...(item.around ? ['Its place on the page:', '```', item.around, '```'] : []),
-      ...(hints.length ? [`To find its source in the project, search the files for these (they come from this element's text, ids and classes): ${hints.map((hint) => `"${hint}"`).join(', ')}`] : []),
+      ...(item.around
+        ? ['Its place on the page:', '```', item.around, '```']
+        : []),
+      ...(hints.length
+        ? [
+            `To find its source in the project, search the files for these (they come from this element's text, ids and classes): ${hints.map((hint) => `"${hint}"`).join(', ')}`,
+          ]
+        : []),
     ].join('\n');
   });
-  const guide = 'These elements are what the request is about. Change the code that renders them, in the place they are rendered: find it by searching the project for the words listed, read the file around the match, and put the change exactly where the element sits (see "Its place on the page"), written like the markup around it. Do not add it anywhere else.';
+  const guide =
+    'These elements are what the request is about. Change the code that renders them, in the place they are rendered: find it by searching the project for the words listed, read the file around the match, and put the change exactly where the element sits (see "Its place on the page"), written like the markup around it. Do not add it anywhere else.';
   return `${text || 'Look at the element(s) below.'}\n\n${guide}\n\n${parts.join('\n\n')}`;
 }
 
@@ -570,8 +872,12 @@ function withElements(text: string, elements: PageElement[]): string {
  * The agent, model and effort of the last message the user actually sent. A new chat starts from them instead of a
  * fixed default. Opening a chat to read it never changes this: only sending does.
  */
-export const lastChat = $state<{ agent: Agent; model: string; effort: Effort } | { agent: null }>({ agent: null });
-void getPref<{ agent: Agent; model: string; effort: Effort }>('composer.lastChat').then((saved) => {
+export const lastChat = $state<
+  { agent: Agent; model: string; effort: Effort } | { agent: null }
+>({ agent: null });
+void getPref<{ agent: Agent; model: string; effort: Effort }>(
+  'composer.lastChat',
+).then((saved) => {
   if (saved?.agent && saved.model) Object.assign(lastChat, saved);
 });
 function rememberLastChat(agent: Agent, model: string | null, effort: Effort) {
@@ -581,7 +887,13 @@ function rememberLastChat(agent: Agent, model: string | null, effort: Effort) {
   setPref('composer.lastChat', saved);
 }
 
-const PERMISSION_MODE: Record<Permission, string | null> = { ask: null, edits: 'acceptEdits', plan: 'plan', auto: 'auto', yolo: 'bypassPermissions' };
+const PERMISSION_MODE: Record<Permission, string | null> = {
+  ask: null,
+  edits: 'acceptEdits',
+  plan: 'plan',
+  auto: 'auto',
+  yolo: 'bypassPermissions',
+};
 /** The permission setting of the Composer, read when a turn starts. */
 export const turnOptions = $state<{ permission: Permission; effort: Effort }>({
   permission: 'auto',
@@ -592,7 +904,13 @@ export const turnOptions = $state<{ permission: Permission; effort: Effort }>({
 const turns: Record<string, string> = {};
 
 /** Messages typed while the agent was still busy, waiting their turn. */
-export type Queued = { text: string; images: Attachment[]; elements: PageElement[]; mentions?: Mention[]; files?: FileAttachment[] };
+export type Queued = {
+  text: string;
+  images: Attachment[];
+  elements: PageElement[];
+  mentions?: Mention[];
+  files?: FileAttachment[];
+};
 export const queued = $state<Record<string, Queued[]>>({});
 
 type SessionWorkBatch = { failed: boolean };
@@ -608,9 +926,21 @@ function failSessionWork(sessionId: string) {
 }
 
 function hasOutstandingSessionWork(sessionId: string): boolean {
-  if (replies[sessionId] || hasSideTurn(sessionId) || renderWaiters[sessionId] || needsUserInput(sessionId)) return true;
-  if (delegateRuns.some((run) => run.main === sessionId && !run.endedAt)) return true;
-  if ([...taskRuns.keys()].some((taskId) => delegateTasks[taskId]?.caller === sessionId)) return true;
+  if (
+    replies[sessionId] ||
+    hasSideTurn(sessionId) ||
+    renderWaiters[sessionId] ||
+    needsUserInput(sessionId)
+  )
+    return true;
+  if (delegateRuns.some((run) => run.main === sessionId && !run.endedAt))
+    return true;
+  if (
+    [...taskRuns.keys()].some(
+      (taskId) => delegateTasks[taskId]?.caller === sessionId,
+    )
+  )
+    return true;
   return false;
 }
 
@@ -621,7 +951,9 @@ function notifySessionWorkDone(sessionId: string) {
   if (!connectors.alerts.system) return;
   const session = workspace.sessions.find((item) => item.id === sessionId);
   if (!session) return;
-  const title = batch.failed ? 'Session finished with failures' : 'Session finished';
+  const title = batch.failed
+    ? 'Session finished with failures'
+    : 'Session finished';
   const body = batch.failed
     ? `${session.title}: at least one task failed. No session work remains.`
     : `${session.title}: all tasks are done and nothing remains queued.`;
@@ -629,19 +961,22 @@ function notifySessionWorkDone(sessionId: string) {
 }
 
 /** Whether a chat has a reply in progress (for the send / stop button). */
-export const isRunning = (sessionId: string) => workspace.sessions.find((item) => item.id === sessionId)?.status === 'working' || hasSideTurn(sessionId);
+export const isRunning = (sessionId: string) =>
+  workspace.sessions.find((item) => item.id === sessionId)?.status ===
+    'working' || hasSideTurn(sessionId);
 
 /** Stops the reply of a chat now. What was written so far stays. */
 export function stopTurn(sessionId: string) {
   for (const [id, side] of sideTurns) {
     if (side.main !== sessionId) continue;
-    void stopAgentTurn(id).catch(() => {});
+    void stopAgentTurn(id, side.turn).catch(() => {});
     side.reply.live = false;
     sideTurns.delete(id);
   }
   // Work handed to other agents (a flow's steps, `@agent`) stops with the chat that handed it out, all at once.
   for (const run of delegateRuns) {
-    if (run.main !== sessionId || run.endedAt || run.handback === 'running') continue;
+    if (run.main !== sessionId || run.endedAt || run.handback === 'running')
+      continue;
     run.cancelled = true;
     for (const node of run.nodes) {
       if (node.state !== 'running') continue;
@@ -650,18 +985,24 @@ export function stopTurn(sessionId: string) {
       if (!replies[node.childId] && waiter) {
         stepWaiters.delete(node.childId);
         askingCards.delete(node.childId);
-        waiter('', 'stopped', { id: nextId(), role: 'assistant', time: '', blocks: [] });
+        waiter('', 'stopped', {
+          id: nextId(),
+          role: 'assistant',
+          time: '',
+          blocks: [],
+        });
       } else stopTurn(node.childId);
     }
   }
   if (!replies[sessionId]) {
     // Nothing is running any more but the chat still says so (a lost event): clear it.
     const stuck = workspace.sessions.find((item) => item.id === sessionId);
-    if (stuck?.status === 'working') stuck.status = hasSideTurn(sessionId) ? 'working' : 'idle';
+    if (stuck?.status === 'working')
+      stuck.status = hasSideTurn(sessionId) ? 'working' : 'idle';
     return;
   }
   const turn = turns[sessionId];
-  void stopAgentTurn(sessionId).catch(() => {});
+  void stopAgentTurn(sessionId, turn).catch(() => {});
   handleAgentEvent(sessionId, { kind: 'error', message: 'stopped' }, turn);
 }
 
@@ -674,20 +1015,31 @@ void getPref<Record<string, string[]>>('permissions.allowed').then((saved) => {
 /** The chat's model if its agent offers it, else that agent's first model. */
 function modelFor(session: SessionItem): string | null {
   const list = MODELS[session.agent] ?? [];
-  if (session.model && list.some((item) => item.value === session.model)) return session.model;
+  if (session.model && list.some((item) => item.value === session.model))
+    return session.model;
   const fallback = list[0]?.value ?? null;
   if (fallback) session.model = fallback;
   return fallback;
 }
 
-const agentLabel = (agent?: Agent, model?: string | null) => (agent === 'custom' && customProviderName(model)) || (agent === 'custom' ? 'Custom provider' : agentDisplayName(agent ?? 'claude'));
+const agentLabel = (agent?: Agent, model?: string | null) =>
+  (agent === 'custom' && customProviderName(model)) ||
+  (agent === 'custom'
+    ? 'Custom provider'
+    : agentDisplayName(agent ?? 'claude'));
 
 /**
  * A user message that is only the hand-back prompt (or, in a chat saved by an older version, its stand-in
  * "↩ Claude answered"): it is never shown or quoted.
  */
 const hiddenPrompt = (message: Message) =>
-  message.role === 'user' && message.blocks.some((block) => block.kind === 'response' && (isHandbackPrompt(block.text) || /^↩ .{1,200} answered$/.test(block.text.trim())));
+  message.role === 'user' &&
+  message.blocks.some(
+    (block) =>
+      block.kind === 'response' &&
+      (isHandbackPrompt(block.text) ||
+        /^↩ .{1,200} answered$/.test(block.text.trim())),
+  );
 
 /**
  * What the other agents of this chat said since this agent last spoke, as text to put before the prompt.
@@ -695,33 +1047,67 @@ const hiddenPrompt = (message: Message) =>
  * it missed. `list` ends with the message being sent, unless `sent` is false (a hand-back turn has no message of its own:
  * `list` is then all that came before). The newest turns are kept when it is long.
  */
-function missedTurns(session: SessionItem, list: Message[], sent = true): string {
+function missedTurns(
+  session: SessionItem,
+  list: Message[],
+  sent = true,
+): string {
   const before = sent ? list.slice(0, -1) : list;
-  const writer = (message: Message) => message.agent ?? session.source ?? session.agent;
+  const writer = (message: Message) =>
+    message.agent ?? session.source ?? session.agent;
   let start = 0;
   for (let index = before.length - 1; index >= 0; index--) {
-    if (before[index].role === 'assistant' && writer(before[index]) === session.agent) {
+    if (
+      before[index].role === 'assistant' &&
+      writer(before[index]) === session.agent
+    ) {
       start = index + 1;
       break;
     }
   }
   const missed = before.slice(start);
   if (!missed.some((message) => message.role === 'assistant')) return '';
-  const lines = missed.filter((message) => !hiddenPrompt(message)).map((message) => {
-    const text = message.blocks
-      .flatMap((block) => (block.kind === 'response' ? [block.text] : block.kind === 'command' ? [`(ran: ${block.command.slice(0, 160)})`] : []))
-      .join('\n')
-      .trim();
-    const cut = text.length > 2500 ? `${text.slice(0, 2500)}…` : text;
-    return `${message.role === 'user' ? 'User' : agentLabel(writer(message), message.model)}: ${cut}`;
-  });
+  const lines = missed
+    .filter((message) => !hiddenPrompt(message))
+    .map((message) => {
+      const text = message.blocks
+        .flatMap((block) =>
+          block.kind === 'response'
+            ? [block.text]
+            : block.kind === 'command'
+              ? [`(ran: ${block.command.slice(0, 160)})`]
+              : [],
+        )
+        .join('\n')
+        .trim();
+      const cut = text.length > 2500 ? `${text.slice(0, 2500)}…` : text;
+      return `${message.role === 'user' ? 'User' : agentLabel(writer(message), message.model)}: ${cut}`;
+    });
   let digest = lines.join('\n\n');
   if (digest.length > 16000) digest = `…${digest.slice(-16000)}`;
   return `Earlier in this chat, other agents answered these turns (you were not part of them):\n\n${digest}\n\n---\nNow the user says:\n`;
 }
 
 /** One CLI run (`claude -p`, `codex exec`) in `session`, with a fresh live reply. Images go to disk first so the CLI can open them. */
-function startTurn(session: SessionItem, text: string, images: Attachment[] = [], allow: string[] = [], preface = '', files: FileAttachment[] = [], silent?: Message) {
+function startTurn(
+  session: SessionItem,
+  text: string,
+  images: Attachment[] = [],
+  allow: string[] = [],
+  preface = '',
+  files: FileAttachment[] = [],
+  silent?: Message,
+) {
+  const documentRequest = text.match(/^\/document(?:\s+([\s\S]*))?/i);
+  if (documentRequest) {
+    guide.tasks[session.id] = {
+      request: documentRequest[1]?.trim() || 'Create the requested document',
+      status: 'working',
+      progress: 'Starting document task',
+      result: '',
+    };
+    guide.open = true;
+  }
   if (images.length || !allow.length) lastPrompt[session.id] = text;
   // The CLI's own id for the conversation. Claude takes one we choose; Codex names its thread on the first turn
   // and reports it, so a new Codex chat starts without one.
@@ -730,27 +1116,50 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   let cliId: string | null;
   let resume: boolean;
   const selectedModel = modelFor(session);
-  rememberLastChat(session.agent, selectedModel, (session.stepEffort ?? turnOptions.effort) as Effort);
+  rememberLastChat(
+    session.agent,
+    selectedModel,
+    (session.stepEffort ?? turnOptions.effort) as Effort,
+  );
   if (session.agent === first) {
     // A conversation whose last run never started is not resumed from its id (see handleAgentEvent).
-    const fromId = session.agentStarted === false ? undefined : session.id.startsWith(prefix) ? session.id.slice(prefix.length) : undefined;
+    const fromId =
+      session.agentStarted === false
+        ? undefined
+        : session.id.startsWith(prefix)
+          ? session.id.slice(prefix.length)
+          : undefined;
     const known = session.agentSession ?? fromId;
     cliId = known ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
-    const modelChanged = Boolean(session.conversationModel && session.conversationModel !== selectedModel);
+    const modelChanged = Boolean(
+      session.conversationModel && session.conversationModel !== selectedModel,
+    );
     if (modelChanged) {
       cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
       session.agentStarted = false;
     }
     if (cliId) session.agentSession = cliId;
-    resume = cliId !== null && !modelChanged && (session.agentStarted ?? !!session.path);
+    resume =
+      cliId !== null &&
+      !modelChanged &&
+      (session.agentStarted ?? !!session.path);
     session.conversationModel = selectedModel ?? undefined;
   } else {
     // Another agent in this chat: its own conversation, started the first time it is used here.
     const own = session.agentIds?.[session.agent];
-    cliId = own?.id ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
-    if (cliId && !own) (session.agentIds ??= {})[session.agent] = { id: cliId, started: false };
-    const modelChanged = Boolean(session.agentModels?.[session.agent] && session.agentModels[session.agent] !== selectedModel);
-    if (modelChanged) cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
+    cliId =
+      own?.id ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
+    if (cliId && !own)
+      (session.agentIds ??= {})[session.agent] = {
+        id: cliId,
+        started: false,
+      };
+    const modelChanged = Boolean(
+      session.agentModels?.[session.agent] &&
+      session.agentModels[session.agent] !== selectedModel,
+    );
+    if (modelChanged)
+      cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
     resume = cliId !== null && !modelChanged && Boolean(own?.started);
     (session.agentModels ??= {})[session.agent] = selectedModel ?? '';
   }
@@ -766,17 +1175,33 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   const list = messagesOf(session.id);
   // A silent turn (the hand-back) continues the finished reply that handed work out: it is one message on screen.
   const host = silent ? list.at(-1) : undefined;
-  const continues = !!host && host.role === 'assistant' && !host.live && host.agent === session.agent;
-  const reply: Message = continues && host
-    ? host
-    : { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent, model: selectedModel ?? session.model };
+  const continues =
+    !!host &&
+    host.role === 'assistant' &&
+    !host.live &&
+    host.agent === session.agent;
+  const reply: Message =
+    continues && host
+      ? host
+      : {
+          id: nextId(),
+          role: 'assistant',
+          time: clock(new Date().toISOString()),
+          at: new Date().toISOString(),
+          blocks: [],
+          live: true,
+          startedAt: Date.now(),
+          agent: session.agent,
+          model: selectedModel ?? session.model,
+        };
   if (continues && host) {
     host.live = true;
     host.startedAt = Date.now() - (host.ms ?? 0);
     host.callOutput = 0;
   }
   // A silent turn (the hand-back) has no message of its own: its reply simply follows the message that handed work out.
-  const context = preface + (session.forkContext ?? '') + missedTurns(session, list, !silent);
+  const context =
+    preface + (session.forkContext ?? '') + missedTurns(session, list, !silent);
   session.forkContext = undefined;
   const asked = silent ? undefined : list.at(-1);
   if (!continues) list.push(reply);
@@ -788,22 +1213,39 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
   } else delete liveHandouts[session.id];
   replies[session.id] = reply.id;
   session.status = 'working';
-  const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
+  const cwd =
+    workspace.projects.find((project) => project.id === session.projectId)
+      ?.path ?? null;
   void (async () => {
-    const paths = await Promise.all(images.map((image) => saveAttachment(image.mime, image.src.slice(image.src.indexOf(',') + 1))));
+    const paths = await Promise.all(
+      images.map((image) =>
+        saveAttachment(image.mime, image.src.slice(image.src.indexOf(',') + 1)),
+      ),
+    );
     // A message that starts with `/name` is a command: its text goes to the agent, the chat keeps what was typed.
     const body = await expandSlash(text, session.agent, cwd);
     if (session.agent === 'custom') {
       // A custom provider has no CLI to keep the conversation: the whole chat goes along with every turn.
       const target = parseCustomModel(selectedModel);
-      const provider = connectors.custom.find((item) => item.id === target?.providerId);
-      if (!target || !provider) throw new Error('This provider was removed or turned off. Pick another model.');
+      const provider = connectors.custom.find(
+        (item) => item.id === target?.providerId,
+      );
+      if (!target || !provider)
+        throw new Error(
+          'This provider was removed or turned off. Pick another model.',
+        );
       const spoken = (message: Message) =>
-        message.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : [])).join('\n').trim();
+        message.blocks
+          .flatMap((block) => (block.kind === 'response' ? [block.text] : []))
+          .join('\n')
+          .trim();
       const history = list
         .slice(0, silent ? -1 : -2)
         .filter((message) => !hiddenPrompt(message))
-        .map((message) => ({ role: message.role, content: spoken(message) }))
+        .map((message) => ({
+          role: message.role,
+          content: spoken(message),
+        }))
         .filter((message) => message.content);
       await sendCustomTurn({
         session: session.id,
@@ -812,7 +1254,15 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey || null,
         model: target.model,
-        messages: [...history, { role: 'user', content: body, images: images.map((image) => image.src), files: files.map((file) => file.path) }],
+        messages: [
+          ...history,
+          {
+            role: 'user',
+            content: body,
+            images: images.map((image) => image.src),
+            files: files.map((file) => file.path),
+          },
+        ],
         permissionMode: PERMISSION_MODE[turnOptions.permission],
         allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
         cwd,
@@ -821,21 +1271,36 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       return;
     }
     // A flow's step is not told it may open pages: it reports back, the user did not ask to see anything.
-    const openHint = !isWorkerChat(session.id) && OPEN_WORDS.test(body) ? AGENTDECK_HINT : '';
-    // How to delegate (DELEGATE_HINT): said when the conversation starts, and once per run of the app for a chat that is
-    // resumed, not with every turn: the agent keeps it in its history. Sub chats (workers, flow steps) do not delegate.
+    // Agents told about the Preview in their system prompt are not told again in every message that says "run" or "open".
+    const openHint =
+      !isWorkerChat(session.id) &&
+      !KNOWS_PREVIEW.has(session.agent) &&
+      OPEN_WORDS.test(body)
+        ? AGENTDECK_HINT
+        : '';
+    // How to delegate (DELEGATE_HINT): said when the conversation starts, and once for a chat this app never told (an
+    // imported one), not with every turn: the agent keeps it in its history. Sub chats (workers, flow steps) do not delegate.
     const hintKey = `${session.id}|${session.agent}`;
-    const delegateHint = !isWorkerChat(session.id) && (!resume || !delegateHinted.has(hintKey)) ? DELEGATE_HINT : '';
-    if (delegateHint) delegateHinted.add(hintKey);
+    const delegateHint =
+      !isWorkerChat(session.id) && (!resume || !delegateHinted.has(hintKey))
+        ? DELEGATE_HINT
+        : '';
+    if (delegateHint) rememberDelegateHint(hintKey);
     const hint = agentdeckLead(openHint, delegateHint);
     // Pictures and documents are on disk: the prompt names their paths, which the agent opens with its own tools.
     const attached =
-      (paths.length ? `Attached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}` : '') +
-      (files.length ? `${paths.length ? '\n\n' : ''}Attached file${files.length > 1 ? 's' : ''} (open with the Read tool or a shell command):\n${files.map((file) => `- ${file.path}`).join('\n')}` : '');
+      (paths.length
+        ? `Attached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
+        : '') +
+      (files.length
+        ? `${paths.length ? '\n\n' : ''}Attached file${files.length > 1 ? 's' : ''} (open with the Read tool or a shell command):\n${files.map((file) => `- ${file.path}`).join('\n')}`
+        : '');
     const prompt =
       hint +
       context +
-      (attached ? `${body || (files.length && !paths.length ? 'Look at the attached file.' : 'Look at the attached image.')}\n\n${attached}` : body);
+      (attached
+        ? `${body || (files.length && !paths.length ? 'Look at the attached file.' : 'Look at the attached image.')}\n\n${attached}`
+        : body);
     await sendAgentTurn({
       session: session.id,
       turn,
@@ -851,7 +1316,11 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
       cwd,
     });
   })().catch((error: unknown) => {
-    handleAgentEvent(session.id, { kind: 'error', message: String(error) }, turn);
+    handleAgentEvent(
+      session.id,
+      { kind: 'error', message: String(error) },
+      turn,
+    );
   });
 }
 
@@ -859,10 +1328,21 @@ function startTurn(session: SessionItem, text: string, images: Attachment[] = []
  * The user's answer to an approval card. "Allow" and "Always allow" let the CLI run the refused tools and
  * continue the work in a new turn; "Deny" just closes the card.
  */
-export function answerPermission(messageId: string, blockIndex: number, answer: 'once' | 'always' | 'deny') {
+export function answerPermission(
+  messageId: string,
+  blockIndex: number,
+  answer: 'once' | 'always' | 'deny',
+) {
   const session = activeSession();
-  const block = chat.messages.find((message) => message.id === messageId)?.blocks[blockIndex];
-  if (!session || block?.kind !== 'permission' || block.state !== 'pending' || replies[session.id]) return;
+  const block = chat.messages.find((message) => message.id === messageId)
+    ?.blocks[blockIndex];
+  if (
+    !session ||
+    block?.kind !== 'permission' ||
+    block.state !== 'pending' ||
+    replies[session.id]
+  )
+    return;
   if (answer === 'deny') {
     block.state = 'denied';
     persistLocal();
@@ -872,11 +1352,18 @@ export function answerPermission(messageId: string, blockIndex: number, answer: 
   block.state = 'allowed';
   const entries = block.requests.map((request) => request.allow);
   if (answer === 'always') {
-    approved[session.id] = [...new Set([...(approved[session.id] ?? []), ...entries])];
+    approved[session.id] = [
+      ...new Set([...(approved[session.id] ?? []), ...entries]),
+    ];
     setPref('permissions.allowed', JSON.parse(JSON.stringify(approved)));
   }
   persistLocal();
-  startTurn(session, 'Permission granted. Please continue with what you were doing.', [], entries);
+  startTurn(
+    session,
+    'Permission granted. Please continue with what you were doing.',
+    [],
+    entries,
+  );
 }
 
 /** Adds the typed message to the open session. The first message turns a draft into a real session. */
@@ -889,7 +1376,12 @@ const liveAsks: Record<string, Message> = {};
 /** For a running hand-back turn (it has no message of its own): the message whose delegate cards it answers. */
 const liveHandouts: Record<string, Message> = {};
 /** For a hand-back that answers no message (a background task's report): its reply just follows the chat's last message. */
-const NO_HANDOUT: Message = { id: 'no-handout', role: 'user', time: '', blocks: [] };
+const NO_HANDOUT: Message = {
+  id: 'no-handout',
+  role: 'user',
+  time: '',
+  blocks: [],
+};
 
 const askText = (message: Message) =>
   message.blocks
@@ -906,18 +1398,25 @@ const askText = (message: Message) =>
 function withLive(sessionId: string, list: Message[]): Message[] {
   const reply = liveReplies[sessionId];
   const handout = liveHandouts[sessionId];
-  if (reply && handout === NO_HANDOUT) return list.includes(reply) ? list : [...list, reply];
+  if (reply && handout === NO_HANDOUT)
+    return list.includes(reply) ? list : [...list, reply];
   if (reply && handout && !list.includes(reply)) {
     // The file may already hold part of the reply, behind the message that handed work out: that is replaced by the live one.
     const at = list.findLastIndex((message) => message.id === handout.id);
-    return at >= 0 ? [...list.slice(0, at), handout, reply] : [...list, handout, reply];
+    return at >= 0
+      ? [...list.slice(0, at), handout, reply]
+      : [...list, handout, reply];
   }
   const asked = liveAsks[sessionId];
   if (!reply || !asked || list.includes(reply)) return list;
   const want = askText(asked);
   let cut = list.length;
   // Only the last few can be this turn: an older message with the same words is another turn.
-  for (let index = list.length - 1; index >= Math.max(0, list.length - 3); index--) {
+  for (
+    let index = list.length - 1;
+    index >= Math.max(0, list.length - 3);
+    index--
+  ) {
     if (list[index].role === 'user' && askText(list[index]) === want) {
       cut = index;
       break;
@@ -938,12 +1437,27 @@ function messagesOf(sessionId: string): Message[] {
 /** A queued task must wait while the latest user turn still has a question or permission request to resolve. */
 export function needsUserInput(sessionId: string): boolean {
   const list = messagesOf(sessionId);
-  const messages = liveReplies[sessionId] && !list.includes(liveReplies[sessionId]) ? [...list, liveReplies[sessionId]] : list;
+  const messages =
+    liveReplies[sessionId] && !list.includes(liveReplies[sessionId])
+      ? [...list, liveReplies[sessionId]]
+      : list;
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.role === 'user') return false;
-    if (message.blocks.some((block) => block.kind === 'permission' && block.state === 'pending')) return true;
-    if (message.blocks.some((block) => block.kind === 'response' && parseQuestions(block.text).questions.length > 0)) return true;
+    if (
+      message.blocks.some(
+        (block) => block.kind === 'permission' && block.state === 'pending',
+      )
+    )
+      return true;
+    if (
+      message.blocks.some(
+        (block) =>
+          block.kind === 'response' &&
+          parseQuestions(block.text).questions.length > 0,
+      )
+    )
+      return true;
   }
   return false;
 }
@@ -958,7 +1472,9 @@ function sendNextQueued(sessionId: string) {
     if (hasOutstandingSessionWork(sessionId)) return;
     const next = dequeue(queued, sessionId);
     if (next) {
-      send(sessionId, next.text, next.images, next.elements, next.mentions, { files: next.files });
+      send(sessionId, next.text, next.images, next.elements, next.mentions, {
+        files: next.files,
+      });
       return;
     }
     if (backlog.get(sessionId)?.length) {
@@ -971,10 +1487,17 @@ function sendNextQueued(sessionId: string) {
 }
 
 /** A finished reply can still be animating its final Markdown into view; keep its queue behind that render. */
-const renderWaiters: Record<string, { messageId: string; blocks: Set<number> }> = {};
+const renderWaiters: Record<
+  string,
+  { messageId: string; blocks: Set<number> }
+> = {};
 
 /** Called after a response block's final text has reached the DOM. */
-export function replyBlockRendered(sessionId: string, messageId: string, blockIndex: number) {
+export function replyBlockRendered(
+  sessionId: string,
+  messageId: string,
+  blockIndex: number,
+) {
   const waiting = renderWaiters[sessionId];
   if (!waiting || waiting.messageId !== messageId) return;
   waiting.blocks.delete(blockIndex);
@@ -991,21 +1514,43 @@ export function releaseReplyRender(sessionId: string) {
 }
 
 /** Apply one agent event to the reply it belongs to. */
-export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: string) {
+export function handleAgentEvent(
+  sessionId: string,
+  event: AgentEvent,
+  turn?: string,
+) {
   if (turn !== undefined && turns[sessionId] !== turn) return; // a run that was stopped or replaced
   const session = workspace.sessions.find((item) => item.id === sessionId);
   // The live reply is kept by reference: the chat list can be swapped under it (another chat opened, a transcript
   // reloaded) and the turn must still finish, or the chat would spin for ever.
-  const reply = liveReplies[sessionId] ?? messagesOf(sessionId).find((item) => item.id === replies[sessionId]);
+  const reply =
+    liveReplies[sessionId] ??
+    messagesOf(sessionId).find((item) => item.id === replies[sessionId]);
   if (!session) return;
   // Codex writes a thread's rollout, and Claude its session file, only once a run has started. A run stopped before
   // that leaves an id with nothing to resume. The next message then starts a new conversation, instead of resuming
   // that id again and failing the same way.
-  if (event.kind === 'error' && /no rollout found|no conversation found/i.test(event.message)) {
+  if (
+    event.kind === 'error' &&
+    /no rollout found|no conversation found/i.test(event.message)
+  ) {
     session.agentStarted = false;
     session.agentSession = undefined;
   }
-  trackActivity(sessionId, session.title, workspace.projects.find((project) => project.id === session.projectId)?.name ?? '', event);
+  trackActivity(
+    sessionId,
+    session.title,
+    workspace.projects.find((project) => project.id === session.projectId)
+      ?.name ?? '',
+    event,
+  );
+  const documentTask = guide.tasks[sessionId];
+  if (documentTask?.status === 'working') {
+    if (event.kind === 'tool_call') documentTask.progress = `Agent is running ${event.name}`;
+    if (event.kind === 'tool_result') documentTask.progress = event.is_error
+      ? `Tool failed: ${event.output.slice(0, 300)}`
+      : `Finished ${documentTask.progress.replace(/^Agent is running /, '')}`;
+  }
   // A line of the CLI the chat does not show: it is only kept in the Audit log.
   if (event.kind === 'raw') return;
   if (!reply) {
@@ -1017,82 +1562,122 @@ export function handleAgentEvent(sessionId: string, event: AgentEvent, turn?: st
   }
   if (event.kind === 'usage') {
     reply.model ??= session.model;
-    reply.tokens ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    const tokens = reply.tokens;
-    if (event.new_call) {
-      tokens.input += event.input_tokens;
-      tokens.cacheRead += event.cache_read_tokens;
-      tokens.cacheWrite += event.cache_write_tokens;
-      reply.callOutput = 0;
-    }
-    tokens.output += Math.max(0, event.output_tokens - (reply.callOutput ?? 0));
-    reply.callOutput = event.output_tokens;
+    addUsage(reply, event);
     return;
   }
-  if (event.kind === 'done' && event.cost_usd != null) reply.cost = (reply.cost ?? 0) + event.cost_usd;
+  if (event.kind === 'done' && event.cost_usd != null)
+    reply.cost = (reply.cost ?? 0) + event.cost_usd;
   const update = applyAgentEvent(reply.blocks, event);
   reply.blocks = update.blocks;
-  if (event.kind === 'tool_result' && event.image) persistCommandImage(sessionId, reply, event.id, event.image);
+  if (event.kind === 'tool_result' && event.image)
+    persistCommandImage(sessionId, reply, event.id, event.image);
   // A delegate_task call just showed up: its card follows the task the call starts.
-  if (event.kind === 'tool_call' && toolKindOf(event.name) === 'delegate_task') bindTasks(sessionId);
+  if (event.kind === 'tool_call' && toolKindOf(event.name) === 'delegate_task')
+    bindTasks(sessionId);
   // The CLI has the conversation once it answers; only then is `--resume` valid for the next turn.
   const first = session.source ?? session.agents?.[0] ?? session.agent;
   const agent = reply.agent ?? session.agent;
   if (agent === first) {
     if (event.kind !== 'error') session.agentStarted = true;
     if (update.agentSession) session.agentSession = update.agentSession;
-  } else if (event.kind !== 'error' && (update.agentSession || session.agentIds?.[agent])) {
+  } else if (
+    event.kind !== 'error' &&
+    (update.agentSession || session.agentIds?.[agent])
+  ) {
     const id = update.agentSession ?? session.agentIds?.[agent]?.id;
     if (id) (session.agentIds ??= {})[agent] = { id, started: true };
   }
   if (update.finished) {
-    if (event.kind === 'error') failSessionWork(sessionId);
-    reply.live = false;
-    void finishCommandImages(sessionId, reply);
-    if (session.path && session.source && reply.agent && reply.agent !== session.source) {
-      keepOtherTurn(session, reply);
-      rememberMixed(session);
+    if (documentTask?.status === 'working') {
+      documentTask.status = event.kind === 'error' ? 'error' : 'done';
+      documentTask.progress = event.kind === 'error' ? 'Document task failed' : 'Document task finished';
+      documentTask.result = event.kind === 'error'
+        ? event.message
+        : event.kind === 'done'
+          ? event.text || reply.blocks.flatMap((block) => block.kind === 'response' ? [block.text] : []).join('\n').trim()
+          : reply.blocks.flatMap((block) => block.kind === 'response' ? [block.text] : []).join('\n').trim();
+      documentTask.outputPath = documentTask.result.match(/(?:[A-Za-z]:\\|\\\\|\/|docs[\\/])[^\n\r"'<>]*?\.(?:docx|pdf|pptx|webm|html|md)\b/i)?.[0];
     }
-    if (reply.startedAt) reply.ms = Date.now() - reply.startedAt;
-    if (reply.tokens) {
-      const estimate = estimateCost(reply.tokens, reply.model);
-      recordUsage({
-        at: new Date().toISOString(),
+    // The chat is released in `finally`: a step here that throws must not leave it working for ever.
+    try {
+      if (event.kind === 'error') failSessionWork(sessionId);
+      reply.live = false;
+      void finishCommandImages(sessionId, reply);
+      if (
+        session.path &&
+        session.source &&
+        reply.agent &&
+        reply.agent !== session.source
+      ) {
+        keepOtherTurn(session, reply);
+        rememberMixed(session);
+      }
+      if (reply.startedAt) reply.ms = Date.now() - reply.startedAt;
+      if (reply.tokens) {
+        const estimate = estimateCost(reply.tokens, reply.model);
+        recordUsage({
+          at: new Date().toISOString(),
+          sessionId,
+          agent: session.agent,
+          model: reply.model,
+          projectId: session.projectId,
+          ms: reply.ms,
+          tokens: { ...reply.tokens },
+          cost: reply.cost ?? estimate,
+          estimated: reply.cost == null,
+        });
+      }
+      openServedPage(sessionId, reply);
+      onDelegateDone(
         sessionId,
-        agent: session.agent,
-        model: reply.model,
-        projectId: session.projectId,
-        ms: reply.ms,
-        tokens: { ...reply.tokens },
-        cost: reply.cost ?? estimate,
-        estimated: reply.cost == null,
-      });
+        reply,
+        event.kind === 'error' ? event.message : null,
+      );
+      onHandbackDone(sessionId, reply, event.kind === 'error');
+      endWaitingTasks(sessionId);
+      // Our own copy of the turn (agent, model, time), apart from what the CLIs store: the base for syncing later.
+      archiveTurn(
+        {
+          id: sessionId,
+          title: session.title,
+          agent: session.agent,
+          model: reply.model ?? session.model,
+          projectPath:
+            workspace.projects.find(
+              (project) => project.id === session.projectId,
+            )?.path ?? null,
+        },
+        [liveAsks[sessionId], reply].filter((message): message is Message =>
+          Boolean(message),
+        ),
+      );
+    } finally {
+      delete replies[sessionId];
+      delete liveReplies[sessionId];
+      delete liveAsks[sessionId];
+      delete liveHandouts[sessionId];
+      session.status = hasSideTurn(sessionId) ? 'working' : 'idle';
+      persistLocal();
+      // The CLI wrote the conversation to disk: pick it up so the row gets its path, in place (same id).
+      // The cached transcript of this chat is now behind the file: a new time makes the next open read it again.
+      session.updatedAt = new Date().toISOString();
+      transcripts.delete(sessionId);
+      if (!session.path) void importHistory({ refresh: true });
+      // The final Markdown animation can outlast the CLI turn. Keep queued work behind the last rendered response.
+      const responseBlocks = reply.blocks.flatMap((block, index) =>
+        block.kind === 'response' && block.text ? [index] : [],
+      );
+      if (
+        sessionId === workspace.activeId &&
+        responseBlocks.length &&
+        !needsUserInput(sessionId)
+      ) {
+        renderWaiters[sessionId] = {
+          messageId: reply.id,
+          blocks: new Set(responseBlocks),
+        };
+      } else sendNextQueued(sessionId);
     }
-    openServedPage(sessionId, reply);
-    onDelegateDone(sessionId, reply, event.kind === 'error' ? event.message : null);
-    onHandbackDone(sessionId, reply, event.kind === 'error');
-    endWaitingTasks(sessionId);
-    // Our own copy of the turn (agent, model, time), apart from what the CLIs store: the base for syncing later.
-    archiveTurn(
-      { id: sessionId, title: session.title, agent: session.agent, model: reply.model ?? session.model, projectPath: workspace.projects.find((project) => project.id === session.projectId)?.path ?? null },
-      [liveAsks[sessionId], reply].filter((message): message is Message => Boolean(message)),
-    );
-    delete replies[sessionId];
-    delete liveReplies[sessionId];
-    delete liveAsks[sessionId];
-    delete liveHandouts[sessionId];
-    session.status = hasSideTurn(sessionId) ? 'working' : 'idle';
-    persistLocal();
-    // The CLI wrote the conversation to disk: pick it up so the row gets its path, in place (same id).
-    // The cached transcript of this chat is now behind the file: a new time makes the next open read it again.
-    session.updatedAt = new Date().toISOString();
-    transcripts.delete(sessionId);
-    if (!session.path) void importHistory({ refresh: true });
-    // The final Markdown animation can outlast the CLI turn. Keep queued work behind the last rendered response.
-    const responseBlocks = reply.blocks.flatMap((block, index) => (block.kind === 'response' && block.text ? [index] : []));
-    if (sessionId === workspace.activeId && responseBlocks.length && !needsUserInput(sessionId)) {
-      renderWaiters[sessionId] = { messageId: reply.id, blocks: new Set(responseBlocks) };
-    } else sendNextQueued(sessionId);
   }
 }
 
@@ -1100,15 +1685,26 @@ if (inTauri()) {
   // A fast stream sends dozens of deltas a second; each one re-rendered the chat. Apply them once per frame.
   let queue: { session: string; turn: string; event: AgentEvent }[] = [];
   const flush = () => {
+    if (!queue.length) return; // already applied by the other of the two triggers
     const batch = queue;
     queue = [];
     for (const { session, turn, event } of batch) {
-      if (sideTurns.has(session)) handleSideEvent(session, event, turn);
-      else handleAgentEvent(session, event, turn);
+      // One event that throws must not drop the rest of the frame: a `done` behind it (of this chat or of another
+      // running at the same time) would be lost, and that chat would show it is working for ever.
+      try {
+        if (sideTurns.has(session)) handleSideEvent(session, event, turn);
+        else handleAgentEvent(session, event, turn);
+      } catch (error) {
+        console.error('agent event failed', session, event.kind, error);
+      }
     }
   };
   void listenAgentEvents((envelope) => {
-    if (queue.push(envelope) === 1) requestAnimationFrame(flush);
+    if (queue.push(envelope) !== 1) return;
+    // A hidden or minimised window gets no animation frames: the timer applies the events then, so a turn still
+    // ends (and its queue, its notification and the agents waiting on it go on) while nobody looks.
+    requestAnimationFrame(flush);
+    setTimeout(flush, 250);
   });
 }
 
@@ -1118,15 +1714,55 @@ if (inTauri()) {
 // answered, the answer goes back into this chat and the chat's own agent carries on with it. With several `@`s the
 // children run side by side and the agent is called once, when the last one has answered.
 
-type DelegateBatch = { main: string; task: string; /** The message whose cards show the work. */ asked: Message; pending: Set<string>; results: { label: string; text: string }[]; run: DelegateRun; /** A workflow preset's note to the agent that writes the final answer. */ orchestrator?: string; /** More for that agent: the findings the steps shared, where their notes are. */ memo?: string };
+type DelegateBatch = {
+  main: string;
+  task: string;
+  /** The message whose cards show the work. */ asked: Message;
+  pending: Set<string>;
+  results: { label: string; text: string }[];
+  run: DelegateRun;
+  /** A workflow preset's note to the agent that writes the final answer. */ orchestrator?: string;
+  /** More for that agent: the findings the steps shared, where their notes are. */ memo?: string;
+};
 type DelegateCard = Extract<Block, { kind: 'delegate' }>;
-const delegations = new Map<string, { batch: DelegateBatch; label: string; card: DelegateCard; node: RunNode }>();
+const delegations = new Map<
+  string,
+  { batch: DelegateBatch; label: string; card: DelegateCard; node: RunNode }
+>();
 
 // What the Workflow tab draws: one run per delegated message (main chat -> a child per agent -> handback -> main agent).
-export type RunStats = { ms: number; tokens?: import('./usage').Tokens; cost: number | null; tools: number; last: string };
+export type RunStats = {
+  ms: number;
+  tokens?: import('./usage').Tokens;
+  cost: number | null;
+  tools: number;
+  last: string;
+};
 /** One question a step put to an earlier step (its chat answers it), kept for the Workflow tab and the Audit log. */
-export type Talk = { to: string; question: string; answer?: string; at: number };
-export type RunNode = { childId: string; talks?: Talk[]; /** The preset step it runs, when the run comes from a workflow. */ stepId?: string; /** What it was handed (earlier answers) and what it answered, for the audit. */ input?: string; output?: string; handoff?: HandoffReport | null; attempt?: number; agentSession?: string; agent: Agent; model: string; label: string; startedAt: number; endedAt?: number; state: 'running' | 'done' | 'failed'; note?: string; stats?: RunStats };
+export type Talk = {
+  to: string;
+  question: string;
+  answer?: string;
+  at: number;
+};
+export type RunNode = {
+  childId: string;
+  talks?: Talk[];
+  /** The preset step it runs, when the run comes from a workflow. */ stepId?: string;
+  /** What it was handed (earlier answers) and what it answered, for the audit. */ input?: string;
+  output?: string;
+  handoff?: HandoffReport | null;
+  attempt?: number;
+  agentSession?: string;
+  agent: Agent;
+  model: string;
+  label: string;
+  startedAt: number;
+  endedAt?: number;
+  state: 'running' | 'done' | 'failed';
+  note?: string;
+  stats?: RunStats;
+};
 export type DelegateRun = {
   id: string;
   main: string;
@@ -1155,7 +1791,8 @@ export const delegateRuns = $state<DelegateRun[]>([]);
 // Finished runs are kept (IndexedDB), so the Workflow tab has a history to judge the flows by after a restart. What a
 // step was handed and answered is cut short: the numbers and the outcome are what the history is for.
 const RUNS_KEY = 'workflow.runs';
-const clip = (text: string | undefined, max = 1500) => (text && text.length > max ? `${text.slice(0, max)}…` : text);
+const clip = (text: string | undefined, max = 1500) =>
+  text && text.length > max ? `${text.slice(0, max)}…` : text;
 void getPref<DelegateRun[]>(RUNS_KEY).then((saved) => {
   if (!Array.isArray(saved)) return;
   const known = new Set(delegateRuns.map((run) => run.id));
@@ -1165,38 +1802,75 @@ $effect.root(() => {
   $effect(() => {
     const ended = delegateRuns.filter((run) => run.endedAt);
     const snapshot = JSON.parse(JSON.stringify(ended)) as DelegateRun[];
-    for (const run of snapshot) for (const node of run.nodes) Object.assign(node, { input: clip(node.input), output: clip(node.output) });
+    for (const run of snapshot)
+      for (const node of run.nodes)
+        Object.assign(node, {
+          input: clip(node.input),
+          output: clip(node.output),
+        });
     setPref(RUNS_KEY, snapshot.slice(-RUN_LIMIT));
   });
 });
 
-function statsOf(reply: Message | undefined, startedAt: number): RunStats | undefined {
+function statsOf(
+  reply: Message | undefined,
+  startedAt: number,
+): RunStats | undefined {
   if (!reply) return undefined;
-  const text = reply.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : []));
-  const last = text.join("\n").split('\n').reverse().find((line) => line.trim()) ?? '';
-  const commands = reply.blocks.filter((block): block is Extract<Block, { kind: 'command' }> => block.kind === 'command');
-  const cost = reply.cost ?? (reply.tokens ? estimateCost(reply.tokens, reply.model) : null);
+  const text = reply.blocks.flatMap((block) =>
+    block.kind === 'response' ? [block.text] : [],
+  );
+  const last =
+    text
+      .join('\n')
+      .split('\n')
+      .reverse()
+      .find((line) => line.trim()) ?? '';
+  const commands = reply.blocks.filter(
+    (block): block is Extract<Block, { kind: 'command' }> =>
+      block.kind === 'command',
+  );
+  const cost =
+    reply.cost ??
+    (reply.tokens ? estimateCost(reply.tokens, reply.model) : null);
   return {
     ms: reply.ms ?? Date.now() - (reply.startedAt ?? startedAt),
     tokens: reply.tokens ? { ...reply.tokens } : undefined,
     cost,
     tools: commands.length,
-    last: last.trim() || (commands.length ? commands[commands.length - 1].command : ''),
+    last:
+      last.trim() ||
+      (commands.length ? commands[commands.length - 1].command : ''),
   };
 }
 
 /** The numbers of a turn still being written in `sessionId` (read it again each second: the reply is not reactive here). */
-export const liveStats = (sessionId: string, startedAt: number) => statsOf(liveReplies[sessionId], startedAt);
+export const liveStats = (sessionId: string, startedAt: number) =>
+  statsOf(liveReplies[sessionId], startedAt);
 
 /** Whether the chat `childId` is still working on something it was handed. */
-export const isDelegating = (childId: string) => delegations.has(childId) || stepWaiters.has(childId);
+export const isDelegating = (childId: string) =>
+  delegations.has(childId) || stepWaiters.has(childId);
 /** Whether the chat `childId` stopped on an approval card that waits for the user (a flow step that needs a yes). Not reactive: read it with a ticker. */
 export const needsApproval = (childId: string) => {
-  const list = childId === workspace.activeId ? chat.messages : (localMessages[childId] ?? []);
-  return list.slice(-3).some((message) => message.blocks.some((block) => block.kind === 'permission' && block.state === 'pending'));
+  const list =
+    childId === workspace.activeId
+      ? chat.messages
+      : (localMessages[childId] ?? []);
+  return list
+    .slice(-3)
+    .some((message) =>
+      message.blocks.some(
+        (block) => block.kind === 'permission' && block.state === 'pending',
+      ),
+    );
 };
 /** Whether a run that started some of these chats is still going (a step waiting in its queue is waiting for it). */
-export const isRunActive = (childIds: string[]) => delegateRuns.some((run) => !run.endedAt && run.nodes.some((node) => childIds.includes(node.childId)));
+export const isRunActive = (childIds: string[]) =>
+  delegateRuns.some(
+    (run) =>
+      !run.endedAt && run.nodes.some((node) => childIds.includes(node.childId)),
+  );
 
 const firstLineOf = (text: string, max: number) => {
   const line = text.split('\n')[0].trim();
@@ -1205,7 +1879,13 @@ const firstLineOf = (text: string, max: number) => {
 
 const plainText = (message: Message) =>
   message.blocks
-    .flatMap((block) => (block.kind === 'response' ? [block.text] : block.kind === 'command' ? [`(ran: ${block.command.slice(0, 160)})`] : []))
+    .flatMap((block) =>
+      block.kind === 'response'
+        ? [block.text]
+        : block.kind === 'command'
+          ? [`(ran: ${block.command.slice(0, 160)})`]
+          : [],
+    )
     .join('\n')
     .trim();
 
@@ -1224,21 +1904,55 @@ function mentionContext(mentions: Mention[]): string {
   const parts: string[] = [];
   for (const mention of mentions) {
     if (mention.kind === 'session') {
-      const messages = transcripts.get(mention.id)?.messages ?? localMessages[mention.id] ?? [];
-      parts.push(messages.length ? `Chat "${mention.label}", its latest messages:\n${digestOf(messages, 4000)}` : `Chat "${mention.label}" (not opened in this app yet, so no text of it is known here)`);
+      const messages =
+        transcripts.get(mention.id)?.messages ??
+        localMessages[mention.id] ??
+        [];
+      parts.push(
+        messages.length
+          ? `Chat "${mention.label}", its latest messages:\n${digestOf(messages, 4000)}`
+          : `Chat "${mention.label}" (not opened in this app yet, so no text of it is known here)`,
+      );
     } else if (mention.kind === 'project') {
       const project = workspace.projects.find((item) => item.id === mention.id);
-      if (project) parts.push(`Project "${project.name}" is at ${project.path}`);
+      if (project)
+        parts.push(`Project "${project.name}" is at ${project.path}`);
     }
   }
-  return parts.length ? `The user attached this context:\n\n${parts.join('\n\n')}\n\n---\n` : '';
+  return parts.length
+    ? `The user attached this context:\n\n${parts.join('\n\n')}\n\n---\n`
+    : '';
 }
 
-function delegate(main: SessionItem, asked: Message, task: string, targets: Mention[], preface: string, images: Attachment[], elements: PageElement[], files: FileAttachment[] = []) {
-  delegateRuns.push({ id: crypto.randomUUID(), main: main.id, task, startedAt: Date.now(), nodes: [], handback: 'waiting' });
-  if (delegateRuns.length > RUN_LIMIT) delegateRuns.splice(0, delegateRuns.length - RUN_LIMIT);
+function delegate(
+  main: SessionItem,
+  asked: Message,
+  task: string,
+  targets: Mention[],
+  preface: string,
+  images: Attachment[],
+  elements: PageElement[],
+  files: FileAttachment[] = [],
+) {
+  delegateRuns.push({
+    id: crypto.randomUUID(),
+    main: main.id,
+    task,
+    startedAt: Date.now(),
+    nodes: [],
+    handback: 'waiting',
+  });
+  if (delegateRuns.length > RUN_LIMIT)
+    delegateRuns.splice(0, delegateRuns.length - RUN_LIMIT);
   const run = delegateRuns[delegateRuns.length - 1];
-  const batch: DelegateBatch = { main: main.id, task, asked, pending: new Set(), results: [], run };
+  const batch: DelegateBatch = {
+    main: main.id,
+    task,
+    asked,
+    pending: new Set(),
+    results: [],
+    run,
+  };
   const history = [...messagesOf(main.id)];
   main.status = 'working';
   for (const target of targets) {
@@ -1259,10 +1973,23 @@ function delegate(main: SessionItem, asked: Message, task: string, targets: Ment
     });
     const child = workspace.sessions.find((item) => item.id === id);
     if (!child) continue;
-    asked.blocks.push({ kind: 'delegate', childId: id, agent, model, state: 'running' });
+    asked.blocks.push({
+      kind: 'delegate',
+      childId: id,
+      agent,
+      model,
+      state: 'running',
+    });
     const card = asked.blocks[asked.blocks.length - 1] as DelegateCard;
     const label = `${agentLabel(agent)} · ${modelLabel(model)}`;
-    run.nodes.push({ childId: id, agent, model, label, startedAt: Date.now(), state: 'running' });
+    run.nodes.push({
+      childId: id,
+      agent,
+      model,
+      label,
+      startedAt: Date.now(),
+      state: 'running',
+    });
     const node = run.nodes[run.nodes.length - 1];
     delegations.set(id, { batch, label, card, node });
     batch.pending.add(id);
@@ -1284,13 +2011,23 @@ function onDelegateDone(childId: string, reply: Message, error: string | null) {
   const waiter = stepWaiters.get(childId);
   if (waiter) {
     stepWaiters.delete(childId);
-    waiter(plainText({ ...reply, blocks: reply.blocks.filter((block) => block.kind === 'response') }), error, reply);
+    waiter(
+      plainText({
+        ...reply,
+        blocks: reply.blocks.filter((block) => block.kind === 'response'),
+      }),
+      error,
+      reply,
+    );
     return;
   }
   const entry = delegations.get(childId);
   if (!entry) return;
   delegations.delete(childId);
-  const text = plainText({ ...reply, blocks: reply.blocks.filter((block) => block.kind === 'response') });
+  const text = plainText({
+    ...reply,
+    blocks: reply.blocks.filter((block) => block.kind === 'response'),
+  });
   const ok = !error && text.length > 0;
   entry.card.state = ok ? 'done' : 'failed';
   entry.card.note = ok ? undefined : (error ?? 'no answer');
@@ -1301,13 +2038,23 @@ function onDelegateDone(childId: string, reply: Message, error: string | null) {
   // Only the compact digest goes back to the asking agent (the full answer stays in the child's chat); an answer with no
   // digest goes back whole.
   // The room for digests is shared by the agents asked together: one agent may use up to 8000 characters, ten about 1600.
-  const room = Math.max(1600, Math.floor(16000 / Math.max(1, entry.batch.run.nodes.length)));
-  const digest = ok && /^#{1,3}\s*handoff\b/im.test(text) ? handoffOf(text, Math.min(room, 8000)) : text;
-  entry.batch.results.push({ label: entry.label, text: ok ? digest : `(it did not answer: ${error ?? 'no text'})` });
+  const room = Math.max(
+    1600,
+    Math.floor(16000 / Math.max(1, entry.batch.run.nodes.length)),
+  );
+  const digest =
+    ok && /^#{1,3}\s*handoff\b/im.test(text)
+      ? handoffOf(text, Math.min(room, 8000))
+      : text;
+  entry.batch.results.push({
+    label: entry.label,
+    text: ok ? digest : `(it did not answer: ${error ?? 'no text'})`,
+  });
   entry.batch.pending.delete(childId);
   keepHandout(entry.batch.main, entry.batch.asked);
   if (entry.batch.pending.size === 0) {
-    if (entry.batch.run.cancelled) endCancelled(entry.batch.main, entry.batch.run);
+    if (entry.batch.run.cancelled)
+      endCancelled(entry.batch.main, entry.batch.run);
     else handBack(entry.batch);
   }
 }
@@ -1336,7 +2083,10 @@ const TASK_LIMIT = 200;
 
 type Ending = 'user' | 'caller' | 'timeout' | 'abort';
 /** What a running task needs besides its record: the tool call that waits for its report, the timer, why it is ending. */
-const taskRuns = new Map<string, { callId?: string; timer?: ReturnType<typeof setTimeout>; ending?: Ending }>();
+const taskRuns = new Map<
+  string,
+  { callId?: string; timer?: ReturnType<typeof setTimeout>; ending?: Ending }
+>();
 
 // Tasks outlive a reload as cards: a task whose worker was running then has no run any more, so it reads as stopped.
 const taskStore = $state({ ready: false });
@@ -1345,7 +2095,14 @@ void getPref<TaskRecord[]>(TASKS_KEY)
     for (const item of Array.isArray(saved) ? saved : []) {
       if (delegateTasks[item.id]) continue;
       const lost = item.state === 'running' || item.state === 'approval';
-      delegateTasks[item.id] = lost ? { ...item, state: 'stopped', endedAt: item.endedAt ?? Date.now(), note: 'Stopped: AgentDeck was closed or reloaded while it ran.' } : item;
+      delegateTasks[item.id] = lost
+        ? {
+            ...item,
+            state: 'stopped',
+            endedAt: item.endedAt ?? Date.now(),
+            note: 'Stopped: AgentDeck was closed or reloaded while it ran.',
+          }
+        : item;
     }
   })
   .catch(() => undefined)
@@ -1355,41 +2112,75 @@ void getPref<TaskRecord[]>(TASKS_KEY)
 $effect.root(() => {
   $effect(() => {
     if (!taskStore.ready) return;
-    const all = (JSON.parse(JSON.stringify(Object.values(delegateTasks))) as TaskRecord[]).sort((a, b) => a.startedAt - b.startedAt);
+    const all = (
+      JSON.parse(JSON.stringify(Object.values(delegateTasks))) as TaskRecord[]
+    ).sort((a, b) => a.startedAt - b.startedAt);
     setPref(TASKS_KEY, all.slice(-TASK_LIMIT));
   });
 });
 
 /** Whether this chat is a worker of a task: it does not delegate further. */
-const isTaskChild = (id: string) => Object.values(delegateTasks).some((item) => item.childId === id);
+const isTaskChild = (id: string) =>
+  Object.values(delegateTasks).some((item) => item.childId === id);
 /**
  * A chat that only works for another one: a delegated task's worker or a step of a flow. A fork also sits under its
  * parent in the tree (`parentId`), but it is a chat of its own: it opens pages and delegates like any other, and its
  * state is its own.
  */
 function isWorkerChat(id: string): boolean {
-  return isTaskChild(id) || delegateRuns.some((run) => run.nodes.some((node) => node.childId === id));
+  return (
+    isTaskChild(id) ||
+    delegateRuns.some((run) => run.nodes.some((node) => node.childId === id))
+  );
 }
 
 /** The chat of a call. A link that names none (Antigravity's stored one) is the chat of that agent running now. */
 function callerOf(chatId: string): SessionItem | undefined {
-  const named = chatId ? workspace.sessions.find((item) => item.id === chatId) : undefined;
+  const named = chatId
+    ? workspace.sessions.find((item) => item.id === chatId)
+    : undefined;
   if (named) return named;
-  const running = workspace.sessions.filter((item) => item.status === 'working' && replies[item.id]);
-  return running.length === 1 ? running[0] : (running.find((item) => item.id === workspace.activeId) ?? running[0]);
+  const running = workspace.sessions.filter(
+    (item) => item.status === 'working' && replies[item.id],
+  );
+  return running.length === 1
+    ? running[0]
+    : (running.find((item) => item.id === workspace.activeId) ?? running[0]);
 }
 
 /** The agents `list_agents` shows and `delegate_task` takes: the installed CLIs, then each local provider. */
 function agentRows(): AgentRow[] {
-  const installed = (tool: string) => connectors.detected?.tools.find((item) => item.id === tool)?.path !== null;
+  const installed = (tool: string) =>
+    connectors.detected?.tools.find((item) => item.id === tool)?.path !== null;
   const rows: AgentRow[] = [];
-  for (const [id, tool] of [['claude', 'claude'], ['codex', 'codex'], ['antigravity', 'agy'], ['opencode', 'opencode']] as const) {
-    const models = (MODELS[id] ?? []).map((item) => ({ value: item.value, label: item.label, description: item.description }));
-    if (models.length && installed(tool)) rows.push({ id, label: agentLabel(id), models });
+  for (const [id, tool] of [
+    ['claude', 'claude'],
+    ['codex', 'codex'],
+    ['antigravity', 'agy'],
+    ['opencode', 'opencode'],
+  ] as const) {
+    const models = (MODELS[id] ?? []).map((item) => ({
+      value: item.value,
+      label: item.label,
+      description: item.description,
+    }));
+    if (models.length && installed(tool))
+      rows.push({ id, label: agentLabel(id), models });
   }
-  for (const provider of connectors.custom.filter((item) => item.enabled && item.kind !== 'anthropic')) {
-    const names = provider.models.length ? provider.models : provider.defaultModel ? [provider.defaultModel] : [];
-    if (names.length) rows.push({ id: provider.id, label: provider.name, models: names.map((name) => ({ value: name, label: name })) });
+  for (const provider of connectors.custom.filter(
+    (item) => item.enabled && item.kind !== 'anthropic',
+  )) {
+    const names = provider.models.length
+      ? provider.models
+      : provider.defaultModel
+        ? [provider.defaultModel]
+        : [];
+    if (names.length)
+      rows.push({
+        id: provider.id,
+        label: provider.name,
+        models: names.map((name) => ({ value: name, label: name })),
+      });
   }
   return rows;
 }
@@ -1398,57 +2189,162 @@ const span = (ms: number) => elapsed(ms);
 
 /** The text a tool answers about a task that has not ended, or has. */
 function statusText(record: TaskRecord): string {
-  const head = { taskId: record.id, childId: record.childId, label: record.label, took: span((record.endedAt ?? Date.now()) - record.startedAt) };
+  const head = {
+    taskId: record.id,
+    childId: record.childId,
+    label: record.label,
+    took: span((record.endedAt ?? Date.now()) - record.startedAt),
+  };
   if (record.state === 'running' || record.state === 'approval') {
-    return formatTaskResult({ ...head, verdict: 'running' }, record.state === 'approval' ? 'Waiting: the worker needs the user to approve a step in its chat.' : 'Still working.');
+    return formatTaskResult(
+      { ...head, verdict: 'running' },
+      record.state === 'approval'
+        ? 'Waiting: the worker needs the user to approve a step in its chat.'
+        : 'Still working.',
+    );
   }
-  const verdict: Verdict = record.state === 'done' ? 'done' : record.state === 'stopped' ? 'stopped' : 'failed';
-  return formatTaskResult({ ...head, verdict }, record.digest ?? record.note ?? '');
+  const verdict: Verdict =
+    record.state === 'done'
+      ? 'done'
+      : record.state === 'stopped'
+        ? 'stopped'
+        : 'failed';
+  return formatTaskResult(
+    { ...head, verdict },
+    record.digest ?? record.note ?? '',
+  );
 }
 
 /** Links each delegate_task line of a caller's live reply to the task it started (the card reads the task from it). */
 function bindTasks(callerId: string) {
   const reply = liveReplies[callerId];
   if (!reply) return;
-  const lines = reply.blocks.filter((block): block is Extract<Block, { kind: 'command' }> => block.kind === 'command' && kindOfCommand(block.command) === 'delegate_task');
+  const lines = reply.blocks.filter(
+    (block): block is Extract<Block, { kind: 'command' }> =>
+      block.kind === 'command' &&
+      kindOfCommand(block.command) === 'delegate_task',
+  );
   for (const line of lines) {
     if (line.taskId) continue;
     const taken = new Set(lines.map((item) => item.taskId));
-    const free = Object.values(delegateTasks).filter((item) => item.caller === callerId && item.startedAt >= (reply.startedAt ?? 0) - 1000 && !taken.has(item.id));
-    const id = pickTask(argsOfCall(line.command.replace(/^\S+\s*/, '')), free.map((item) => ({ id: item.id, agent: item.agentId, task: item.task })));
+    const free = Object.values(delegateTasks).filter(
+      (item) =>
+        item.caller === callerId &&
+        item.startedAt >= (reply.startedAt ?? 0) - 1000 &&
+        !taken.has(item.id),
+    );
+    const id = pickTask(
+      argsOfCall(line.command.replace(/^\S+\s*/, '')),
+      free.map((item) => ({
+        id: item.id,
+        agent: item.agentId,
+        task: item.task,
+      })),
+    );
     if (id) line.taskId = id;
   }
 }
 
 /** Starts the worker of a `delegate_task` call. `reply` answers the call; a task in the background answers at once. */
-function startTask(call: DelegateCall, reply: (text: string, isError?: boolean) => void) {
+function startTask(
+  call: DelegateCall,
+  reply: (text: string, isError?: boolean) => void,
+) {
   const parsed = parseDelegateArgs(call.args);
   if (!parsed.ok) return reply(parsed.error, true);
-  const { agent: wanted, model: wantedModel, task, wait, timeoutS } = parsed.args;
+  const {
+    agent: wanted,
+    model: wantedModel,
+    task,
+    wait,
+    timeoutS,
+  } = parsed.args;
   const caller = callerOf(call.caller);
-  if (!caller) return reply('AgentDeck could not tell which chat is calling. Do the task yourself, or ask the user to run it from the chat.', true);
-  if (isTaskChild(caller.id)) return reply('You are a worker of a delegated task and cannot delegate further: do it yourself and report back.', true);
+  if (!caller)
+    return reply(
+      'AgentDeck could not tell which chat is calling. Do the task yourself, or ask the user to run it from the chat.',
+      true,
+    );
+  if (isTaskChild(caller.id))
+    return reply(
+      'You are a worker of a delegated task and cannot delegate further: do it yourself and report back.',
+      true,
+    );
   const rows = agentRows();
   const row = findAgent(rows, wanted);
-  if (!row) return reply(`No agent "${wanted}" is available. ${formatAgents(rows)}`, true);
+  if (!row)
+    return reply(
+      `No agent "${wanted}" is available. ${formatAgents(rows)}`,
+      true,
+    );
   // A worker of the same provider keeps the model selected in its parent chat unless the caller asked for one.
   // Different providers cannot run that model id, so they use their own normal default.
-  const inheritedModel = row.id === caller.agent && row.models.some((item) => item.value === caller.model) ? caller.model : undefined;
-  const chosen = resolveModel(row.models, wantedModel ?? inheritedModel, row.id === 'claude' ? 'sonnet' : undefined);
+  const inheritedModel =
+    row.id === caller.agent &&
+    row.models.some((item) => item.value === caller.model)
+      ? caller.model
+      : undefined;
+  const chosen = resolveModel(
+    row.models,
+    wantedModel ?? inheritedModel,
+    row.id === 'claude' ? 'sonnet' : undefined,
+  );
   if ('error' in chosen) return reply(chosen.error, true);
-  const agent: Agent = row.id === 'claude' || row.id === 'codex' || row.id === 'antigravity' || row.id === 'opencode' ? row.id : 'custom';
-  const model = agent === 'custom' ? customModelId(row.id, chosen.model) : chosen.model;
+  const agent: Agent =
+    row.id === 'claude' ||
+    row.id === 'codex' ||
+    row.id === 'antigravity' ||
+    row.id === 'opencode'
+      ? row.id
+      : 'custom';
+  const model =
+    agent === 'custom' ? customModelId(row.id, chosen.model) : chosen.model;
   let taskId = newTaskId();
   while (delegateTasks[taskId]) taskId = newTaskId();
 
   const uuid = crypto.randomUUID();
   const id = `claude:${uuid}`;
   const label = `${agentLabel(agent, model)} · ${modelLabel(model)}`;
-  workspace.sessions.push({ id, projectId: caller.projectId, title: `@${agentLabel(agent, model)}: ${firstLineOf(task, 50)}`, agent, agentSession: uuid, model, gitBranch: caller.gitBranch, status: 'idle', parentId: caller.id, draft: false });
-  delegateTasks[taskId] = { id: taskId, caller: caller.id, childId: id, state: 'running', wait, label, agent, agentId: row.id, model, task, startedAt: Date.now() };
-  const run: { callId?: string; timer?: ReturnType<typeof setTimeout>; ending?: Ending } = { callId: wait ? call.callId : undefined };
+  workspace.sessions.push({
+    id,
+    projectId: caller.projectId,
+    title: `@${agentLabel(agent, model)}: ${firstLineOf(task, 50)}`,
+    agent,
+    agentSession: uuid,
+    model,
+    gitBranch: caller.gitBranch,
+    status: 'idle',
+    parentId: caller.id,
+    draft: false,
+  });
+  delegateTasks[taskId] = {
+    id: taskId,
+    caller: caller.id,
+    childId: id,
+    state: 'running',
+    wait,
+    label,
+    agent,
+    agentId: row.id,
+    model,
+    task,
+    startedAt: Date.now(),
+  };
+  const run: {
+    callId?: string;
+    timer?: ReturnType<typeof setTimeout>;
+    ending?: Ending;
+  } = { callId: wait ? call.callId : undefined };
   taskRuns.set(taskId, run);
-  run.timer = setTimeout(() => stopTask(taskId, 'timeout', `Timed out after ${timeoutS} s: the worker was stopped before it finished.`), timeoutS * 1000);
+  run.timer = setTimeout(
+    () =>
+      stopTask(
+        taskId,
+        'timeout',
+        `Timed out after ${timeoutS} s: the worker was stopped before it finished.`,
+      ),
+    timeoutS * 1000,
+  );
   bindTasks(caller.id);
 
   // The worker's end: its report, or why there is none. A worker stopped on an approval card waits for the user's yes.
@@ -1460,7 +2356,15 @@ function startTask(call: DelegateCall, reply: (text: string, isError?: boolean) 
       stepWaiters.set(id, settle);
       return;
     }
-    const verdict: Verdict = run.ending ? (run.ending === 'timeout' ? 'timed out' : 'stopped') : error === 'stopped' ? 'stopped' : error || !answer ? 'failed' : 'done';
+    const verdict: Verdict = run.ending
+      ? run.ending === 'timeout'
+        ? 'timed out'
+        : 'stopped'
+      : error === 'stopped'
+        ? 'stopped'
+        : error || !answer
+          ? 'failed'
+          : 'done';
     finishTask(taskId, verdict, run.ending ? '' : (error ?? ''), answer);
   };
   stepWaiters.set(id, settle);
@@ -1472,27 +2376,57 @@ function startTask(call: DelegateCall, reply: (text: string, isError?: boolean) 
 }
 
 /** Ends a task: the record, the worker's chat, and the answer: to the tool call that waits, or to the caller in line. */
-function finishTask(taskId: string, verdict: Verdict, detail: string, answer: string) {
+function finishTask(
+  taskId: string,
+  verdict: Verdict,
+  detail: string,
+  answer: string,
+) {
   const record = delegateTasks[taskId];
   const run = taskRuns.get(taskId);
   if (!record || !run) return;
-  if (verdict === 'failed' || verdict === 'timed out') failSessionWork(record.caller);
+  if (verdict === 'failed' || verdict === 'timed out')
+    failSessionWork(record.caller);
   clearTimeout(run.timer);
   taskRuns.delete(taskId);
   stepWaiters.delete(record.childId);
   record.endedAt = Date.now();
-  record.state = verdict === 'done' ? 'done' : verdict === 'stopped' ? 'stopped' : 'failed';
-  const detailOf = run.ending === 'caller' ? 'you stopped it with task_stop' : run.ending === 'abort' ? 'the agent that asked was stopped' : detail;
-  const body = verdict === 'done' ? reportDigest(answer) : reasonLine(verdict, detailOf);
+  record.state =
+    verdict === 'done' ? 'done' : verdict === 'stopped' ? 'stopped' : 'failed';
+  const detailOf =
+    run.ending === 'caller'
+      ? 'you stopped it with task_stop'
+      : run.ending === 'abort'
+        ? 'the agent that asked was stopped'
+        : detail;
+  const body =
+    verdict === 'done' ? reportDigest(answer) : reasonLine(verdict, detailOf);
   if (verdict === 'done') record.digest = body;
   else record.note = body;
-  const text = formatTaskResult({ taskId, childId: record.childId, label: record.label, verdict, took: span(record.endedAt - record.startedAt) }, body);
+  const text = formatTaskResult(
+    {
+      taskId,
+      childId: record.childId,
+      label: record.label,
+      verdict,
+      took: span(record.endedAt - record.startedAt),
+    },
+    body,
+  );
   if (run.callId) {
-    void replyDelegateCall(run.callId, text, verdict === 'failed' || verdict === 'timed out').catch(() => undefined);
+    void replyDelegateCall(
+      run.callId,
+      text,
+      verdict === 'failed' || verdict === 'timed out',
+    ).catch(() => undefined);
     return;
   }
   // A task in the background: its report goes to the caller, unless the user or the caller itself stopped it.
-  if (run.ending !== 'user' && run.ending !== 'caller') deliverReport(record.caller, { label: `${record.label} (task ${taskId})`, text: verdict === 'done' ? body : reasonLine(verdict, detailOf) });
+  if (run.ending !== 'user' && run.ending !== 'caller')
+    deliverReport(record.caller, {
+      label: `${record.label} (task ${taskId})`,
+      text: verdict === 'done' ? body : reasonLine(verdict, detailOf),
+    });
 }
 
 /** Stops a task: its worker's run is killed and the task ends as stopped (or timed out). */
@@ -1504,7 +2438,8 @@ function stopTask(taskId: string, how: Ending, detail = '') {
   // The worker's run ends with an error event that settles the task (see `settle`). One with no run (it waits on an
   // approval card) is ended here.
   stopTurn(record.childId);
-  if (taskRuns.has(taskId)) finishTask(taskId, how === 'timeout' ? 'timed out' : 'stopped', detail, '');
+  if (taskRuns.has(taskId))
+    finishTask(taskId, how === 'timeout' ? 'timed out' : 'stopped', detail, '');
 }
 
 /** The Stop button of a task's card. */
@@ -1515,7 +2450,10 @@ export function stopDelegateTask(taskId: string) {
 /** Reports of background tasks waiting for their caller to be idle, per caller. */
 const backlog = new Map<string, { label: string; text: string }[]>();
 
-function deliverReport(callerId: string, report: { label: string; text: string }) {
+function deliverReport(
+  callerId: string,
+  report: { label: string; text: string },
+) {
   const list = backlog.get(callerId) ?? [];
   list.push(report);
   backlog.set(callerId, list);
@@ -1536,26 +2474,41 @@ function flushReports(callerId: string, tries: number) {
     return;
   }
   backlog.delete(callerId);
-  const asked = messagesOf(callerId).findLast((message) => message.role === 'user' && !hiddenPrompt(message));
-  const task = shorten(askText(asked ?? { id: '', role: 'user', time: '', blocks: [] }), 1500) || 'the one you were working on';
-  send(callerId, '', [], [], [], { prompt: handbackPrompt({ results: list, task }), silent: NO_HANDOUT });
+  const asked = messagesOf(callerId).findLast(
+    (message) => message.role === 'user' && !hiddenPrompt(message),
+  );
+  const task =
+    shorten(
+      askText(asked ?? { id: '', role: 'user', time: '', blocks: [] }),
+      1500,
+    ) || 'the one you were working on';
+  send(callerId, '', [], [], [], {
+    prompt: handbackPrompt({ results: list, task }),
+    silent: NO_HANDOUT,
+  });
 }
 
 /** A caller's turn ended: the tasks it was waiting for have nobody to answer, so they stop. Background ones go on. */
 function endWaitingTasks(callerId: string) {
   for (const record of Object.values(delegateTasks)) {
-    if (record.caller === callerId && record.wait && taskRuns.has(record.id)) stopTask(record.id, 'abort');
+    if (record.caller === callerId && record.wait && taskRuns.has(record.id))
+      stopTask(record.id, 'abort');
   }
 }
 
 /** A call of one of the delegation tools, from the Rust side. */
 function onDelegateCall(call: DelegateCall) {
-  const reply = (text: string, isError = false) => void replyDelegateCall(call.callId, text, isError).catch(() => undefined);
+  const reply = (text: string, isError = false) =>
+    void replyDelegateCall(call.callId, text, isError).catch(() => undefined);
   if (call.tool === 'list_agents') return reply(formatAgents(agentRows()));
   if (call.tool === 'delegate_task') return startTask(call, reply);
   const id = call.args.task_id;
   const record = isTaskId(id) ? delegateTasks[id] : undefined;
-  if (!record) return reply(`No task ${String(id)}: its id is the one delegate_task returned.`, true);
+  if (!record)
+    return reply(
+      `No task ${String(id)}: its id is the one delegate_task returned.`,
+      true,
+    );
   if (call.tool === 'task_status') return reply(statusText(record));
   // task_stop
   if (taskRuns.has(record.id)) stopTask(record.id, 'caller');
@@ -1567,7 +2520,8 @@ if (inTauri()) {
   void delegateReady().catch(() => undefined);
   void listenDelegateCalls(onDelegateCall);
   void listenDelegateAborts((callId) => {
-    for (const [taskId, run] of taskRuns) if (run.callId === callId) stopTask(taskId, 'abort');
+    for (const [taskId, run] of taskRuns)
+      if (run.callId === callId) stopTask(taskId, 'abort');
   });
 }
 
@@ -1586,7 +2540,8 @@ const askOf = (text: string) => {
   const found = /^\s*ASK @([^:\n]{1,60}):\s*(.+)$/m.exec(text);
   return found ? { to: found[1].trim(), question: found[2].trim() } : null;
 };
-const shorten = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+const shorten = (text: string, max: number) =>
+  text.length > max ? `${text.slice(0, max)}…` : text;
 
 /** The line a step ends with to send its input back to the step(s) before it. */
 const REPLAN_MARK = 'REPLAN:';
@@ -1595,7 +2550,10 @@ const replanOf = (text: string) => {
   const found = /^\s*REPLAN:\s*(.+)$/m.exec(text);
   if (found) return found[1].trim();
   // The handoff can say it too: STATUS: needs-plan-change, with what is missing in OPEN.
-  if (/^\s*STATUS:\s*needs-plan-change/im.test(text)) return /^\s*OPEN:\s*(.+)$/im.exec(text)?.[1].trim() || 'the plan needs changes';
+  if (/^\s*STATUS:\s*needs-plan-change/im.test(text))
+    return (
+      /^\s*OPEN:\s*(.+)$/im.exec(text)?.[1].trim() || 'the plan needs changes'
+    );
   return null;
 };
 
@@ -1604,9 +2562,13 @@ const HANDOFF_RULE =
   'End with "## Handoff" (<=120 words, only this is passed on; "-" if empty): STATUS: done|blocked|needs-plan-change / RESULT: <1 line> / FILES: <paths> / FACTS: <<=5, "; "-separated, path:line> / OPEN: <<=3> / VERIFY: <cmd> -> pass|fail|not run / NEXT: <first thing the next step does>. Telegraphic: no filler, no restating the task.';
 
 /** Told to every agent of a run: the user's language, not the language of these instructions. */
-const LANGUAGE_RULE = "Reply in the user's language (these notes are English); code, paths, commands unchanged.";
+const LANGUAGE_RULE =
+  "Reply in the user's language (these notes are English); code, paths, commands unchanged.";
 
-const stepWaiters = new Map<string, (text: string, error: string | null, reply: Message) => void>();
+const stepWaiters = new Map<
+  string,
+  (text: string, error: string | null, reply: Message) => void
+>();
 /** Flow steps waiting for the user's answers, by their chat. */
 const askingCards = new Map<string, DelegateCard>();
 
@@ -1629,18 +2591,36 @@ const passes = (step: WorkflowStep, previous: string) => {
 };
 
 /** Reads (no `content`) or writes one file of a run's notes; '' when it cannot. */
-async function runFile(root: string | null, run: string, name: string, content?: string): Promise<string> {
+async function runFile(
+  root: string | null,
+  run: string,
+  name: string,
+  content?: string,
+): Promise<string> {
   try {
     const { invoke } = await import('@tauri-apps/api/core');
-    const args = { root, run, name, ...(content === undefined ? {} : { content }) };
-    const out = await invoke(content === undefined ? 'run_file_read' : 'run_file_write', args);
+    const args = {
+      root,
+      run,
+      name,
+      ...(content === undefined ? {} : { content }),
+    };
+    const out = await invoke(
+      content === undefined ? 'run_file_read' : 'run_file_write',
+      args,
+    );
     return typeof out === 'string' ? out : '';
   } catch {
     return '';
   }
 }
 
-const slugOf = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'step';
+const slugOf = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 32) || 'step';
 
 /** The findings (`[F]` lines) the steps wrote in their notes, without repeats, at most `limit` lines. */
 function findingsOf(notes: string[], limit = 30): string[] {
@@ -1655,19 +2635,60 @@ function findingsOf(notes: string[], limit = 30): string[] {
   return [...seen];
 }
 
-type FlowRunContext = { root: string | null; folder: string; board: string[]; slugs: Map<string, string>; handoffs: Map<string, string> };
+type FlowRunContext = {
+  root: string | null;
+  folder: string;
+  board: string[];
+  slugs: Map<string, string>;
+  handoffs: Map<string, string>;
+};
 
-function boardText(task: string, preset: WorkflowPreset, ctx: FlowRunContext, groups: WorkflowStep[][]): string {
-  const plan = groups.map((group, stage) => `${stage + 1}. ${group.map((step) => `${step.name} (${agentLabel(step.agent, step.model)}) — notes: agents/${ctx.slugs.get(step.id)}.md`).join(' | ')}`).join('\n');
-  return [`# Run board — ${preset.name}`, '', `Goal: ${firstLineOf(task, 300)}`, '', '## Plan (one line per stage; steps of a stage run at the same time)', plan, '', '## Handoffs', ...(ctx.board.length ? ctx.board : ['(none yet)']), ''].join('\n');
+function boardText(
+  task: string,
+  preset: WorkflowPreset,
+  ctx: FlowRunContext,
+  groups: WorkflowStep[][],
+): string {
+  const plan = groups
+    .map(
+      (group, stage) =>
+        `${stage + 1}. ${group.map((step) => `${step.name} (${agentLabel(step.agent, step.model)}) — notes: agents/${ctx.slugs.get(step.id)}.md`).join(' | ')}`,
+    )
+    .join('\n');
+  return [
+    `# Run board — ${preset.name}`,
+    '',
+    `Goal: ${firstLineOf(task, 300)}`,
+    '',
+    '## Plan (one line per stage; steps of a stage run at the same time)',
+    plan,
+    '',
+    '## Handoffs',
+    ...(ctx.board.length ? ctx.board : ['(none yet)']),
+    '',
+  ].join('\n');
 }
 
-function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: WorkflowStep, brief: string, task: string, previous: string, images: Attachment[], elements: PageElement[], files: FileAttachment[], queued?: { uuid: string; card: DelegateCard }) {
+function runStep(
+  main: SessionItem,
+  asked: Message,
+  run: DelegateRun,
+  step: WorkflowStep,
+  brief: string,
+  task: string,
+  previous: string,
+  images: Attachment[],
+  elements: PageElement[],
+  files: FileAttachment[],
+  queued?: { uuid: string; card: DelegateCard },
+) {
   const agent = step.agent;
   const model = step.model || MODELS[agent]?.[0]?.value || '';
   // Replan attempts stay in the same provider conversation. This preserves context and avoids paying a new
   // system/tool-definition prefix for a correction that belongs to the same step.
-  const prior = [...run.nodes].reverse().find((item) => item.stepId === step.id && item.agentSession);
+  const prior = [...run.nodes]
+    .reverse()
+    .find((item) => item.stepId === step.id && item.agentSession);
   const uuid = prior?.agentSession ?? queued?.uuid ?? crypto.randomUUID();
   const id = `claude:${uuid}`;
   if (!workspace.sessions.some((item) => item.id === id)) {
@@ -1694,14 +2715,37 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
     card.childId = id;
     card.note = undefined;
   } else {
-    asked.blocks.push({ kind: 'delegate', childId: id, agent, model, state: 'running', step: step.name });
+    asked.blocks.push({
+      kind: 'delegate',
+      childId: id,
+      agent,
+      model,
+      state: 'running',
+      step: step.name,
+    });
     card = asked.blocks[asked.blocks.length - 1] as DelegateCard;
   }
   const label = `${step.name} · ${agentLabel(agent, model)}`;
-  run.nodes.push({ childId: id, stepId: step.id, agent, model, label, startedAt: Date.now(), state: 'running', input: previous, attempt: (prior?.attempt ?? 0) + 1, agentSession: uuid });
+  run.nodes.push({
+    childId: id,
+    stepId: step.id,
+    agent,
+    model,
+    label,
+    startedAt: Date.now(),
+    state: 'running',
+    input: previous,
+    attempt: (prior?.attempt ?? 0) + 1,
+    agentSession: uuid,
+  });
   const node = run.nodes[run.nodes.length - 1];
   const asks = new Map<string, number>();
-  return new Promise<{ step: WorkflowStep; label: string; text: string; ok: boolean }>((resolve) => {
+  return new Promise<{
+    step: WorkflowStep;
+    label: string;
+    text: string;
+    ok: boolean;
+  }>((resolve) => {
     const settle = (text: string, error: string | null, reply: Message) => {
       // The step asked the user first: the run waits here until the answers come back as the step's next turn.
       const questions = error ? [] : parseQuestions(text).questions;
@@ -1716,10 +2760,23 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
       // The step needs a fact only an earlier step knows: that step's own chat (it has the context) is asked, its short
       // answer goes back to this step as its next turn. Capped, so two steps cannot talk for ever.
       const ask = error ? null : askOf(text);
-      const target = ask && (asks.get(id) ?? 0) < MAX_ASKS ? run.nodes.findLast((item) => item.state === 'done' && item.childId !== id && item.label.split(' · ')[0].toLowerCase() === ask.to.toLowerCase()) : undefined;
+      const target =
+        ask && (asks.get(id) ?? 0) < MAX_ASKS
+          ? run.nodes.findLast(
+              (item) =>
+                item.state === 'done' &&
+                item.childId !== id &&
+                item.label.split(' · ')[0].toLowerCase() ===
+                  ask.to.toLowerCase(),
+            )
+          : undefined;
       if (ask && target) {
         asks.set(id, (asks.get(id) ?? 0) + 1);
-        (node.talks ??= []).push({ to: ask.to, question: ask.question, at: Date.now() });
+        (node.talks ??= []).push({
+          to: ask.to,
+          question: ask.question,
+          at: Date.now(),
+        });
         const talk = node.talks[node.talks.length - 1];
         card.talking = ask.to;
         card.talkText = ask.question;
@@ -1730,11 +2787,25 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
           talk.answer = failed ? '(no answer)' : shorten(answer, 700);
           card.talking = undefined;
           card.talkText = undefined;
-          logTalk(main.id, main.title, workspace.projects.find((project) => project.id === main.projectId)?.name ?? '', step.name, ask.to, ask.question, talk.answer);
+          logTalk(
+            main.id,
+            main.title,
+            workspace.projects.find((project) => project.id === main.projectId)
+              ?.name ?? '',
+            step.name,
+            ask.to,
+            ask.question,
+            talk.answer,
+          );
           keepHandout(main.id, asked);
           send(id, `A from ${ask.to}: ${talk.answer}`, [], []);
         });
-        send(target.childId, `Q from ${step.name}: ${ask.question}\nAnswer in at most 60 words, only the answer.`, [], []);
+        send(
+          target.childId,
+          `Q from ${step.name}: ${ask.question}\nAnswer in at most 60 words, only the answer.`,
+          [],
+          [],
+        );
         return;
       }
       card.questions = undefined;
@@ -1748,29 +2819,77 @@ function runStep(main: SessionItem, asked: Message, run: DelegateRun, step: Work
       node.output = text;
       node.handoff = parseHandoff(text);
       keepHandout(main.id, asked);
-      resolve({ step, label, text: ok ? text : `(it did not answer: ${error ?? 'no text'})`, ok });
+      resolve({
+        step,
+        label,
+        text: ok ? text : `(it did not answer: ${error ?? 'no text'})`,
+        ok,
+      });
     };
     stepWaiters.set(id, settle);
     send(id, task, images, elements, [], { preface: brief, files });
   });
 }
 
-async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPreset, task: string, preface: string, images: Attachment[], elements: PageElement[], files: FileAttachment[] = []) {
+async function runWorkflow(
+  main: SessionItem,
+  asked: Message,
+  preset: WorkflowPreset,
+  task: string,
+  preface: string,
+  images: Attachment[],
+  elements: PageElement[],
+  files: FileAttachment[] = [],
+) {
   const runId = crypto.randomUUID();
   const graph = normalizeGraph(preset.steps);
   const links = inputsOf(graph);
   const groups = stepGroups(graph);
-  delegateRuns.push({ id: runId, main: main.id, task, preset: preset.name, plan: JSON.parse(JSON.stringify(graph)), skipped: [], startedAt: Date.now(), nodes: [], handback: 'waiting' });
-  if (delegateRuns.length > RUN_LIMIT) delegateRuns.splice(0, delegateRuns.length - RUN_LIMIT);
+  delegateRuns.push({
+    id: runId,
+    main: main.id,
+    task,
+    preset: preset.name,
+    plan: JSON.parse(JSON.stringify(graph)),
+    skipped: [],
+    startedAt: Date.now(),
+    nodes: [],
+    handback: 'waiting',
+  });
+  if (delegateRuns.length > RUN_LIMIT)
+    delegateRuns.splice(0, delegateRuns.length - RUN_LIMIT);
   const run = delegateRuns[delegateRuns.length - 1];
-  const batch: DelegateBatch = { main: main.id, task, asked, pending: new Set(), results: [], run, orchestrator: preset.orchestrator.trim() || undefined };
+  const batch: DelegateBatch = {
+    main: main.id,
+    task,
+    asked,
+    pending: new Set(),
+    results: [],
+    run,
+    orchestrator: preset.orchestrator.trim() || undefined,
+  };
   main.status = 'working';
 
-  const root = workspace.projects.find((project) => project.id === main.projectId)?.path ?? null;
+  const root =
+    workspace.projects.find((project) => project.id === main.projectId)?.path ??
+    null;
   const slugs = new Map<string, string>();
-  graph.forEach((step, index) => slugs.set(step.id, `${index + 1}-${slugOf(step.name)}`));
-  const ctx: FlowRunContext = { root, folder: '', board: [], slugs, handoffs: new Map() };
-  const boardPath = await runFile(root, runId, 'BOARD.md', boardText(task, preset, ctx, groups));
+  graph.forEach((step, index) =>
+    slugs.set(step.id, `${index + 1}-${slugOf(step.name)}`),
+  );
+  const ctx: FlowRunContext = {
+    root,
+    folder: '',
+    board: [],
+    slugs,
+    handoffs: new Map(),
+  };
+  const boardPath = await runFile(
+    root,
+    runId,
+    'BOARD.md',
+    boardText(task, preset, ctx, groups),
+  );
   ctx.folder = boardPath ? boardPath.replace(/[\\/]BOARD\.md$/, '') : '';
   run.folder = ctx.folder || undefined;
 
@@ -1779,8 +2898,18 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
   const cards = new Map<string, { uuid: string; card: DelegateCard }>();
   for (const step of graph) {
     const uuid = crypto.randomUUID();
-    asked.blocks.push({ kind: 'delegate', childId: `claude:${uuid}`, agent: step.agent, model: step.model || MODELS[step.agent]?.[0]?.value || '', state: 'queued', step: step.name });
-    cards.set(step.id, { uuid, card: asked.blocks[asked.blocks.length - 1] as DelegateCard });
+    asked.blocks.push({
+      kind: 'delegate',
+      childId: `claude:${uuid}`,
+      agent: step.agent,
+      model: step.model || MODELS[step.agent]?.[0]?.value || '',
+      state: 'queued',
+      step: step.name,
+    });
+    cards.set(step.id, {
+      uuid,
+      card: asked.blocks[asked.blocks.length - 1] as DelegateCard,
+    });
   }
   keepHandout(main.id, asked);
 
@@ -1790,14 +2919,23 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
   let replans = 0;
   // Keep parallel fan-out useful without turning a normal flow into a provider swarm. A preset may lower or raise
   // this deliberately, but the app keeps the value bounded so an imported preference cannot exhaust the machine.
-  const maxParallel = Math.max(1, Math.min(6, Math.round(preset.coordination?.maxParallel ?? 3)));
-  const maxReplans = Math.max(0, Math.min(3, Math.round(preset.coordination?.maxReplans ?? MAX_REPLANS)));
+  const maxParallel = Math.max(
+    1,
+    Math.min(6, Math.round(preset.coordination?.maxParallel ?? 3)),
+  );
+  const maxReplans = Math.max(
+    0,
+    Math.min(3, Math.round(preset.coordination?.maxReplans ?? MAX_REPLANS)),
+  );
   for (let stage = 0; stage < groups.length; stage++) {
     const group = groups[stage];
     const inputText = (step: WorkflowStep) =>
       (links[step.id] ?? [])
         .filter((from) => from !== 'start' && ctx.handoffs.has(from))
-        .map((from) => `### ${graph.find((item) => item.id === from)?.name ?? from}\n${ctx.handoffs.get(from)}`)
+        .map(
+          (from) =>
+            `### ${graph.find((item) => item.id === from)?.name ?? from}\n${ctx.handoffs.get(from)}`,
+        )
         .join('\n\n');
     const active = group.filter((step) => passes(step, inputText(step)));
     for (const step of group) {
@@ -1811,34 +2949,64 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
     }
     if (active.length === 0) continue;
     const board = boardText(task, preset, ctx, groups);
-    const done: { step: WorkflowStep; label: string; text: string; ok: boolean }[] = [];
+    const done: {
+      step: WorkflowStep;
+      label: string;
+      text: string;
+      ok: boolean;
+    }[] = [];
     for (let offset = 0; offset < active.length; offset += maxParallel) {
       const batch = await Promise.all(
         active.slice(offset, offset + maxParallel).map((step) => {
-        const slug = slugs.get(step.id) ?? slugOf(step.name);
-        const previous = inputText(step);
-        const others = active.filter((item) => item !== step).map((item) => `"${item.name}" (notes: agents/${slugs.get(item.id)}.md)`);
-        const where = ctx.folder || '.agentdeck/runs/' + runId;
-        const fed = (links[step.id] ?? []).some((from) => from !== 'start');
-        // Written for the agent, not the user: short labelled lines. What the user reads is the chat itself.
-        const brief = [
-          preface,
-          `Step "${step.name}" of an AgentDeck run (orchestrator: ${agentLabel(main.agent)}). Do only this job:`,
-          step.prompt.trim() || 'Do your part of the task.',
-          `Run folder: ${where}. BOARD.md = goal, plan, handoffs (app-written, read-only${ctx.folder ? '; read it first' : '; below'}). Notes: agents/${slug}.md, yours only, append one line each: [F] fact (path:line) | [Q @name] question | [A @name] answer. Never edit BOARD.md or others' notes.`,
-          ctx.folder ? '' : board,
-          previous ? `IN (from the step before; read its notes only if needed):\n${previous}` : '',
-          others.length ? `Parallel with you: ${others.join(', ')}. Read their notes at start and after each big step, answer [Q @${step.name}] with [A], do not edit files they claim.` : '',
-          LANGUAGE_RULE,
-          QUESTION_RULE,
-          fed ? `Need one fact only an earlier step knows: end with "ASK @<step name>: <question>" and stop (max ${MAX_ASKS}). Input too unclear or wrong to work from: do not guess, end with "${REPLAN_MARK} <what to fix>" and stop.` : '',
-          replanNotes.get(step.id) ? `Sent back by the next step: "${replanNotes.get(step.id)}". Fix that.` : '',
-          REVIEW_STEP.test(`${step.name} ${step.prompt}`) ? REVIEW_RULE : '',
-          HANDOFF_RULE,
-        ]
-          .filter((line, index, all) => line !== '' || all[index - 1] !== '')
-          .join('\n');
-          return runStep(main, asked, run, step, brief, task, previous, first ? images : [], first ? elements : [], first ? files : [], cards.get(step.id));
+          const slug = slugs.get(step.id) ?? slugOf(step.name);
+          const previous = inputText(step);
+          const others = active
+            .filter((item) => item !== step)
+            .map(
+              (item) =>
+                `"${item.name}" (notes: agents/${slugs.get(item.id)}.md)`,
+            );
+          const where = ctx.folder || '.agentdeck/runs/' + runId;
+          const fed = (links[step.id] ?? []).some((from) => from !== 'start');
+          // Written for the agent, not the user: short labelled lines. What the user reads is the chat itself.
+          const brief = [
+            preface,
+            `Step "${step.name}" of an AgentDeck run (orchestrator: ${agentLabel(main.agent)}). Do only this job:`,
+            step.prompt.trim() || 'Do your part of the task.',
+            `Run folder: ${where}. BOARD.md = goal, plan, handoffs (app-written, read-only${ctx.folder ? '; read it first' : '; below'}). Notes: agents/${slug}.md, yours only, append one line each: [F] fact (path:line) | [Q @name] question | [A @name] answer. Never edit BOARD.md or others' notes.`,
+            ctx.folder ? '' : board,
+            previous
+              ? `IN (from the step before; read its notes only if needed):\n${previous}`
+              : '',
+            others.length
+              ? `Parallel with you: ${others.join(', ')}. Read their notes at start and after each big step, answer [Q @${step.name}] with [A], do not edit files they claim.`
+              : '',
+            LANGUAGE_RULE,
+            QUESTION_RULE,
+            fed
+              ? `Need one fact only an earlier step knows: end with "ASK @<step name>: <question>" and stop (max ${MAX_ASKS}). Input too unclear or wrong to work from: do not guess, end with "${REPLAN_MARK} <what to fix>" and stop.`
+              : '',
+            replanNotes.get(step.id)
+              ? `Sent back by the next step: "${replanNotes.get(step.id)}". Fix that.`
+              : '',
+            REVIEW_STEP.test(`${step.name} ${step.prompt}`) ? REVIEW_RULE : '',
+            HANDOFF_RULE,
+          ]
+            .filter((line, index, all) => line !== '' || all[index - 1] !== '')
+            .join('\n');
+          return runStep(
+            main,
+            asked,
+            run,
+            step,
+            brief,
+            task,
+            previous,
+            first ? images : [],
+            first ? elements : [],
+            first ? files : [],
+            cards.get(step.id),
+          );
         }),
       );
       done.push(...batch);
@@ -1849,7 +3017,9 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
       ctx.handoffs.set(item.step.id, handoff);
       const name = `handoff/${slugs.get(item.step.id)}.md`;
       void runFile(root, runId, name, `# ${item.step.name}\n\n${handoff}\n`);
-      ctx.board.push(`- ${item.step.name}: ${name}${item.ok ? '' : ' (failed)'}`);
+      ctx.board.push(
+        `- ${item.step.name}: ${name}${item.ok ? '' : ' (failed)'}`,
+      );
       batch.results.push({ label: item.label, text: handoff });
     }
     void runFile(root, runId, 'BOARD.md', boardText(task, preset, ctx, groups));
@@ -1860,8 +3030,16 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
     // A step sent its input back: the steps that fed it run again (and every stage after them), with its reason.
     const back = done.find((item) => item.ok && replanOf(item.text) !== null);
     if (back && replans < maxReplans) {
-      const feeders = (links[back.step.id] ?? []).filter((from) => from !== 'start');
-      const from = Math.min(...feeders.map((id) => groups.findIndex((list) => list.some((item) => item.id === id))).filter((index) => index >= 0));
+      const feeders = (links[back.step.id] ?? []).filter(
+        (from) => from !== 'start',
+      );
+      const from = Math.min(
+        ...feeders
+          .map((id) =>
+            groups.findIndex((list) => list.some((item) => item.id === id)),
+          )
+          .filter((index) => index >= 0),
+      );
       if (Number.isFinite(from)) {
         replans++;
         const reason = replanOf(back.text) ?? '';
@@ -1876,7 +3054,10 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
           cards.set(item.id, { uuid: entry.uuid, card: entry.card });
           ctx.handoffs.delete(item.id);
         }
-        batch.results = batch.results.filter((result) => !again.some((item) => result.label.startsWith(`${item.name} ·`)));
+        batch.results = batch.results.filter(
+          (result) =>
+            !again.some((item) => result.label.startsWith(`${item.name} ·`)),
+        );
         ctx.board.push(`- ${back.step.name} sent its input back: ${reason}`);
         keepHandout(main.id, asked);
         stage = from - 1;
@@ -1903,9 +3084,20 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
     sendNextQueued(main.id);
     return;
   }
-  const notes = await Promise.all(graph.map((step) => runFile(root, runId, `agents/${slugs.get(step.id)}.md`)));
+  const notes = await Promise.all(
+    graph.map((step) =>
+      runFile(root, runId, `agents/${slugs.get(step.id)}.md`),
+    ),
+  );
   const facts = findingsOf(notes);
-  batch.memo = [facts.length ? `Findings the steps shared:\n${facts.map((fact) => `- ${fact}`).join('\n')}` : '', ctx.folder ? `The run's notes are in ${ctx.folder} (BOARD.md, agents/, handoff/): open them only if you need more detail.` : '']
+  batch.memo = [
+    facts.length
+      ? `Findings the steps shared:\n${facts.map((fact) => `- ${fact}`).join('\n')}`
+      : '',
+    ctx.folder
+      ? `The run's notes are in ${ctx.folder} (BOARD.md, agents/, handoff/): open them only if you need more detail.`
+      : '',
+  ]
     .filter(Boolean)
     .join('\n\n');
   handBack(batch);
@@ -1913,7 +3105,9 @@ async function runWorkflow(main: SessionItem, asked: Message, preset: WorkflowPr
 
 /** The main agent finished the turn that got the answers: the run is over. */
 function onHandbackDone(sessionId: string, reply: Message, failed: boolean) {
-  const run = delegateRuns.find((item) => item.main === sessionId && item.handback === 'running');
+  const run = delegateRuns.find(
+    (item) => item.main === sessionId && item.handback === 'running',
+  );
   if (!run) return;
   run.handback = failed ? 'failed' : 'done';
   run.endedAt = Date.now();
@@ -1932,17 +3126,30 @@ const HANDBACK_ANSWER_MAX = 8000;
 const TROUBLE = /VERDICT:\s*FAIL|STATUS:\s*(?:blocked|needs-plan-change)/i;
 
 /** The prompt that hands the answers of the agents asked back to the chat's own agent. */
-function handbackPrompt(batch: Pick<DelegateBatch, 'results' | 'memo' | 'orchestrator' | 'task'>): string {
-  const cut = (text: string) => (text.length > HANDBACK_ANSWER_MAX ? `${text.slice(0, HANDBACK_ANSWER_MAX)}\n… (cut here: the rest is in that agent's own chat)` : text);
-  const answers = batch.results.map((result) => `### ${result.label}\n${cut(result.text)}`).join('\n\n');
+function handbackPrompt(
+  batch: Pick<DelegateBatch, 'results' | 'memo' | 'orchestrator' | 'task'>,
+): string {
+  const cut = (text: string) =>
+    text.length > HANDBACK_ANSWER_MAX
+      ? `${text.slice(0, HANDBACK_ANSWER_MAX)}\n… (cut here: the rest is in that agent's own chat)`
+      : text;
+  const answers = batch.results
+    .map((result) => `### ${result.label}\n${cut(result.text)}`)
+    .join('\n\n');
   // When nothing went wrong the lead only reads the answers and replies, like a manager reading a report: no tools, no
   // second round of the work. It re-checks and fixes (see `owner`) only when an answer reports trouble.
   const trouble = batch.results.some((result) => {
     const handoff = parseHandoff(result.text);
-    return handoff?.status === 'blocked' || handoff?.status === 'needs-plan-change' || TROUBLE.test(result.text);
+    return (
+      handoff?.status === 'blocked' ||
+      handoff?.status === 'needs-plan-change' ||
+      TROUBLE.test(result.text)
+    );
   });
   const memo = batch.memo ? `\n\n${batch.memo}` : '';
-  const finish = batch.orchestrator ? `${batch.orchestrator}\n\nThe user's request: ${batch.task}` : `Using their answers, finish the user's request: ${batch.task}`;
+  const finish = batch.orchestrator
+    ? `${batch.orchestrator}\n\nThe user's request: ${batch.task}`
+    : `Using their answers, finish the user's request: ${batch.task}`;
   // A step that reviews can find the work wrong. The agent that gets the answers then owns the result: it fixes what is
   // wrong and cleans up after the steps, instead of only reporting it.
   const owner =
@@ -1973,7 +3180,10 @@ function handBack(batch: DelegateBatch) {
 // The agents asked have answered while the chat is busy with another turn. That turn cannot be joined (one CLI
 // conversation runs one turn at a time), so the answers go to a turn of their own, running beside it: it knows the chat so
 // far, has no session and no tab, and its reply sits in the chat as a message (open its steps to see what it did).
-const sideTurns = new Map<string, { main: string; reply: Message; turn: string }>();
+const sideTurns = new Map<
+  string,
+  { main: string; reply: Message; turn: string }
+>();
 let sideCount = 0;
 
 /** A side hand-back still occupies the main chat until its result arrives. */
@@ -1990,14 +3200,26 @@ function handBackBeside(batch: DelegateBatch, prompt: string): boolean {
   const turn = nextId();
   const list = messagesOf(batch.main);
   const model = modelFor(session);
-  const reply: Message = { id: nextId(), role: 'assistant', time: clock(new Date().toISOString()), at: new Date().toISOString(), blocks: [], live: true, startedAt: Date.now(), agent: session.agent, model: model ?? session.model };
+  const reply: Message = {
+    id: nextId(),
+    role: 'assistant',
+    time: clock(new Date().toISOString()),
+    at: new Date().toISOString(),
+    blocks: [],
+    live: true,
+    startedAt: Date.now(),
+    agent: session.agent,
+    model: model ?? session.model,
+  };
   const context = forkDigest(list);
   list.push(reply);
   const stored = list[list.length - 1]; // the stored (reactive) object
   sideTurns.set(id, { main: batch.main, reply: stored, turn });
   batch.run.handback = 'running';
   batch.run.handbackAt = Date.now();
-  const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
+  const cwd =
+    workspace.projects.find((project) => project.id === session.projectId)
+      ?.path ?? null;
   void sendAgentTurn({
     session: id,
     turn,
@@ -2011,7 +3233,9 @@ function handBackBeside(batch: DelegateBatch, prompt: string): boolean {
     effort: (session.stepEffort ?? turnOptions.effort) as Effort,
     allowedTools: [...(approved[batch.main] ?? [])],
     cwd,
-  }).catch((error: unknown) => handleSideEvent(id, { kind: 'error', message: String(error) }, turn));
+  }).catch((error: unknown) =>
+    handleSideEvent(id, { kind: 'error', message: String(error) }, turn),
+  );
   return true;
 }
 
@@ -2021,28 +3245,23 @@ function handleSideEvent(id: string, event: AgentEvent, turn: string) {
   if (!side || side.turn !== turn || event.kind === 'raw') return;
   const { reply, main } = side;
   if (event.kind === 'usage') {
-    reply.tokens ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    if (event.new_call) {
-      reply.tokens.input += event.input_tokens;
-      reply.tokens.cacheRead += event.cache_read_tokens;
-      reply.tokens.cacheWrite += event.cache_write_tokens;
-      reply.callOutput = 0;
-    }
-    reply.tokens.output += Math.max(0, event.output_tokens - (reply.callOutput ?? 0));
-    reply.callOutput = event.output_tokens;
+    addUsage(reply, event);
     return;
   }
-  if (event.kind === 'done' && event.cost_usd != null) reply.cost = (reply.cost ?? 0) + event.cost_usd;
+  if (event.kind === 'done' && event.cost_usd != null)
+    reply.cost = (reply.cost ?? 0) + event.cost_usd;
   const update = applyAgentEvent(reply.blocks, event);
   reply.blocks = update.blocks;
-  if (event.kind === 'tool_result' && event.image) persistCommandImage(main, reply, event.id, event.image);
+  if (event.kind === 'tool_result' && event.image)
+    persistCommandImage(main, reply, event.id, event.image);
   if (!update.finished) return;
   reply.live = false;
   if (reply.startedAt) reply.ms = Date.now() - reply.startedAt;
   void finishCommandImages(main, reply);
   sideTurns.delete(id);
   const session = workspace.sessions.find((item) => item.id === main);
-  if (session) session.status = replies[main] || hasSideTurn(main) ? 'working' : 'idle';
+  if (session)
+    session.status = replies[main] || hasSideTurn(main) ? 'working' : 'idle';
   if (session?.path) keepOtherTurn(session, reply);
   onHandbackDone(main, reply, event.kind === 'error');
   persistLocal();
@@ -2052,27 +3271,70 @@ function handleSideEvent(id: string, event: AgentEvent, turn: string) {
 /** Send from the message box. While the agent is busy: wait in line (Enter), or stop it and go first (Ctrl+Enter). */
 /** The picture of each picked element, sent with the message as an image next to its markup. */
 const elementPictures = (elements: PageElement[]): Attachment[] =>
-  elements.flatMap((item) => (item.picture ? [{ id: crypto.randomUUID(), name: `${item.tag}.png`, mime: 'image/png', src: item.picture }] : []));
+  elements.flatMap((item) =>
+    item.picture
+      ? [
+          {
+            id: crypto.randomUUID(),
+            name: `${item.tag}.png`,
+            mime: 'image/png',
+            src: item.picture,
+          },
+        ]
+      : [],
+  );
 
-export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = [], mentions: Mention[] = [], whileRunning: 'queue' | 'interrupt' = 'queue', files: FileAttachment[] = []) {
+export function sendMessage(
+  text: string,
+  images: Attachment[] = [],
+  elements: PageElement[] = [],
+  mentions: Mention[] = [],
+  whileRunning: 'queue' | 'interrupt' = 'queue',
+  files: FileAttachment[] = [],
+) {
   const session = activeSession();
   images = [...images, ...elementPictures(elements)];
-  if (!session || (!text.trim() && images.length === 0 && elements.length === 0 && files.length === 0)) return;
+  if (
+    !session ||
+    (!text.trim() &&
+      images.length === 0 &&
+      elements.length === 0 &&
+      files.length === 0)
+  )
+    return;
   // A task for another agent needs words to say what the task is.
   if (mentions.some((mention) => mention.kind === 'ai') && !text.trim()) return;
   beginSessionWork(session.id);
-  if (replies[session.id] || isRunning(session.id) || needsUserInput(session.id)) {
+  if (
+    replies[session.id] ||
+    isRunning(session.id) ||
+    needsUserInput(session.id)
+  ) {
     if (whileRunning === 'queue') {
-      enqueue(queued, session.id, { text, images, elements, mentions, files });
+      enqueue(queued, session.id, {
+        text,
+        images,
+        elements,
+        mentions,
+        files,
+      });
       return;
     }
     if (needsUserInput(session.id)) {
-      enqueue(queued, session.id, { text, images, elements, mentions, files });
+      enqueue(queued, session.id, {
+        text,
+        images,
+        elements,
+        mentions,
+        files,
+      });
       return;
     }
     stopTurn(session.id);
   }
-  send(session.id, text, images, elements, mentions, { files });
+  send(session.id, text, images, elements, mentions, {
+    files,
+  });
 }
 
 /** Sends a queued message now: the reply running in the chat is stopped (what it wrote stays), and this one goes out. */
@@ -2082,12 +3344,17 @@ export function steerQueued(sessionId: string, item: Queued) {
   if (rest.length) queued[sessionId] = rest;
   else delete queued[sessionId];
   if (replies[sessionId]) stopTurn(sessionId);
-  send(sessionId, item.text, item.images, item.elements, item.mentions, { files: item.files });
+  send(sessionId, item.text, item.images, item.elements, item.mentions, {
+    files: item.files,
+  });
 }
 
 /** A message as it is recognised again in the chat's file (where it has another id than the one it got here). */
 const signature = (message: Message) =>
-  `${message.role}|${message.blocks.map((block) => (block.kind === 'response' ? block.text.trim() : '')).join('').slice(0, 300)}`;
+  `${message.role}|${message.blocks
+    .map((block) => (block.kind === 'response' ? block.text.trim() : ''))
+    .join('')
+    .slice(0, 300)}`;
 
 /** Messages taken out of a saved chat by an edit: its file still has them, so they are hidden when it is read. */
 const hidden: Record<string, string[]> = {};
@@ -2104,7 +3371,9 @@ export function editMessage(messageId: string, text: string) {
   if (!session || !text.trim()) return;
   beginSessionWork(session.id);
   const list = messagesOf(session.id);
-  const index = list.findIndex((message) => message.id === messageId && message.role === 'user');
+  const index = list.findIndex(
+    (message) => message.id === messageId && message.role === 'user',
+  );
   if (index === -1) return;
   if (replies[session.id]) stopTurn(session.id);
   delete queued[session.id];
@@ -2112,10 +3381,18 @@ export function editMessage(messageId: string, text: string) {
   const { images, elements, files } = attachmentsOf(list[index]);
   const removed = list.splice(index);
   if (session.path) {
-    hidden[session.id] = [...new Set([...(hidden[session.id] ?? []), ...removed.flatMap((message) => [message.id, signature(message)])])];
+    hidden[session.id] = [
+      ...new Set([
+        ...(hidden[session.id] ?? []),
+        ...removed.flatMap((message) => [message.id, signature(message)]),
+      ]),
+    ];
     setPref('chat.hidden', hidden);
     const others = otherTurns[session.id];
-    if (others) otherTurns[session.id] = others.filter((message) => !removed.includes(message));
+    if (others)
+      otherTurns[session.id] = others.filter(
+        (message) => !removed.includes(message),
+      );
     transcripts.delete(session.id);
   } else {
     localMessages[session.id] = list;
@@ -2125,16 +3402,59 @@ export function editMessage(messageId: string, text: string) {
 }
 
 /** What a message of yours carried besides its words, as composer attachments again (edit, copy all). */
-export function attachmentsOf(message: Message): { images: Attachment[]; elements: PageElement[]; files: FileAttachment[] } {
+export function attachmentsOf(message: Message): {
+  images: Attachment[];
+  elements: PageElement[];
+  files: FileAttachment[];
+} {
   const images: Attachment[] = message.blocks.flatMap((block) =>
-    block.kind === 'image' ? [{ id: nextId(), name: block.name, mime: block.src.slice(5, block.src.indexOf(';')) || 'image/png', src: block.src }] : [],
+    block.kind === 'image'
+      ? [
+          {
+            id: nextId(),
+            name: block.name,
+            mime: block.src.slice(5, block.src.indexOf(';')) || 'image/png',
+            src: block.src,
+          },
+        ]
+      : [],
   );
   const elements: PageElement[] = message.blocks.flatMap((block) =>
     block.kind === 'element'
-      ? [{ id: nextId(), tag: block.tag, text: block.text, selector: block.selector, html: block.html ?? '', around: block.around, box: { x: block.box?.x ?? 0, y: block.box?.y ?? 0, w: block.box?.w ?? 0, h: block.box?.h ?? 0 }, style: block.style ?? {}, url: block.url ?? '', title: block.title ?? '', note: block.note }]
+      ? [
+          {
+            id: nextId(),
+            tag: block.tag,
+            text: block.text,
+            selector: block.selector,
+            html: block.html ?? '',
+            around: block.around,
+            box: {
+              x: block.box?.x ?? 0,
+              y: block.box?.y ?? 0,
+              w: block.box?.w ?? 0,
+              h: block.box?.h ?? 0,
+            },
+            style: block.style ?? {},
+            url: block.url ?? '',
+            title: block.title ?? '',
+            note: block.note,
+          },
+        ]
       : [],
   );
-  const files: FileAttachment[] = message.blocks.flatMap((block) => (block.kind === 'file' ? [{ id: nextId(), name: block.name, path: block.path, size: block.size ?? 0 }] : []));
+  const files: FileAttachment[] = message.blocks.flatMap((block) =>
+    block.kind === 'file'
+      ? [
+          {
+            id: nextId(),
+            name: block.name,
+            path: block.path,
+            size: block.size ?? 0,
+          },
+        ]
+      : [],
+  );
   return { images, elements, files };
 }
 
@@ -2143,14 +3463,43 @@ export function attachmentsOf(message: Message): { images: Attachment[]; element
  * front of the prompt without being shown (context of a delegated task). `extra.silent` (the message that handed work
  * out) sends `extra.prompt` without any message in the chat: the agent's reply just continues after that message.
  */
-function send(sessionId: string, text: string, images: Attachment[], elements: PageElement[], mentions: Mention[] = [], extra: { prompt?: string; preface?: string; files?: FileAttachment[]; silent?: Message } = {}) {
+function send(
+  sessionId: string,
+  text: string,
+  images: Attachment[],
+  elements: PageElement[],
+  mentions: Mention[] = [],
+  extra: {
+    prompt?: string;
+    preface?: string;
+    files?: FileAttachment[];
+    silent?: Message;
+  } = {},
+) {
   const session = workspace.sessions.find((item) => item.id === sessionId);
   const body = text.trim();
   const files = extra.files ?? [];
   if (!session || replies[sessionId]) return;
   const messages = messagesOf(sessionId);
-  if (extra.silent && extra.prompt && inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'opencode' || session.agent === 'custom')) {
-    startTurn(session, extra.prompt, [], [], extra.preface ?? '', [], extra.silent);
+  if (
+    extra.silent &&
+    extra.prompt &&
+    inTauri() &&
+    (session.agent === 'claude' ||
+      session.agent === 'codex' ||
+      session.agent === 'antigravity' ||
+      session.agent === 'opencode' ||
+      session.agent === 'custom')
+  ) {
+    startTurn(
+      session,
+      extra.prompt,
+      [],
+      [],
+      extra.preface ?? '',
+      [],
+      extra.silent,
+    );
     if (!session.path) localMessages[session.id] = messages;
     persistLocal();
     return;
@@ -2160,9 +3509,31 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
     role: 'user',
     time: clock(new Date().toISOString()),
     blocks: [
-      ...images.map((image) => ({ kind: 'image' as const, src: image.src, name: image.name })),
-      ...files.map((file) => ({ kind: 'file' as const, name: file.name, path: file.path, size: file.size })),
-      ...elements.map((item) => ({ kind: 'element' as const, tag: item.tag, text: item.text, selector: item.selector, url: item.url, title: item.title, note: item.note, html: item.html, around: item.around, box: { ...item.box }, style: { ...item.style }, picture: item.picture })),
+      ...images.map((image) => ({
+        kind: 'image' as const,
+        src: image.src,
+        name: image.name,
+      })),
+      ...files.map((file) => ({
+        kind: 'file' as const,
+        name: file.name,
+        path: file.path,
+        size: file.size,
+      })),
+      ...elements.map((item) => ({
+        kind: 'element' as const,
+        tag: item.tag,
+        text: item.text,
+        selector: item.selector,
+        url: item.url,
+        title: item.title,
+        note: item.note,
+        html: item.html,
+        around: item.around,
+        box: { ...item.box },
+        style: { ...item.style },
+        picture: item.picture,
+      })),
       ...(body ? [{ kind: 'response' as const, text: body }] : []),
     ],
     at: new Date().toISOString(),
@@ -2170,15 +3541,62 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
   const preface = (extra.preface ?? '') + mentionContext(mentions);
   const targets = mentions.filter((mention) => mention.kind === 'ai');
   const preset = presetOf(sessionId);
-  if (inTauri() && targets.length > 0 && body) delegate(session, messages[messages.length - 1], body, targets, preface, images, elements, files);
-  else if (inTauri() && preset && preset.steps.length > 0 && body && !extra.prompt && !extra.preface) void runWorkflow(session, messages[messages.length - 1], preset, body, preface, images, elements, files);
-  else if (inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'opencode' || session.agent === 'custom')) startTurn(session, withElements(extra.prompt ?? body, elements), images, [], preface, files);
+  if (inTauri() && targets.length > 0 && body)
+    delegate(
+      session,
+      messages[messages.length - 1],
+      body,
+      targets,
+      preface,
+      images,
+      elements,
+      files,
+    );
+  else if (
+    inTauri() &&
+    preset &&
+    preset.steps.length > 0 &&
+    body &&
+    !extra.prompt &&
+    !extra.preface
+  )
+    void runWorkflow(
+      session,
+      messages[messages.length - 1],
+      preset,
+      body,
+      preface,
+      images,
+      elements,
+      files,
+    );
+  else if (
+    inTauri() &&
+    (session.agent === 'claude' ||
+      session.agent === 'codex' ||
+      session.agent === 'antigravity' ||
+      session.agent === 'opencode' ||
+      session.agent === 'custom')
+  )
+    startTurn(
+      session,
+      withElements(extra.prompt ?? body, elements),
+      images,
+      [],
+      preface,
+      files,
+    );
   else if (inTauri()) {
     messages.push({
       id: nextId(),
       role: 'assistant',
       time: clock(new Date().toISOString()),
-      blocks: [{ kind: 'response', text: `⚠ ${session.agent} chats are not connected yet. Claude and Codex run from here for now.` }],
+      blocks: [
+        {
+          kind: 'response',
+          text: `⚠ ${session.agent} chats are not connected yet. Claude and Codex run from here for now.`,
+        },
+      ],
     });
   }
   // Imported sessions reload from disk; sessions that only exist here keep their messages in memory.
@@ -2187,7 +3605,8 @@ function send(sessionId: string, text: string, images: Attachment[], elements: P
   if (session.draft) {
     session.draft = false;
     const firstLine = body.split('\n')[0] || 'Image';
-    session.title = firstLine.length > 60 ? `${firstLine.slice(0, 57)}…` : firstLine;
+    session.title =
+      firstLine.length > 60 ? `${firstLine.slice(0, 57)}…` : firstLine;
   }
 }
 
@@ -2203,10 +3622,18 @@ function forkDigest(list: Message[]): string {
     .filter((message) => !hiddenPrompt(message))
     .map((message) => {
       const text = message.blocks
-        .flatMap((block) => (block.kind === 'response' ? [block.text] : block.kind === 'command' ? [`(ran: ${block.command.slice(0, 160)})`] : []))
+        .flatMap((block) =>
+          block.kind === 'response'
+            ? [block.text]
+            : block.kind === 'command'
+              ? [`(ran: ${block.command.slice(0, 160)})`]
+              : [],
+        )
         .join('\n')
         .trim();
-      return text ? `${message.role === 'user' ? 'User' : 'Assistant'}: ${text.length > 2500 ? `${text.slice(0, 2500)}…` : text}` : '';
+      return text
+        ? `${message.role === 'user' ? 'User' : 'Assistant'}: ${text.length > 2500 ? `${text.slice(0, 2500)}…` : text}`
+        : '';
     })
     .filter(Boolean);
   if (!lines.length) return '';
@@ -2224,11 +3651,34 @@ export function forkSession(sourceId: string) {
   const source = workspace.sessions.find((item) => item.id === sourceId);
   if (!source) return;
   const id = nextId();
-  const copy = (JSON.parse(JSON.stringify(messagesOf(sourceId))) as Message[]).map((message) => ({ ...message, live: false }));
+  const copy = (
+    JSON.parse(JSON.stringify(messagesOf(sourceId))) as Message[]
+  ).map((message) => ({ ...message, live: false }));
   localMessages[id] = copy;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { path, source: _origin, updatedAt, messageCount, agentSession, agentStarted, agentIds, conversationModel, agentModels, ...rest } = source;
-  workspace.sessions.push({ ...rest, id, title: `${source.title} (fork)`, status: 'idle', parentId: source.id, draft: false, messageCount: copy.length, updatedAt: new Date().toISOString(), forkContext: forkDigest(copy) || undefined });
+  const {
+    path,
+    source: _origin,
+    updatedAt,
+    messageCount,
+    agentSession,
+    agentStarted,
+    agentIds,
+    conversationModel,
+    agentModels,
+    ...rest
+  } = source;
+  workspace.sessions.push({
+    ...rest,
+    id,
+    title: `${source.title} (fork)`,
+    status: 'idle',
+    parentId: source.id,
+    draft: false,
+    messageCount: copy.length,
+    updatedAt: new Date().toISOString(),
+    forkContext: forkDigest(copy) || undefined,
+  });
   workspace.activeId = id;
   persistLocal();
 }
@@ -2254,8 +3704,16 @@ export type TreeData = {
 };
 
 /** How the sidebar lists chats: by folder (Recents, This computer, Projects), by date, or one plain list. */
-export type SidebarView = { groupBy: 'folder' | 'date' | 'none'; sortBy: 'updated' | 'name'; order: 'desc' | 'asc' };
-export const DEFAULT_VIEW: SidebarView = { groupBy: 'folder', sortBy: 'updated', order: 'desc' };
+export type SidebarView = {
+  groupBy: 'folder' | 'date' | 'none';
+  sortBy: 'updated' | 'name';
+  order: 'desc' | 'asc';
+};
+export const DEFAULT_VIEW: SidebarView = {
+  groupBy: 'folder',
+  sortBy: 'updated',
+  order: 'desc',
+};
 export type TreeOptions = {
   view: SidebarView;
   /** Heading keys that are folded. */
@@ -2274,17 +3732,26 @@ export function pendingProject(): string | undefined {
   return active && isEmptyDraft(active) ? active.projectId : undefined;
 }
 
-export function buildTree({ view, collapsed, showPages }: TreeOptions = { view: DEFAULT_VIEW, collapsed: [], showPages: {} }): ZTreeNode<TreeData>[] {
+export function buildTree(
+  { view, collapsed, showPages }: TreeOptions = {
+    view: DEFAULT_VIEW,
+    collapsed: [],
+    showPages: {},
+  },
+): ZTreeNode<TreeData>[] {
   // A session with no time yet is new: it goes first.
   const newest = (a: SessionItem, b: SessionItem) => {
-    if (!a.updatedAt || !b.updatedAt) return Number(!b.updatedAt) - Number(!a.updatedAt);
+    if (!a.updatedAt || !b.updatedAt)
+      return Number(!b.updatedAt) - Number(!a.updatedAt);
     return b.updatedAt.localeCompare(a.updatedAt);
   };
   // Two levels, as in Claude: every fork, a fork of a fork too, sits right under the chat it all started from.
   const rootOf = (item: SessionItem): string => {
     let cursor = item;
     for (let depth = 0; cursor.parentId && depth < 50; depth++) {
-      const parent = workspace.sessions.find((other) => other.id === cursor.parentId);
+      const parent = workspace.sessions.find(
+        (other) => other.id === cursor.parentId,
+      );
       if (!parent) break;
       cursor = parent;
     }
@@ -2292,11 +3759,17 @@ export function buildTree({ view, collapsed, showPages }: TreeOptions = { view: 
   };
   const forksOf = (root: SessionItem): ZTreeNode<TreeData>[] =>
     workspace.sessions
-      .filter((item) => item.parentId && item.id !== root.id && rootOf(item) === root.id)
+      .filter(
+        (item) =>
+          item.parentId && item.id !== root.id && rootOf(item) === root.id,
+      )
       .sort(newest)
       .map((item, index, list) => sessionNode(item, index === list.length - 1));
 
-  const sessionNode = (session: SessionItem, last = false): ZTreeNode<TreeData> => ({
+  const sessionNode = (
+    session: SessionItem,
+    last = false,
+  ): ZTreeNode<TreeData> => ({
     id: `session:${session.id}`,
     label: session.title,
     icon: session.parentId ? 'lucideGitFork' : 'lucideMessageSquare',
@@ -2308,11 +3781,20 @@ export function buildTree({ view, collapsed, showPages }: TreeOptions = { view: 
   const shown = (item: SessionItem) => !isEmptyDraft(item);
   // The chosen order; a new chat (no time yet) stays first when sorting by time.
   const ordered = (list: SessionItem[]) => {
-    const sorted = [...list].sort(view.sortBy === 'name' ? (x, y) => x.title.localeCompare(y.title) : newest);
+    const sorted = [...list].sort(
+      view.sortBy === 'name'
+        ? (x, y) => x.title.localeCompare(y.title)
+        : newest,
+    );
     return view.order === 'asc' ? sorted.reverse() : sorted;
   };
   // The first rows of a long list, then one 20-row page per "Show more" click.
-  const limited = <T>(key: string, list: T[], limit: number, row: (item: T) => ZTreeNode<TreeData>) => {
+  const limited = <T>(
+    key: string,
+    list: T[],
+    limit: number,
+    row: (item: T) => ZTreeNode<TreeData>,
+  ) => {
     const page = showPages[key] ?? 0;
     const visibleCount = Math.min(list.length, limit + page * LIST_PAGE_SIZE);
     const done = list.length <= visibleCount;
@@ -2335,13 +3817,21 @@ export function buildTree({ view, collapsed, showPages }: TreeOptions = { view: 
     data: { kind: 'project', path: project.path },
     children: limited(
       `project:${project.id}`,
-      ordered(workspace.sessions.filter((item) => item.projectId === project.id && !item.parentId && shown(item))),
+      ordered(
+        workspace.sessions.filter(
+          (item) =>
+            item.projectId === project.id && !item.parentId && shown(item),
+        ),
+      ),
       LIST_LIMIT,
       (item) => sessionNode(item),
     ),
   });
   // A chat listed right under a heading: one line, no branch lines. `key` keeps ids unique when a chat is listed twice.
-  const flatNode = (session: SessionItem, key = 'session'): ZTreeNode<TreeData> => ({
+  const flatNode = (
+    session: SessionItem,
+    key = 'session',
+  ): ZTreeNode<TreeData> => ({
     id: `${key}:${session.id}`,
     label: session.title,
     isLeaf: true,
@@ -2349,20 +3839,46 @@ export function buildTree({ view, collapsed, showPages }: TreeOptions = { view: 
     data: { kind: 'session', session, flat: true },
   });
   // A heading and, unless it is folded, its rows. An empty heading still shows (its + button), without a fold arrow.
-  const section = (key: string, label: string, rows: ZTreeNode<TreeData>[], always = false): ZTreeNode<TreeData>[] => {
+  const section = (
+    key: string,
+    label: string,
+    rows: ZTreeNode<TreeData>[],
+    always = false,
+  ): ZTreeNode<TreeData>[] => {
     if (!rows.length && !always) return [];
-    const head: ZTreeNode<TreeData> = { id: `section:${key}`, label, isLeaf: true, children: [], data: { kind: 'section', count: rows.length } };
+    const head: ZTreeNode<TreeData> = {
+      id: `section:${key}`,
+      label,
+      isLeaf: true,
+      children: [],
+      data: { kind: 'section', count: rows.length },
+    };
     return [head, ...(collapsed.includes(key) ? [] : rows)];
   };
 
   // Pinned: chats and project folders kept at the top, in the order they were pinned. A pinned folder moves there
   // from Projects; a pinned chat leaves Recents and the date lists but stays in its project.
-  const pinnedChats = pinned.sessions.map((id) => workspace.sessions.find((item) => item.id === id)).filter((item): item is SessionItem => Boolean(item && shown(item)));
-  const visibleProjects = workspace.projects.filter((project) => project.id !== NO_PROJECT && !hiddenProjects.some((path) => samePath(path, project.path)));
-  const pinnedProjects = pinned.projects.map((path) => visibleProjects.find((project) => samePath(project.path, path))).filter((item): item is Project => Boolean(item));
-  const pins = section('pinned', 'Pinned', [...pinnedProjects.map(projectNode), ...pinnedChats.map((item) => flatNode(item, 'pin'))]);
+  const pinnedChats = pinned.sessions
+    .map((id) => workspace.sessions.find((item) => item.id === id))
+    .filter((item): item is SessionItem => Boolean(item && shown(item)));
+  const visibleProjects = workspace.projects.filter(
+    (project) =>
+      project.id !== NO_PROJECT &&
+      !hiddenProjects.some((path) => samePath(path, project.path)),
+  );
+  const pinnedProjects = pinned.projects
+    .map((path) =>
+      visibleProjects.find((project) => samePath(project.path, path)),
+    )
+    .filter((item): item is Project => Boolean(item));
+  const pins = section('pinned', 'Pinned', [
+    ...pinnedProjects.map(projectNode),
+    ...pinnedChats.map((item) => flatNode(item, 'pin')),
+  ]);
 
-  const chats = workspace.sessions.filter((item) => shown(item) && (view.groupBy === 'folder' || !item.parentId));
+  const chats = workspace.sessions.filter(
+    (item) => shown(item) && (view.groupBy === 'folder' || !item.parentId),
+  );
   const unpinned = chats.filter((item) => !isPinnedSession(item.id));
   if (view.groupBy === 'date') {
     // Today, Yesterday, Previous 7 days, Older: like the chat lists of Claude and ChatGPT.
@@ -2370,41 +3886,105 @@ export function buildTree({ view, collapsed, showPages }: TreeOptions = { view: 
     const midnight = new Date().setHours(0, 0, 0, 0);
     const bucket = (item: SessionItem) => {
       const time = item.updatedAt ? Date.parse(item.updatedAt) : Date.now();
-      return time >= midnight ? 'today' : time >= midnight - day ? 'yesterday' : time >= midnight - 7 * day ? 'week' : 'older';
+      return time >= midnight
+        ? 'today'
+        : time >= midnight - day
+          ? 'yesterday'
+          : time >= midnight - 7 * day
+            ? 'week'
+            : 'older';
     };
-    const labels = { today: 'Today', yesterday: 'Yesterday', week: 'Previous 7 days', older: 'Older' } as const;
+    const labels = {
+      today: 'Today',
+      yesterday: 'Yesterday',
+      week: 'Previous 7 days',
+      older: 'Older',
+    } as const;
     return [
       ...pins,
       ...(Object.keys(labels) as (keyof typeof labels)[]).flatMap((key) =>
-        section(key, labels[key], limited(key, ordered(unpinned.filter((item) => bucket(item) === key)), LIST_LIMIT, (item) => flatNode(item, 'list'))),
+        section(
+          key,
+          labels[key],
+          limited(
+            key,
+            ordered(unpinned.filter((item) => bucket(item) === key)),
+            LIST_LIMIT,
+            (item) => flatNode(item, 'list'),
+          ),
+        ),
       ),
     ];
   }
-  if (view.groupBy === 'none') return [...pins, ...section('chats', 'Chats', limited('chats', ordered(unpinned), LIST_LIMIT * 3, (item) => flatNode(item, 'list')), true)];
+  if (view.groupBy === 'none')
+    return [
+      ...pins,
+      ...section(
+        'chats',
+        'Chats',
+        limited('chats', ordered(unpinned), LIST_LIMIT * 3, (item) =>
+          flatNode(item, 'list'),
+        ),
+        true,
+      ),
+    ];
 
   // By folder: Recents (newest chats of every project), This computer (chats outside any project), Projects.
   const latest = unpinned.filter((item) => !item.parentId).sort(newest);
-  const computer = chats.filter((item) => item.projectId === NO_PROJECT && !item.parentId);
-  const projects = visibleProjects.filter((project) => !pinnedProjects.includes(project));
+  const computer = chats.filter(
+    (item) => item.projectId === NO_PROJECT && !item.parentId,
+  );
+  const projects = visibleProjects.filter(
+    (project) => !pinnedProjects.includes(project),
+  );
   // Projects come most recently used first; sorting by name sorts them too.
-  if (view.sortBy === 'name') projects.sort((x, y) => x.name.localeCompare(y.name));
+  if (view.sortBy === 'name')
+    projects.sort((x, y) => x.name.localeCompare(y.name));
   if (view.order === 'asc') projects.reverse();
   return [
     ...pins,
-    ...section('recents', 'Recents', limited('recents', latest, LIST_LIMIT, (item) => flatNode(item, 'recent'))),
-    ...section('computer', 'This computer', limited('computer', ordered(computer), LIST_LIMIT, (item) => flatNode(item)), true),
-    ...section('projects', 'Projects', limited('projects', projects, PROJECT_LIMIT, projectNode), true),
+    ...section(
+      'recents',
+      'Recents',
+      limited('recents', latest, LIST_LIMIT, (item) =>
+        flatNode(item, 'recent'),
+      ),
+    ),
+    ...section(
+      'computer',
+      'This computer',
+      limited('computer', ordered(computer), LIST_LIMIT, (item) =>
+        flatNode(item),
+      ),
+      true,
+    ),
+    ...section(
+      'projects',
+      'Projects',
+      limited('projects', projects, PROJECT_LIMIT, projectNode),
+      true,
+    ),
   ];
 }
 
 // ---------- real history (Claude Code and Codex, read-only) ----------
-export const chat = $state({ messages: mockMessages as Message[], loading: false, error: '', older: 0, loadingOlder: false });
+export const chat = $state({
+  messages: mockMessages as Message[],
+  loading: false,
+  error: '',
+  older: 0,
+  loadingOlder: false,
+});
 export const history = $state({ imported: false, loading: inTauri() });
 
 const CACHE_KEY = 'agentdeck.history.index';
 
 /** Last folder of a path, for either separator: `C:\work\demo` and `/home/me/demo` both give `demo`. */
-const folderName = (cwd: string) => cwd.split(/[\\/]+/).filter(Boolean).at(-1) ?? 'Unknown';
+const folderName = (cwd: string) =>
+  cwd
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .at(-1) ?? 'Unknown';
 
 /** Replaces the mock workspace with what Claude Code and Codex already saved on this machine. */
 export async function importHistory({ refresh = false } = {}) {
@@ -2414,15 +3994,18 @@ export async function importHistory({ refresh = false } = {}) {
   }
   await Promise.all([restored, addedReady]);
   // Show the last known index at once, then refresh it: indexing every file takes a moment.
-  if (!refresh) try {
-    const cached = JSON.parse(localStorage.getItem(CACHE_KEY) ?? '[]') as HistorySession[];
-    if (cached.length > 0) {
-      applyHistory(cached);
-      history.imported = true;
+  if (!refresh)
+    try {
+      const cached = JSON.parse(
+        localStorage.getItem(CACHE_KEY) ?? '[]',
+      ) as HistorySession[];
+      if (cached.length > 0) {
+        applyHistory(cached);
+        history.imported = true;
+      }
+    } catch {
+      // A bad cache is simply ignored.
     }
-  } catch {
-    // A bad cache is simply ignored.
-  }
   history.loading = true;
   try {
     const found = await listHistory();
@@ -2432,8 +4015,14 @@ export async function importHistory({ refresh = false } = {}) {
     if (found.some((item) => item.id === keep)) workspace.activeId = keep;
     history.imported = true;
     // Quietly warm the transcripts of the newest chats while the app is idle.
-    const warm = () => workspace.sessions.filter((item) => item.path).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')).slice(0, 4).forEach((item) => void prefetchTranscript(item));
-    if ('requestIdleCallback' in window) window.requestIdleCallback(warm, { timeout: 3000 });
+    const warm = () =>
+      workspace.sessions
+        .filter((item) => item.path)
+        .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+        .slice(0, 4)
+        .forEach((item) => void prefetchTranscript(item));
+    if ('requestIdleCallback' in window)
+      window.requestIdleCallback(warm, { timeout: 3000 });
     else setTimeout(warm, 800);
     try {
       localStorage.setItem(CACHE_KEY, JSON.stringify(found));
@@ -2451,7 +4040,10 @@ export async function importHistory({ refresh = false } = {}) {
 function knownParent(id: string, ids: Set<string>): string | undefined {
   const parent = parents[id];
   if (!parent || parent === id) return undefined;
-  return ids.has(parent) || workspace.sessions.some((item) => item.id === parent) ? parent : undefined;
+  return ids.has(parent) ||
+    workspace.sessions.some((item) => item.id === parent)
+    ? parent
+    : undefined;
 }
 
 function applyHistory(all: HistorySession[]) {
@@ -2468,7 +4060,11 @@ function applyHistory(all: HistorySession[]) {
     if (!projectIds.has(item.cwd)) {
       const id = `dir:${item.cwd}`;
       projectIds.set(item.cwd, id);
-      projects.push({ id, name: item.cwd ? folderName(item.cwd) : 'Unknown', path: item.cwd });
+      projects.push({
+        id,
+        name: item.cwd ? folderName(item.cwd) : 'Unknown',
+        path: item.cwd,
+      });
     }
   }
   const sessions: SessionItem[] = found.map((item) => ({
@@ -2479,10 +4075,17 @@ function applyHistory(all: HistorySession[]) {
     title: item.title,
     agent: mixed[item.id]?.agents?.at(-1) ?? item.source,
     // Sonnet unless the chat was changed: the first model of the list is the biggest one.
-    model: item.model ?? (item.source === 'claude' ? 'claude-sonnet-5-5' : MODELS[item.source][0].value),
+    model:
+      item.model ??
+      (item.source === 'claude'
+        ? 'claude-sonnet-5-5'
+        : MODELS[item.source][0].value),
     conversationModel: item.model ?? undefined,
     status: 'idle',
-    parentId: item.parent_id && ids.has(item.parent_id) ? item.parent_id : knownParent(item.id, ids),
+    parentId:
+      item.parent_id && ids.has(item.parent_id)
+        ? item.parent_id
+        : knownParent(item.id, ids),
     source: item.source,
     path: item.path,
     updatedAt: item.updated_at ?? undefined,
@@ -2490,16 +4093,28 @@ function applyHistory(all: HistorySession[]) {
   }));
   // Most recently used project first.
   const latest = (projectId: string) =>
-    sessions.filter((item) => item.projectId === projectId).reduce((max, item) => (item.updatedAt ?? '') > max ? item.updatedAt ?? '' : max, '');
+    sessions
+      .filter((item) => item.projectId === projectId)
+      .reduce(
+        (max, item) =>
+          (item.updatedAt ?? '') > max ? (item.updatedAt ?? '') : max,
+        '',
+      );
   projects.sort((a, b) => latest(b.id).localeCompare(latest(a.id)));
 
   // Sessions that only exist here (drafts, new chats) survive the import.
   const local = localSessions().filter((item) => !ids.has(item.id));
   // The open empty draft keeps its project too, so its row stays highlighted.
-  const draft = workspace.sessions.find((item) => item.id === workspace.activeId && isEmptyDraft(item));
+  const draft = workspace.sessions.find(
+    (item) => item.id === workspace.activeId && isEmptyDraft(item),
+  );
   if (draft) local.push(draft);
   // The open chat stays open: after F5 it is an imported session, after a send it may still be a local one.
-  const keepActive = ids.has(workspace.activeId) || local.some((item) => item.id === workspace.activeId) ? workspace.activeId : undefined;
+  const keepActive =
+    ids.has(workspace.activeId) ||
+    local.some((item) => item.id === workspace.activeId)
+      ? workspace.activeId
+      : undefined;
   // Folders added by hand stay even with no chat in them yet, right after "This computer".
   const added = addedProjects
     .filter((path) => !projects.some((project) => samePath(project.path, path)))
@@ -2507,8 +4122,23 @@ function applyHistory(all: HistorySession[]) {
   projects.unshift(noProjectRow(), ...added);
   sessions.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 
+  // A chat already listed keeps its object, updated in place: a turn running in it (in this chat, or on another
+  // chat's import) still holds that object and its "working" state. A new object with `status: 'idle'` dropped both,
+  // so the chat looked done while its agent was still answering.
+  const current = new Map(workspace.sessions.map((item) => [item.id, item]));
+  const merged = sessions.map((item) => {
+    const existing = current.get(item.id);
+    if (!existing) return item;
+    return Object.assign(existing, item, { status: existing.status });
+  });
+
   workspace.projects = projects;
-  workspace.sessions = [...sessions, ...local.filter((item) => projects.some((project) => project.id === item.projectId))];
+  workspace.sessions = [
+    ...merged,
+    ...local.filter((item) =>
+      projects.some((project) => project.id === item.projectId),
+    ),
+  ];
   workspace.activeId = keepActive ?? sessions[0].id;
 }
 
@@ -2520,7 +4150,8 @@ let transcriptToken = 0;
 type Transcript = { stamp: string; messages: Message[]; start: number };
 const transcripts = new Map<string, Transcript>();
 // The format version leads the stamp: v5 limits persisted transcript pages to 30 messages.
-const stampOf = (session: SessionItem) => `v5|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
+const stampOf = (session: SessionItem) =>
+  `v5|${session.updatedAt ?? ''}|${session.messageCount ?? 0}`;
 const MAX_SAVED = 12;
 /** Keep one page in the reload cache; older pages are fetched from the history cursor on demand. */
 const PAGE_LIMIT = 20;
@@ -2533,7 +4164,10 @@ void getPref<typeof mixed>('chat.mixed').then((saved) => {
 });
 export function rememberMixed(session: SessionItem) {
   if (!session.path || !session.agents || session.agents.length < 2) return;
-  mixed[session.id] = $state.snapshot({ agents: session.agents, agentIds: session.agentIds });
+  mixed[session.id] = $state.snapshot({
+    agents: session.agents,
+    agentIds: session.agentIds,
+  });
   setPref('chat.mixed', mixed);
 }
 
@@ -2548,12 +4182,19 @@ void getPref<Record<string, Message[]>>('chat.otherTurns').then((saved) => {
 function keepOtherTurn(session: SessionItem, reply: Message) {
   const list = messagesOf(session.id);
   const index = list.indexOf(reply);
-  const asked = index > 0 && list[index - 1].role === 'user' ? [list[index - 1]] : [];
+  const asked =
+    index > 0 && list[index - 1].role === 'user' ? [list[index - 1]] : [];
   const kept = (otherTurns[session.id] ??= []);
   for (const message of [...asked, reply]) {
-    if (!kept.some((item) => item.id === message.id)) kept.push($state.snapshot(message) as Message);
+    if (!kept.some((item) => item.id === message.id))
+      kept.push($state.snapshot(message) as Message);
   }
-  const saved = Object.fromEntries(Object.entries(otherTurns).map(([id, list]) => [id, stripCommandImageData($state.snapshot(list) as Message[])]));
+  const saved = Object.fromEntries(
+    Object.entries(otherTurns).map(([id, list]) => [
+      id,
+      stripCommandImageData($state.snapshot(list) as Message[]),
+    ]),
+  );
   setPref('chat.otherTurns', saved);
 }
 
@@ -2568,81 +4209,190 @@ function keepHandout(mainId: string, asked: Message) {
   const index = kept.findIndex((item) => item.id === asked.id);
   if (index >= 0) kept[index] = copy;
   else kept.push(copy);
-  const saved = Object.fromEntries(Object.entries(otherTurns).map(([id, list]) => [id, stripCommandImageData($state.snapshot(list) as Message[])]));
+  const saved = Object.fromEntries(
+    Object.entries(otherTurns).map(([id, list]) => [
+      id,
+      stripCommandImageData($state.snapshot(list) as Message[]),
+    ]),
+  );
   setPref('chat.otherTurns', saved);
 }
 
 /** Pictures and files a saved prompt named by path (see `splitAttachments`), as blocks; the words lose those lists. */
 async function userAttachments(message: HistoryMessage): Promise<Block[]> {
-  const found: { images: string[]; files: string[] } = { images: [], files: [] };
+  const found: { images: string[]; files: string[] } = {
+    images: [],
+    files: [],
+  };
   for (const block of message.blocks) {
-    if (block.kind !== 'response' || !block.text.includes('Attached ')) continue;
+    if (block.kind !== 'response' || !block.text.includes('Attached '))
+      continue;
     const split = splitAttachments(block.text);
     block.text = split.text;
     found.images.push(...split.images);
     found.files.push(...split.files);
   }
-  return found.images.length || found.files.length ? attachmentBlocks(found.images, found.files) : [];
+  return found.images.length || found.files.length
+    ? attachmentBlocks(found.images, found.files)
+    : [];
 }
 
-async function toMessages(session: SessionItem, all: HistoryMessage[]): Promise<Message[]> {
+async function toMessages(
+  session: SessionItem,
+  all: HistoryMessage[],
+): Promise<Message[]> {
   // The prompt that handed other agents' answers back was never a message of the user's: only the reply to it is shown.
-  const loaded = all.filter((message) => !(message.role === 'user' && message.blocks.some((block) => block.kind === 'response' && isHandbackPrompt(block.text))));
-  const restored = await Promise.all(loaded.map((message) => (message.role === 'user' ? userAttachments(message) : Promise.resolve([] as Block[]))));
-  return joinContinuations(loaded.map((message, at) => ({
-    ...(message.role === 'assistant' ? { agent: session.source } : {}),
-    id: message.id,
-    role: message.role,
-    time: clock(message.time),
-    at: message.time || undefined,
-    // A prompt sent with the turns this agent missed shows only what the user typed.
-    blocks: [...restored[at], ...toBlocks(message.blocks).map((block) => {
-      // The paragraph AgentDeck puts before a prompt (how to open pages, how to delegate) is not the user's text.
-      const typed = message.role === 'user' && block.kind === 'response' ? { ...block, text: stripLead(block.text) } : block;
-      return typed.kind === 'response' && message.role === 'user' && typed.text.startsWith('Earlier in this chat, other agents answered')
-        ? { ...typed, text: typed.text.slice(typed.text.indexOf('Now the user says:\n') + 'Now the user says:\n'.length) }
-        : typed;
-    }
-    ).flatMap((block) => (block.kind === 'response' && !block.text ? [] : [block]))],
-    // Tokens come from the transcript itself, so every reply shows them again when the chat is reopened.
-    ...(message.usage
-      ? { tokens: { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cache_read, cacheWrite: message.usage.cache_write }, model: message.model }
-      : {}),
-  })));
+  const loaded = all.filter(
+    (message) =>
+      !(
+        message.role === 'user' &&
+        message.blocks.some(
+          (block) => block.kind === 'response' && isHandbackPrompt(block.text),
+        )
+      ),
+  );
+  const restored = await Promise.all(
+    loaded.map((message) =>
+      message.role === 'user'
+        ? userAttachments(message)
+        : Promise.resolve([] as Block[]),
+    ),
+  );
+  return joinContinuations(
+    loaded.map((message, at) => ({
+      ...(message.role === 'assistant' ? { agent: session.source } : {}),
+      id: message.id,
+      role: message.role,
+      time: clock(message.time),
+      at: message.time || undefined,
+      // A prompt sent with the turns this agent missed shows only what the user typed.
+      blocks: [
+        ...restored[at],
+        ...toBlocks(message.blocks)
+          .map((block) => {
+            // The paragraph AgentDeck puts before a prompt (how to open pages, how to delegate) is not the user's text.
+            const typed =
+              message.role === 'user' && block.kind === 'response'
+                ? { ...block, text: stripLead(block.text) }
+                : block;
+            return typed.kind === 'response' &&
+              message.role === 'user' &&
+              typed.text.startsWith(
+                'Earlier in this chat, other agents answered',
+              )
+              ? {
+                  ...typed,
+                  text: typed.text.slice(
+                    typed.text.indexOf('Now the user says:\n') +
+                      'Now the user says:\n'.length,
+                  ),
+                }
+              : typed;
+          })
+          .flatMap((block) =>
+            block.kind === 'response' && !block.text ? [] : [block],
+          ),
+      ],
+      // Tokens come from the transcript itself, so every reply shows them again when the chat is reopened.
+      ...(message.usage
+        ? {
+            tokens: {
+              input: message.usage.input,
+              output: message.usage.output,
+              cacheRead: message.usage.cache_read,
+              cacheWrite: message.usage.cache_write,
+            },
+            model: message.model,
+          }
+        : {}),
+    })),
+  );
 }
 
 /** The file's messages minus the deleted ones, with the other agents' turns that fall in the time range `[lower, upper)`. */
-function assemble(session: SessionItem, own: Message[], lower?: string, upper?: string): Message[] {
-  const others = (otherTurns[session.id] ?? []).filter((message) => (!lower || (message.at ?? '') >= lower) && (!upper || (message.at ?? '') < upper));
+function assemble(
+  session: SessionItem,
+  own: Message[],
+  lower?: string,
+  upper?: string,
+): Message[] {
+  const others = (otherTurns[session.id] ?? []).filter(
+    (message) =>
+      (!lower || (message.at ?? '') >= lower) &&
+      (!upper || (message.at ?? '') < upper),
+  );
   const gone = new Set(hidden[session.id] ?? []);
-  const out = (message: Message) => gone.has(message.id) || gone.has(signature(message));
+  const out = (message: Message) =>
+    gone.has(message.id) || gone.has(signature(message));
   const shown = gone.size ? own.filter((message) => !out(message)) : own;
   if (!others.length) return shown;
-  return [...shown, ...others.filter((message) => !out(message))].sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
+  return [...shown, ...others.filter((message) => !out(message))].sort((a, b) =>
+    (a.at ?? '').localeCompare(b.at ?? ''),
+  );
 }
 
-async function fetchTranscript(session: SessionItem): Promise<{ messages: Message[]; start: number }> {
-  const page = await loadHistoryPage(session.source!, session.path!, null, PAGE_LIMIT);
+async function fetchTranscript(
+  session: SessionItem,
+): Promise<{ messages: Message[]; start: number }> {
+  const page = await loadHistoryPage(
+    session.source!,
+    session.path!,
+    null,
+    PAGE_LIMIT,
+  );
   const own = await toMessages(session, page.messages);
-  const assembled = assemble(session, own, page.start > 0 ? own[0]?.at : undefined);
+  const assembled = assemble(
+    session,
+    own,
+    page.start > 0 ? own[0]?.at : undefined,
+  );
   const messages = assembled.slice(-PAGE_LIMIT);
-  const removedBefore = messages.length < assembled.length ? page.messages.filter((message) => message.time < (messages[0]?.at ?? '')).length : 0;
-  return { messages: await restoreCommandImages(session.id, messages), start: page.start + removedBefore };
+  const removedBefore =
+    messages.length < assembled.length
+      ? page.messages.filter(
+          (message) => message.time < (messages[0]?.at ?? ''),
+        ).length
+      : 0;
+  return {
+    messages: await restoreCommandImages(session.id, messages),
+    start: page.start + removedBefore,
+  };
 }
 
 /** Reads the page of messages before the first one on screen and puts it in front. Returns how many it added. */
-export async function loadOlder(session: SessionItem | undefined): Promise<number> {
-  if (!session?.path || !session.source || chat.older <= 0 || chat.loadingOlder) return 0;
+export async function loadOlder(
+  session: SessionItem | undefined,
+): Promise<number> {
+  if (!session?.path || !session.source || chat.older <= 0 || chat.loadingOlder)
+    return 0;
   chat.loadingOlder = true;
   try {
-    const page = await loadHistoryPage(session.source, session.path, chat.older, PAGE_LIMIT);
+    const page = await loadHistoryPage(
+      session.source,
+      session.path,
+      chat.older,
+      PAGE_LIMIT,
+    );
     if (workspace.activeId !== session.id) return 0;
     const own = await toMessages(session, page.messages);
-    const added = await restoreCommandImages(session.id, assemble(session, own, page.start > 0 ? own[0]?.at : undefined, chat.messages[0]?.at));
+    const added = await restoreCommandImages(
+      session.id,
+      assemble(
+        session,
+        own,
+        page.start > 0 ? own[0]?.at : undefined,
+        chat.messages[0]?.at,
+      ),
+    );
     chat.messages = [...added, ...chat.messages];
     chat.older = page.start;
     const cached = transcripts.get(session.id);
-    if (cached) transcripts.set(session.id, { ...cached, messages: [...added, ...cached.messages], start: page.start });
+    if (cached)
+      transcripts.set(session.id, {
+        ...cached,
+        messages: [...added, ...cached.messages],
+        start: page.start,
+      });
     return added.length;
   } catch (error) {
     chat.error = String(error);
@@ -2661,19 +4411,31 @@ function remember(session: SessionItem, messages: Message[], start: number) {
   const persist = () =>
     void getPref<string[]>('transcripts.keys').then((keys = []) => {
       const next = [session.id, ...keys.filter((key) => key !== session.id)];
-      for (const old of next.slice(MAX_SAVED)) setPref(`transcript.${old}`, null);
+      for (const old of next.slice(MAX_SAVED))
+        setPref(`transcript.${old}`, null);
       setPref('transcripts.keys', next.slice(0, MAX_SAVED));
-      const tail = { stamp: '', messages: stripCommandImageData(messages.slice(-SAVED_TAIL)), start: start + Math.max(0, messages.length - SAVED_TAIL) };
+      const tail = {
+        stamp: '',
+        messages: stripCommandImageData(messages.slice(-SAVED_TAIL)),
+        start: start + Math.max(0, messages.length - SAVED_TAIL),
+      };
       setPref(`transcript.${session.id}`, JSON.parse(JSON.stringify(tail)));
     });
-  if (typeof requestIdleCallback === 'function') requestIdleCallback(persist, { timeout: 3000 });
+  if (typeof requestIdleCallback === 'function')
+    requestIdleCallback(persist, { timeout: 3000 });
   else setTimeout(persist, 500);
 }
 
 /** Warms the cache for a chat the user is likely to open next (row hover, most recent ones). */
 const prefetching = new Set<string>();
 export async function prefetchTranscript(session: SessionItem | undefined) {
-  if (!session?.path || !session.source || transcripts.get(session.id)?.stamp === stampOf(session) || prefetching.has(session.id)) return;
+  if (
+    !session?.path ||
+    !session.source ||
+    transcripts.get(session.id)?.stamp === stampOf(session) ||
+    prefetching.has(session.id)
+  )
+    return;
   prefetching.add(session.id);
   try {
     const fresh = await fetchTranscript(session);
@@ -2695,7 +4457,11 @@ export async function openTranscript(session: SessionItem | undefined) {
     return;
   }
   if (!session.path || !session.source) {
-    const messages = await restoreCommandImages(session.id, localMessages[session.id] ?? (mockIds.has(session.id) ? mockMessages : []));
+    const messages = await restoreCommandImages(
+      session.id,
+      localMessages[session.id] ??
+        (mockIds.has(session.id) ? mockMessages : []),
+    );
     if (token === transcriptToken) chat.messages = messages;
     return;
   }
@@ -2703,7 +4469,9 @@ export async function openTranscript(session: SessionItem | undefined) {
   // takes a moment on the main thread, and the window must not look frozen meanwhile.
   chat.messages = [];
   chat.loading = true;
-  await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+  await new Promise<void>((resolve) =>
+    requestAnimationFrame(() => setTimeout(resolve, 0)),
+  );
   if (token !== transcriptToken) return;
   let cached = transcripts.get(session.id);
   if (!cached) {
@@ -2712,15 +4480,24 @@ export async function openTranscript(session: SessionItem | undefined) {
     if (saved?.messages) {
       // Older versions kept up to 200 messages in IndexedDB. Bound this first paint too, before the fresh page arrives.
       const removed = Math.max(0, saved.messages.length - PAGE_LIMIT);
-      cached = removed ? { ...saved, messages: saved.messages.slice(-PAGE_LIMIT), start: saved.start + removed } : saved;
+      cached = removed
+        ? {
+            ...saved,
+            messages: saved.messages.slice(-PAGE_LIMIT),
+            start: saved.start + removed,
+          }
+        : saved;
       transcripts.set(session.id, cached);
     }
   }
   if (cached) {
     // Show what we have right away; a stale copy is replaced as soon as the fresh one arrives.
-    chat.messages = await restoreCommandImages(session.id, withLive(session.id, cached.messages));
+    chat.messages = await restoreCommandImages(
+      session.id,
+      withLive(session.id, cached.messages),
+    );
     if (token !== transcriptToken) return;
-    chat.older = cached.stamp === stampOf(session) ? cached.start ?? 0 : 0;
+    chat.older = cached.stamp === stampOf(session) ? (cached.start ?? 0) : 0;
     chat.loading = false;
     if (cached.stamp === stampOf(session)) return;
   } else {
@@ -2744,7 +4521,9 @@ export async function openTranscript(session: SessionItem | undefined) {
 /** The cached index mirrors the files on disk, so a rename or delete has to reach it too. */
 function patchCache(change: (list: HistorySession[]) => HistorySession[]) {
   try {
-    const list = JSON.parse(localStorage.getItem(CACHE_KEY) ?? '[]') as HistorySession[];
+    const list = JSON.parse(
+      localStorage.getItem(CACHE_KEY) ?? '[]',
+    ) as HistorySession[];
     localStorage.setItem(CACHE_KEY, JSON.stringify(change(list)));
   } catch {
     // Only an optimisation.
@@ -2756,18 +4535,23 @@ export async function renameSession(id: string, title: string) {
   const session = workspace.sessions.find((item) => item.id === id);
   const next = title.trim();
   if (!session || !next) return;
-  if (session.path && session.source) await renameHistory(session.source, session.path, next);
+  if (session.path && session.source)
+    await renameHistory(session.source, session.path, next);
   session.title = next;
-  patchCache((list) => list.map((item) => (item.id === id ? { ...item, title: next } : item)));
+  patchCache((list) =>
+    list.map((item) => (item.id === id ? { ...item, title: next } : item)),
+  );
 }
 
 /** Deletes the chat; Claude and Codex sessions are moved to ~/.agentdeck/trash, so they vanish there too. */
 export async function deleteSession(id: string) {
   const session = workspace.sessions.find((item) => item.id === id);
   if (!session) return;
-  if (session.path && session.source) await deleteHistory(session.source, session.path);
+  if (session.path && session.source)
+    await deleteHistory(session.source, session.path);
   // Forks of it move up to its own parent.
-  for (const child of workspace.sessions.filter((item) => item.parentId === id)) child.parentId = session.parentId;
+  for (const child of workspace.sessions.filter((item) => item.parentId === id))
+    child.parentId = session.parentId;
   workspace.sessions = workspace.sessions.filter((item) => item.id !== id);
   delete drafts[id];
   delete draftMentions[id];
@@ -2778,7 +4562,9 @@ export async function deleteSession(id: string) {
   deleteCommandImages(id);
   patchCache((list) => list.filter((item) => item.id !== id));
   if (workspace.activeId === id) {
-    const next = workspace.sessions.find((item) => item.projectId === session.projectId) ?? workspace.sessions[0];
+    const next =
+      workspace.sessions.find((item) => item.projectId === session.projectId) ??
+      workspace.sessions[0];
     if (next) workspace.activeId = next.id;
     else newSession(session.projectId);
   }

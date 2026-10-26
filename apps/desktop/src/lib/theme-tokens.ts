@@ -43,11 +43,13 @@ export function neutralTokens(neutral: Neutral, dark: boolean): Record<string, s
     };
   }
   return {
-    '--background': shade(neutral, 950),
+    // Keep dark mode charcoal instead of near-black. The 900 canvas and softer
+    // card surface preserve hierarchy without making the whole app feel black.
+    '--background': shade(neutral, 900),
     '--foreground': NEAR_WHITE,
-    '--card': shade(neutral, 900),
+    '--card': `color-mix(in oklab, ${shade(neutral, 900)} 72%, ${shade(neutral, 800)})`,
     '--card-foreground': NEAR_WHITE,
-    '--popover': shade(neutral, 900),
+    '--popover': `color-mix(in oklab, ${shade(neutral, 900)} 55%, ${shade(neutral, 800)})`,
     '--popover-foreground': NEAR_WHITE,
     '--secondary': shade(neutral, 800),
     '--secondary-foreground': NEAR_WHITE,
