@@ -508,7 +508,12 @@
                               <span class="min-w-0 flex-1 truncate text-sm font-medium" title={account.email}>{account.email}</span>
                               {#if account.active}<span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">IN USE</span>{/if}
                               {#if account.expired}<span class="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive" title={account.status ?? 'Sign in again required'}>Needs sign-in</span>{:else if account.status}<span class="max-w-36 truncate text-[11px] text-muted-foreground" title={account.status}>{account.status}</span>{/if}
-                              {#if !account.active}<ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2.5 text-xs" disabled={Boolean(connectors.busy['switch:agy'])} onclick={() => void switchAgyAccount(account)}>Use this account</ZButton>{/if}
+                              {#if !account.active}
+                                {@const switching = Boolean(connectors.busy['switch:agy']?.endsWith(account.email))}
+                                <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Use {account.email}" title="Use this account" disabled={Boolean(connectors.busy['switch:agy'])} onclick={() => void switchAgyAccount(account)}>
+                                  <ZIcon zType={icon(switching ? 'lucideLoaderCircle' : 'lucideArrowLeftRight')} class="size-3 {switching ? 'animate-spin' : ''}" />
+                                </ZButton>
+                              {/if}
                             </li>
                           {/each}
                         </ul>
@@ -584,7 +589,8 @@
                             <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5 {connectors.busy[`accounts:${provider}`] ? 'animate-spin' : ''}" />
                           </ZButton>
                           <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={Boolean(busyOf(`add:${provider}`))} onclick={() => void addAccount(provider, card.label)}>
-                            <ZIcon zType={icon('lucideUserPlus')} class="size-3.5" /> Add account
+                            <ZIcon zType={icon(busyOf(`add:${provider}`) ? 'lucideLoaderCircle' : 'lucideUserPlus')} class="size-3.5 {busyOf(`add:${provider}`) ? 'animate-spin' : ''}" />
+                            {busyOf(`add:${provider}`) ? 'Adding…' : 'Add account'}
                           </ZButton>
                         {/if}
                       </div>
@@ -658,6 +664,7 @@
                                   {/each}
                                 </div>
                                 {#if stale(account, ticker.min)}<p class="mt-1.5 text-[11px] text-muted-foreground">Figures are older than 15 minutes. Use Refresh.</p>{/if}
+                                {#if account.status}<p class="mt-1.5 text-[11px] text-muted-foreground" role="status">{account.status}</p>{/if}
                               {:else if account.expired}
                                 <p class="mt-1.5 text-[11px] text-destructive" role="alert">Signed out: the login expired (401). Sign in again to use this account; it cannot be switched to until then.</p>
                               {:else if account.status}
@@ -670,12 +677,12 @@
                                 <div class="mt-2.5 flex items-center gap-2 border-t border-border/60 pt-2.5 text-[11px]">
                                   <ZIcon zType={icon('lucideRotateCcw')} class="size-3 shrink-0 text-muted-foreground" />
                                   <span class="min-w-0 flex-1 truncate text-muted-foreground">
-                                    {#if account.plan === 'free'}No free resets on this plan{:else if resetBusy}Redeeming reset…{:else if resetCredits !== undefined}Free resets: <b class="text-foreground tabular-nums">{resetCredits}</b> left{:else}Reset count unavailable{/if}
+                                    {#if resetBusy}Redeeming reset…{:else if resetCredits !== undefined}Available resets: <b class="text-foreground tabular-nums">{resetCredits}</b>{:else}Reset count unavailable{/if}
                                   </span>
                                   <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Refresh usage" title="Reload usage and reset credits" disabled={Boolean(busyOf('accounts:codex'))} onclick={() => { refreshing = account.email; void refreshAccounts('codex', true).finally(() => (refreshing = '')); }}>
                                     <ZIcon zType={icon('lucideRefreshCw')} class="size-3 {refreshing === account.email ? 'animate-spin' : ''}" />
                                   </ZButton>
-                                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 px-2 text-[11px]" disabled={account.plan === 'free' || resetCredits === undefined || resetCredits < 1 || resetBusy} onclick={() => (resetAsk = account.email)}>Reset limit</ZButton>
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 px-2 text-[11px]" disabled={resetCredits === undefined || resetCredits < 1 || resetBusy} onclick={() => (resetAsk = account.email)}>Reset limit</ZButton>
                                 </div>
                                 {#if resetError}<p class="mt-1 text-[11px] text-destructive" role="alert">{resetError}</p>{/if}
                               {/if}

@@ -152,16 +152,26 @@
       windows = connectors.agyQuota?.groups.find((group) => group.id === family)?.windows ?? [];
       observedAt = connectors.agyQuota?.observed_at ?? null;
     }
+    const minutesFor = (label: string) => {
+      const match = /^(\d+)(m|h|d)$/.exec(label);
+      if (!match) return Number.POSITIVE_INFINITY;
+      const amount = Number(match[1]);
+      return amount * (match[2] === 'd' ? 1440 : match[2] === 'h' ? 60 : 1);
+    };
+    const selected =
+      windows.find((item) => item.label === '5h') ??
+      [...windows].sort((a, b) => minutesFor(a.label) - minutesFor(b.label))[0];
+    if (!selected) return null;
     const now = Date.now() / 1000;
-    const available = windows
-      .map((item) => ({
-        label: item.label,
-        remaining: item.resets_at !== null && item.resets_at <= now ? 100 : Math.max(0, Math.min(100, 100 - item.pct)),
-        resetsAt: item.resets_at,
-        observedAt,
-      }))
-      .sort((a, b) => a.remaining - b.remaining);
-    return available[0] ?? null;
+    return {
+      label: selected.label,
+      remaining:
+        selected.resets_at !== null && selected.resets_at <= now
+          ? 100
+          : Math.max(0, Math.min(100, 100 - selected.pct)),
+      resetsAt: selected.resets_at,
+      observedAt,
+    };
   });
   const quotaUnavailable = $derived(!quota);
 

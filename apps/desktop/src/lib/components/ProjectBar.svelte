@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { ZIcon, ZModal, ZPopover } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZModal, ZPopover } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { inTauri } from '../history';
   import { activeSession, isRunning, isUnstarted, moveDraftToProject, NO_PROJECT, workspace } from '../sessions.svelte';
   import { toast } from '../toast';
-  import { cancelLogin, connectors, login, refreshAccounts, refreshAgyAccounts, switchAccount, switchAgyAccount, type Account, type AccountProvider, type AgyAccount } from '../connectors.svelte';
+  import { addAccount, cancelLogin, connectors, installed, login, refreshAccounts, refreshAgyAccounts, switchAccount, switchAgyAccount, type Account, type AccountProvider, type AgyAccount } from '../connectors.svelte';
   import AgentLogo from './AgentLogo.svelte';
 
   // Under the message box: the project the chat works in (switchable while the chat is new, "This computer" by default)
@@ -34,6 +34,21 @@
   });
   const activeAccount = $derived(accountRows.find((entry) => entry.account.active));
   const canQuickSwitch = $derived(accountRows.length > 1 || Boolean(activeAccount && ('expired' in activeAccount.account && activeAccount.account.expired)));
+  const canQuickAdd = $derived(
+    accountProvider === 'agy'
+      ? installed('agy') && connectors.detected?.antigravity.logged_in === true
+      : accountProvider
+        ? Boolean(connectors.accounts[accountProvider]?.manager)
+        : false,
+  );
+  const canOpenAccountMenu = $derived(canQuickSwitch || canQuickAdd);
+  const addBusy = $derived(
+    accountProvider === 'agy'
+      ? Boolean(connectors.busy['login:agy'])
+      : accountProvider
+        ? Boolean(connectors.busy[`add:${accountProvider}`])
+        : false,
+  );
   let lastAccountProvider: AccountProvider | 'agy' | null | undefined;
   $effect(() => {
     const selected = accountProvider;
@@ -56,6 +71,14 @@
   let loginRequired = $state<Record<string, boolean>>({});
   const entryKey = (entry: QuickAccount) => `${entry.provider}:${entry.account.id}`;
   const labelFor = (provider: AccountProvider | 'agy') => (provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : 'Antigravity');
+  async function addQuickAccount() {
+    if (!accountProvider || !canQuickAdd || addBusy) return;
+    if (accountProvider === 'agy') {
+      if (await login('agy', 'Antigravity')) await refreshAgyAccounts();
+      return;
+    }
+    await addAccount(accountProvider, labelFor(accountProvider));
+  }
   function needsLogin(entry: QuickAccount) {
     const status = entry.account.status?.toLowerCase() ?? '';
     return Boolean(('expired' in entry.account && entry.account.expired) || loginRequired[entryKey(entry)] || /\b(?:401|403|404)\b|expired|unauthori[sz]ed|authentication required|login required|invalid token|credentials are missing/i.test(status));
@@ -293,7 +316,7 @@
       </button>
     {/if}
 
-    {#if accountProvider && canQuickSwitch}
+    {#if accountProvider && canOpenAccountMenu}
       <button
         bind:this={accountTrigger}
         type="button"
@@ -365,7 +388,12 @@
       <div class="flex w-full flex-col text-xs" role="listbox" aria-label="{labelFor(accountProvider ?? 'agy')} accounts">
         <div class="flex items-center gap-2 border-b border-border px-3 py-2 text-[11px] font-medium text-muted-foreground">
           <AgentLogo agent={accountProvider === 'agy' ? 'antigravity' : accountProvider ?? 'antigravity'} class="size-3.5 shrink-0" />
-          <span>{labelFor(accountProvider ?? 'agy')} accounts</span>
+          <span class="min-w-0 flex-1">{labelFor(accountProvider ?? 'agy')} accounts</span>
+          {#if canQuickAdd}
+            <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Add {labelFor(accountProvider ?? 'agy')} account" title="Add account" disabled={addBusy} onclick={() => void addQuickAccount()}>
+              <ZIcon zType={icon(addBusy ? 'lucideLoaderCircle' : 'lucidePlus')} class="size-3.5 {addBusy ? 'animate-spin' : ''}" />
+            </ZButton>
+          {/if}
         </div>
         <div class="flex max-h-60 flex-col gap-0.5 overflow-y-auto p-1">
           {#each sortedAccountRows as entry (entryKey(entry))}

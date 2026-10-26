@@ -403,7 +403,8 @@ export function newSession(projectId = NO_PROJECT, { reuseDraft = true } = {}) {
     return;
   }
   const base = workspace.sessions.find((item) => item.projectId === projectId);
-  dropEmptyDrafts();
+  // Explicit new-tab and tray actions must keep earlier empty drafts as separate chats.
+  if (reuseDraft) dropEmptyDrafts();
   const uuid = crypto.randomUUID();
   const id = `claude:${uuid}`;
   const start = startingPoint();

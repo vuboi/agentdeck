@@ -715,6 +715,70 @@ const CODEX_RESET_CREDITS_URL: &str =
     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const CODEX_RESET_CREDITS_CONSUME_URL: &str =
     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
+const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+
+fn parse_codex_usage(payload: &Value) -> (Vec<UsageWindow>, Option<String>) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as i64);
+    let windows = ["primary_window", "secondary_window"]
+        .iter()
+        .filter_map(|name| {
+            let window = payload.pointer(&format!("/rate_limit/{name}"))?;
+            let used_percent = window["used_percent"].as_f64()?;
+            let seconds = window["limit_window_seconds"].as_i64()?;
+            if seconds <= 0 {
+                return None;
+            }
+            let resets_at = window["reset_at"].as_i64().or_else(|| {
+                window["reset_after_seconds"]
+                    .as_i64()
+                    .filter(|remaining| *remaining >= 0)
+                    .map(|remaining| now + remaining)
+            });
+            Some(UsageWindow {
+                label: window_label((seconds + 59) / 60),
+                pct: used_percent.clamp(0.0, 100.0),
+                resets_at,
+            })
+        })
+        .collect();
+    let plan = payload["plan_type"].as_str().map(str::to_owned);
+    (windows, plan)
+}
+
+async fn fetch_codex_usage(
+    codex_home: &Path,
+    email: &str,
+) -> Result<(Vec<UsageWindow>, Option<String>), String> {
+    let (access_token, account_id) = codex_account_auth(codex_home, email)?;
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("Could not create Codex usage client: {error}"))?
+        .get(CODEX_USAGE_URL)
+        .headers(codex_reset_headers(
+            &access_token,
+            account_id.as_deref(),
+            "/backend-api/wham/usage",
+        ))
+        .send()
+        .await
+        .map_err(|error| format!("Could not fetch Codex usage: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("Codex usage API returned HTTP {status}"));
+    }
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|error| format!("Could not parse Codex usage response: {error}"))?;
+    let (windows, plan) = parse_codex_usage(&payload);
+    if windows.is_empty() {
+        return Err("Codex usage API returned no rate-limit windows".to_string());
+    }
+    Ok((windows, plan))
+}
 
 fn codex_account_auth(codex_home: &Path, email: &str) -> Result<(String, Option<String>), String> {
     let registry_path = codex_home.join("accounts").join("registry.json");
@@ -1044,20 +1108,39 @@ pub async fn accounts_list(provider: String, refresh: bool) -> Result<Accounts, 
                         account.usage.clear();
                         account.status = Some("signed out (401)".to_string());
                     }
-                    let mut reset_queries = tokio::task::JoinSet::new();
-                    for account in accounts.iter().filter(|account| {
-                        !account.expired && account.plan.as_deref() != Some("free")
-                    }) {
+                    let mut usage_queries = tokio::task::JoinSet::new();
+                    for account in accounts.iter().filter(|account| !account.expired) {
                         let email = account.email.clone();
                         let home = codex_home();
-                        reset_queries.spawn(async move {
-                            let credits = fetch_codex_reset_credits(&home, &email).await.ok();
-                            (email, credits)
+                        usage_queries.spawn(async move {
+                            let (usage, credits) = tokio::join!(
+                                fetch_codex_usage(&home, &email),
+                                fetch_codex_reset_credits(&home, &email),
+                            );
+                            (email, usage, credits.ok())
                         });
                     }
-                    while let Some(Ok((email, credits))) = reset_queries.join_next().await {
+                    while let Some(Ok((email, usage, credits))) = usage_queries.join_next().await {
                         if let Some(account) = accounts.iter_mut().find(|item| item.email == email)
                         {
+                            match usage {
+                                Ok((windows, plan)) => {
+                                    account.usage = windows;
+                                    account.observed_at = Some(
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map_or(0, |elapsed| elapsed.as_secs() as i64),
+                                    );
+                                    account.status = None;
+                                    if plan.is_some() {
+                                        account.plan = plan;
+                                    }
+                                }
+                                Err(error) => {
+                                    account.status =
+                                        Some(format!("Live usage unavailable: {error}"));
+                                }
+                            }
                             account.reset_credits_available = credits;
                         }
                     }
