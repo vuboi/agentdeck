@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildExport, mergeProviders, parseExport } from './data-export.ts';
+import { buildExport, mergeCredit, mergeProviders, parseExport } from './data-export.ts';
 
 const stores = { prefs: [['providers.custom', [{ id: 'p1', name: 'Groq', apiKey: 'gsk_secret' }]], ['sidebar.view', 'tree']] as [string, unknown][] };
 
@@ -23,4 +23,11 @@ test('an export reads back, and other files are refused', () => {
 test('importing without keys keeps the keys saved here', () => {
   const merged = mergeProviders([{ id: 'p1', apiKey: '' }, { id: 'p2', apiKey: '' }], [{ id: 'p1', apiKey: 'kept' }]) as { apiKey: string }[];
   assert.deepEqual(merged.map((item) => item.apiKey), ['kept', '']);
+});
+
+test('the Claude credit keys follow the same rule', () => {
+  const credit = { prefs: [['providers.claudeCredit', { apiKey: 'sk-ant-api', sessionKey: 'sk-ant-sid', enabled: true }]] as [string, unknown][] };
+  assert.deepEqual(buildExport(credit, {}, false).stores.prefs[0][1], { apiKey: '', sessionKey: '', enabled: true });
+  assert.deepEqual(buildExport(credit, {}, true).stores.prefs[0][1], { apiKey: 'sk-ant-api', sessionKey: 'sk-ant-sid', enabled: true });
+  assert.deepEqual(mergeCredit({ apiKey: '', sessionKey: '', enabled: false }, { apiKey: 'kept', sessionKey: 'also' }), { apiKey: 'kept', sessionKey: 'also', enabled: false });
 });

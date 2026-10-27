@@ -88,6 +88,15 @@ impl Provider for Claude {
         true
     }
 
+    fn environment(&self, req: &TurnRequest) -> Vec<(String, String)> {
+        // An API key wins over the signed-in plan in Claude Code's sign-in order: the turn spends Console credit.
+        req.api_key
+            .iter()
+            .filter(|key| !key.is_empty())
+            .map(|key| ("ANTHROPIC_API_KEY".to_string(), key.clone()))
+            .collect()
+    }
+
     fn args(&self, req: &TurnRequest) -> Vec<String> {
         // `-p` with no prompt argument reads the prompt from stdin (see `prompt_on_stdin`).
         let mut args = vec![
@@ -294,7 +303,19 @@ mod tests {
             allowed_tools: Vec::new(),
             cwd: None,
             owner: None,
+            api_key: None,
         }
+    }
+
+    #[test]
+    fn an_api_key_reaches_the_cli_as_its_environment() {
+        assert!(Claude.environment(&req(false)).is_empty());
+        let mut with_key = req(false);
+        with_key.api_key = Some("sk-ant-test".into());
+        assert_eq!(
+            Claude.environment(&with_key),
+            vec![("ANTHROPIC_API_KEY".to_string(), "sk-ant-test".to_string())]
+        );
     }
 
     #[test]

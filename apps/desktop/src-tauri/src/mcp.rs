@@ -422,7 +422,7 @@ async fn element_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> 
     }
 }
 
-fn tool_list() -> Value {
+pub(crate) fn tool_list() -> Value {
     Value::Array(
         TOOLS
             .iter()

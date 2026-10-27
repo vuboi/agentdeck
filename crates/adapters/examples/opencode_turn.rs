@@ -24,6 +24,7 @@ async fn turn(
         allowed_tools: Vec::new(),
         cwd: Some(cwd.to_path_buf()),
         owner: None,
+        api_key: None,
     };
     let mut events = Vec::new();
     drive_turn(resolve_binary(provider), provider, &request, |event| {

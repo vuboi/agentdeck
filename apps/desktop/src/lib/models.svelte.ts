@@ -1,6 +1,7 @@
 import type { ZIconName } from '@shival99/z-ui-svelte';
 import { inTauri } from './history';
-import { connectors } from './connectors.svelte';
+import { claudeCreditOn, connectors } from './connectors.svelte';
+import { CREDIT_PREFIX, creditModel } from './credit-model';
 import { agentProfile } from './provider-registry';
 import { providerLogo } from './brand-icons';
 
@@ -73,7 +74,17 @@ export function parseCustomModel(value: string | null | undefined) {
 /** What a local model's thinking can be set to: off, or a level (sent as `reasoning_effort`). */
 const chattable = () => connectors.custom.filter((provider) => provider.enabled && provider.kind !== 'anthropic');
 
+// Claude's own models, as the CLI lists them. The catalogue's Claude list is these, then, while a Console API key is
+// saved, the same models billed to the API credit (`credit:` ids, after a "Claude credit" divider in the pickers).
+let claudeOwn = $state<ModelOption[]>([...catalog.claude]);
+
 $effect.root(() => {
+  $effect(() => {
+    const credit = claudeCreditOn()
+      ? claudeOwn.map((item) => ({ ...item, value: `${CREDIT_PREFIX}${item.value}`, description: 'Claude credit · billed to the API credit' }))
+      : [];
+    catalog.claude = [...claudeOwn, ...credit];
+  });
   $effect(() => {
     catalog.custom = chattable().flatMap((provider) => {
       const names = provider.models.length ? provider.models : provider.defaultModel ? [provider.defaultModel] : [];
@@ -130,13 +141,15 @@ export async function loadModels() {
     try {
       const listed = await invoke<Listed[]>('models_list', { agent: provider });
       if (listed.length) {
-        catalog[provider] = listed.map((item) => ({
+        const models = listed.map((item) => ({
           value: item.value,
           label: item.label,
           description: item.description || undefined,
           efforts: item.efforts,
           defaultEffort: item.default_effort ?? undefined,
         }));
+        if (provider === 'claude') claudeOwn = models;
+        else catalog[provider] = models;
       }
     } catch {
       // Keep the built-in list.
@@ -155,6 +168,8 @@ export function modelLabel(value: string | undefined | null): string {
     .flat()
     .find((item) => item.value === value);
   if (listed) return listed.label;
+  const credit = creditModel(value);
+  if (credit) return modelLabel(credit);
   const isNumber = (text: string) => /^\d+(\.\d+)*$/.test(text);
   const parts = value
     .replace(/\[.*\]$/, '')

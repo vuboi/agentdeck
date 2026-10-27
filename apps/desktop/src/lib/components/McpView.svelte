@@ -53,6 +53,8 @@
     claude: { label: 'Claude', tone: 'text-orange-500' },
     codex: { label: 'Codex', tone: 'text-foreground' },
     antigravity: { label: 'Antigravity', tone: 'text-sky-500' },
+    opencode: { label: 'OpenCode', tone: 'text-foreground' },
+    custom: { label: 'Providers', tone: 'text-emerald-600 dark:text-emerald-400' },
   };
 
   const compact = (count: number) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(count);
@@ -212,11 +214,15 @@
                       <div class="min-w-0 flex-1">
                         <div class="text-xs font-medium">Use it in Antigravity</div>
                         <div class="mt-1 leading-snug text-muted-foreground">
-                          Claude and Codex always have it. Antigravity gets it by itself before each turn, so "debug the page" works there too. Turn it off to keep agy on its own browser.
+                          Claude, Codex, OpenCode and your custom providers always have it. Antigravity gets it by itself before each turn, so "debug the page" works there too. Turn it off to keep agy on its own browser.
                         </div>
                       </div>
                       <ZSwitch checked={auto} zSize="sm" zLoading={mcp.busy === 'agy'} zDisabled={mcp.busy === 'agy'} onChange={(value) => void linkAgy(value)} />
                     </div>
+                    <p class="m-0 flex items-start gap-1.5 leading-snug text-muted-foreground">
+                      <ZIcon zType={icon('lucideShieldCheck')} class="mt-px size-3 shrink-0" />
+                      Free-tier providers never get it: its tools read this computer, its browser and its project, or hand work to an agent that does. They keep web search only, and cannot reach this server through their web tools either.
+                    </p>
                   {/if}
 
                   {#if test && test.state !== 'testing'}

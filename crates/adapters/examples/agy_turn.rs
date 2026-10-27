@@ -24,6 +24,7 @@ fn request(
         allowed_tools: allowed,
         cwd: std::env::current_dir().ok(),
         owner: None,
+        api_key: None,
     }
 }
 

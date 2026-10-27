@@ -1,7 +1,11 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
   import { fade, scale } from 'svelte/transition';
-  import { ZButton, ZIcon, ZInput, ZModal, ZSelect, ZSlider, ZSwitch } from '@shival99/z-ui-svelte';
+  import AgentLogo from './AgentLogo.svelte';
+  import ClaudeCreditCard from './ClaudeCreditCard.svelte';
+  import { ENDPOINTS } from '../endpoints';
+  import SecretInput from './SecretInput.svelte';
+  import { ZButton, ZIcon, ZInput, ZModal, ZSelect, ZSlider, ZSwitch, zSortable } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { testSystemNotification } from '../system-notifications';
   import { toast } from '../toast';
@@ -187,9 +191,9 @@
 
   // --- Providers form -------------------------------------------------------------------------------------
   const KINDS = [
-    { value: 'openai', label: 'OpenAI-compatible', hint: 'LM Studio, llama.cpp, vLLM, OpenRouter, LiteLLM…', base: 'http://127.0.0.1:1234/v1' },
-    { value: 'anthropic', label: 'Anthropic-compatible', hint: 'Anthropic API or a proxy that speaks it', base: 'https://api.anthropic.com' },
-    { value: 'ollama', label: 'Ollama', hint: 'Local models served by Ollama', base: 'http://127.0.0.1:11434' },
+    { value: 'openai', label: 'OpenAI-compatible', hint: 'LM Studio, llama.cpp, vLLM, OpenRouter, LiteLLM…', base: ENDPOINTS.providerKinds.openai },
+    { value: 'anthropic', label: 'Anthropic-compatible', hint: 'Anthropic API or a proxy that speaks it', base: ENDPOINTS.providerKinds.anthropic },
+    { value: 'ollama', label: 'Ollama', hint: 'Local models served by Ollama', base: ENDPOINTS.providerKinds.ollama },
   ] as const;
 
   const blank = (): CustomProvider => ({ id: newProviderId(), name: '', kind: 'openai', baseUrl: KINDS[0].base, keyEnv: '', apiKey: '', models: [], defaultModel: '', enabled: true });
@@ -200,8 +204,13 @@
   /** Account whose "reset limit" confirmation modal is open. */
   let resetAsk = $state('');
 
+  /** The key the provider being edited was saved with: shown hidden, never in the field (SecretInput). */
+  let keptKey = $state('');
+
   function edit(provider?: CustomProvider) {
-    draft = provider ? { ...provider, models: [...provider.models] } : blank();
+    // A provider saved before keys were kept as text has none: the field binds a string either way.
+    draft = provider ? { ...provider, apiKey: provider.apiKey ?? '', models: [...provider.models] } : blank();
+    keptKey = provider?.apiKey ?? '';
     probeNote = null;
   }
 
@@ -234,23 +243,20 @@
   }
 
   /** Official APIs with a free tier, all OpenAI-compatible. The key is read from the named environment variable when none is typed. */
-  const FREE_CLOUD = [
-    { name: 'Google Gemini', base: 'https://generativelanguage.googleapis.com/v1beta/openai', keyEnv: 'GEMINI_API_KEY', model: 'gemini-flash-latest', note: 'Gemini Flash, generous daily limit', keyUrl: 'https://aistudio.google.com/app/apikey' },
-    { name: 'Groq', base: 'https://api.groq.com/openai/v1', keyEnv: 'GROQ_API_KEY', model: '', note: 'Very fast open models', keyUrl: 'https://console.groq.com/keys' },
-    { name: 'Cerebras', base: 'https://api.cerebras.ai/v1', keyEnv: 'CEREBRAS_API_KEY', model: '', note: 'High throughput open models', keyUrl: 'https://cloud.cerebras.ai' },
-    { name: 'OpenRouter (free)', base: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY', model: '', note: 'Many ":free" models, one key', keyUrl: 'https://openrouter.ai/settings/keys' },
-  ];
+  const FREE_CLOUD = ENDPOINTS.freeCloud;
   /** The free cloud provider being edited, found by its address: its name and logo are fixed. */
   const freePreset = $derived(draft ? FREE_CLOUD.find((preset) => preset.base === draft?.baseUrl.trim().replace(/\/+$/, '')) : undefined);
 
   /** Opens the provider form filled in for a free cloud API: paste the key, Test lists its models, Save. */
   function useFreeCloud(preset: (typeof FREE_CLOUD)[number]) {
     draft = { ...blank(), name: preset.name, kind: 'openai', baseUrl: preset.base, keyEnv: preset.keyEnv, defaultModel: preset.model, restricted: true };
+    keptKey = '';
     probeNote = { ok: true, text: `Paste your ${preset.name} key (or set ${preset.keyEnv}), then Load models.` };
   }
 
   function useLocal(server:{ kind: CustomProvider['kind']; label: string; base_url: string; models: string[] }) {
     draft = { ...blank(), name: server.label, kind: server.kind, baseUrl: server.base_url, models: server.models, defaultModel: server.models[0] ?? '' };
+    keptKey = '';
     probeNote = { ok: true, text: `${server.models.length} models found` };
   }
 
@@ -393,6 +399,13 @@
   });
 
   onMount(() => startWatching());
+  function moveChain(from: number, to: number) {
+    if (from === to) return;
+    const list = [...connectors.recovery.chain];
+    const [item] = list.splice(from, 1);
+    list.splice(to, 0, item);
+    connectors.recovery.chain = list;
+  }
 </script>
 
 <svelte:window onkeydowncapture={onKey} />
@@ -795,6 +808,8 @@
 
           {:else if settings.section === 'providers'}
             <div class="flex flex-col gap-5" in:fade={{ duration: 200 }}>
+              <ClaudeCreditCard />
+
               <section aria-label="Local servers">
                 <div class="mb-2 flex items-center gap-2">
                   <h3 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">On this computer</h3>
@@ -893,11 +908,11 @@
                         </div>
                         <label class="flex flex-col gap-1 text-xs">
                           <span class="font-medium">Base URL</span>
-                          <ZInput bind:value={draft.baseUrl} zPlaceholder="http://127.0.0.1:1234/v1" />
+                          <ZInput bind:value={draft.baseUrl} zPlaceholder={ENDPOINTS.providerKinds.openai} />
                         </label>
                         <label class="flex flex-col gap-1 text-xs">
                           <span class="font-medium">API key <span class="font-normal text-muted-foreground">· optional</span></span>
-                          <ZInput zType="password" autocomplete="off" bind:value={draft.apiKey} zPlaceholder="sk-…" />
+                          {#key draft.id}<SecretInput bind:value={draft.apiKey} kept={keptKey} />{/key}
                         </label>
                       </div>
                       <p class="-mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"><ZIcon zType={icon('lucideShieldCheck')} class="size-3" /> The key stays on this computer. It is never part of the source or a build.</p>
@@ -1086,22 +1101,26 @@
                 <div class="mt-1 flex justify-between text-[11px] text-muted-foreground"><span>50% (early)</span><span>99% (last moment)</span></div>
               </section>
 
-              <section class="flex items-start gap-3 rounded-xl border border-border p-4">
-                <div class="min-w-0 flex-1">
-                  <div class="text-sm font-medium">System notification</div>
-                  <p class="mt-0.5 text-xs text-muted-foreground">Show quota warnings and finished session tasks in Windows, macOS, or Linux notifications.</p>
+              <section class="rounded-xl border border-border p-4">
+                <div class="flex items-start gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm font-medium">System notification</div>
+                    <p class="mt-0.5 text-xs text-muted-foreground">Show quota warnings and finished session tasks in Windows, macOS, or Linux notifications.</p>
+                  </div>
+                  <ZSwitch checked={connectors.alerts.system} zSize="sm" onChange={(value) => void allowSystemNotifications(value)} />
                 </div>
+                <!-- Under the text, apart from the switch: a test is a one-off, the switch is the setting. -->
                 <ZButton
                   zWave={false}
                   zType="outline"
                   zSize="sm"
-                  class="h-7! shrink-0 px-2.5 text-xs"
+                  class="mt-3 h-7! gap-1.5 px-2.5 text-xs"
+                  disabled={!connectors.alerts.system}
                   onclick={async () => {
                     const problem = await testSystemNotification();
                     if (problem) toast.error(problem);
                     else toast.success('Test notification sent. If nothing appeared, check Focus Assist / Do Not Disturb.');
-                  }}>Send a test</ZButton>
-                <ZSwitch checked={connectors.alerts.system} zSize="sm" onChange={(value) => void allowSystemNotifications(value)} />
+                  }}><ZIcon zType={'lucideBell' as ZIconName} class="size-3.5" /> Send a test</ZButton>
               </section>
 
               <section class="rounded-xl border border-border p-4">
@@ -1119,13 +1138,19 @@
                   </div>
                   <ZSwitch checked={connectors.recovery.autoResume} zSize="sm" onChange={(value) => (connectors.recovery.autoResume = value)} />
                 </div>
-                <ol class="mt-3 flex flex-col gap-1 {connectors.recovery.enabled ? '' : 'pointer-events-none opacity-50'}" aria-label="Order of agents to carry on with">
+                <ol
+                  class="mt-3 flex flex-col gap-1 {connectors.recovery.enabled ? '' : 'pointer-events-none opacity-50'}"
+                  aria-label="Order of agents to carry on with"
+                  {@attach zSortable({ onSort: moveChain, handle: '[data-handle]' })}
+                >
                   {#each connectors.recovery.chain as agent, index (agent)}
-                    <li class="flex items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-xs">
+                    <li class="flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs">
                       <span class="w-4 text-center tabular-nums text-muted-foreground">{index + 1}</span>
+                      <AgentLogo {agent} class="size-4 shrink-0" />
                       <span class="flex-1 capitalize">{agent}</span>
-                      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0" aria-label="Move up" disabled={index === 0} onclick={() => { const list = [...connectors.recovery.chain]; [list[index - 1], list[index]] = [list[index], list[index - 1]]; connectors.recovery.chain = list; }}><ZIcon zType={'lucideChevronUp' as ZIconName} class="size-3.5" /></ZButton>
-                      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0" aria-label="Move down" disabled={index === connectors.recovery.chain.length - 1} onclick={() => { const list = [...connectors.recovery.chain]; [list[index + 1], list[index]] = [list[index], list[index + 1]]; connectors.recovery.chain = list; }}><ZIcon zType={'lucideChevronDown' as ZIconName} class="size-3.5" /></ZButton>
+                      <span data-handle class="grid size-6 shrink-0 cursor-grab touch-none place-items-center text-muted-foreground hover:text-foreground active:cursor-grabbing" aria-label="Drag to reorder">
+                        <ZIcon zType={'lucideGripVertical' as ZIconName} class="size-3.5" />
+                      </span>
                     </li>
                   {/each}
                 </ol>

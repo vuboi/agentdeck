@@ -961,7 +961,7 @@ function notifySessionWorkDone(sessionId: string) {
   }
   const last = [...messagesOf(sessionId)].reverse().find((message) => message.role === 'assistant');
   const answer = last?.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : [])).join(' ') ?? '';
-  const title = batch.failed ? `✖ ${session.title}: failed` : `✔ ${session.title}: done`;
+  const title = batch.failed ? `${session.title}: failed` : `${session.title}: done`;
   const body = answer.trim()
     ? clipText(answer, 180)
     : batch.failed

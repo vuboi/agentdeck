@@ -61,6 +61,45 @@ fn command_for(binary: OsString, args: &[String]) -> Command {
     command
 }
 
+/// Stops the whole process tree of a turn that is dropped before it ends (the user stopped it, or sent an edited
+/// message). `kill_on_drop` ends only the process the app started: on Windows that is the `cmd /C` around a `.cmd`
+/// CLI, and everywhere a CLI started by a wrapper (an npm shim, `node`) keeps its own children. They kept running,
+/// still holding the session, and the next turn resuming that session hung.
+struct TreeGuard(Option<u32>);
+
+impl TreeGuard {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for TreeGuard {
+    fn drop(&mut self) {
+        let Some(pid) = self.0 else { return };
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &pid.to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(0x0800_0000)
+                .spawn();
+        }
+        // macOS and Linux: the CLI leads a process group of its own (see `drive_turn`), so the group is ended.
+        #[cfg(unix)]
+        {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", "--", &format!("-{pid}")])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+        }
+    }
+}
+
 /// Runs one turn: start the CLI, read its stream line by line, translate each line, hand each event to `emit`.
 /// Separate from Tauri so the process handling can be tested with a stand-in binary.
 pub async fn drive_turn(
@@ -93,6 +132,9 @@ pub async fn drive_turn(
     }
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console flashing up per turn
+    // Its own process group, so a stop ends what it started too (TreeGuard).
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -106,6 +148,7 @@ pub async fn drive_turn(
             });
         }
     };
+    let mut tree = TreeGuard(child.id());
 
     // Written apart from the reader: a long prompt must not hold up the output, and the CLI reads all of it
     // before it starts working, so a closed or early-exiting child only ends this write.
@@ -159,6 +202,8 @@ pub async fn drive_turn(
         }
     }
 
+    // Ended on its own: what the CLI left running in the background (a dev server) is not ours to stop.
+    tree.disarm();
     let status = match exited {
         Some((status, _)) => status,
         None => {
@@ -242,6 +287,7 @@ mod unix_tests {
             allowed_tools: Vec::new(),
             cwd: None,
             owner: None,
+            api_key: None,
         }
     }
 

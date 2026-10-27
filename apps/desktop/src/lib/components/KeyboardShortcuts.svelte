@@ -31,7 +31,7 @@
       <ZIcon zType={'lucideSearch' as ZIconName} class="size-4 shrink-0 text-muted-foreground" />
       <input bind:this={input} bind:value={query} class="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" placeholder="Search shortcuts" aria-label="Search shortcuts" spellcheck="false" />
     </label>
-    <div class="scrollbar-slim min-h-0 flex-1 overflow-y-auto pt-3 pr-1 pb-4 pl-4">
+    <div class="scrollbar-full min-h-0 flex-1 overflow-y-auto pt-3 pr-1 pb-4 pl-4">
       {#each groups as group (group.title)}
         <section class="mb-4 last:mb-0">
           <h3 class="mb-1 text-sm font-semibold">{group.title}</h3>

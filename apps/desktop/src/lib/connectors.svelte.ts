@@ -55,6 +55,9 @@ export type CustomProvider = {
   /** A free tier that may keep and train on what it is sent: it never sees project files, code or secrets. */
   restricted?: boolean;
 };
+/** The Claude Console's API credit: the key the `credit:` Claude models run on, and the Console sign-in that reads
+ * the credit left. Both stay on this computer only. */
+export type ClaudeCredit = { apiKey: string; sessionKey: string; enabled: boolean };
 export type Probe = { ok: boolean; models: string[]; ms: number; error: string | null };
 export type LocalServer = { kind: ProviderKind; label: string; base_url: string; models: string[] };
 
@@ -80,6 +83,8 @@ export const connectors = $state({
   /** When a turn fails: retry, or let the next agent (provider) of `chain` carry on; never another account (turn-failure.ts). */
   recovery: { enabled: true, chain: ['claude', 'codex', 'opencode', 'antigravity'] as string[], /** At a usage limit with nowhere to move, carry on by itself once the limit resets. */ autoResume: true },
   custom: [] as CustomProvider[],
+  /** Claude Console API credit: Claude Code runs on this key (billed to the credit) for the `credit:` models. */
+  claudeCredit: { apiKey: '', sessionKey: '', enabled: true } as ClaudeCredit,
   local: [] as LocalServer[],
   /** What agy last reported per model family, read from the file a status-line tool saves. `null`: none saved. */
   agyQuota: null as AgyQuota | null,
@@ -468,6 +473,38 @@ export async function refreshProviderQuota(provider: CustomProvider) {
   }
 }
 
+/** The `credit:` Claude models are offered: an API key is saved and turned on. */
+export const claudeCreditOn = () => connectors.claudeCredit.enabled && connectors.claudeCredit.apiKey.trim() !== '';
+
+/** What the Console says is left of the API credit (USD), or why it could not tell. */
+export type ConsoleCredit = { balance: number; granted: number | null; expires_at: string | null; at: number };
+export const claudeCreditState = $state<{ reading: ConsoleCredit | null; error: string | null; busy: boolean; top: number }>({ reading: null, error: null, busy: false, top: 0 });
+void getPref<number>('providers.claudeCreditTop').then((top) => {
+  if (top) claudeCreditState.top = Math.max(claudeCreditState.top, top);
+});
+
+/** Reads the credit left from the Console (the sign-in cookie pasted in Settings). The bar's full width is the
+ * credit granted when the Console lists it, else the most this credit was ever seen at. */
+export async function refreshClaudeCredit() {
+  const key = connectors.claudeCredit.sessionKey.trim();
+  if (!inTauri() || !key || claudeCreditState.busy) return;
+  claudeCreditState.busy = true;
+  try {
+    const found = await call<Omit<ConsoleCredit, 'at'>>('claude_console_credit', { sessionKey: key });
+    claudeCreditState.reading = { ...found, at: Date.now() / 1000 };
+    claudeCreditState.error = null;
+    const top = Math.max(claudeCreditState.top, found.granted ?? 0, found.balance);
+    if (top !== claudeCreditState.top) {
+      claudeCreditState.top = top;
+      setPref('providers.claudeCreditTop', top);
+    }
+  } catch (error) {
+    claudeCreditState.error = String(error);
+  } finally {
+    claudeCreditState.busy = false;
+  }
+}
+
 export async function probeProvider(kind: ProviderKind, baseUrl: string, apiKey: string, keyEnv = ''): Promise<Probe> {
   if (!inTauri()) return { ok: false, models: [], ms: 0, error: 'Only available in the desktop app' };
   return call<Probe>('provider_probe', { kind, baseUrl, apiKey: apiKey || null, keyEnv: keyEnv || null });
@@ -498,8 +535,9 @@ export const newProviderId = () => `custom-${Date.now().toString(36)}`;
 // --- Saved settings ---------------------------------------------------------------------------------------
 
 let hydrated = false;
-Promise.all([getPref<CustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts'), getPref<typeof connectors.recovery>('connectors.recovery')]).then(([custom, alerts, recovery]) => {
+Promise.all([getPref<CustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts'), getPref<typeof connectors.recovery>('connectors.recovery'), getPref<ClaudeCredit>('providers.claudeCredit')]).then(([custom, alerts, recovery, credit]) => {
   if (custom) connectors.custom = custom;
+  if (credit) connectors.claudeCredit = { ...connectors.claudeCredit, ...credit };
   if (recovery) connectors.recovery = { ...connectors.recovery, ...recovery };
   if (alerts) connectors.alerts = { ...connectors.alerts, ...alerts };
   // System notifications used to start switched off, so most people never saw a finished task announced. They are on
@@ -522,5 +560,9 @@ $effect.root(() => {
   $effect(() => {
     const recovery = $state.snapshot(connectors.recovery);
     if (hydrated) setPref('connectors.recovery', recovery);
+  });
+  $effect(() => {
+    const credit = $state.snapshot(connectors.claudeCredit);
+    if (hydrated) setPref('providers.claudeCredit', credit);
   });
 });

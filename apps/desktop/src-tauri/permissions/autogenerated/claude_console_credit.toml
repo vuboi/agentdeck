@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-claude-console-credit"
+description = "Enables the claude_console_credit command without any pre-configured scope."
+commands.allow = ["claude_console_credit"]
+
+[[permission]]
+identifier = "deny-claude-console-credit"
+description = "Denies the claude_console_credit command without any pre-configured scope."
+commands.deny = ["claude_console_credit"]

@@ -121,6 +121,8 @@ pub struct TurnRequest {
     pub cwd: Option<std::path::PathBuf>,
     /// The AgentDeck chat this turn belongs to: the browser tools it calls are tagged with it (which chat drives a tab).
     pub owner: Option<String>,
+    /// An Anthropic API key: Claude Code then bills the Console's API credit instead of the signed-in plan.
+    pub api_key: Option<String>,
 }
 
 /// Everything provider-specific: how to start a turn and how to read its output.

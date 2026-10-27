@@ -269,6 +269,8 @@
   // scrollbar drag shows as a stutter.
   let listWidth = $state(800);
   let viewportHeight = $state(600);
+  // The last height each row was measured at in this view, live replies included (row-size.ts keeps only finished ones).
+  const measured = new Map<string, number>();
   const virtualOptions = () => ({
     count: chat.messages.length - from,
     getScrollElement: () => viewportEl ?? null,
@@ -286,9 +288,19 @@
     measureElement: (element: Element, entry: ResizeObserverEntry | undefined) => {
       const message = chat.messages[Number((element as HTMLElement).dataset.index) + from];
       const box = entry?.borderBoxSize?.[0]?.blockSize;
-      if (box === undefined) return message ? rowHeight(message, listWidth) : 96;
+      if (box === undefined) {
+        // Asked again without an observer entry (the row was put in again): the height it was last measured at. A
+        // reply being written has no saved height, and falling back to its guess shrank the list and grew it back on
+        // the next report, so the text jumped up and down while it streamed.
+        const known = message ? measured.get(`${message.id}|${listWidth}`) : undefined;
+        return known ?? (message ? rowHeight(message, listWidth) : 96);
+      }
       const height = Math.round(box);
-      if (message && !message.live) rememberRowHeight(message.id, listWidth, height);
+      if (message) {
+        measured.set(`${message.id}|${listWidth}`, height);
+        if (measured.size > 2000) measured.delete(measured.keys().next().value as string);
+        if (!message.live) rememberRowHeight(message.id, listWidth, height);
+      }
       return height;
     },
     // Rows mounted beyond the screen: enough that a fast drag shows laid-out rows, not blanks, between frames.
@@ -814,7 +826,7 @@
 
     {#if chat.loadingOlder}
       <!-- Drops in from the top while a page of older messages loads: a spinner in a soft primary ring and shimmering text. -->
-      <div class="pointer-events-none absolute top-3 left-1/2 z-20 -translate-x-1/2" role="status" aria-label="Loading earlier messages" in:fly={{ y: -12, duration: 220 }} out:fade={{ duration: 160 }}>
+      <div class="pointer-events-none absolute top-3 left-1/2 z-40 -translate-x-1/2" role="status" aria-label="Loading earlier messages" in:fly={{ y: -12, duration: 220 }} out:fade={{ duration: 160 }}>
         <div class="flex items-center gap-2.5 rounded-full border border-primary/25 bg-background/95 py-1.5 pr-4 pl-2 text-[13px] font-medium shadow-lg shadow-primary/10 backdrop-blur">
           <span class="grid size-6 place-items-center rounded-full bg-primary/12"><ZLoading zLoading zSpinner={LOADER.fetch} zSize="xs" zColor="primary" /></span>
           <ZShimmerText zText="Loading earlier messages…" />
@@ -887,7 +899,7 @@
                   {#if editingId === message.id}
                     <!-- Editing: the message becomes a box; Send replaces it and everything after it. The text runs into the
                          box's right padding, so a long message's scrollbar sits flush with the box's edge. -->
-                    <div class="flex w-full max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 pt-3 pb-2.5 text-sm">
+                    <div in:fly={{ y: 4, duration: 220 }} class="flex w-full max-w-[85%] flex-col gap-2 rounded-2xl bg-muted px-4 pt-3 pb-2.5 text-sm">
                       {#each message.blocks.filter((block) => block.kind === 'element') as attached, at (at)}
                         <ChatBlock block={attached} />
                       {/each}
@@ -921,7 +933,7 @@
                     </div>
                   {:else}
                     {#if words.length > 0}
-                      <div class="flex max-w-[85%] flex-col gap-2 rounded-2xl bg-muted p-3 text-sm {theme.chatLayout === 'split' ? 'rounded-br-md' : 'rounded-bl-md'}">
+                      <div in:fade={{ duration: 220 }} class="flex max-w-[85%] flex-col gap-2 rounded-2xl bg-muted p-3 text-sm {theme.chatLayout === 'split' ? 'rounded-br-md' : 'rounded-bl-md'}">
                         {#each words as block}
                           <ChatBlock {block} fade="var(--muted)" />
                         {/each}
@@ -973,12 +985,14 @@
                           {/if}
                         </div>
                       {/snippet}
+                      <!-- The figures roll only while the reply is being written; a loaded chat shows them plainly. -->
+                      {@const rolling = Boolean(message.live) && isRunning(workspace.activeId)}
                       <!-- Tokens and cost, quiet and on the right; hover for the breakdown. -->
                       <span class="ml-auto flex items-baseline gap-1.5 text-[11px] tabular-nums" {@attach zTooltip({ content: usageTip, position: 'top' })}>
-                        <span class="text-muted-foreground"><ZNumberTicker zValue={totalTokens(message.tokens)} zFormat="compact" zDuration={600} /> tokens</span>
+                        <span class="text-muted-foreground">{#if rolling}<ZNumberTicker zValue={totalTokens(message.tokens)} zFormat="compact" zDuration={600} />{:else}{shortCount(totalTokens(message.tokens))}{/if} tokens</span>
                         {#if cost != null}
                           <span class="text-muted-foreground/40" aria-hidden="true">·</span>
-                          <span class="font-medium text-success">{message.cost == null ? '≈ ' : ''}<ZNumberTicker zValue={cost} zFormat="currency" zCurrency="USD" zLocale="en-US" zMinimumFractionDigits={2} zMaximumFractionDigits={cost < 0.01 ? 3 : 2} zDuration={600} /></span>
+                          <span class="font-medium text-success">{message.cost == null ? '≈ ' : ''}{#if rolling}<ZNumberTicker zValue={cost} zFormat="currency" zCurrency="USD" zLocale="en-US" zMinimumFractionDigits={2} zMaximumFractionDigits={cost < 0.01 ? 3 : 2} zDuration={600} />{:else}{usd(cost)}{/if}</span>
                         {/if}
                       </span>
                     {/if}

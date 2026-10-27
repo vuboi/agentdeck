@@ -20,7 +20,7 @@
   import { highlightHtml } from '../highlight';
   import { isLocalUrl, linkMenu, openExternal, openInPreview, terminalCommand } from '../browser.svelte';
   import { inTauri } from '../history';
-  import { colourFinished, colourStarted, eagerColour, renderMarkdown } from '../markdown';
+  import { colourFinished, colourStarted, eagerColour, markdownBlocks, renderMarkdown } from '../markdown';
   import { runInTerminal } from '../terminal.svelte';
   import { theme } from '../theme.svelte';
   import { fileRootOf, isAbsolutePath, resolveInProject } from '../paths';
@@ -93,7 +93,19 @@
     return () => cancelAnimationFrame(frame);
   });
 
-  const html = $derived(renderMarkdown(text.slice(0, shown)));
+  // The answer is drawn block by block (markdown.ts `markdownBlocks`). While it streams, the blocks already complete
+  // keep their HTML string, so their DOM is left alone; only the block being written is parsed and replaced. Parsing
+  // and replacing the whole answer on every frame made a long answer stutter as it grew.
+  let lastRaw: string[] = [];
+  let lastHtml: string[] = [];
+  const html = $derived.by(() => {
+    const raw = markdownBlocks(text.slice(0, shown), lastRaw);
+    const growing = streaming || shown < text.length;
+    const next = raw.map((block, index) => (lastRaw[index] === block ? lastHtml[index] : renderMarkdown(block, !(growing && index === raw.length - 1))));
+    lastRaw = raw;
+    lastHtml = next;
+    return next;
+  });
   let root: HTMLDivElement | undefined = $state();
 
   // Notify the chat only after the completed response has been revealed and this DOM update has landed.
@@ -101,61 +113,71 @@
     if (!streaming && text.length > 0 && shown >= text.length) onrendered?.();
   });
 
-  // The whole answer is re-rendered as HTML on each step, so the fade is kept by offset in its visible text:
-  // a word seen before keeps its start time (a negative delay resumes its fade), a new word starts now.
-  const fadeStarts = new Map<number, number>();
-  let seen = 0;
+  // Each step replaces the HTML of the blocks that changed, so the fade is kept by offset in a block's visible text: a
+  // word seen before keeps its start time (a negative delay resumes its fade), a new word starts now.
+  const fadeStarts = new Map<string, number>();
+  let seen: number[] = [];
+  let fadedHtml: string[] = [];
 
-  function fadeTail(container: HTMLElement) {
+  function fadeTail(blocks: HTMLElement[], from: number) {
     const now = performance.now();
-    for (const [at, start] of fadeStarts) if (now - start > FADE_MS) fadeStarts.delete(at);
-    const from = Math.min(seen, ...fadeStarts.keys());
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-    const tail: [Text, number][] = [];
-    let offset = 0;
-    for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
-      // Svelte owns the top-level nodes of {@html}; only text inside elements is split. Code stays plain.
-      const parent = node.parentElement;
-      if (offset + node.data.length > from && parent && parent !== container && !parent.closest('pre')) tail.push([node, offset]);
-      offset += node.data.length;
-    }
+    for (const [key, start] of fadeStarts) if (now - start > FADE_MS) fadeStarts.delete(key);
     let fresh = 0;
-    for (const [node, base] of tail) {
-      const out = document.createDocumentFragment();
-      let at = base;
-      for (const piece of node.data.split(/(\s+)/)) {
-        if (!piece) continue;
-        const known = fadeStarts.get(at);
-        // A word before `seen` with no fade in progress was already shown: it stays plain. (When the markdown of the
-        // earlier text changes, offsets shift by a character or two; without this check those words would fade in again.)
-        if (at + piece.length <= from || /^\s+$/.test(piece) || (known === undefined && at < seen)) {
-          out.append(piece);
-        } else {
-          let start = known;
-          if (start === undefined && fadeStarts.size >= FADE_LIMIT) {
-            out.append(piece);
-            at += piece.length;
-            continue;
-          }
-          if (start === undefined) fadeStarts.set(at, (start = now + Math.min(fresh++, 6) * STAGGER_MS));
-          const word = document.createElement('span');
-          word.className = 'md-fade';
-          word.style.animationDelay = `${Math.round(start - now)}ms`;
-          word.textContent = piece;
-          out.append(word);
-        }
-        at += piece.length;
+    for (let index = from; index < blocks.length; index++) {
+      const block = blocks[index];
+      const before = seen[index] ?? 0;
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      const tail: [Text, number][] = [];
+      let offset = 0;
+      for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+        // Svelte owns the top-level nodes of {@html}; only text inside elements is split. Code stays plain.
+        const parent = node.parentElement;
+        if (parent && parent !== block && !parent.closest('pre')) tail.push([node, offset]);
+        offset += node.data.length;
       }
-      node.replaceWith(out);
+      for (const [node, base] of tail) {
+        const out = document.createDocumentFragment();
+        let at = base;
+        let split = false;
+        for (const piece of node.data.split(/(\s+)/)) {
+          if (!piece) continue;
+          const key = `${index}:${at}`;
+          const known = fadeStarts.get(key);
+          // A word shown before with no fade in progress stays plain. (When the markdown of the earlier text changes,
+          // offsets shift by a character or two; without this check those words would fade in again.)
+          if (/^\s+$/.test(piece) || (known === undefined && at < before) || (known === undefined && fadeStarts.size >= FADE_LIMIT)) {
+            out.append(piece);
+          } else {
+            let start = known;
+            if (start === undefined) fadeStarts.set(key, (start = now + Math.min(fresh++, 6) * STAGGER_MS));
+            const word = document.createElement('span');
+            word.className = 'md-fade';
+            word.style.animationDelay = `${Math.round(start - now)}ms`;
+            word.textContent = piece;
+            out.append(word);
+            split = true;
+          }
+          at += piece.length;
+        }
+        if (split) node.replaceWith(out);
+      }
+      seen[index] = offset;
     }
-    seen = offset;
+    seen.length = blocks.length;
   }
 
   $effect(() => {
-    void html;
+    const current = html;
     if (!root || !live || reducedMotion) return;
     const container = root;
-    untrack(() => fadeTail(container));
+    untrack(() => {
+      // Only the blocks whose HTML changed since the last step are walked: the others still hold their fades.
+      let from = 0;
+      while (from < current.length && fadedHtml[from] === current[from]) from++;
+      fadedHtml = current;
+      const blocks = [...container.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains('md-block'));
+      fadeTail(blocks, from);
+    });
   });
 
 
@@ -291,7 +313,7 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (the copy buttons inside are real buttons) -->
-<div bind:this={root} class="md" {onclick} {oncontextmenu}>{@html html}</div>
+<div bind:this={root} class="md" {onclick} {oncontextmenu}>{#each html as block, index (index)}<div class="md-block">{@html block}</div>{/each}</div>
 
 <style>
   /* A word that has just arrived fades in, quickly and without blur, as in Claude Code: fast text never smears. */

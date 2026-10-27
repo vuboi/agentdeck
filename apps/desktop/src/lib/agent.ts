@@ -1,3 +1,6 @@
+import { connectors } from './connectors.svelte';
+import { creditModel } from './credit-model';
+
 // The UI side of the agent event stream. The Rust side (crates/adapters/src/agent) turns each CLI's output
 // into these events; nothing here knows a CLI's format.
 
@@ -36,7 +39,10 @@ export async function sendAgentTurn(args: {
   cwd: string | null;
 }): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('agent_send', args);
+  // A `credit:` Claude model runs the same CLI on the Console API key, so the turn spends API credit (models.svelte.ts).
+  const credit = args.agent === 'claude' ? creditModel(args.model) : null;
+  const apiKey = credit ? connectors.claudeCredit.apiKey.trim() || null : null;
+  await invoke('agent_send', { ...args, model: credit ?? args.model, apiKey });
 }
 
 /** Start one turn on a custom provider: an OpenAI-compatible server that gets the whole conversation. */

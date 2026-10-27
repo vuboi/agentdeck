@@ -251,10 +251,13 @@ pub async fn mcp_list() -> McpOverview {
             .and_then(|raw| raw.url.clone());
         let mut entries = merge(&raws);
         if let Some(url) = bridge_url() {
-            let mut agents = vec!["claude".to_owned(), "codex".to_owned()];
+            // Claude, Codex and OpenCode get it with every turn; custom providers call it directly (free tiers never:
+            // custom_chat.rs). Antigravity once it is linked.
+            let mut agents = vec!["claude".to_owned(), "codex".to_owned(), "opencode".to_owned()];
             if agy_link.is_some() {
                 agents.push("antigravity".to_owned());
             }
+            agents.push("custom".to_owned());
             entries.insert(
                 0,
                 McpEntry {

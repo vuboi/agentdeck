@@ -16,6 +16,7 @@ async fn turn(prompt: &str, id: &str, resume: bool, cwd: &std::path::Path) -> Ve
         allowed_tools: Vec::new(),
         cwd: Some(cwd.to_path_buf()),
         owner: None,
+        api_key: None,
     };
     let mut events = Vec::new();
     drive_turn(resolve_binary(&Claude), &Claude, &request, |event| {

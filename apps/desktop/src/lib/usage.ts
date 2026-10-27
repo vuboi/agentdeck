@@ -2,6 +2,7 @@
 // so a running reply shows an estimate from the list prices below (USD per million tokens).
 
 import { getPref, setPref } from './prefs';
+import { baseModel } from './credit-model';
 
 export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number };
 
@@ -42,7 +43,12 @@ const LIST: [RegExp, () => Price][] = [
   [/gemini-4-argon/i, () => (Date.now() >= Date.UTC(2026, 11, 1) ? { input: 4, output: 20, cacheRead: 0.4 } : { input: 2, output: 10, cacheRead: 0.2 })],
 ];
 const listed = (model: string): Price | undefined => LIST.find(([pattern]) => pattern.test(model))?.[1]();
-export const priceOf = (model: string | undefined): Price | undefined => (model ? (custom[model] ?? PRICES[model] ?? listed(model)) : undefined);
+// A `credit:` model is the same model billed to the API credit: it costs what that model costs.
+export const priceOf = (model: string | undefined): Price | undefined => {
+  if (!model) return undefined;
+  const base = baseModel(model);
+  return custom[model] ?? custom[base] ?? PRICES[base] ?? listed(base);
+};
 /** Saves a price for a model (`null` removes it). */
 export function setModelPrice(model: string, price: Price | null) {
   if (price) custom[model] = price;

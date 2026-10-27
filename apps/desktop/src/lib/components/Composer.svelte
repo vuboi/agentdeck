@@ -56,6 +56,7 @@
   import { fileSize, saveFileAttachment } from '../agent';
   import { customProviderOf } from '../provider-registry';
   import { onUsage, shortCount, totalTokens, usageLog, usd } from '../usage';
+  import { CREDIT_PREFIX } from '../credit-model';
   import { inTauri } from '../history';
   import { toast } from '../toast';
   import ModelPicker from './ModelPicker.svelte';
@@ -65,6 +66,8 @@
     refreshAgyQuota,
     refreshProviderQuota,
     providerQuotas,
+    claudeCreditState,
+    refreshClaudeCredit,
     type UsageWindow,
   } from '../connectors.svelte';
 
@@ -236,18 +239,34 @@
   /** What this provider's key can still spend (OpenRouter), or its free-tier note. */
   const keyQuota = $derived(customProvider ? providerQuotas[customProvider.id] : undefined);
 
+  // A Claude model billed to the Console API credit: the credit left, read from the Console now and then and after
+  // each reply (a reply spends some of it).
+  const onCredit = $derived(agent === 'claude' && model.startsWith(CREDIT_PREFIX));
+  $effect(() => {
+    if (!onCredit || !inTauri()) return;
+    void refreshClaudeCredit();
+    const timer = window.setInterval(() => void refreshClaudeCredit(), 120_000);
+    const stop = onUsage(() => window.setTimeout(() => void refreshClaudeCredit(), 3000));
+    return () => {
+      clearInterval(timer);
+      stop();
+    };
+  });
+  const creditReading = $derived(onCredit ? claudeCreditState.reading : null);
+
   // What was used today with this agent (or custom provider), counted from the replies the app finished.
   let todayUsed = $state<{ tokens: number; replies: number; cost: number } | null>(null);
   async function readToday() {
     const log = await usageLog();
     const from = new Date();
     from.setHours(0, 0, 0, 0);
-    const mine = log.filter((item) => new Date(item.at) >= from && item.agent === agent && (agent !== 'custom' || customProviderOf(item.model)?.id === customProvider?.id));
+    const mine = log.filter((item) => new Date(item.at) >= from && item.agent === agent && (agent !== 'custom' || customProviderOf(item.model)?.id === customProvider?.id) && (agent !== 'claude' || (item.model ?? '').startsWith(CREDIT_PREFIX) === onCredit));
     todayUsed = { tokens: mine.reduce((sum, item) => sum + totalTokens(item.tokens), 0), replies: mine.length, cost: mine.reduce((sum, item) => sum + (item.cost ?? 0), 0) };
   }
   $effect(() => {
     void agent;
     void customProvider?.id;
+    void onCredit;
     void readToday();
     return onUsage(() => void readToday());
   });
@@ -255,7 +274,14 @@
   const quota = $derived.by(() => {
     let windows: UsageWindow[] = [];
     let observedAt: number | null = null;
-    if (keyQuota && keyQuota.limit && keyQuota.remaining !== null) {
+    if (onCredit) {
+      // The credit left of what it was at its fullest (the grant, when the Console lists it).
+      const top = Math.max(claudeCreditState.top, creditReading?.granted ?? 0, creditReading?.balance ?? 0);
+      if (creditReading && top > 0) {
+        windows = [{ label: `${usd(creditReading.balance)} credit`, pct: Math.min(100, 100 - (creditReading.balance / top) * 100), resets_at: null }];
+        observedAt = creditReading.at;
+      }
+    } else if (keyQuota && keyQuota.limit && keyQuota.remaining !== null) {
       // A key with a credit limit reads like a quota window: the share still left.
       windows = [{ label: 'credit', pct: Math.min(100, ((keyQuota.limit - keyQuota.remaining) / keyQuota.limit) * 100), resets_at: null }];
       observedAt = keyQuota.at;
@@ -1375,8 +1401,9 @@
     class="mt-1.5 flex min-w-0 flex-col gap-1 px-0.5"
     title="This provider does not currently expose quota data to AgentDeck"
   >
-    <span class="text-[10px] leading-[1.25] text-muted-foreground"
-      >{#if keyQuota?.free_tier}Free key: only “:free” models work, with daily request limits{:else if keyQuota}Spent {usd(keyQuota.used)} · this key has no limit{:else}This provider reports no limit{/if}{#if todayUsed && todayUsed.replies > 0}
+    <span class="min-w-0 truncate text-[10px] leading-[1.25] text-muted-foreground"
+      title={onCredit && !connectors.claudeCredit.sessionKey ? 'Add the Console sign-in in Settings > Providers to see the credit left' : undefined}
+      >{#if onCredit}{claudeCreditState.error ? `Credit: ${claudeCreditState.error}` : connectors.claudeCredit.sessionKey ? 'Reading credit…' : 'Credit left unknown'}{:else if keyQuota?.free_tier}Free key: only “:free” models work, with daily request limits{:else if keyQuota}Spent {usd(keyQuota.used)} · this key has no limit{:else}This provider reports no limit{/if}{#if todayUsed && todayUsed.replies > 0}
         · today {shortCount(todayUsed.tokens)} tokens{todayUsed.cost > 0 ? ` · ${usd(todayUsed.cost)}` : ''} · {todayUsed.replies} {todayUsed.replies === 1 ? 'reply' : 'replies'}{/if}</span
     >
     <div

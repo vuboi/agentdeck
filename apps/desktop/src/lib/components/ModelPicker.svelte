@@ -8,6 +8,7 @@
   import { AGENT_TEXT, turnOptions, workspace, type Agent, type Effort, type Permission } from '../sessions.svelte';
   import { allPresets, assignPreset, createFlow, presetOf } from '../workflows.svelte';
   import { findModel, freeFirst, modelSources } from '../models.svelte';
+  import { CREDIT_PREFIX } from '../credit-model';
   import SectionTitle from './SectionTitle.svelte';
 
   let {
@@ -78,9 +79,12 @@
   const modelsOf = (key: string) => sourceOf(key).models();
   // Free models first, the paid ones after a divider (models.svelte.ts).
   const subList = $derived.by(() => freeFirst(modelsOf(subProvider)));
+  // Claude's models billed to the Console API credit come last, after their own divider (credit-model.ts).
+  const creditAt = $derived(subList.items.findIndex((item) => item.value.startsWith(CREDIT_PREFIX)));
   // The row the chosen model belongs to: a custom provider has its own, the CLIs are found by agent.
   const currentSource = $derived(sources.find((source) => source.provider === agent && source.models().some((item) => item.value === model)) ?? sources.find((source) => source.provider === agent) ?? sources[0]);
-  const modelName = (provider: Agent, value: string) => findModel(provider, value)?.label ?? value;
+  // A model billed to the API credit says so wherever its name is shown alone.
+  const modelName = (provider: Agent, value: string) => (findModel(provider, value)?.label ?? value) + (value.startsWith(CREDIT_PREFIX) ? ' · Credit' : '');
 
   let subOpen = $state(false);
   let subProvider = $state('claude');
@@ -388,6 +392,7 @@
         {#each subList.items as item, index (item.value)}
           {@const selected = agent === sourceOf(subProvider).provider && model === item.value}
           {#if index === subList.paidAt}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Paid</span><span class="h-px flex-1 bg-border"></span></div>{/if}
+          {#if index === creditAt && creditAt > 0}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Claude credit</span><span class="h-px flex-1 bg-border"></span></div>{/if}
           <button
             type="button"
             role="radio"

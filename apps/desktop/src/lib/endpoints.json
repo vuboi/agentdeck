@@ -1,0 +1,41 @@
+{
+  "$comment": "Every address AgentDeck calls for a provider, a connector or a local model server, in one place. Read by the frontend (src/lib/endpoints.ts) and by Rust (src-tauri/src/endpoints.rs, built in with include_str!). No keys here: keys stay in the app's local storage.",
+  "anthropic": {
+    "api": "https://api.anthropic.com",
+    "keysPage": "https://platform.claude.com/settings/keys",
+    "billingPage": "https://platform.claude.com/settings/billing",
+    "consoleBootstrap": "https://platform.claude.com/api/bootstrap",
+    "consolePrepaidCredits": "https://platform.claude.com/api/organizations/{org}/prepaid/credits"
+  },
+  "openrouter": {
+    "key": "https://openrouter.ai/api/v1/key"
+  },
+  "chatgpt": {
+    "home": "https://chatgpt.com/",
+    "usage": "https://chatgpt.com/backend-api/wham/usage",
+    "resetCredits": "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+    "resetCreditsConsume": "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+  },
+  "antigravity": {
+    "quota": "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+  },
+  "web": {
+    "search": "https://html.duckduckgo.com/html/"
+  },
+  "providerKinds": {
+    "openai": "http://127.0.0.1:1234/v1",
+    "anthropic": "https://api.anthropic.com",
+    "ollama": "http://127.0.0.1:11434"
+  },
+  "local": [
+    { "kind": "ollama", "label": "Ollama", "base": "http://127.0.0.1:11434" },
+    { "kind": "openai", "label": "LM Studio", "base": "http://127.0.0.1:1234/v1" },
+    { "kind": "openai", "label": "llama.cpp", "base": "http://127.0.0.1:8080/v1" }
+  ],
+  "freeCloud": [
+    { "name": "Google Gemini", "base": "https://generativelanguage.googleapis.com/v1beta/openai", "keyEnv": "GEMINI_API_KEY", "model": "gemini-flash-latest", "note": "Gemini Flash, generous daily limit", "keyUrl": "https://aistudio.google.com/app/apikey" },
+    { "name": "Groq", "base": "https://api.groq.com/openai/v1", "keyEnv": "GROQ_API_KEY", "model": "", "note": "Very fast open models", "keyUrl": "https://console.groq.com/keys" },
+    { "name": "Cerebras", "base": "https://api.cerebras.ai/v1", "keyEnv": "CEREBRAS_API_KEY", "model": "", "note": "High throughput open models", "keyUrl": "https://cloud.cerebras.ai" },
+    { "name": "OpenRouter (free)", "base": "https://openrouter.ai/api/v1", "keyEnv": "OPENROUTER_API_KEY", "model": "", "note": "Many \":free\" models, one key", "keyUrl": "https://openrouter.ai/settings/keys" }
+  ]
+}

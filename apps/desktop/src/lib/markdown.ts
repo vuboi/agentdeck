@@ -65,11 +65,12 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 });
 
 // Rows of a long chat are mounted again each time they scroll back into view: an answer that was already parsed and
-// sanitised is taken from here. Only recent texts are kept (a streaming answer adds one entry per step).
+// sanitised is taken from here, block by block (see `markdownBlocks`). Only recent blocks are kept.
 const rendered = new Map<string, string>();
-const RENDERED_MAX = 400;
+const RENDERED_MAX = 2000;
 
-export function renderMarkdown(source: string): string {
+/** `keep: false` for text that is still being written: its next step differs, so caching it only pushes out answers. */
+export function renderMarkdown(source: string, keep = true): string {
   const known = rendered.get(source);
   if (known !== undefined) {
     rendered.delete(source);
@@ -80,9 +81,34 @@ export function renderMarkdown(source: string): string {
   // Tables sit in a rounded, scrollable card like the code blocks.
   const framed = html.replaceAll('<table>', '<div class="md-table"><table>').replaceAll('</table>', '</table></div>');
   const clean = DOMPurify.sanitize(framed, { ADD_ATTR: ['target'] });
+  if (!keep) return clean;
   rendered.set(source, clean);
   if (rendered.size > RENDERED_MAX) rendered.delete(rendered.keys().next().value as string);
   return clean;
+}
+
+/**
+ * An answer cut at its top-level blocks (paragraphs, headings, lists, code, tables), each with the blank lines after
+ * it. Rendered one by one, a block that is complete keeps its HTML while the answer streams: only the last one is
+ * parsed again. Joined, the pieces are the source.
+ */
+export function markdownBlocks(source: string, previous: string[] = []): string[] {
+  // While an answer grows, the blocks before the last one are done: only the text from the last block on is read again.
+  const kept = previous.slice(0, -1);
+  const prefix = kept.join('');
+  if (kept.length && source.startsWith(prefix)) return [...kept, ...markdownBlocks(source.slice(prefix.length))];
+  const blocks: string[] = [];
+  for (const token of marked.lexer(source)) {
+    if (token.type === 'space' && blocks.length) blocks[blocks.length - 1] += token.raw;
+    else blocks.push(token.raw);
+  }
+  // The lexer can drop a trailing piece it has no token for; it stays with the last block so nothing is lost.
+  const joined = blocks.join('');
+  if (joined.length < source.length && source.startsWith(joined)) {
+    if (blocks.length) blocks[blocks.length - 1] += source.slice(joined.length);
+    else blocks.push(source);
+  }
+  return blocks;
 }
 
 // Code colouring in flight. A chat that is being opened waits for it (a short while at most) before it is shown, so code

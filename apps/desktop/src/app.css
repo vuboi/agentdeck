@@ -137,6 +137,9 @@ body {
 /* A modal's body (z-ui's overlay scroll host) sets `scrollbar-color` and it is inherited: Chromium then draws its own
    15px scrollbar and ignores every ::-webkit-scrollbar rule below, so the property goes back to `auto` here. */
 .scrollbar-slim { scrollbar-color: auto; scrollbar-width: auto; }
+/* `.scrollbar-full`: the global scrollbar (12px, arrow buttons at both ends, as in the chat) inside a host that sets
+`scrollbar-color` (a modal): without the reset Chromium draws its own and drops the arrows. */
+.scrollbar-full { scrollbar-color: auto; scrollbar-width: auto; }
 .scrollbar-slim::-webkit-scrollbar { width: var(--scrollbar-width, 8px); height: var(--scrollbar-width, 8px); }
 .scrollbar-slim::-webkit-scrollbar-thumb { border-width: 2px; border-radius: 4px; }
 .scrollbar-slim::-webkit-scrollbar-button:single-button { display: none; }
@@ -249,8 +252,10 @@ html[data-warming] [data-z-popover] {
   line-height: 1.65;
   overflow-wrap: anywhere;
 }
-.md > :first-child { margin-top: 0; }
-.md > :last-child { margin-bottom: 0; }
+/* An answer is drawn block by block (Markdown.svelte); the wrappers take no box, so its spacing is as one document. */
+.md > .md-block { display: contents; }
+.md > :first-child, .md > .md-block:first-child > :first-child { margin-top: 0; }
+.md > :last-child, .md > .md-block:last-child > :last-child { margin-bottom: 0; }
 .md p { margin: 0 0 0.75rem; }
 .md h1, .md h2, .md h3, .md h4 { margin: 1.1rem 0 0.5rem; font-weight: 600; line-height: 1.35; }
 .md h1 { font-size: 1.15rem; }
@@ -453,3 +458,8 @@ body {
 /* Ctrl+F (FindBar.svelte): every match, and the current one stronger. */
 ::highlight(find-all) { background-color: color-mix(in oklab, var(--primary) 28%, transparent); }
 ::highlight(find-current) { background-color: color-mix(in oklab, var(--primary) 70%, transparent); color: var(--primary-foreground); }
+
+/* Show more / Show less opens a little slower than the library default (300ms). */
+.z-show-more > [id][class*="transition-[max-height]"] {
+  transition-duration: 350ms;
+}

@@ -13,6 +13,7 @@ mod custom_chat;
 mod delegate;
 mod detect;
 mod devtools;
+mod endpoints;
 mod fs_ops;
 mod image_gen;
 mod image_history;
@@ -20,6 +21,7 @@ mod index;
 mod mcp;
 mod mcp_client;
 mod mcp_manage;
+mod notify;
 mod privacy;
 mod pty;
 mod servers;
@@ -1994,6 +1996,8 @@ pub fn run() {
             connectors::codex_auto_switch,
             connectors::provider_probe,
             connectors::provider_quota,
+            connectors::claude_console_credit,
+            notify::system_notify,
             connectors::local_scan,
             audit_append,
             audit_read,

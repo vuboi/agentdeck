@@ -671,7 +671,7 @@ async fn web_search(args: &Value) -> Outcome {
         Err(error) => return failed(error.to_string()),
     };
     let page = match client
-        .get("https://html.duckduckgo.com/html/")
+        .get(crate::endpoints::ENDPOINTS.web.search.as_str())
         .query(&[("q", query)])
         .send()
         .await
@@ -1816,6 +1816,18 @@ mod tests {
             assert!(!call(name, false), "{name} must be denied");
         }
         assert!(!call("mcp__github__create_issue", true));
+        // Every tool of AgentDeck's own MCP server (browser, code index, checks, delegation, the computer) reaches this
+        // machine or another agent that reads it: none is a way around the rule, today or when one is added.
+        for tool in crate::mcp::tool_list().as_array().into_iter().flatten() {
+            let name = tool["name"].as_str().unwrap_or_default();
+            assert!(!call(name, false), "{name} must be denied");
+            assert!(!call(&format!("{MCP_PREFIX}{name}"), false), "{name} must be denied");
+        }
+        // Nor can it reach that server, or anything else on this machine, through its web tools.
+        let fetch = |url: &str| matches!(decide(&restricted, "WebFetch", &json!({ "url": url }), false), Decision::Allow);
+        assert!(!fetch("http://127.0.0.1:47821/2b283ce45cca/mcp"));
+        assert!(!fetch("http://localhost:1420/"));
+        assert!(fetch("https://example.com/"));
         // The same tools are fine for a trusted provider.
         assert!(matches!(decide(&turn(Some("bypassPermissions"), &[]), "Bash", &json!({}), false), Decision::Allow | Decision::Ask));
     }

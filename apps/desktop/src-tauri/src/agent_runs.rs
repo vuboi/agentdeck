@@ -107,6 +107,7 @@ pub(crate) async fn agent_send(
     effort: Option<String>,
     allowed_tools: Vec<String>,
     cwd: Option<String>,
+    api_key: Option<String>,
 ) -> Result<(), String> {
     let provider = provider_for(&agent)?;
     let req = TurnRequest {
@@ -119,6 +120,7 @@ pub(crate) async fn agent_send(
         allowed_tools,
         cwd: cwd.map(Into::into),
         owner: Some(session.clone()),
+        api_key,
     };
     let handle = tauri::async_runtime::spawn(run_turn(
         app,

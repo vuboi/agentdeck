@@ -23,12 +23,19 @@ export type ExportFile = {
 
 type Provider = { id?: string; apiKey?: string };
 const PROVIDERS_KEY = 'providers.custom';
+/** The Claude Console credit: its API key and Console sign-in are keys too. */
+const CREDIT_KEY = 'providers.claudeCredit';
+type Credit = { apiKey?: string; sessionKey?: string };
 
 /** The export of what was read. Without `withKeys` every custom provider loses its API key. */
 export function buildExport(stores: Record<string, [string, unknown][]>, local: Record<string, string>, withKeys: boolean, now = new Date()): ExportFile {
   const strip = (entries: [string, unknown][]) =>
     entries.map(([key, value]): [string, unknown] =>
-      key === PROVIDERS_KEY && Array.isArray(value) && !withKeys ? [key, (value as Provider[]).map((provider) => ({ ...provider, apiKey: '' }))] : [key, value],
+      key === PROVIDERS_KEY && Array.isArray(value) && !withKeys
+        ? [key, (value as Provider[]).map((provider) => ({ ...provider, apiKey: '' }))]
+        : key === CREDIT_KEY && value && typeof value === 'object' && !withKeys
+          ? [key, { ...(value as Credit), apiKey: '', sessionKey: '' }]
+          : [key, value],
     );
   return {
     format: EXPORT_FORMAT,
@@ -66,6 +73,14 @@ export function mergeProviders(incoming: unknown, current: unknown): unknown {
   if (!Array.isArray(incoming)) return incoming;
   const saved = new Map((Array.isArray(current) ? (current as Provider[]) : []).map((provider) => [provider.id, provider.apiKey]));
   return (incoming as Provider[]).map((provider) => (provider.apiKey ? provider : { ...provider, apiKey: saved.get(provider.id) ?? '' }));
+}
+
+/** The Claude credit to save on import: a key left out of the export keeps the one saved here. */
+export function mergeCredit(incoming: unknown, current: unknown): unknown {
+  if (!incoming || typeof incoming !== 'object') return incoming;
+  const saved = (current && typeof current === 'object' ? current : {}) as Credit;
+  const next = incoming as Credit;
+  return { ...next, apiKey: next.apiKey || saved.apiKey || '', sessionKey: next.sessionKey || saved.sessionKey || '' };
 }
 
 /** "12 settings, 3 providers, 40 chats" for the note after an import or export. */
@@ -129,9 +144,10 @@ export async function pickExport(): Promise<string | null> {
 export async function importData(file: ExportFile): Promise<void> {
   const { getPref, isStoreName, putEntries } = await import('./prefs');
   const current = await getPref<unknown>(PROVIDERS_KEY);
+  const credit = await getPref<unknown>(CREDIT_KEY);
   for (const [name, entries] of Object.entries(file.stores)) {
     if (!isStoreName(name) || name === 'tabs' || name === 'terminal') continue;
-    const fixed = entries.map(([key, value]): [string, unknown] => (key === PROVIDERS_KEY ? [key, mergeProviders(value, current)] : [key, value]));
+    const fixed = entries.map(([key, value]): [string, unknown] => (key === PROVIDERS_KEY ? [key, mergeProviders(value, current)] : key === CREDIT_KEY ? [key, mergeCredit(value, credit)] : [key, value]));
     await putEntries(name, fixed);
   }
   for (const [key, value] of Object.entries(file.local)) {

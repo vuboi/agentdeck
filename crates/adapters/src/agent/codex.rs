@@ -490,6 +490,7 @@ mod tests {
             allowed_tools: Vec::new(),
             cwd: None,
             owner: None,
+            api_key: None,
         }
     }
 

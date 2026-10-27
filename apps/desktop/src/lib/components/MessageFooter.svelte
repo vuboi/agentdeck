@@ -15,11 +15,18 @@
   let armed = $state(false);
   function arm(node: HTMLElement) {
     const row = node.closest('article') ?? node;
+    // Mounted under the pointer (an edit cancelled or sent from this row): no pointerenter comes, so arm now.
+    if (row.matches(':hover') || row.contains(document.activeElement)) {
+      armed = true;
+      return;
+    }
     const on = () => (armed = true);
     row.addEventListener('pointerenter', on, { once: true });
+    row.addEventListener('pointermove', on, { once: true });
     row.addEventListener('focusin', on, { once: true });
     return () => {
       row.removeEventListener('pointerenter', on);
+      row.removeEventListener('pointermove', on);
       row.removeEventListener('focusin', on);
     };
   }

@@ -103,6 +103,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tauri-winrt-notification",
  "tokio",
  "toml 0.8.2",
  "tree-sitter",

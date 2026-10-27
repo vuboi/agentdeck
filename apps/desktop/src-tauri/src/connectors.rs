@@ -20,6 +20,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use reqwest::header::{ACCEPT, AUTHORIZATION, REFERER, USER_AGENT};
 use serde::Serialize;
+
+use crate::endpoints::ENDPOINTS;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
@@ -903,11 +905,6 @@ fn read_codex_registry(codex_home: &Path) -> Result<(Vec<Account>, Option<AutoSw
     parse_codex_registry(&text)
 }
 
-const CODEX_RESET_CREDITS_URL: &str =
-    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
-const CODEX_RESET_CREDITS_CONSUME_URL: &str =
-    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
-const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 
 fn parse_codex_usage(payload: &Value) -> (Vec<UsageWindow>, Option<String>) {
     let now = std::time::SystemTime::now()
@@ -948,7 +945,7 @@ async fn fetch_codex_usage(
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|error| format!("Could not create Codex usage client: {error}"))?
-        .get(CODEX_USAGE_URL)
+        .get(ENDPOINTS.chatgpt.usage.as_str())
         .headers(codex_reset_headers(
             &access_token,
             account_id.as_deref(),
@@ -1023,7 +1020,8 @@ fn codex_reset_headers(
     );
     headers.insert(
         REFERER,
-        reqwest::header::HeaderValue::from_static("https://chatgpt.com/"),
+        reqwest::header::HeaderValue::from_str(&ENDPOINTS.chatgpt.home)
+            .unwrap_or_else(|_| reqwest::header::HeaderValue::from_static("https://chatgpt.com/")),
     );
     headers.insert(
         USER_AGENT,
@@ -1053,7 +1051,7 @@ async fn fetch_codex_reset_credits(codex_home: &Path, email: &str) -> Result<i64
         .build()
         .map_err(|error| format!("Could not create Codex reset credits client: {error}"))?;
     let response = client
-        .get(CODEX_RESET_CREDITS_URL)
+        .get(ENDPOINTS.chatgpt.reset_credits.as_str())
         .headers(codex_reset_headers(
             &access_token,
             account_id.as_deref(),
@@ -1114,7 +1112,7 @@ pub async fn codex_consume_reset_credit(email: String) -> Result<(), String> {
         .build()
         .map_err(|error| format!("Could not create Codex reset client: {error}"))?;
     let response = client
-        .post(CODEX_RESET_CREDITS_CONSUME_URL)
+        .post(ENDPOINTS.chatgpt.reset_credits_consume.as_str())
         .headers(codex_reset_headers(
             &access_token,
             account_id.as_deref(),
@@ -2062,7 +2060,7 @@ async fn fetch_agy_summary(sign_in: &Value) -> Result<(i64, Value), String> {
         .build()
         .map_err(|error| error.to_string())?;
     let response = client
-        .post("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
+        .post(ENDPOINTS.antigravity.quota.as_str())
         .bearer_auth(access)
         .header(
             reqwest::header::USER_AGENT,
@@ -2222,7 +2220,8 @@ fn models_url(kind: &str, base: &str) -> String {
     let base = base.trim().trim_end_matches('/');
     match kind {
         "ollama" => format!("{base}/api/tags"),
-        "anthropic" => format!("{base}/v1/models"),
+        // A base typed with its version (`https://api.anthropic.com/v1`) is the same address.
+        "anthropic" => format!("{}/v1/models", base.trim_end_matches("/v1")),
         _ => format!("{base}/models"),
     }
 }
@@ -2342,6 +2341,100 @@ pub struct ProviderQuota {
     free_tier: bool,
 }
 
+/// The prepaid credit of the Claude Console (platform.claude.com): what the API keys of its organization can still
+/// spend, read the way the Console's own billing page reads it.
+#[derive(Serialize)]
+pub struct ConsoleCredit {
+    /// USD left.
+    balance: f64,
+    /// USD granted or bought in the grants that still hold credit, when the Console lists it.
+    granted: Option<f64>,
+    /// When the first grant that still holds credit expires (RFC 3339).
+    expires_at: Option<String>,
+}
+
+/// An amount the Console gives in minor units with an exponent (`{"amount_minor": 5950, "exponent": 2}` is 59.50).
+fn minor_amount(value: &Value, exponent: i64) -> Option<f64> {
+    let minor = value.as_f64()?;
+    (0..=6).contains(&exponent).then(|| minor / 10f64.powi(exponent as i32))
+}
+
+/// Reads the Console's prepaid credit with its sign-in cookie (`sessionKey`). There is no API for it: the Console
+/// has no balance endpoint for API keys, so this asks the two endpoints its billing page calls. They are not
+/// documented and can change; an error then says so and the footer falls back to what the app counted.
+#[tauri::command]
+pub async fn claude_console_credit(session_key: String) -> Result<ConsoleCredit, String> {
+    let key = session_key.trim();
+    let key = key.strip_prefix("sessionKey=").unwrap_or(key);
+    if key.is_empty() {
+        return Err("no Console session key".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36")
+        .build()
+        .map_err(|error| error.to_string())?;
+    let get = |url: String| {
+        client
+            .get(url)
+            .header("Cookie", format!("sessionKey={key}"))
+            .header("Accept", "application/json")
+            .send()
+    };
+    let read = |response: reqwest::Response| async move {
+        match response.status().as_u16() {
+            200..=299 => response.json::<Value>().await.map_err(|error| format!("not the Console's answer: {error}")),
+            401 | 403 => Err("the Console session ended: copy a new sessionKey".to_string()),
+            code => Err(format!("the Console answered {code}")),
+        }
+    };
+    let boot = read(get(ENDPOINTS.anthropic.console_bootstrap.clone()).await.map_err(|error| error.to_string())?).await?;
+    // The organization of the API keys: the membership whose organization has the `api` capability.
+    let org = boot["account"]["memberships"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|member| &member["organization"])
+        .find(|org| org["capabilities"].as_array().is_some_and(|caps| caps.iter().any(|cap| cap == "api")))
+        .and_then(|org| org["uuid"].as_str())
+        .ok_or("this sign-in has no API organization")?
+        .to_string();
+    let body = read(
+        get(ENDPOINTS.anthropic.console_prepaid_credits.replace("{org}", &org))
+            .await
+            .map_err(|error| error.to_string())?,
+    )
+    .await?;
+    let credits = &body["balance"]["credits"];
+    let exponent = credits["exponent"].as_i64().unwrap_or(2);
+    let balance = minor_amount(&credits["amount_minor"], exponent).ok_or("the Console sent no balance")?;
+    // The grants that still hold credit: their total (when given) is the bar's full width, the first to end its date.
+    let grants: Vec<&Value> = ["promo_tranches", "tranches"]
+        .iter()
+        .filter_map(|name| body[*name].as_array())
+        .flatten()
+        .filter(|grant| grant["remaining_amount_minor_units"].as_f64().unwrap_or(0.0) > 0.0)
+        .collect();
+    let granted: f64 = grants
+        .iter()
+        .filter_map(|grant| {
+            ["amount_minor_units", "initial_amount_minor_units", "original_amount_minor_units"]
+                .iter()
+                .find_map(|field| minor_amount(&grant[*field], exponent))
+        })
+        .sum();
+    let expires_at = grants
+        .iter()
+        .filter_map(|grant| grant["expires_at"].as_str())
+        .min()
+        .map(str::to_string);
+    Ok(ConsoleCredit {
+        balance,
+        granted: (granted >= balance && granted > 0.0).then_some(granted),
+        expires_at,
+    })
+}
+
 /// The spending left on a key, for the providers that tell it (OpenRouter: `GET /key`). `None` for the rest: they
 /// report their limits only in response headers, or not at all.
 #[tauri::command]
@@ -2359,7 +2452,7 @@ pub async fn provider_quota(
         .or_else(|| key_env.filter(|name| !name.is_empty()).and_then(|name| std::env::var(name).ok()))?;
     let client = reqwest::Client::builder().timeout(Duration::from_secs(8)).build().ok()?;
     let response = client
-        .get("https://openrouter.ai/api/v1/key")
+        .get(ENDPOINTS.openrouter.key.as_str())
         .bearer_auth(key)
         .send()
         .await
@@ -2388,14 +2481,14 @@ pub struct LocalServer {
 /// Looks for the usual local model servers (Ollama, LM Studio, llama.cpp) on this machine.
 #[tauri::command]
 pub async fn local_scan() -> Vec<LocalServer> {
-    const SERVERS: [(&str, &str, &str); 3] = [
-        ("ollama", "Ollama", "http://127.0.0.1:11434"),
-        ("openai", "LM Studio", "http://127.0.0.1:1234/v1"),
-        ("openai", "llama.cpp", "http://127.0.0.1:8080/v1"),
-    ];
-    let limit = Duration::from_millis(700);
-    let handles: Vec<_> = SERVERS
+    let servers: Vec<(&str, &str, &str)> = ENDPOINTS
+        .local
         .iter()
+        .map(|server| (server.kind.as_str(), server.label.as_str(), server.base.as_str()))
+        .collect();
+    let limit = Duration::from_millis(700);
+    let handles: Vec<_> = servers
+        .into_iter()
         .map(|(kind, label, base_url)| {
             tauri::async_runtime::spawn(async move {
                 let found = probe(kind, base_url, None, None, limit).await;
@@ -2511,6 +2604,10 @@ mod tests {
         assert_eq!(models_url("openai", "http://h/v1"), "http://h/v1/models");
         assert_eq!(
             models_url("anthropic", "https://api.x.com"),
+            "https://api.x.com/v1/models"
+        );
+        assert_eq!(
+            models_url("anthropic", "https://api.x.com/v1/"),
             "https://api.x.com/v1/models"
         );
         let tags: Value = serde_json::json!({"models": [{"name": "llama3"}]});
