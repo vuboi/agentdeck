@@ -103,6 +103,17 @@
     replies: rows.length,
     avgMs: rows.filter((item) => item.ms).length ? rows.reduce((sum, item) => sum + (item.ms ?? 0), 0) / rows.filter((item) => item.ms).length : 0,
   });
+  // A monthly estimate from the whole log (not the range): the average cost per day since the first reply, times 30.
+  // Only the days of the chosen project count. Needs a few days of data to mean anything.
+  const monthly = $derived.by(() => {
+    const mine = log.filter((item) => chosen === null || (item.projectId ?? '') === chosen);
+    if (mine.length === 0) return null;
+    const first = Math.min(...mine.map((item) => Date.parse(item.at)));
+    const days = Math.max(1, Math.ceil((Date.now() - first) / 86_400_000));
+    const cost = mine.reduce((sum, item) => sum + (worth(item).cost ?? 0), 0);
+    const priced = mine.some((item) => worth(item).cost !== null);
+    return { cost: (cost / days) * 30, days, priced };
+  });
   const kinds = $derived(
     KINDS.map((kind) => ({ ...kind, count: rows.reduce((sum, item) => sum + item.tokens[kind.key], 0) })),
   );
@@ -215,6 +226,7 @@
           { label: 'Avg reply time', value: total.avgMs ? seconds(total.avgMs) : '–' },
           { label: 'Output tokens', value: shortCount(total.output), hint: 'What the models wrote, apart from what they read.' },
           { label: 'Cost / reply', value: total.priced ? money(total.cost / total.priced) : '–' },
+          { label: 'Est. per month', value: monthly && monthly.priced ? money(monthly.cost) : '–', hint: monthly ? `Average cost per day over the ${monthly.days} day${monthly.days === 1 ? '' : 's'} since the first reply, times 30. A rough guide: it moves with how much you use it.` : 'Needs a reply first.' },
         ] as card (card.label)}
           <div class="rounded-lg border border-border bg-muted/20 px-3 py-2" title={card.hint}>
             <div class="text-[11px] text-muted-foreground">{card.label}</div>
