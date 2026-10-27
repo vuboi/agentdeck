@@ -217,7 +217,7 @@
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Changes">
   {#if root && changes.length > 0}
     <!-- Find a changed file by name: the same bar as the file tree's, over the changed files only. -->
-    <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center border-b border-border p-1 text-xs">
+    <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center border-b border-border p-1.5 text-xs">
       <button type="button" class="inline-flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-2 text-left outline-none {findOpen ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" title="Find a changed file by name" aria-expanded={findOpen} onclick={() => (findOpen = true)}>
         <ZIcon zType={icon('lucideSearch')} zSize="15" /> <span class="truncate">Search changed files</span>
       </button>
@@ -238,7 +238,7 @@
         <p class="m-0">No changes since the last commit.</p>
       </div>
     {:else}
-      <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-2 text-xs" bind:clientWidth={headWidth}>
+      <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-1.5 text-xs" bind:clientWidth={headWidth}>
         <span class="font-medium tabular-nums" title="{changes.length} {changes.length === 1 ? 'file' : 'files'}">{compact(changes.length)}{narrow ? '' : changes.length === 1 ? ' file' : ' files'}</span>
         <span class="text-emerald-500 tabular-nums" title="{totals.added} lines added">+{compact(totals.added)}</span>
         <span class="text-red-500 tabular-nums" title="{totals.removed} lines removed">−{compact(totals.removed)}</span>

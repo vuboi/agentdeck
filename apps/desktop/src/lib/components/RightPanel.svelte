@@ -30,7 +30,7 @@
         zWave={false}
         zType="ghost"
         zSize="sm"
-        class="size-7! shrink-0 p-0 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary"
+        class="size-8! shrink-0 p-0 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary"
         aria-label="Open {current.label} in a window"
         title="Open {current.label} in a window"
         onclick={detachTools}

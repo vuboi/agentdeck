@@ -82,11 +82,15 @@ pub fn sources_file(home: &Path) -> PathBuf {
     home.join(".agentdeck").join("store-sources.json")
 }
 
+/// The skill sources a new install starts with, so Discover lists skills before the user adds any. Once the list is
+/// saved (a source added or removed) the saved one is used, an empty one too.
+pub const DEFAULT_SOURCES: [&str; 1] = ["https://github.com/anthropics/skills"];
+
 pub fn read_sources(home: &Path) -> Vec<String> {
-    std::fs::read_to_string(sources_file(home))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+    match std::fs::read_to_string(sources_file(home)) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => DEFAULT_SOURCES.iter().map(|url| (*url).to_owned()).collect(),
+    }
 }
 
 pub fn write_sources(home: &Path, urls: &[String]) -> Result<(), String> {
@@ -375,10 +379,11 @@ async fn skill_items(home: &Path, url: &str) -> Result<Vec<CatalogItem>, String>
             CatalogItem {
                 key: format!("skill:{url}:{subpath}"),
                 kind: "skill".to_owned(),
-                summary: String::new(),
+                // Read before the clone is removed below.
+                summary: crate::slash_commands::skill_description(&path),
                 version: String::new(),
                 publisher: url.trim_start_matches("https://").to_owned(),
-                agents: vec!["claude".to_owned(), "codex".to_owned()],
+                agents: super::library::SKILL_AGENTS.iter().map(|agent| (*agent).to_owned()).collect(),
                 name,
                 install: Install::Skill { url: url.to_owned(), subpath },
             }
@@ -448,6 +453,16 @@ mod tests {
         }
         let remote = json!({ "name": "io.example/remote", "remotes": [{ "type": "streamable-http", "url": "https://mcp.example.com/mcp" }] });
         assert!(registry_item(&remote).is_some());
+    }
+
+    #[test]
+    fn a_new_install_has_the_default_sources_and_a_saved_empty_list_stays_empty() {
+        let home = std::env::temp_dir().join(format!("agentdeck-sources-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(read_sources(&home), DEFAULT_SOURCES.map(str::to_owned).to_vec());
+        write_sources(&home, &[]).unwrap();
+        assert!(read_sources(&home).is_empty());
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

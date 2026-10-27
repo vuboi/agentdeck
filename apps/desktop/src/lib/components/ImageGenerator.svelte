@@ -531,7 +531,7 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-col" role="tabpanel" aria-label="Image generator">
-  <header class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-[13px]">
+  <header class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-1.5 text-[13px]">
     <span class="grid size-7 place-items-center rounded-lg bg-primary/12 text-primary"><ZIcon zType="lucideImage" class="size-4" /></span>
     <h2 class="m-0 min-w-0 flex-1 truncate text-xs font-semibold text-foreground">Image candidates</h2>
     {#if runMs > 0}
@@ -602,8 +602,8 @@
     {/snippet}
   </ZPopover>
 
-  <div class="min-h-0 flex-1 overflow-y-auto py-3">
-    <div class="flex min-h-full flex-col gap-3 px-3">
+  <div class="min-h-0 flex-1 overflow-y-auto p-1.5">
+    <div class="flex min-h-full flex-col gap-3">
       <div class="relative min-w-0 rounded-2xl border border-input bg-card p-2 shadow-lg transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-ring/20 focus-within:ring-2">
         {#if references.length > 0}
           <div class="mb-2 flex flex-wrap gap-2" aria-label="Reference images">
@@ -906,7 +906,7 @@
         </ZPopover>
 
         {#if suggesting || promptSuggestions.length}
-          <div transition:fold class="-mx-3 -mb-2 mt-2 flex flex-col gap-1 overflow-hidden border-t border-border px-3 pt-2 pb-2" aria-label="Prompt suggestions">
+          <div transition:fold class="-mx-1.5 -mb-2 mt-2 flex flex-col gap-1 overflow-hidden border-t border-border px-1.5 pt-2 pb-2" aria-label="Prompt suggestions">
             <span class="px-1 text-[11px] text-muted-foreground">Suggested prompts · click to use</span>
             {#if suggesting}
               <div class="flex flex-col gap-2 px-1 py-1" role="status" aria-label="Writing prompt suggestions">
@@ -935,12 +935,12 @@
       </div>
 
       <!-- The settings under the prompt: sent with it, and suggested with it by the prompt model. -->
-      <div class="-mt-2 flex flex-wrap items-center gap-1.5" role="group" aria-label="Image settings">
+      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Image settings">
         {#each SETTINGS as setting (setting.key)}
           {@const chosen = settings[setting.key]}
           <button
             type="button"
-            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded border border-border bg-background px-2.5 text-[11px] outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingOpen && settingKey === setting.key ? ACTIVE_ON : ''} {chosen ? 'text-foreground' : 'text-muted-foreground'}"
+            class="flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingOpen && settingKey === setting.key ? ACTIVE_ON : ''} {chosen ? 'text-foreground' : 'text-muted-foreground'}"
             aria-haspopup="menu"
             aria-expanded={settingOpen && settingKey === setting.key}
             onclick={(event) => openSetting(setting.key, event.currentTarget)}
@@ -973,8 +973,8 @@
         onclose={() => (settingQuery = '')}
       />
 
-      <div class="-mx-3 flex min-h-0 flex-1 flex-col border-t border-border pt-3">
-        <div class="flex min-h-0 flex-1 flex-col px-3">
+      <div class="-mx-1.5 flex min-h-0 flex-1 flex-col border-t border-border pt-3">
+        <div class="flex min-h-0 flex-1 flex-col px-1.5">
           {#if working || loadingRun}
             <div class="grid grid-cols-2 gap-2" role="status" aria-label="Generating image candidates">
               {#each Array.from({ length: working ? runSkeleton : loadingRun }) as _, index (index)}

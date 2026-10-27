@@ -7,7 +7,7 @@
 //! before its answer (the caller's run was stopped, its connection closed) tells the webview with `agent-delegate-abort`,
 //! so a worker nobody waits for is stopped.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
@@ -37,7 +37,7 @@ pub fn tool_defs() -> Vec<Value> {
     vec![
         json!({
             "name": DELEGATE_TOOL,
-            "description": "Hands a task to another AI agent running in AgentDeck (Claude, Codex, Antigravity or a local model) and returns its short report. Keep ordinary Q&A, a small edit, a quick command or a simple artifact action in the current chat; do not invent a plan for those. Delegate only when work is BIG or clearly separable, using genuinely independent capabilities such as investigation, implementation, verification, browser or artifact work. Do NOT delegate small things. Give each worker a self-contained goal, paths/resources, constraints and evidence-first handoff: it sees nothing of this conversation. Never delegate just to relay the user's message; never delegate the final answer. Keep tasks few: 1-3 workers, not a swarm. wait=true (the default): this call blocks until the worker is done and returns its report when the next step depends on it. wait=false: returns a task_id and runs in the background for independent work; its report is delivered when it finishes. Reuse the worker conversation for corrections and replan only after a real gap appears. Call list_agents first when unsure which agent or model to use. A FREE TIER agent sees no file or project and may train on the task: send it only public, non-sensitive text.",
+            "description": "Hands a task to another AI agent running in AgentDeck (Claude, Codex, Antigravity or a local model) and returns its short report. Keep ordinary Q&A, a small edit, a quick command or a simple artifact action in the current chat; do not invent a plan for those. Delegate only when work is BIG or clearly separable, using genuinely independent capabilities such as investigation, implementation, verification, browser or artifact work. Do NOT delegate small things. Give each worker a self-contained goal, paths/resources, constraints and evidence-first handoff: it sees nothing of this conversation. Never delegate just to relay the user's message; never delegate the final answer. Keep tasks few: 1-3 workers, not a swarm. Independent tasks go out together in ONE turn (several delegate_task calls at once, wait=false, or wait=true in parallel): they run side by side, at most 3 at a time; more wait in line (state queued) and start as others finish. wait=true (the default): this call blocks until the worker is done and returns its report when the next step depends on it. wait=false: returns a task_id and runs in the background for independent work; its report is delivered when it finishes. Reuse the worker conversation for corrections and replan only after a real gap appears. Call list_agents first when unsure which agent or model to use. A FREE TIER agent sees no file or project and may train on the task: send it only public, non-sensitive text.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -57,7 +57,7 @@ pub fn tool_defs() -> Vec<Value> {
         }),
         json!({
             "name": "task_status",
-            "description": "The state of a task started with delegate_task (running, done, failed or stopped), with its report once done. A background task's report is delivered to you anyway: use this only to look before it arrives.",
+            "description": "The state of a task started with delegate_task (queued, running, done, failed or stopped), with its report once done. A background task's report is delivered to you anyway: use this only to look before it arrives.",
             "inputSchema": { "type": "object", "properties": { "task_id": { "type": "string", "description": "the task_id delegate_task returned" } }, "required": ["task_id"] },
         }),
         json!({
@@ -302,7 +302,79 @@ pub fn delegate_reply(call_id: String, text: String, is_error: bool) -> bool {
 /// The webview just (re)loaded: the chats and workers of the page before it are gone, so no call can be answered.
 #[tauri::command]
 pub fn delegate_ready() -> usize {
+    if let Ok(mut gate) = GATE.lock() {
+        *gate = Gate::default();
+    }
     fail_all("AgentDeck was reloaded while this task ran; the task is lost. Start it again if it is still needed.")
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The cap on workers running at once
+
+/// How many delegated workers run at the same time, whoever asked and however (wait=true or false). The webview asks
+/// for a place before it starts a worker (`delegate_enter`) and gives it back when the task ends (`delegate_release`).
+pub const MAX_PARALLEL_WORKERS: usize = 3;
+
+/// Workers running and workers waiting for a place, in the order they asked. Holds task ids only, no I/O: a place is
+/// given by `enter` or, once one is released, by the list `release` returns.
+#[derive(Debug, Default)]
+struct Gate {
+    running: Vec<String>,
+    waiting: VecDeque<String>,
+}
+
+impl Gate {
+    /// `true`: the task may start now. `false`: it waits, and `release` names it when its turn comes.
+    fn enter(&mut self, id: &str) -> bool {
+        if self.running.iter().any(|item| item == id) {
+            return true;
+        }
+        if self.waiting.iter().any(|item| item == id) {
+            return false;
+        }
+        if self.running.len() < MAX_PARALLEL_WORKERS {
+            self.running.push(id.to_owned());
+            return true;
+        }
+        self.waiting.push_back(id.to_owned());
+        false
+    }
+
+    /// Frees the task's place (or its place in the line) and returns the waiting tasks that may start now.
+    fn release(&mut self, id: &str) -> Vec<String> {
+        self.running.retain(|item| item != id);
+        self.waiting.retain(|item| item != id);
+        let mut started = Vec::new();
+        while self.running.len() < MAX_PARALLEL_WORKERS {
+            let Some(next) = self.waiting.pop_front() else {
+                break;
+            };
+            self.running.push(next.clone());
+            started.push(next);
+        }
+        started
+    }
+}
+
+static GATE: LazyLock<Mutex<Gate>> = LazyLock::new(Default::default);
+
+/// A worker is about to start: `true` when it may, `false` when it is queued behind `MAX_PARALLEL_WORKERS` others (the
+/// webview is then told with `agent-delegate-slot` `{ taskId }` when its turn comes).
+#[tauri::command]
+pub fn delegate_enter(task_id: String) -> bool {
+    GATE.lock().map_or(true, |mut gate| gate.enter(&task_id))
+}
+
+/// A task ended (done, failed, stopped, timed out or never started): its place goes to the next one waiting.
+#[tauri::command]
+pub fn delegate_release(app: AppHandle, task_id: String) {
+    let started = GATE
+        .lock()
+        .map(|mut gate| gate.release(&task_id))
+        .unwrap_or_default();
+    for id in started {
+        let _ = app.emit("agent-delegate-slot", json!({ "taskId": id }));
+    }
 }
 
 #[cfg(test)]
@@ -437,6 +509,37 @@ mod tests {
             &json!({ "method": "tools/list" }).to_string()
         ));
         assert!(!is_long_call("not json"));
+    }
+
+
+    #[test]
+    fn three_workers_run_and_the_fourth_waits_for_a_release() {
+        let mut gate = Gate::default();
+        assert!(gate.enter("a") && gate.enter("b") && gate.enter("c"));
+        assert!(!gate.enter("d"));
+        assert!(!gate.enter("e"));
+        // Asking twice does not take a second place, nor lose the one in line.
+        assert!(gate.enter("a"));
+        assert!(!gate.enter("d"));
+        assert_eq!(gate.release("b"), ["d"]);
+        assert_eq!(gate.running.len(), MAX_PARALLEL_WORKERS);
+        // Completion order, not start order: the next place goes to the next in line.
+        assert_eq!(gate.release("a"), ["e"]);
+        assert!(gate.release("c").is_empty());
+        assert_eq!(gate.running, ["d", "e"]);
+    }
+
+    #[test]
+    fn a_task_stopped_in_line_leaves_the_line_and_an_unknown_release_is_harmless() {
+        let mut gate = Gate::default();
+        for id in ["a", "b", "c"] {
+            assert!(gate.enter(id));
+        }
+        assert!(!gate.enter("d"));
+        assert!(!gate.enter("e"));
+        assert!(gate.release("d").is_empty());
+        assert!(gate.release("nobody").is_empty());
+        assert_eq!(gate.release("a"), ["e"]);
     }
 
     #[test]

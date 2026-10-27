@@ -4,12 +4,14 @@
   import { errorLog } from '../error-log.svelte';
   import DevEmpty from './DevEmpty.svelte';
   import LiveCommand from './LiveCommand.svelte';
-  import { ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZIcon, ZLoading, ZShimmerText, ZTabs, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { slide } from 'svelte/transition';
   import { activity, audit, auditImage, clearAudit, type Activity } from '../activity.svelte';
+  import AgentLogo from './AgentLogo.svelte';
   import { openImages } from '../preview.svelte';
   import { elapsed } from '../blocks';
+  import { detailOf, kindOf } from '../activity-kind';
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { workspace } from '../sessions.svelte';
@@ -112,6 +114,8 @@
   // The same id before and after a call ends (the log entry's key is the live key plus its start), so the row
   // keeps its place and its open state when the spinner turns into a check.
   const rowId = (item: Activity) => (item.key.includes('@') ? item.key : `${item.key}@${item.startedAt}`);
+  /** The entry's id as the log file keeps it (without the position `load` adds to it on reading). */
+  const logId = (item: Activity) => item.key.replace(/#\d+$/, '');
 
   // Virtual list: day headers and rows in one flat run, each with a measured height (an estimate until seen).
   type Flat = { id: string; day: string; kind: 'day'; group: Group } | { id: string; day: string; kind: 'row'; item: Activity };
@@ -222,19 +226,19 @@
 {#snippet copyButton(text: string, what: string)}
   <button
     type="button"
-    class="absolute top-1 right-1 grid size-5 cursor-pointer place-items-center rounded bg-background/80 text-muted-foreground backdrop-blur-sm transition-colors outline-none hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+    class="absolute top-1 right-1 grid size-4 cursor-pointer place-items-center rounded bg-background/80 text-muted-foreground backdrop-blur-sm transition-colors outline-none hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
     aria-label="Copy {what.toLowerCase()}"
     title="Copy {what.toLowerCase()}"
     onclick={() => copy(text, what)}
   >
-    <ZIcon zType={'lucideCopy' as ZIconName} class="size-3" />
+    <ZIcon zType={'lucideCopy' as ZIconName} class="size-2.5" />
   </button>
 {/snippet}
 
 {#snippet dayHeader(group: Group, pin: boolean)}
   <button
     type="button"
-    class="flex h-7 w-full cursor-pointer items-center gap-2 border-b border-border bg-background px-3 text-left text-[10px] font-medium tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground {pin ? 'sticky top-0 z-10 -mb-7' : ''}"
+    class="flex h-7 w-full cursor-pointer items-center gap-2 border-b border-border bg-background px-1.5 text-left text-[10px] font-medium tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground {pin ? 'sticky top-0 z-10 -mb-7' : ''}"
     aria-expanded={!folded[group.key]}
     onclick={() => (folded[group.key] = !folded[group.key])}
   >
@@ -246,37 +250,59 @@
 {/snippet}
 
 {#snippet row(item: Activity, id: string)}
+  {@const kind = kindOf(item.name)}
   {@const empty = !item.output && item.status === 'ok' && !item.image && /^(WebSearch|WebFetch|Grep|Glob)$/.test(item.name)}
   <div class="border-b border-border">
     <button
       type="button"
-      class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs outline-none hover:bg-muted/40 focus-visible:bg-muted/40"
+      class="flex w-full cursor-pointer items-center gap-2 px-1.5 py-1.5 text-left text-xs outline-none {item.status === 'fail' ? 'bg-destructive/5 hover:bg-destructive/10 focus-visible:bg-destructive/10' : 'hover:bg-muted/40 focus-visible:bg-muted/40'}"
       aria-expanded={open[id] ?? false}
       onclick={() => (open[id] = !open[id])}
     >
       <ZIcon zType={'lucideChevronRight' as ZIconName} class="size-3 shrink-0 text-muted-foreground transition-transform duration-200 {open[id] ? 'rotate-90' : ''}" />
-      <span class="grid size-3.5 shrink-0 place-items-center {STATUS[item.status].tone}" aria-label={STATUS[item.status].label} {@attach zTooltip({ content: STATUS[item.status].label, position: 'top' })}>
-        {#if live(item)}
-          <ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="current" />
-        {:else}
-          <ZIcon zType={(item.status === 'ok' ? 'lucideCircleCheck' : item.status === 'fail' ? 'lucideCircleX' : 'lucideBan') as ZIconName} class="size-3.5" />
-        {/if}
-      </span>
       <!-- Name, command and time share one baseline: the names and the mono command have different fonts, so centring their boxes leaves them a pixel apart. The icons stay centred in the row. -->
       <span class="flex min-w-0 flex-1 items-baseline gap-2">
-        <span class="shrink-0 text-xs leading-4 font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}">{item.name}</span>
+        <!-- One icon at the left says what kind of step it is (a spinner in its place while it runs); how it ended is said
+             at the right, and only when it went wrong: a step that worked needs no mark. -->
+        <span class="grid size-3.5 shrink-0 place-items-center self-center">
+          {#if live(item)}
+            <ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="primary" />
+          {:else if item.agent}
+            <!-- A request shows the agent it went to, so the log says who answered at a glance. -->
+            <AgentLogo agent={item.agent} model={item.model ?? undefined} class="size-3.5" />
+          {:else}
+            <ZIcon zType={kind.icon as ZIconName} class="size-3.5 {item.status === 'fail' ? 'text-destructive' : kind.tone}" />
+          {/if}
+        </span>
+        {#if live(item)}
+          <!-- Only the step that is running shimmers, like a running command in the chat. -->
+          <ZShimmerText class="shrink-0 text-xs leading-4 font-medium" zText={kind.label || item.name} />
+        {:else}
+          <span class="shrink-0 text-xs leading-4 font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}" title={item.name}>{kind.label || item.name}</span>
+        {/if}
+        {#if detailOf(item.name)}<span class="shrink-0 text-[11px] leading-4 {item.status === 'fail' ? 'text-destructive/80' : 'text-muted-foreground'}">{detailOf(item.name)}</span>{/if}
         {#if item.background}<span class="shrink-0 rounded bg-primary/10 px-1 text-[10px] text-primary">bg</span>{/if}
-        <span class="min-w-0 flex-1 truncate font-mono text-[11px] leading-4 text-muted-foreground">{item.input}</span>
-        <span class="shrink-0 text-[11px] leading-4 tabular-nums text-muted-foreground">{live(item) ? took(item) : clock(item.startedAt)}</span>
+        <span class="min-w-0 flex-1 truncate font-mono text-[11px] leading-4 {item.status === 'fail' ? 'text-destructive/80' : 'text-muted-foreground'}">{item.input}</span>
+        {#if !live(item)}
+          <!-- How it ended, plain marks without a circle: a check, a cross, a dash for a stopped one. -->
+          <span class="grid size-3.5 shrink-0 place-items-center self-center {STATUS[item.status].tone}" aria-label={STATUS[item.status].label} {@attach zTooltip({ content: STATUS[item.status].label, position: 'top' })}>
+            <ZIcon zType={(item.status === 'ok' ? 'lucideCheck' : item.status === 'fail' ? 'lucideX' : 'lucideMinus') as ZIconName} class="size-3.5" />
+          </span>
+        {/if}
+        <span class="shrink-0 text-[11px] leading-4 tabular-nums {item.status === 'fail' ? 'text-destructive/80' : 'text-muted-foreground'}">{live(item) ? took(item) : `${took(item)} | ${clock(item.startedAt)}`}</span>
       </span>
     </button>
     {#if open[id]}
-      <div class="flex flex-col gap-1.5 overflow-hidden px-3 pb-2.5 text-[11px]" transition:slide={{ duration: 180 }}>
+      <div class="flex flex-col gap-1.5 overflow-hidden px-1.5 pb-1.5 text-[11px]" transition:slide={{ duration: 180 }}>
         <div class="flex items-center gap-2 text-muted-foreground">
           <button type="button" class="min-w-0 cursor-pointer truncate text-primary hover:underline" onclick={() => openChat(item.sessionId)}>{item.title}</button>
           <span aria-hidden="true">·</span>
           <!-- A running entry already counts its time in the row above: it is shown once. -->
           <span class="tabular-nums">{live(item) ? STATUS[item.status].label : `${STATUS[item.status].label}, ${took(item)}`}</span>
+          <!-- The entry's id in the log file: what to send when something went wrong, so the entry can be found. -->
+          <button type="button" class="ml-auto grid size-5 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring" aria-label="Copy the log ID" {@attach zTooltip({ content: 'Copy the log ID, to debug', position: 'top' })} onclick={() => copy(logId(item), 'Log ID')}>
+            <ZIcon zType={'lucideCopy' as ZIconName} class="size-3" />
+          </button>
         </div>
         {#if item.input && /^(Run project|Terminal|Bash)$/.test(item.name)}
           <LiveCommand {item} oncopy={(text) => copy(text, 'Output')} />
@@ -291,7 +317,7 @@
             <p class="m-0 rounded-md border border-border bg-background px-2 py-1.5 text-muted-foreground italic">No information found.</p>
           {/if}
           {#if item.output}
-            <div class="group/code relative rounded-md {item.status === 'fail' ? 'border border-destructive/30 bg-destructive/5' : ''}">
+            <div class="group/code relative rounded-md border {item.status === 'fail' ? 'border-destructive/30 bg-destructive/5' : 'border-border bg-background'}">
               <pre class="m-0 max-h-48 overflow-auto py-1 pr-7 pl-1.5 font-mono whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
               {@render copyButton(item.output ?? '', item.status === 'fail' ? 'Error' : 'Output')}
             </div>
@@ -317,7 +343,7 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Tasks">
-  <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-[13px]">
+  <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-1.5 text-[13px]">
     <span class="font-medium">Tasks</span>
     {#if runningCount > 0}
       <span class="flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-px text-[10px] text-primary tabular-nums"><ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="current" />{runningCount}</span>
@@ -341,12 +367,8 @@
     </button>
   </div>
   <!-- How far back the history reaches (left) and which project (right); the select drops under the range when narrow. -->
-  <div class="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-xs">
-    <div class="flex rounded-md bg-muted p-0.5" role="tablist" aria-label="Range">
-      {#each RANGES as item (item.value)}
-        <button type="button" role="tab" aria-selected={range === item.value} class="cursor-pointer rounded px-2.5 py-0.5 {range === item.value ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
-      {/each}
-    </div>
+  <div class="flex shrink-0 items-center gap-2 border-b border-border px-1.5 py-1.5 text-xs">
+    <ZTabs zTabs={RANGES.map(({ value, label }) => ({ value, label }))} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={range} onTabChange={(next) => (range = next as Range)} />
     {#if projects.length > 1}
       <ProjectSelect bind:value={project} options={projects} label={(name) => name || 'No project'} class="ml-auto" />
     {/if}

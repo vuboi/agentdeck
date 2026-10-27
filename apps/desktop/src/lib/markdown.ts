@@ -79,7 +79,10 @@ export function renderMarkdown(source: string, keep = true): string {
   }
   const html = marked.parse(source, { async: false });
   // Tables sit in a rounded, scrollable card like the code blocks.
-  const framed = html.replaceAll('<table>', '<div class="md-table"><table>').replaceAll('</table>', '</table></div>');
+  // Each table has a head bar with a copy button (as a code block has), which copies it as tab-separated rows.
+  const framed = html
+    .replaceAll('<table>', `<div class="md-table"><div class="md-code-head"><span>table</span><span class="md-code-actions"><button type="button" data-copy-table title="Copy table" aria-label="Copy table">${COPY_ICON}</button></span></div><table>`)
+    .replaceAll('</table>', '</table></div>');
   const clean = DOMPurify.sanitize(framed, { ADD_ATTR: ['target'] });
   if (!keep) return clean;
   rendered.set(source, clean);

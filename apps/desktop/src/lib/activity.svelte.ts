@@ -29,6 +29,9 @@ export type Activity = {
   port?: number;
   /** Terminal: the tab the command runs in. */
   terminalId?: string;
+  /** A Request: the agent it went to (its id, as AgentLogo takes it) and the model. */
+  agent?: string;
+  model?: string | null;
 };
 
 /** A saved picture, read back as a data URL; one read per picture. */
@@ -127,8 +130,68 @@ export function logTalk(sessionId: string, title: string, project: string, from:
   record({ key: `${sessionId}:talk:${++calls}`, sessionId, title, project, name: 'Discussion', input: `${from} → ${to}: ${question}`.slice(0, 200), background: false, status: 'ok', startedAt: now, endedAt: now, output: `${from} asked ${to}:\n${question}\n\n${to} answered:\n${answer}` });
 }
 
+/** The message a chat sent and is waiting on: one entry from the send to the end of the reply, so the log shows who
+ *  answered, how long it took, and what went wrong (a limit, a time out, a failed start). */
+const requests = new Map<string, { item: Activity; firstAt?: number }>();
+
+const seconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`);
+
+/** A message was sent to an agent: its entry runs until the reply ends. `detail` is what the turn was started with. */
+export function logRequest(sessionId: string, title: string, project: string, agent: string, model: string | null, detail: string, agentId?: string) {
+  endRequest(sessionId, 'stopped', 'A new message was sent before this reply ended.');
+  const item: Activity = { key: `${sessionId}:request:${++calls}`, sessionId, title, project, name: 'Request', input: `${agent} · ${model ?? 'default model'}`, agent: agentId, model, background: false, status: 'running', startedAt: Date.now(), output: `Waiting for ${agent} to answer.
+${detail}` };
+  requests.set(sessionId, { item });
+  audit.push(item);
+}
+
+/** The reply began: how long the agent took to start answering. */
+function noteFirstReply(sessionId: string) {
+  const request = requests.get(sessionId);
+  if (!request || request.firstAt) return;
+  request.firstAt = Date.now();
+  request.item.output = `${request.item.output ?? ''}
+First reply after ${seconds(request.firstAt - request.item.startedAt)}.`;
+}
+
+/** The reply ended (or failed): the entry is final, with how long it took and the error if there was one. */
+function endRequest(sessionId: string, status: 'ok' | 'fail' | 'stopped', note: string) {
+  const request = requests.get(sessionId);
+  if (!request) return;
+  requests.delete(sessionId);
+  const { item } = request;
+  item.status = status;
+  item.endedAt = Date.now();
+  item.output = `${item.output ?? ''}
+${status === 'ok' ? 'Answered' : status === 'fail' ? 'Failed' : 'Ended'} after ${seconds(item.endedAt - item.startedAt)}${request.firstAt ? '' : ', with no reply'}.${note ? `
+
+${note}` : ''}`;
+  record(item);
+}
+
+/** The reasoning of a chat's run so far: it streams in pieces and is one log entry, written when something else happens. */
+const thoughts = new Map<string, { text: string; at: number; title: string; project: string }>();
+
+function flushThinking(sessionId: string) {
+  const thought = thoughts.get(sessionId);
+  if (!thought) return;
+  thoughts.delete(sessionId);
+  const text = thought.text.trim();
+  if (!text) return;
+  record({ key: `${sessionId}:thinking:${++calls}`, sessionId, title: thought.title, project: thought.project, name: 'Thinking', input: text.replace(/\s+/g, ' ').slice(0, 200), background: false, status: 'ok', startedAt: thought.at, endedAt: Date.now(), output: text });
+}
+
 /** Keeps the log in step with one event of a chat's run. */
 export function trackActivity(sessionId: string, title: string, project: string, event: AgentEvent) {
+  if (event.kind === 'thinking' || event.kind === 'delta' || event.kind === 'tool_call') noteFirstReply(sessionId);
+  if (event.kind === 'thinking') {
+    const thought = thoughts.get(sessionId) ?? { text: '', at: Date.now(), title, project };
+    thought.text += event.text;
+    thoughts.set(sessionId, thought);
+    return;
+  }
+  // Anything else ends the reasoning that came before it (a tool, the answer, the end of the run).
+  if (event.kind !== 'usage') flushThinking(sessionId);
   if (event.kind === 'raw') {
     // A step of the CLI the app does not turn into anything: its line as the CLI wrote it, to copy when debugging.
     const now = Date.now();
@@ -172,7 +235,10 @@ export function trackActivity(sessionId: string, title: string, project: string,
     }
     if (item.status === 'ok' && (item.name === 'Write' || item.name === 'Edit' || item.name === 'Delete' || item.name === 'MultiEdit')) fileWrites.tick++;
   } else if (event.kind === 'done' || event.kind === 'error') {
-    if (event.kind === 'error' && event.message !== 'stopped') {
+    const asked = requests.has(sessionId);
+    endRequest(sessionId, event.kind === 'done' ? 'ok' : event.message === 'stopped' ? 'stopped' : 'fail', event.kind === 'error' && event.message !== 'stopped' ? event.message : '');
+    // The failure is on the request's entry: a second "Chat error" for the same thing would only repeat it.
+    if (event.kind === 'error' && event.message !== 'stopped' && !asked) {
       const now = Date.now();
       record({
         key: `${sessionId}:error:${now}`,

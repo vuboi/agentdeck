@@ -15,6 +15,6 @@
   {#key state.spinner}
     <ZLoading zLoading zSpinner={state.spinner} zSize="xs" zColor="primary" />
   {/key}
-  <ZShimmerText zText={state.label} />
+  <ZShimmerText class="stream-label" zText={state.label} />
   <span class="tabular-nums">{seconds}</span>
 </div>

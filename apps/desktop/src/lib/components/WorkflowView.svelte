@@ -1,6 +1,6 @@
 <script lang="ts">
   import AgentLogo from './AgentLogo.svelte';
-  import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZTabs, zTooltip } from '@shival99/z-ui-svelte';
   import { fade } from 'svelte/transition';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { ticker } from '../clock.svelte';
@@ -254,12 +254,8 @@
   <FlowTemplates />
   {#if delegateRuns.length > 0}
     <!-- How far back the runs reach (left) and which project (right); the select drops under the range when narrow. -->
-    <div class="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-xs">
-      <div class="flex rounded-md bg-muted p-0.5" role="tablist" aria-label="Range">
-        {#each RANGES as item (item.value)}
-          <button type="button" role="tab" aria-selected={range === item.value} class="cursor-pointer rounded px-2.5 py-0.5 {range === item.value ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
-        {/each}
-      </div>
+    <div class="flex shrink-0 items-center gap-2 border-b border-border px-1.5 py-1.5 text-xs">
+      <ZTabs zTabs={RANGES.map(({ value, label }) => ({ value, label }))} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={range} onTabChange={(next) => (range = next as typeof range)} />
       {#if projectIds.length > 1}
         <ProjectSelect bind:value={project} options={projectIds} label={projectName} class="ml-auto" />
       {/if}
@@ -275,7 +271,7 @@
       </p>
     </div>
   {:else}
-    <div class="min-h-0 flex-1 overflow-y-auto p-2.5">
+    <div class="min-h-0 flex-1 overflow-y-auto p-1.5">
       <div class="flex flex-col gap-3">
         {#if flowStats.length}
           <section class="rounded-xl border border-border bg-background" aria-label="Flow history">
@@ -376,7 +372,7 @@
 {#if full?.plan}
   {@const state = runState(full)}
   <div class="fixed inset-0 z-[60] flex flex-col bg-background" role="dialog" aria-modal="true" aria-label="Run" transition:fade={{ duration: 120 }}>
-    <header class="flex h-14 shrink-0 items-center gap-3 border-b border-border px-3 sm:px-4">
+    <header class="flex h-10 shrink-0 items-center gap-3 border-b border-border px-1.5">
       <span class="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/12 text-primary"><ZIcon zType={icon('lucideWorkflow')} class="size-[18px]" /></span>
       <div class="min-w-0 flex-1">
         <div class="truncate text-sm font-semibold">{firstLine(full.task)}</div>
@@ -390,7 +386,7 @@
     </header>
     <div class="flex min-h-0 flex-1">
       <FlowCanvas steps={full.plan} mode="run" run={full} bind:selected={picked[full.id]} minimap class="min-w-0 flex-1" />
-      <aside class="hidden w-[360px] shrink-0 overflow-y-auto border-l border-border p-3 md:block" aria-label="Details">{@render audit(full)}</aside>
+      <aside class="hidden w-[360px] shrink-0 overflow-y-auto border-l border-border p-1.5 md:block" aria-label="Details">{@render audit(full)}</aside>
     </div>
   </div>
 {/if}

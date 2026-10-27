@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 
-use crate::connectors::{command, which};
+use crate::connectors::{command, which, KillTree};
 use crate::mcp_manage::{initialize, message_with_id, rpc_error, Raw};
 
 #[allow(clippy::large_enum_variant)] // one per server for one turn: boxing buys nothing
@@ -25,6 +25,8 @@ enum Link {
         session: Option<String>,
     },
     Stdio {
+        // Before the child: dropped first, so the whole tree (npx, the shell, node) goes with it.
+        _tree: KillTree,
         _child: Child,
         stdin: ChildStdin,
         lines: tokio::io::Lines<BufReader<ChildStdout>>,
@@ -152,6 +154,7 @@ impl Server {
             let stdin = child.stdin.take().ok_or("no stdin")?;
             let stdout = child.stdout.take().ok_or("no stdout")?;
             Link::Stdio {
+                _tree: KillTree::of(&child),
                 _child: child,
                 stdin,
                 lines: BufReader::new(stdout).lines(),

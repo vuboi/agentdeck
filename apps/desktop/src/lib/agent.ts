@@ -45,7 +45,8 @@ function billing(args: AgentTurnSettings): { model: string | null; apiKey: strin
 }
 
 /** Start one turn. Resolves as soon as the CLI is started; the answer arrives as `agent-event`s. */
-export async function sendAgentTurn(args: AgentTurnSettings & { turn: string; prompt: string }): Promise<void> {
+/** `keepOpen: false`: the turn runs once and its CLI is not kept for the next one (a side answer, a worker, a flow step). */
+export async function sendAgentTurn(args: AgentTurnSettings & { turn: string; prompt: string; keepOpen?: boolean }): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('agent_send', { ...args, ...billing(args) });
 }
@@ -221,6 +222,24 @@ export async function listenDelegateAborts(onAbort: (callId: string) => void): P
 export async function replyDelegateCall(callId: string, text: string, isError: boolean): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('delegate_reply', { callId, text, isError });
+}
+
+/** A worker is about to start: true when it may (fewer than 3 run), false when it is queued until a place frees. */
+export async function enterWorkerSlot(taskId: string): Promise<boolean> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<boolean>('delegate_enter', { taskId });
+}
+
+/** A task ended: its place goes to the next queued one. */
+export async function releaseWorkerSlot(taskId: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('delegate_release', { taskId });
+}
+
+/** A queued task's turn has come: its worker may start. */
+export async function listenWorkerSlots(onSlot: (taskId: string) => void): Promise<() => void> {
+  const { listen } = await import('./tauri-event');
+  return listen<{ taskId: string }>('agent-delegate-slot', (event) => onSlot(event.payload.taskId));
 }
 
 /** Tells the Rust side this page just loaded: calls still waiting for the page before it are answered with an error. */

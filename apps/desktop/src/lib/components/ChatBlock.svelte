@@ -10,11 +10,17 @@
   import { parseQuestions, withoutOpenBlock } from '../questions';
 
   // `fade` is the surface behind the block; ZShowMore fades its clipped edge into that colour.
-  let { block, fade, agent, onanswer, onquestions, onrendered, answered = false, showQuestions = true }: { block: Block; fade?: string; agent?: import('../sessions.svelte').Agent; onanswer?: (answer: 'once' | 'always' | 'deny') => void; /** Sends the answers to questions the agent asked in this block. */ onquestions?: (text: string) => void; /** Called when this response block's final text is visible. */ onrendered?: () => void; /** Something came after this block: its questions were answered (or passed). */ answered?: boolean; /** Keep an unanswered question beside the composer instead of in the scrolling transcript. */ showQuestions?: boolean } = $props();
+  let { block, fade, agent, onanswer, onquestions, onrendered, answered = false, showQuestions = true, running = true }: { block: Block; fade?: string; agent?: import('../sessions.svelte').Agent; onanswer?: (answer: 'once' | 'always' | 'deny') => void; /** Sends the answers to questions the agent asked in this block. */ onquestions?: (text: string) => void; /** Called when this response block's final text is visible. */ onrendered?: () => void; /** Something came after this block: its questions were answered (or passed). */ answered?: boolean; /** Keep an unanswered question beside the composer instead of in the scrolling transcript. */ showQuestions?: boolean; /** The chat is still running this reply: a block still marked streaming spins only then. */ running?: boolean } = $props();
 
   // An agent's answer can end in questions for the user (a ```questions block): shown as cards, not as JSON.
   const asked = $derived(block.kind === 'response' && fade === undefined && !block.streaming ? parseQuestions(block.text) : { questions: [], rest: '' });
   const answerText = $derived(block.kind !== 'response' ? '' : block.streaming ? withoutOpenBlock(block.text) : asked.questions.length ? asked.rest : block.text);
+
+  // A finished answer that leaves no text to draw (only a questions block) is "rendered" at once: the reply's footer and
+  // its queued messages wait for every answer block to report it (see replyBlockRendered).
+  $effect(() => {
+    if (block.kind === 'response' && fade === undefined && !block.streaming && !answerText) onrendered?.();
+  });
 
   // Thinking starts folded. The body animates by growing its grid row from 0fr to 1fr.
   let thinkingOpen = $state(false);
@@ -30,17 +36,17 @@
 
 {#if block.kind === 'thinking' && block.text.trim()}
   <!-- Same flat style as the command blocks; the body slides open and shut. -->
-  <div class="block-in rounded-lg border border-border bg-muted/30 text-xs text-muted-foreground">
+  <div class="block-in rounded-lg border border-border bg-muted/30 text-sm text-muted-foreground">
     <button
       type="button"
-      class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      class="flex h-9 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
       aria-expanded={thinkingOpen}
       onclick={() => (thinkingOpen = !thinkingOpen)}
     >
-      <ZIcon zType="lucideBrain" class="size-3" />
-      {#if block.streaming}<ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="primary" />{/if}
+      <ZIcon zType="lucideLightbulb" class="size-3.5 shrink-0" />
+      {#if block.streaming && running}<ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="primary" />{/if}
       Thinking
-      <ZIcon zType="lucideChevronDown" class="ml-auto size-3 transition-transform duration-300 {thinkingOpen ? 'rotate-180' : ''}" />
+      <ZIcon zType="lucideChevronDown" class="ml-auto size-3.5 shrink-0 transition-transform duration-300 {thinkingOpen ? 'rotate-180' : ''}" />
     </button>
     <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {thinkingOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
       <div class="min-h-0 overflow-hidden">
@@ -49,10 +55,10 @@
           {#if thinkingText.length > 600}
             <!-- Match the card surface so the fade fully covers the clipped text without showing a background seam. -->
             <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="color-mix(in oklab, var(--muted) 30%, transparent)" moreLabel="Show more" lessLabel="Show less">
-              <p class="m-0 whitespace-pre-wrap leading-relaxed">{thinkingText}</p>
+              <Markdown text={thinkingText} />
             </ZShowMore>
           {:else}
-            <p class="m-0 whitespace-pre-wrap leading-relaxed">{thinkingText}</p>
+            <Markdown text={thinkingText} />
           {/if}
         </div>
       </div>

@@ -202,10 +202,10 @@
       {#key current.spinner}
         <ZLoading zLoading zSpinner={current.spinner} zSize="xs" zColor="primary" />
       {/key}
-      <ZShimmerText zText={current.label} />
-      <span class="tabular-nums">{seconds}</span>
+      <ZShimmerText class="stream-label" zText={current.label} />
+      <span class="stream-label tabular-nums">{seconds}</span>
     {:else}
-      {#if thoughts.length > 0}<ZIcon zType="lucideBrain" class="size-3 shrink-0" />{/if}
+      {#if thoughts.length > 0}<ZIcon zType="lucideLightbulb" class="size-3 shrink-0" />{/if}
       {#if working || items.some((item) => item.status === 'running')}
         <ZShimmerText class="truncate font-medium" zText={summarize(items)} />
       {:else}
@@ -223,8 +223,8 @@
         {#if thoughts.length > 0}
           <div>
             <button type="button" class="flex h-9 w-full cursor-pointer items-center gap-2 px-3 text-left outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset" aria-expanded={view.thinking} onclick={() => (view.thinking = !view.thinking)}>
-              <ZIcon zType="lucideBrain" class="size-3.5 shrink-0 text-muted-foreground" />
-              <span class="font-medium text-foreground">Thinking</span>
+              <ZIcon zType="lucideLightbulb" class="size-3.5 shrink-0 text-muted-foreground" />
+              <span class="text-sm font-medium text-foreground">Thinking</span>
               <span class="text-muted-foreground">{thoughts.length === 1 ? '' : `${thoughts.length} times`}</span>
               {#if thinkingNow}<ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="primary" />{/if}
               <ZIcon zType="lucideChevronRight" class="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform duration-300 {view.thinking ? 'rotate-90' : ''}" />
@@ -232,13 +232,13 @@
             <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {view.thinking ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
               <div class="min-h-0 overflow-hidden">
                 {#if view.thinking || built.thinking}
-                <div class="px-3 pt-1 pb-3 text-muted-foreground">
+                <div class="stream-label px-3 pt-1 pb-3 text-muted-foreground">
                   {#if thinkingText.length > 600}
                     <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="var(--background)" moreLabel="Show more" lessLabel="Show less">
-                      <p class="m-0 whitespace-pre-wrap leading-relaxed">{thinkingText}</p>
+                      <Markdown text={thinkingText} />
                     </ZShowMore>
                   {:else}
-                    <p class="m-0 whitespace-pre-wrap leading-relaxed">{thinkingText}</p>
+                    <Markdown text={thinkingText} />
                   {/if}
                 </div>
                 {/if}

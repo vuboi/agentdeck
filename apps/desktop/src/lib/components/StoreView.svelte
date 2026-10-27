@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fly } from 'svelte/transition';
-  import { ZButton, ZIcon, ZSwitch, ZTabs, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZSwitch, ZTabs, zFormatCompact, zModalService, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { inTauri } from '../history';
   import { loadMcp, mcp, testAllMcp } from '../mcp.svelte';
   import { ACTIVE_ON } from '../popover';
   import { debounced } from '../debounce.svelte';
+  import { clearTopActions, setTopActions, topActions } from '../store-actions.svelte';
   import {
     assignSkill,
     importSkill,
@@ -20,9 +20,7 @@
     type PluginItem,
     type SkillItem,
   } from '../store.svelte';
-  import { askConfirm } from '../confirm.svelte';
   import AgentLogo from './AgentLogo.svelte';
-  import ConfirmHost from './ConfirmHost.svelte';
   import McpView from './McpView.svelte';
   import StoreBar from './StoreBar.svelte';
   import StoreAddDialog from './StoreAddDialog.svelte';
@@ -42,7 +40,8 @@
   const icon = (name: string) => name as ZIconName;
 
   // Skills go to the agents that read a skill folder; MCP and plugins are handled by their own commands.
-  const SKILL_AGENTS = ['claude', 'codex'];
+  // The same list as SKILL_AGENTS in src-tauri/src/store/library.rs.
+  const SKILL_AGENTS = ['claude', 'codex', 'opencode', 'antigravity'];
   const ORIGIN_LABEL: Record<string, string> = { library: 'Library', user: 'Own folder' };
   const originLabel = (origin: string) => ORIGIN_LABEL[origin] ?? `Plugin · ${origin}`;
 
@@ -58,12 +57,24 @@
     { value: 'plugins' as Section, label: 'Plugins', icon: 'lucidePuzzle', count: store.plugins.length },
     { value: 'mcp' as Section, label: 'MCP servers', icon: 'lucidePlug', count: mcpEntries.length },
   ]);
+  // The kind switch is a tab strip like the one above it: an icon and the count, with the name beside them while there is room.
+  let panelWidth = $state(0);
+  const KIND_TABS = $derived(SECTIONS.map((option) => ({ value: option.value, label: option.label, icon: icon(option.icon), badge: zFormatCompact(option.count) })));
+  // The Installed tab's buttons for the top row: add (a skill or plugin, or an MCP server) and refresh.
+  const owner = Symbol('installed');
+  $effect(() => {
+    if (tab !== 'installed' || !inTauri()) return;
+    setTopActions(owner, [
+      { id: 'add', label: section === 'mcp' ? 'Add an MCP server' : 'Add from outside', icon: 'lucidePlus', onclick: () => (section === 'mcp' ? (mcpAdding = true) : (addOpen = true)) },
+      ...(section === 'mcp' ? [{ id: 'test', label: 'Test every server', icon: 'lucideActivity', onclick: () => void testAllMcp(), disabled: mcpEntries.length === 0 }] : []),
+      { id: 'refresh', label: 'Refresh', icon: 'lucideRefreshCw', onclick: () => { void loadStore(); void loadMcp(); }, busy: refreshing },
+    ]);
+    return () => clearTopActions(owner);
+  });
   const has = (text: string) => text.toLowerCase().includes(searched.value.trim().toLowerCase());
   const skills = $derived(store.skills.filter((skill) => has(`${skill.name} ${skill.description ?? ''}`)));
   const plugins = $derived(store.plugins.filter((plugin) => has(`${plugin.name} ${plugin.marketplace}`)));
 
-  // Rows come in one after another; a long list stops adding delay after the first screen.
-  const rise = (index: number) => ({ y: 6, duration: 180, delay: Math.min(index, 12) * 25 });
 
   onMount(() => {
     void loadStore();
@@ -75,14 +86,31 @@
     void assignSkill(skill.name, next);
   }
 
-  async function dropSkill(skill: SkillItem) {
-    const yes = await askConfirm({ title: `Remove ${skill.name}?`, text: "It is removed from the library and from every agent it was given to. The agents' own copies stay.", ok: 'Remove', danger: true });
-    if (yes) void removeSkill(skill.name);
+  // Destructive actions ask first, in the same confirm dialog as the rest of the app (Revert, Clear, …).
+  function dropSkill(skill: SkillItem) {
+    zModalService.danger({
+      zTitle: `Remove ${skill.name}?`,
+      zContent: "It is removed from the library and from every agent it was given to. The agents' own copies stay.",
+      zConfirmStyle: 'dialog',
+      zOkText: 'Remove',
+      zOkIcon: 'lucideTrash2',
+      zCancelText: 'Cancel',
+      zWidth: '400px',
+      onOk: () => void removeSkill(skill.name),
+    });
   }
 
-  async function dropPlugin(plugin: PluginItem) {
-    const yes = await askConfirm({ title: `Uninstall ${plugin.name}?`, text: `It is uninstalled from ${plugin.agent}.`, ok: 'Uninstall', danger: true });
-    if (yes) void uninstallPlugin(plugin);
+  function dropPlugin(plugin: PluginItem) {
+    zModalService.danger({
+      zTitle: `Uninstall ${plugin.name}?`,
+      zContent: `It is uninstalled from ${plugin.agent}.`,
+      zConfirmStyle: 'dialog',
+      zOkText: 'Uninstall',
+      zOkIcon: 'lucideTrash2',
+      zCancelText: 'Cancel',
+      zWidth: '400px',
+      onOk: () => void uninstallPlugin(plugin),
+    });
   }
 
   // Sharing a plugin copies its skills into the library and adds its MCP servers; a caution asks first.
@@ -98,13 +126,20 @@
   ];
 </script>
 
-<div class="flex h-full min-h-0 flex-1 flex-col overflow-hidden" role="tabpanel" aria-label="Store">
-  <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-1.5 text-xs text-muted-foreground">
+<div class="flex h-full min-h-0 flex-1 flex-col overflow-hidden" role="tabpanel" aria-label="Store" bind:clientWidth={panelWidth}>
+  <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-1.5 text-xs text-muted-foreground">
     <ZTabs zTabs={TABS} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={tab} onTabChange={(next) => (tab = next as Tab)} />
+    <!-- Add and refresh, plain until the pointer is on them: the tab on screen decides which there are. -->
+    <div class="ml-auto flex shrink-0 items-center gap-0.5">
+      {#each topActions.items as action (action.id)}
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! shrink-0 p-0 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" disabled={action.disabled || action.busy} aria-label={action.label} aria-busy={action.busy} {@attach zTooltip({ content: action.label, position: 'bottom' })} onclick={action.onclick}>
+          <ZIcon zType={icon(action.busy ? 'lucideLoaderCircle' : action.icon)} class="size-4 {action.busy ? 'animate-spin' : ''}" />
+        </ZButton>
+      {/each}
+    </div>
   </div>
 
   <StoreAddDialog bind:open={addOpen} />
-  <ConfirmHost />
 
   {#if !inTauri()}
     <StoreEmpty icon="lucidePuzzle" text="Desktop app only" hint="The Store is read from your computer. Open the desktop app to use it." />
@@ -115,32 +150,21 @@
   {:else if tab === 'sources'}
     <StoreSources />
   {:else}
+    <!-- Header 2: what kind of thing; header 3: the search box. -->
+    <div class="flex shrink-0 items-center border-b border-border px-1.5 py-1.5">
+      <div class="store-kinds min-w-0"><ZTabs zTabs={KIND_TABS} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={section} onTabChange={(next) => (section = next as Section)} /></div>
+    </div>
     <StoreBar
       bind:query
       placeholder={section === 'mcp' ? 'Search MCP servers' : section === 'plugins' ? 'Search plugins' : 'Search skills'}
-      actions={[
-        { id: 'add', label: section === 'mcp' ? 'Add an MCP server' : 'Add from outside', icon: 'lucidePlus', onclick: () => (section === 'mcp' ? (mcpAdding = true) : (addOpen = true)) },
-        ...(section === 'mcp' ? [{ id: 'test', label: 'Test every server', icon: 'lucideActivity', onclick: () => void testAllMcp(), disabled: mcpEntries.length === 0 }] : []),
-        { id: 'refresh', label: 'Refresh', icon: 'lucideRefreshCw', onclick: () => { void loadStore(); void loadMcp(); }, busy: refreshing },
-      ]}
-    >
-      {#snippet lead()}
-        <div class="flex shrink-0 items-center gap-0.5 rounded-md border border-border p-0.5" role="tablist" aria-label="Kind">
-          {#each SECTIONS as option (option.value)}
-            <button type="button" role="tab" aria-selected={section === option.value} aria-label={option.label} class="flex h-8 cursor-pointer items-center gap-1.5 rounded px-2.5 text-xs text-muted-foreground tabular-nums outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 {section === option.value ? ACTIVE_ON : ''}" {@attach zTooltip({ content: option.label, position: 'bottom' })} onclick={() => (section = option.value)}>
-              <ZIcon zType={icon(option.icon)} class="size-3.5 shrink-0" /><span class="hidden @[560px]:inline">{option.label}</span>{option.count}
-            </button>
-          {/each}
-        </div>
-      {/snippet}
-    </StoreBar>
+    />
 
     {#if section === 'mcp'}
       <div class="flex min-h-0 flex-1 flex-col"><McpView query={searched.value} bind:adding={mcpAdding} /></div>
     {:else}
       <div class="flex min-h-0 flex-1 flex-col overflow-y-auto text-xs {GUTTER}">
         {#if store.error}
-          <p class="m-3 rounded-md border border-destructive/30 bg-destructive/10 p-2 text-destructive">{store.error}</p>
+          <p class="m-1.5 rounded-md border border-destructive/30 bg-destructive/10 p-2 text-destructive">{store.error}</p>
         {/if}
 
         {#if section === 'skills'}
@@ -151,9 +175,9 @@
           {:else if skills.length === 0}
             <StoreEmpty icon="lucideSearch" text="Nothing matches this search." />
           {:else}
-            <ul class="m-0 flex list-none flex-col gap-2 p-3">
-              {#each skills as skill, index (skill.origin + ':' + skill.name)}
-                <li class="rounded-md border border-border bg-card p-2.5 {ROW.skill}" in:fly={rise(index)}>
+            <ul class="m-0 flex list-none flex-col gap-2 p-1.5">
+              {#each skills as skill (skill.origin + ':' + skill.name)}
+                <li class="rounded-md border border-border bg-card p-2.5 {ROW.skill}">
                   <div class="flex items-start gap-2">
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-1.5">
@@ -165,12 +189,12 @@
                       {/if}
                     </div>
                     {#if skill.origin === 'library'}
-                      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-destructive hover:!bg-destructive/10" zLoading={busy(`remove:${skill.name}`)} aria-label="Remove from library" {@attach zTooltip({ content: 'Remove from library', position: 'top' })} onclick={() => dropSkill(skill)}>
-                        <ZIcon zType={icon('lucideTrash2')} class="size-3.5" />
+                      <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! p-0 text-destructive hover:!bg-destructive/10" zDisabled={busy(`remove:${skill.name}`)} aria-label="Remove from library" {@attach zTooltip({ content: 'Remove from library', position: 'top' })} onclick={() => dropSkill(skill)}>
+                        <ZIcon zType={icon(busy(`remove:${skill.name}`) ? 'lucideLoaderCircle' : 'lucideTrash2')} class="size-3.5 {busy(`remove:${skill.name}`) ? 'animate-spin' : ''}" />
                       </ZButton>
                     {:else if skill.origin === 'user' && skill.assignable}
-                      <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-2 text-xs" zLoading={busy(`import:${skill.name}`)} onclick={() => importSkill(skill.name, skill.agents[0])}>
-                        Add to library
+                      <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! p-0 text-muted-foreground hover:!bg-primary/10 hover:!text-primary" zDisabled={busy(`import:${skill.name}`)} aria-label="Add to library" {@attach zTooltip({ content: 'Add to library', position: 'top' })} onclick={() => importSkill(skill.name, skill.agents[0])}>
+                        <ZIcon zType={icon(busy(`import:${skill.name}`) ? 'lucideLoaderCircle' : 'lucideLibrary')} class="size-3.5 {busy(`import:${skill.name}`) ? 'animate-spin' : ''}" />
                       </ZButton>
                     {/if}
                   </div>
@@ -187,6 +211,7 @@
                             zVariant="dot"
                             zSize="sm"
                             checked={linked}
+                            zLoading={busy(`assign:${skill.name}`)}
                             zDisabled={skill.origin !== 'library' || (has && !linked) || busy(`assign:${skill.name}`)}
                             onChange={(value) => toggleAgent(skill, agent, value)}
                           />
@@ -207,7 +232,7 @@
 
         {#if section === 'plugins'}
           {#each store.pluginErrors as problem (problem)}
-            <p class="mx-3 mt-2 mb-0 text-muted-foreground">{problem}</p>
+            <p class="mx-1.5 mt-1.5 mb-0 text-muted-foreground">{problem}</p>
           {/each}
           {#if store.loading && store.plugins.length === 0}
             <StoreSkeleton variant="plugin" />
@@ -216,9 +241,9 @@
           {:else if plugins.length === 0}
             <StoreEmpty icon="lucideSearch" text="Nothing matches this search." />
           {:else}
-            <ul class="m-0 flex list-none flex-col gap-2 p-3">
-              {#each plugins as plugin, index (plugin.agent + ':' + plugin.id)}
-                <li class="flex items-center gap-2 rounded-md border border-border bg-card p-2.5 {ROW.plugin}" in:fly={rise(index)}>
+            <ul class="m-0 flex list-none flex-col gap-2 p-1.5">
+              {#each plugins as plugin (plugin.agent + ':' + plugin.id)}
+                <li class="flex items-center gap-2 rounded-md border border-border bg-card p-2.5 {ROW.plugin}">
                   <AgentLogo agent={plugin.agent} class="size-4 shrink-0" />
                   <div class="min-w-0 flex-1">
                     <div class="truncate font-medium text-foreground">{plugin.name}</div>
@@ -227,15 +252,15 @@
                   <!-- Each action on its own: turn on or off, a divider, share with the other agents, uninstall (red). -->
                   {#if plugin.toggleable}
                     <span class="flex shrink-0 items-center" {@attach zTooltip({ content: plugin.enabled ? 'Turn off' : 'Turn on', position: 'top' })}>
-                      <ZSwitch zVariant="dot" zSize="sm" checked={plugin.enabled} zDisabled={busy(`plugin:${plugin.id}`)} onChange={(value) => void setPlugin(plugin, value)} />
+                      <ZSwitch zVariant="dot" zSize="sm" checked={plugin.enabled} zLoading={busy(`plugin:${plugin.id}`)} zDisabled={busy(`plugin:${plugin.id}`)} onChange={(value) => void setPlugin(plugin, value)} />
                     </span>
                     <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
                   {/if}
-                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0 text-muted-foreground" zLoading={busy(`share:${plugin.id}`)} aria-label="Use with Claude and Codex" {@attach zTooltip({ content: 'Use its skills and MCP servers with Claude and Codex', position: 'top' })} onclick={() => void share(plugin)}>
-                    <ZIcon zType={icon('lucideShare2')} class="size-3.5" />
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0 text-muted-foreground" zDisabled={busy(`share:${plugin.id}`)} aria-label="Use with Claude and Codex" {@attach zTooltip({ content: 'Use its skills and MCP servers with Claude and Codex', position: 'top' })} onclick={() => void share(plugin)}>
+                    <ZIcon zType={icon(busy(`share:${plugin.id}`) ? 'lucideLoaderCircle' : 'lucideShare2')} class="size-3.5 {busy(`share:${plugin.id}`) ? 'animate-spin' : ''}" />
                   </ZButton>
-                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0 text-destructive hover:!bg-destructive/10" zLoading={busy(`plugin:${plugin.id}`)} aria-label="Uninstall" {@attach zTooltip({ content: 'Uninstall', position: 'top' })} onclick={() => dropPlugin(plugin)}>
-                    <ZIcon zType={icon('lucideTrash2')} class="size-3.5" />
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0 text-destructive hover:!bg-destructive/10" zDisabled={busy(`uninstall:${plugin.id}`)} aria-label="Uninstall" {@attach zTooltip({ content: 'Uninstall', position: 'top' })} onclick={() => dropPlugin(plugin)}>
+                    <ZIcon zType={icon(busy(`uninstall:${plugin.id}`) ? 'lucideLoaderCircle' : 'lucideTrash2')} class="size-3.5 {busy(`uninstall:${plugin.id}`) ? 'animate-spin' : ''}" />
                   </ZButton>
                 </li>
               {/each}
@@ -246,3 +271,15 @@
     {/if}
   {/if}
 </div>
+
+<style>
+  /* The count on a tab: the tab strip paints it primary on white, which is hard to read on the purple active tab.
+     A quiet chip in the text colour instead. */
+  .store-kinds :global([class*='radius-pill']) {
+    background: color-mix(in oklab, var(--foreground) 14%, transparent) !important;
+    color: var(--foreground) !important;
+    box-shadow: none !important;
+    --tw-ring-shadow: 0 0 #0000 !important;
+    font-variant-numeric: tabular-nums;
+  }
+</style>

@@ -53,7 +53,7 @@
       role="tab"
       zType="ghost"
       zSize="sm"
-      class="size-7! shrink-0 p-0 {layout.activeTool === tool.value ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : '!bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary'}"
+      class="size-8! shrink-0 p-0 {layout.activeTool === tool.value ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : '!bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary'}"
       aria-selected={layout.activeTool === tool.value}
       aria-label={tool.label}
       title={tool.label}

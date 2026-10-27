@@ -139,7 +139,7 @@ export function describeStep(item: CommandBlock): Step {
   if (PAGE_SCRIPT.test(tool)) return { verb: verbs('Ran page script', 'Running page script'), subject: '' };
   if (tool === 'browser_open') return { verb: verbs('Opened a page', 'Opening a page'), subject: '' };
   if (tool === 'browser_serve') return { verb: verbs('Started a server', 'Starting a server'), subject: '' };
-  if (PAGE_LOOK.test(tool)) return { verb: verbs('Looked at page', 'Looking at page'), subject: '' };
+  if (PAGE_LOOK.test(tool)) return { verb: verbs('Took a screenshot', 'Taking a screenshot'), subject: '' };
   if (PAGE_READ.test(tool)) return { verb: verbs('Found on page', 'Finding on page'), subject: '' };
   if (tool === 'Plan') return { verb: verbs('Planned', 'Planning'), subject: '' };
   const delegation = kindOfCommand(item.command);
@@ -162,13 +162,21 @@ export function summarize(items: CommandBlock[]): string {
   const edited = paths((item) => !isDelete(item) && item.change!.create !== true);
   const deleted = paths(isDelete);
   const ran = items.filter((item) => !item.change && RUN.test(toolOf(item.command))).length;
-  const looked = items.filter((item) => !item.change && !RUN.test(toolOf(item.command))).length;
+  // Steps that only read or look something up: each kind says what it did, the rest is a plain tool call.
+  const kinds = items.filter((item) => !item.change && !RUN.test(toolOf(item.command))).map((item) => toolOf(item.command));
+  const read = kinds.filter((tool) => READ.test(tool)).length;
+  const searched = kinds.filter((tool) => SEARCH.test(tool)).length;
+  const fetched = kinds.filter((tool) => FETCH.test(tool)).length;
+  const other = kinds.length - read - searched - fetched;
   const parts = [
     created && `created ${plural(created, 'file')}`,
     edited && `edited ${plural(edited, 'file')}`,
     deleted && `deleted ${plural(deleted, 'file')}`,
     ran && `ran ${plural(ran, 'command')}`,
-    looked && `looked at ${plural(looked, 'thing')}`,
+    read && `read ${plural(read, 'file')}`,
+    searched && `searched ${plural(searched, 'time', 'times')}`,
+    fetched && `fetched ${plural(fetched, 'page')}`,
+    other && `used ${plural(other, 'tool')}`,
   ].filter(Boolean) as string[];
   const text = parts.join(', ');
   return text.charAt(0).toUpperCase() + text.slice(1);
@@ -203,7 +211,7 @@ export function liveState(blocks: Block[]): { label: string; spinner: ZLoadingSp
     if (kindOfCommand(last.command) === 'delegate_task') return { label: 'Waiting for an agent', spinner: LOADER.background };
     if (PAGE_ACT.test(tool)) return { label: 'Interacting with page', spinner: LOADER.action };
     if (PAGE_SCRIPT.test(tool)) return { label: 'Running page script', spinner: LOADER.command };
-    if (PAGE_LOOK.test(tool) || PAGE_READ.test(tool)) return { label: 'Looking at page', spinner: LOADER.check };
+    if (PAGE_LOOK.test(tool) || PAGE_READ.test(tool)) return { label: 'Reading the page', spinner: LOADER.check };
     return { label: 'Running command', spinner: LOADER.command };
   }
   return { label: 'Thinking', spinner: LOADER.thinking };

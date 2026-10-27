@@ -262,7 +262,7 @@
       {#if sideShown}
         <Splitter axis="x" label="Resize file explorer" onDelta={resizeTree} />
       {/if}
-      <div class="min-h-0 shrink-0 flex-col border-l border-border bg-sidebar {sideShown ? 'flex' : 'hidden'}" style:width="{treeWidth}px" aria-label={sideLabel}>
+      <div class="min-h-0 shrink-0 flex-col bg-sidebar {sideShown ? 'flex' : 'hidden'}" style:width="{treeWidth}px" aria-label={sideLabel}>
         {@render sidePane()}
       </div>
     {/if}

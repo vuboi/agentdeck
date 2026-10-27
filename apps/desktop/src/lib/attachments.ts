@@ -78,12 +78,10 @@ export function plainOf(clip: MessageClip): string {
   return lines.filter(Boolean).join('\n');
 }
 
-/** The first picture as PNG, the one image type the clipboard takes; null when there is none or it cannot be read. */
-async function firstPicturePng(images: Attachment[]): Promise<Blob | null> {
-  const first = images[0];
-  if (!first) return null;
+/** A picture as PNG, the one image type the clipboard takes; null when it cannot be read. */
+async function pngOf(src: string): Promise<Blob | null> {
   try {
-    const blob = await (await fetch(first.src)).blob();
+    const blob = await (await fetch(src)).blob();
     if (blob.type === 'image/png') return blob;
     const bitmap = await createImageBitmap(blob);
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
@@ -92,6 +90,21 @@ async function firstPicturePng(images: Attachment[]): Promise<Blob | null> {
     return await canvas.convertToBlob({ type: 'image/png' });
   } catch {
     return null;
+  }
+}
+
+/** The first picture of a message as PNG; null when there is none. */
+const firstPicturePng = (images: Attachment[]) => (images[0] ? pngOf(images[0].src) : Promise.resolve(null));
+
+/** Puts one picture on the clipboard as an image; false when it cannot be read or written. */
+export async function copyImage(src: string): Promise<boolean> {
+  const png = await pngOf(src);
+  if (!png) return false;
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+    return true;
+  } catch {
+    return false;
   }
 }
 

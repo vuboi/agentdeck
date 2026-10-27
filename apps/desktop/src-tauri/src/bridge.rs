@@ -915,45 +915,16 @@ pub(crate) async fn answer(
                 .get("url")
                 .cloned()
                 .ok_or("send ?url= with the address the server will answer at")?;
-            let mut target = crate::browser::parse(&url)?;
-            let port = target
-                .port_or_known_default()
-                .ok_or("the address has no port")?;
-            let mut log = None;
-            // Already up (started earlier, by the user or by AgentDeck): just open it.
-            match crate::browser::ready(&target).await {
-                Some(found) => target = found,
-                None => {
-                    log = Some(crate::servers::start(&command, &cwd, port)?);
-                    let deadline = std::time::Instant::now() + Duration::from_secs(120);
-                    loop {
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                        if let Some(found) = crate::browser::ready(&target).await {
-                            target = found;
-                            break;
-                        }
-                        let exited = crate::servers::exited(port);
-                        if exited || std::time::Instant::now() > deadline {
-                            let ended = if exited {
-                                crate::detect::Ended::Exited
-                            } else {
-                                crate::detect::Ended::Silent
-                            };
-                            let why = crate::detect::failure(
-                                &command,
-                                &cwd,
-                                &crate::servers::read_log(port),
-                                ended,
-                            );
-                            return Err(format!(
-                                "`{command}` did not start a server at {target}. {}",
-                                why.text()
-                            ));
-                        }
-                    }
-                }
-            }
-            crate::servers::set_url(port, target.as_str());
+            let guess = crate::browser::parse(&url)?;
+            // What to answer when the start script asks questions, in order, separated by `|`.
+            let answers: Vec<String> = params
+                .get("answers")
+                .filter(|text| !text.is_empty())
+                .map(|text| text.split('|').map(|answer| answer.trim().to_string()).collect())
+                .unwrap_or_default();
+            let (target, log) = crate::detect::bring_up(&command, &cwd, Some(guess), &answers)
+                .await
+                .map_err(|failure| format!("`{command}` did not start a server at {url}. {}", failure.text()))?;
             let new_tab = wants_new_tab(params);
             let mut opened = open_page(
                 app,

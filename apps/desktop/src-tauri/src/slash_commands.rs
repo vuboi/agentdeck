@@ -66,6 +66,16 @@ fn first_line(text: &str) -> String {
         .collect()
 }
 
+/// What a skill folder's `SKILL.md` says it does (its `description`, else its first line); empty when there is none.
+pub fn skill_description(folder: &Path) -> String {
+    std::fs::read_to_string(folder.join("SKILL.md"))
+        .map(|text| {
+            let (fields, body) = split_front_matter(&text);
+            describe(&fields, body)
+        })
+        .unwrap_or_default()
+}
+
 fn describe(fields: &BTreeMap<String, String>, body: &str) -> String {
     fields
         .get("description")

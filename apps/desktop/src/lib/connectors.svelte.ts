@@ -80,7 +80,7 @@ export const connectors = $state({
   logs: {} as Record<string, string[]>,
   /** The last error of an action, by key. */
   errors: {} as Record<string, string>,
-  alerts: { enabled: true, threshold: 90, system: true, systemChosen: false },
+  alerts: { enabled: true, threshold: 90, system: true, systemChosen: false, keepAwake: true },
   /** When a turn fails: retry, or let the next agent (provider) of `chain` carry on; never another account (turn-failure.ts). */
   recovery: { enabled: false, chain: ['claude', 'codex', 'opencode', 'antigravity'] as string[], /** At a usage limit with nowhere to move, carry on by itself once the limit resets. */ autoResume: true, /** The user set `enabled` themself (it was on by default before). */ chosen: false },
   custom: [] as CustomProvider[],
@@ -441,6 +441,18 @@ export async function allowSystemNotifications(allow: boolean) {
   connectors.alerts.systemChosen = true;
 }
 
+/** Asks the system to stay awake (or not) while the app runs: a long agent task is cut off when the computer sleeps. */
+export async function setKeepAwake(on: boolean) {
+  connectors.alerts.keepAwake = on;
+  if (!inTauri()) return;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('keep_awake_set', { on });
+  } catch {
+    // A system without the tool keeps its own sleep rules.
+  }
+}
+
 let watching = false;
 /** Reads the accounts every few minutes and raises a warning when the active one nears a limit. */
 export function startWatching() {
@@ -549,6 +561,8 @@ Promise.all([getPref<CustomProvider[]>('providers.custom'), getPref<typeof conne
   // now; a saved "off" from before the user ever chose (no `systemChosen`) is turned on once.
   if (!connectors.alerts.systemChosen) connectors.alerts = { ...connectors.alerts, system: true, systemChosen: true };
   hydrated = true;
+  // On by default, and kept on: asked again at every start (the system forgets it when the app ends).
+  void setKeepAwake(connectors.alerts.keepAwake !== false);
   // macOS asks once; Windows and Linux grant it. Without it a notification is dropped silently.
   if (connectors.alerts.system) void requestSystemNotificationPermission();
 });

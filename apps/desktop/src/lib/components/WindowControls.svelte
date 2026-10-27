@@ -43,13 +43,13 @@
 
 <!-- Pinned to the top-right corner, over the header row of whichever pane sits there. -->
 <div class="absolute top-0 right-0 z-50 flex h-[39px] items-center gap-0.5 pr-[5.5px]" aria-label="Window controls">
-  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 items-center justify-center rounded-md !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Minimize window" onclick={() => windowAction('minimize')}>
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! p-0 items-center justify-center rounded-md !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Minimize window" onclick={() => windowAction('minimize')}>
     <ZIcon zType="lucideMinus" class="size-4" zStrokeWidth={1.5} />
   </ZButton>
-  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 items-center justify-center rounded-md !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label={maximized ? 'Restore window' : 'Maximize window'} onclick={() => windowAction('toggle')}>
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! p-0 items-center justify-center rounded-md !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label={maximized ? 'Restore window' : 'Maximize window'} onclick={() => windowAction('toggle')}>
     <ZIcon zType={maximized ? "lucideCopy" : "lucideSquare"} class="size-3.5" zStrokeWidth={1.5} />
   </ZButton>
-  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 items-center justify-center rounded-md !bg-transparent !text-muted-foreground hover:!bg-destructive hover:!text-white" aria-label="Close window" onclick={() => windowAction('close')}>
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! p-0 items-center justify-center rounded-md !bg-transparent !text-muted-foreground hover:!bg-destructive hover:!text-white" aria-label="Close window" onclick={() => windowAction('close')}>
     <ZIcon zType="lucideX" class="size-4" zStrokeWidth={1.5} />
   </ZButton>
 </div>

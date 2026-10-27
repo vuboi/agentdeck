@@ -587,13 +587,10 @@ pub async fn browser_add_extension(
             .filter(|name| !name.trim().is_empty())
             .ok_or("The extension manifest must have a valid name.")?;
 
-        let root = app
-            .path()
-            .app_data_dir()
-            .map_err(|error| error.to_string())?
-            .join("browser-extensions");
+        let root = crate::browser_extensions::root(&app)?;
         std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-        let destination = root.join(extension_folder_name(&source));
+        let folder = extension_folder_name(&source);
+        let destination = root.join(&folder);
         if !destination.exists() {
             if let Err(error) = copy_extension(&source, &destination) {
                 let _ = std::fs::remove_dir_all(&destination);
@@ -601,43 +598,48 @@ pub async fn browser_add_extension(
             }
         }
 
-        let view = webview(&app, &tab)?;
+        // No page open: the folder is in place, and the Preview loads it when its next tab opens (`extensions_path`).
+        let Ok(view) = webview(&app, &tab) else {
+            return Ok(name.to_owned());
+        };
         let extension_path = destination.clone();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         view.with_webview(move |platform| {
-            use webview2_com::{
-                Microsoft::Web::WebView2::Win32::{ICoreWebView2Profile7, ICoreWebView2_13},
-                ProfileAddBrowserExtensionCompletedHandler,
-            };
-            use windows::core::{Interface, HSTRING};
+            use webview2_com::{take_pwstr, ProfileAddBrowserExtensionCompletedHandler};
+            use windows::core::{HSTRING, PWSTR};
 
             let result = (|| unsafe {
-                let webview = platform
-                    .controller()
-                    .CoreWebView2()
-                    .map_err(|error| error.to_string())?;
-                let profile = webview
-                    .cast::<ICoreWebView2_13>()
-                    .map_err(|error| error.to_string())?
-                    .Profile()
-                    .map_err(|error| error.to_string())?
-                    .cast::<ICoreWebView2Profile7>()
-                    .map_err(|error| error.to_string())?;
+                let profile = crate::browser_extensions::profile_of(&platform)?;
                 let path = HSTRING::from(extension_path.as_path());
+                let id = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+                let seen = std::rc::Rc::clone(&id);
                 ProfileAddBrowserExtensionCompletedHandler::wait_for_async_operation(
                     Box::new(move |handler| {
                         profile
                             .AddBrowserExtension(&path, &handler)
                             .map_err(webview2_com::Error::WindowsError)
                     }),
-                    Box::new(|error, _extension| error),
+                    Box::new(move |error, extension| {
+                        error?;
+                        if let Some(extension) = extension {
+                            let mut raw = PWSTR::null();
+                            extension.Id(&mut raw)?;
+                            *seen.borrow_mut() = take_pwstr(raw);
+                        }
+                        Ok(())
+                    }),
                 )
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+                Ok::<String, String>(id.take())
             })();
             let _ = sender.send(result);
         })
         .map_err(|error| error.to_string())?;
-        receiver.await.map_err(|error| error.to_string())??;
+        let id = receiver.await.map_err(|error| error.to_string())??;
+        // The profile knows it by id, the folder by name: kept so the menu can show its toolbar page and remove its folder.
+        if !id.is_empty() {
+            crate::browser_extensions::remember_id(&root, &id, &folder)?;
+        }
 
         Ok(name.to_owned())
     }

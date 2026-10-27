@@ -94,7 +94,7 @@
           {#if settled === 'running' && block.talking}
             <ZIcon zType={'lucideMessagesSquare' as ZIconName} class="size-3.5" /> <ZShimmerText zBase="rgb(168 85 247)" zPeak="var(--foreground)" zText="Discussing with {block.talking}" />
           {:else if settled === 'running'}
-            <ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="current" /> <ZShimmerText zBase="var(--primary)" zPeak="var(--foreground)" zText="Working" />
+            <ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="current" /> <span class="stream-label"><ZShimmerText zBase="var(--primary)" zPeak="var(--foreground)" zText="Working" /></span>
           {:else if settled === 'asking'}
             <ZIcon zType={'lucideMessageCircleQuestion' as ZIconName} class="size-3.5" /> Asking you
           {:else if settled === 'done'}

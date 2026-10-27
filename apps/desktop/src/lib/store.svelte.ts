@@ -1,4 +1,4 @@
-import { askConfirm } from './confirm.svelte';
+import { zModalService } from '@shival99/z-ui-svelte';
 import { inTauri } from './history';
 import { loadMcp } from './mcp.svelte';
 import { toast } from './toast';
@@ -79,12 +79,15 @@ async function attempt<T>(
 export async function withAck(run: (acknowledged: boolean) => Promise<Outcome>, what: string): Promise<Outcome> {
   const first = await run(false);
   if (first !== 'caution') return first;
-  const yes = await askConfirm({
-    title: 'Warnings from the security scan',
-    text: `${what} has warnings from the scan. Read them with "Add from outside" to see each one.\n\nGo ahead anyway?`,
-    ok: 'Go ahead',
+  const ref = zModalService.show({
+    zTitle: 'Warnings from the security scan',
+    zContent: `${what} has warnings from the scan. Read them with "Add from outside" to see each one.\n\nGo ahead anyway?`,
+    zConfirmStyle: 'dialog',
+    zOkText: 'Go ahead',
+    zCancelText: 'Cancel',
+    zWidth: '400px',
   });
-  return yes ? run(true) : 'failed';
+  return (await ref.closed) === true ? run(true) : 'failed';
 }
 
 export async function loadStore() {
@@ -124,7 +127,8 @@ export function setPlugin(plugin: PluginItem, enabled: boolean) {
 }
 
 export function uninstallPlugin(plugin: PluginItem) {
-  return attempt(`plugin:${plugin.id}`, 'store_plugin_uninstall', { agent: plugin.agent, id: plugin.id }, () => `${plugin.name} uninstalled`);
+  // Its own key: the turn on/off switch of the same plugin is busy under `plugin:…`, and must not show as uninstalling.
+  return attempt(`uninstall:${plugin.id}`, 'store_plugin_uninstall', { agent: plugin.agent, id: plugin.id }, () => `${plugin.name} uninstalled`);
 }
 
 /** Uses a plugin's skills and MCP servers with these agents. */

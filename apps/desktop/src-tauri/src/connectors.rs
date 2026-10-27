@@ -128,6 +128,35 @@ pub(crate) fn command(program: &Path) -> Command {
     command
 }
 
+/// Stops a started program together with everything it started when dropped. `kill_on_drop` ends only the program
+/// itself: `npx` and the `.cmd` shims start a shell, then a package manager, then the node server, and killing the
+/// first leaves the node process running. Declare it after the child so it is dropped first (once the child is gone
+/// its children can no longer be found through it).
+pub(crate) struct KillTree(Option<u32>);
+
+impl KillTree {
+    pub(crate) fn of(child: &tokio::process::Child) -> Self {
+        Self(child.id())
+    }
+}
+
+impl Drop for KillTree {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(pid) = self.0 {
+            use std::os::windows::process::CommandExt;
+            let mut kill = std::process::Command::new("taskkill");
+            kill.args(["/PID", &pid.to_string(), "/T", "/F"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            kill.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            let _ = kill.spawn();
+        }
+        #[cfg(not(windows))]
+        let _ = self.0;
+    }
+}
+
 pub(crate) struct Captured {
     pub ok: bool,
     pub stdout: String,

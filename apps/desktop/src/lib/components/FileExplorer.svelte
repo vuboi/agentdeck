@@ -519,7 +519,7 @@
 
 {#if root && inTauri()}
   <!-- Find a file by name, or make a new file or folder in the project folder. -->
-  <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center gap-1 border-b border-border p-1 text-xs">
+  <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center gap-1 border-b border-border p-1.5 text-xs">
     <button type="button" class="inline-flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-2 text-left outline-none {findOpen ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" title="Find a file by name" aria-expanded={findOpen} onclick={() => (findOpen = true)}>
       <ZIcon zType={'lucideSearch' as ZIconName} zSize="15" /> <span class="truncate">Search files</span>
     </button>

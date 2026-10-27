@@ -19,7 +19,7 @@
   import { openWithItem, openWithOptions, type OpenWithOption } from '../open-with';
   import { openInViewer } from '../file-viewer.svelte';
   import type { PickerItem } from './PickerPopover.svelte';
-  import { activeSession, AGENTS, answerPermission, delegateTasks, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, projectOf, releaseReplyRender, replyBlockRendered, resumes, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, answerPermission, delegateTasks, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, prewarmChat, projectOf, releaseReplyRender, replyBlockRendered, replyRendering, resumes, workspace } from '../sessions.svelte';
   import { ticker } from '../clock.svelte';
   import { agentDisplayName } from '../provider-registry';
   import AgentLogo from './AgentLogo.svelte';
@@ -40,6 +40,17 @@
   import { listen } from '../tauri-event';
 
   type ComputerApproval = { id: string; chat: string; tool: string; summary: string };
+  // Opening a chat starts its agent's CLI in the background: the CLI's own start-up is the longest part of a first reply
+  // (about 4 s on a good day, sometimes up to a minute for Antigravity). A message typed later finds it ready.
+  // A change of the chat's agent or model does the same for the new one, so the first message after it is not cold.
+  $effect(() => {
+    const id = workspace.activeId;
+    void activeSession()?.agent;
+    void activeSession()?.model;
+    const timer = setTimeout(() => prewarmChat(id), 1200);
+    return () => clearTimeout(timer);
+  });
+
   let computerApprovals = $state<ComputerApproval[]>([]);
   onMount(() => {
     const openAndFocusNewChat = () => {
@@ -665,7 +676,7 @@
       <button
         bind:this={railButton}
         type="button"
-        class="ml-2 grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
+        class="ml-2 grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
         aria-label={layout.sidebarHidden ? 'Open sessions' : 'Show sidebar (Ctrl+B)'}
         title={layout.sidebarHidden ? 'Sessions' : 'Show sidebar (Ctrl+B)'}
         data-sidebar-rail
@@ -689,7 +700,7 @@
               aria-selected={active}
               title={tab.kind === 'file' ? tab.path : label}
               data-tip-clip
-              class="flex h-7 max-w-56 shrink-0 cursor-pointer items-center justify-between gap-1.5 rounded-md py-0 pr-2.5 pl-2.5 text-xs outline-none focus-visible:ring-0 {active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+              class="flex h-8 max-w-56 shrink-0 cursor-pointer items-center justify-between gap-1.5 rounded-md py-0 pr-2.5 pl-2.5 text-xs outline-none focus-visible:ring-0 {active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
               onclick={() => activateTab(tab.id)}
               oncontextmenu={(event) => openTabMenu(event, tab.id)}
               onkeydown={(event) => event.key === 'Enter' && activateTab(tab.id)}
@@ -718,7 +729,7 @@
       {#if contentTabs.tabs.some((tab) => tab.kind === 'chat')}
         <button
           type="button"
-          class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none focus-visible:ring-0 hover:bg-primary/10 hover:text-primary"
+          class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none focus-visible:ring-0 hover:bg-primary/10 hover:text-primary"
           aria-label="New tab"
           title="New tab"
           onclick={() => openNewChatTab()}
@@ -762,6 +773,16 @@
       <div class="relative z-30 shrink-0 border-b border-border bg-background px-3 text-xs text-muted-foreground">
         <div class="flex h-8 min-w-0 items-center gap-1.5">
           {#if taskOfActive}
+            {@const worker = activeSession()}
+            {#if worker}
+              <!-- Who is doing the task now, and whether it is still working. -->
+              <span class="inline-flex shrink-0 items-center gap-1 font-medium text-foreground">
+                <AgentLogo agent={worker.agent} model={worker.model} class="size-3.5 shrink-0" />
+                {agentDisplayName(worker.agent, worker.model)}
+                {#if running}<ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="current" />{/if}
+              </span>
+              <span class="shrink-0 text-muted-foreground/40" aria-hidden="true">·</span>
+            {/if}
             <span class="shrink-0">Started by</span>
             <AgentLogo agent={parentOfActive.agent} model={parentOfActive.model} class="size-3.5 shrink-0" />
             <span class="shrink-0 text-foreground">{agentDisplayName(parentOfActive.agent)}</span>
@@ -868,7 +889,7 @@
           {#if message}
             <div class="absolute top-0 left-0 w-full" data-index={row.index} style:transform="translateY({row.start}px)" {@attach measureRow}>
               <!-- No avatars: your messages are a bubble (right side, or left in one-sided mode); the agent is just its coloured name. -->
-              <article oncontextmenu={(event) => openSelectionMenu(event, message.blocks.map((block) => (block.kind === 'response' ? block.text : '')).filter(Boolean).join('\n\n'))} class="group/msg mx-auto flex w-full min-w-0 max-w-3xl flex-col break-words py-2.5 px-3 min-[720px]:pr-6 min-[720px]:pl-12 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
+              <article oncontextmenu={(event) => openSelectionMenu(event, message.blocks.map((block) => (block.kind === 'response' ? block.text : '')).filter(Boolean).join('\n\n'))} class="group/msg mx-auto flex w-full min-w-0 max-w-[52rem] flex-col break-words py-2.5 px-3 min-[720px]:px-8 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
                 {#if mine}
                   {@const pictures = message.blocks.flatMap((block) => (block.kind === 'image' ? [block] : []))}
                   {@const words = message.blocks.filter((block) => block.kind !== 'image' && block.kind !== 'delegate' && block.kind !== 'file')}
@@ -953,7 +974,7 @@
                     </span>
                     {#if message.model}
                       <span class="text-muted-foreground/40" aria-hidden="true">/</span>
-                      <span class="text-muted-foreground" title={message.model}>{modelLabel(message.model)}</span>
+                      <span class="mt-0.5 text-muted-foreground" title={message.model}>{modelLabel(message.model)}</span>
                     {/if}
                     <span class="text-muted-foreground/40" aria-hidden="true">·</span>
                     <span class="text-muted-foreground/80 tabular-nums">{message.time}</span>
@@ -1010,7 +1031,7 @@
                       {:else if segment.kind === 'tasks'}
                         <TaskCards items={segment.items} />
                       {:else}
-                        <ChatBlock block={segment.block} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} onrendered={segment.block.kind === 'response' ? () => replyBlockRendered(workspace.activeId, message.id, message.blocks.indexOf(segment.block)) : undefined} answered={!message.live && pendingQuestion?.messageId !== message.id} showQuestions={!message.live && pendingQuestion?.messageId !== message.id} />
+                        <ChatBlock block={segment.block} running={Boolean(message.live) && isRunning(workspace.activeId)} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} onrendered={segment.block.kind === 'response' ? () => replyBlockRendered(workspace.activeId, message.id, message.blocks.indexOf(segment.block)) : undefined} answered={!message.live && pendingQuestion?.messageId !== message.id} showQuestions={!message.live && pendingQuestion?.messageId !== message.id} />
                       {/if}
                     {/each}
                     <ArtifactCards blocks={message.blocks} root={(activeSession() && projectOf(activeSession()!)?.path) || null} live={Boolean(message.live) && isRunning(workspace.activeId)} />
@@ -1023,10 +1044,14 @@
                   <!-- The status line and the footer share one fixed-height slot, so the row does not jump when the reply ends. -->
                   <!-- Live only while the chat really runs: a reply left marked live (a lost "done") shows its footer. -->
                   {@const showLive = message.live && isRunning(workspace.activeId)}
+                  <!-- The footer (copy, fork, time) waits until the text has been written out on screen, not only until the run ends. -->
+                  {@const typing = !showLive && replyRendering(workspace.activeId, message.id)}
                   {#if showLive || message.blocks.length > 0 || message.stoppedAfter !== undefined}
                     <div class="relative h-[30px] w-full shrink-0">
                       {#if showLive}
                         <div class="absolute inset-x-0 bottom-0 flex h-5 items-center"><LiveStatus {message} /></div>
+                      {:else if typing}
+                        <!-- Nothing yet: the slot keeps its height. -->
                       {:else}
                         <MessageFooter {message} onfork={() => forkSession(workspace.activeId)} />
                       {/if}
@@ -1046,7 +1071,7 @@
   <!-- Hidden while a file tab is on screen: the file gets the full height. -->
   {#if !fileActive}
     <div class="relative z-30 shrink-0 bg-background px-2 pt-4 pb-2 min-[720px]:px-6">
-      <div class="mx-auto w-full min-w-0 max-w-3xl px-0 min-[720px]:min-w-[440px] min-[720px]:pr-6 min-[720px]:pl-12">
+      <div class="mx-auto w-full min-w-0 max-w-[52rem] px-3 min-[720px]:min-w-[440px] min-[720px]:px-8">
         <!-- A pending approval sits right above the input, where the eye already is. -->
         <!-- The chat stopped at a usage limit: it carries on by itself when the limit resets. -->
         {#if resumes[workspace.activeId]}<ResumeCard resume={resumes[workspace.activeId]} />{/if}

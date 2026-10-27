@@ -21,7 +21,8 @@
     type McpEntry,
   } from '../mcp.svelte';
   import { mcpLogin, store } from '../store.svelte';
-  import StoreSkeleton from './StoreSkeleton.svelte';
+  import StoreSkeleton, { ROW } from './StoreSkeleton.svelte';
+  import AgentLogo from './AgentLogo.svelte';
 
   // The Store's bar above holds the search, the test-all and reload buttons and the plus that opens the add form.
   let { query = '', adding = $bindable(false) }: { query?: string; adding?: boolean } = $props();
@@ -142,7 +143,7 @@
           </ZButton>
         </div>
       {:else if !mcp.overview}
-        <StoreSkeleton />
+        <StoreSkeleton variant="mcp" />
       {:else if all.length === 0}
         <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground">
           <ZIcon zType={icon('lucidePlug')} zSize="28" class="size-7 opacity-60" />
@@ -155,12 +156,12 @@
           <h3 class="m-0 text-sm font-medium text-foreground">No server matches</h3>
         </div>
       {:else}
-        <ul class="m-0 flex list-none flex-col gap-2 p-3">
+        <ul class="m-0 flex list-none flex-col gap-2 p-1.5">
           {#each entries as entry, index (entry.id)}
             {@const stats = usage.get(entry.name)}
             {@const health = healthOf(entry, stats)}
             {@const test = mcp.tests[entry.id]}
-            <li class="rounded-lg border border-border bg-card/40" in:fade={{ duration: 220, delay: Math.min(index, 8) * 40 }}>
+            <li class="rounded-lg border border-border bg-card/40 {ROW.mcp}" in:fade={{ duration: 220, delay: Math.min(index, 8) * 40 }}>
               <div class="flex items-start gap-2 p-3">
                 <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-expanded={open[entry.id] ?? false} onclick={() => (open[entry.id] = !open[entry.id])}>
                   <ZIcon zType={icon('lucideChevronRight')} class="mt-0.5 size-3 shrink-0 text-muted-foreground transition-transform duration-200 {open[entry.id] ? 'rotate-90' : ''}" />
@@ -177,7 +178,7 @@
                     <span class="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground" title={entry.target}>{entry.target}</span>
                     <span class="mt-1 flex flex-wrap items-center gap-x-2 text-[10px]">
                       <span class="rounded border border-border px-1 uppercase text-muted-foreground">{entry.transport}</span>
-                      {#each entry.agents as agent (agent)}<span class="font-medium {AGENT[agent]?.tone ?? ''}">{AGENT[agent]?.label ?? agent}</span>{/each}
+                      {#each entry.agents as agent (agent)}<span class="inline-flex items-center gap-1 font-medium {AGENT[agent]?.tone ?? ''}"><AgentLogo {agent} class="size-3" />{AGENT[agent]?.label ?? agent}</span>{/each}
                       {#if stats}<span class="text-muted-foreground tabular-nums">· {stats.calls} calls{stats.failed ? `, ${stats.failed} failed` : ''}</span>{/if}
                     </span>
                   </span>

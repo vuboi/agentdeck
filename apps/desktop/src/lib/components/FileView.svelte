@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ZButton, ZIcon, ZModal, ZPopover } from '@shival99/z-ui-svelte';
+  import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
   import LoadingBar from './LoadingBar.svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { contentTabs, saveTab, type ContentTab } from '../content-tabs.svelte';
@@ -13,6 +14,8 @@
   import { diffCache, fileKey, rememberText, textCache } from '../file-cache';
   import { MAX_EDIT_BYTES, splitFileText } from '../file-edit';
   import { toast } from '../toast';
+  import { activeSession, drafts as chatDrafts } from '../sessions.svelte';
+  import Menu from './Menu.svelte';
   import { onDestroy, tick, untrack } from 'svelte';
   import { fade } from 'svelte/transition';
   import { fileWrites } from '../activity.svelte';
@@ -26,6 +29,32 @@
   import OfficePreview from './OfficePreview.svelte';
 
   let { file }: { file: Extract<ContentTab, { kind: 'file' }> } = $props();
+
+  // Right-click on selected code: copy it, or put it in the message box as a code block with the file's name.
+  let codeMenu = $state<{ x: number; y: number } | null>(null);
+  let codeMenuOpen = $state(false);
+  let pickedCode = '';
+  function onCodeContext(event: MouseEvent) {
+    const text = window.getSelection()?.toString() ?? '';
+    if (!text.trim()) return; // nothing selected: the usual menu
+    event.preventDefault();
+    pickedCode = text;
+    codeMenu = { x: event.clientX, y: event.clientY };
+    codeMenuOpen = true;
+  }
+  function addCodeToChat() {
+    const session = activeSession();
+    if (!session) return toast.error('Open a chat first');
+    const fence = pickedCode.includes('```') ? '````' : '```';
+    const body = pickedCode.endsWith('\n') ? pickedCode.slice(0, -1) : pickedCode;
+    const block = [shortPath, `${fence}${language ?? ''}`, body, fence].join(String.fromCharCode(10));
+    chatDrafts[session.id] = [chatDrafts[session.id]?.trimEnd(), block].filter(Boolean).join(String.fromCharCode(10, 10));
+    toast.success('Added to chat');
+  }
+  const codeItems = $derived<ZDropdownMenuItem[]>([
+    { label: 'Copy', icon: 'lucideCopy', iconSize: 12, class: 'text-xs! py-1', shortcut: 'Ctrl+C', onClick: () => void navigator.clipboard.writeText(pickedCode).then(() => toast.success('Copied')) },
+    { label: 'Add to chat', icon: 'lucideMessageSquarePlus', iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: addCodeToChat },
+  ]);
 
   // The file as last read from or written to disk (raw: BOM and line ends included). Null until read: the area
   // stays empty for that moment, with no spinner.
@@ -438,25 +467,15 @@
       <span class="min-w-0 flex-1 truncate font-mono" title={file.path}>{shortPath}</span>
       <span class="shrink-0 whitespace-nowrap tabular-nums">{pictureSize}</span>
     </div>
-  {:else if view === 'changes'}
-    {#if changed || !diffRead}
-      <!-- The bar is there from the first frame (its counts fade in once git has answered), so the area is never a blank band. -->
-      <div class="flex h-10 shrink-0 items-center gap-1 border-b border-border px-1.5 text-xs"><div class="flex items-center gap-1 transition-opacity duration-200 {diffRead ? 'opacity-100' : 'opacity-0'}" aria-hidden={!diffRead}>{@render viewToggle()}</div></div>
-      <div class="relative min-h-0 flex-1">
-        {#if changed}
-          <div class="h-full" in:fade={{ duration: 200 }}><DiffView {rows} lang={language} /></div>
-        {:else if !diffRead}
-          <LoadingBar label="Loading changes" />
-        {/if}
-      </div>
-    {:else}
-      <DevEmpty icon="lucideGitCompare" title="No changes" hint="This file is the same as in the last commit." />
-    {/if}
-  {:else if officeFormatOf(file.name)}
+  {:else if view === 'changes' && !(changed || !diffRead)}
+    <DevEmpty icon="lucideGitCompare" title="No changes" hint="This file is the same as in the last commit." />
+  {:else if view !== 'changes' && officeFormatOf(file.name)}
     <OfficePreview {file} />
-  {:else if disk !== null}
+  {:else if view === 'changes' || disk !== null}
+    <!-- One bar for both views, so the File/Changes tabs keep their place and their sliding mark when the view changes. -->
     <div class="flex h-10 shrink-0 items-center gap-2 overflow-hidden border-b border-border px-1.5 text-xs">
       <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">{#if changed || !diffRead}<div class="flex items-center gap-1 transition-opacity duration-200 {diffRead ? 'opacity-100' : 'opacity-0'}" aria-hidden={!diffRead}>{@render viewToggle()}</div>{/if}</div>
+      {#if view !== 'changes'}
       <div class="flex shrink-0 items-center gap-1">
         {#if dirty}
           <button type="button" class="{tool} {toolOn}" aria-label="Save" title="Save (Ctrl+S)" onclick={save}>
@@ -483,7 +502,17 @@
           <ZIcon zType={icon(copiedAll ? 'lucideCheck' : 'lucideCopy')} zSize="14" />
         </button>
       </div>
+      {/if}
     </div>
+    {#if view === 'changes'}
+      <div class="relative min-h-0 flex-1">
+        {#if changed}
+          <div class="h-full" in:fade={{ duration: 200 }}><DiffView {rows} lang={language} /></div>
+        {:else if !diffRead}
+          <LoadingBar label="Loading changes" />
+        {/if}
+      </div>
+    {:else}
     {#if incoming !== null}
       <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-muted px-3 text-xs" role="alert">
         <ZIcon zType={icon('lucideTriangleAlert')} zSize="13" class="shrink-0 text-amber-500" />
@@ -493,7 +522,7 @@
         <button type="button" class="{tool} {toolOff}" title="Keep your edits; saving overwrites the file on disk" onclick={keepMine}>Keep mine</button>
       </div>
     {/if}
-    <div class="relative min-h-0 flex-1" in:fade={{ duration: 180 }}>
+    <div class="relative min-h-0 flex-1" in:fade={{ duration: 180 }} role="presentation" oncontextmenu={onCodeContext}>
       {#if !(dirty || staleDiff) && changed}
         <ChangeRuler total={shownLines} {added} {removed} {modified} ongo={(line) => (readOnly ? viewer?.goToLine(line) : editor?.goToLine(line))} />
       {/if}
@@ -510,6 +539,7 @@
       <span class="shrink-0 rounded-sm bg-muted px-1.5 py-px">{languageLabel(language)}</span>
       <span class="shrink-0 whitespace-nowrap tabular-nums">{shownLines} lines · {sizeLabel}</span>
     </div>
+    {/if}
   {:else}
     <!-- The file is still being read: the same frame as a loaded file (tool bar, body, footer) with the chat's bar along
          the top, so nothing moves when the text comes in; the text then fades in where it will stay. -->
@@ -541,3 +571,8 @@
     <Markdown text={previewText} />
   </ZModal>
 {/if}
+
+{#if codeMenu}
+  <Menu items={codeItems} bind:open={codeMenuOpen} at={codeMenu} position="bottom-left" width={200} />
+{/if}
+

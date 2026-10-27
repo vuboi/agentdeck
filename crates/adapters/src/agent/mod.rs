@@ -7,9 +7,11 @@ pub mod antigravity;
 pub mod claude;
 pub mod codex;
 mod codex_server;
+pub mod interrupt;
 pub mod opencode;
 pub mod resolve;
 pub mod runner;
+pub mod stall;
 pub mod warm;
 
 use serde::Serialize;
@@ -153,6 +155,10 @@ pub trait Provider: Send + Sync {
     fn environment(&self, _req: &TurnRequest) -> Vec<(String, String)> {
         Vec::new()
     }
+    /// How long a turn may print nothing before it is ended as stuck (see `stall.rs`). Any output line resets it.
+    fn stall_limit(&self) -> std::time::Duration {
+        stall::DEFAULT_STALL_LIMIT
+    }
     /// Emits a terminal event when a CLI exits without one in its stream.
     fn finish(&self, _req: &TurnRequest) -> Option<AgentEvent> {
         None
@@ -165,6 +171,19 @@ pub trait Provider: Send + Sync {
     }
     /// The JSON line (without its newline) that sends one message to a warm process.
     fn warm_message(&self, _prompt: &str) -> String {
+        String::new()
+    }
+    /// How a stop reaches this CLI while it runs a turn on a kept process (see `interrupt.rs`). The default kills it.
+    fn interrupt_mode(&self) -> interrupt::InterruptMode {
+        interrupt::InterruptMode::Kill
+    }
+    /// Whether a kept process can switch its model in the middle of a conversation (`model_switch_line`), so a model
+    /// change keeps the process and its conversation. Only then is the model left out of the process's settings key.
+    fn live_model(&self) -> bool {
+        false
+    }
+    /// The line (without its newline) that switches a kept process to `model`; only used when `live_model` is true.
+    fn model_switch_line(&self, _request_id: &str, _model: &str) -> String {
         String::new()
     }
 }

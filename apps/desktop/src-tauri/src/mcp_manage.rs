@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::connectors::{capture, codex_home, command, failure, which};
+use crate::connectors::{capture, codex_home, command, failure, which, KillTree};
 
 const AGENTS: [&str; 3] = ["claude", "codex", "antigravity"];
 
@@ -428,6 +428,8 @@ async fn test_stdio(raw: &Raw) -> Result<(Option<String>, Vec<String>), String> 
     let mut child = process
         .spawn()
         .map_err(|error| format!("could not start {name}: {error}"))?;
+    // Declared after the child, so it is dropped first and takes the npx / shell / node tree with it.
+    let _tree = KillTree::of(&child);
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let mut lines = BufReader::new(stdout).lines();
@@ -777,6 +779,12 @@ pub async fn ensure_agy_link() {
         return;
     }
     let Some(url) = bridge_url() else { return };
+    // Confirmed a moment ago for this address: the MCP and settings files are not read again on every turn.
+    if let Ok(checked) = AGY_LINK_CHECKED.lock() {
+        if checked.as_ref().is_some_and(|(seen, at)| *seen == url && at.elapsed() < AGY_LINK_TTL) {
+            return;
+        }
+    }
     let current = tauri::async_runtime::spawn_blocking(read_all)
         .await
         .unwrap_or_default()
@@ -784,11 +792,15 @@ pub async fn ensure_agy_link() {
         .find(|raw| raw.agent == "antigravity" && is_own(raw))
         .and_then(|raw| raw.url);
     if current.as_deref() != Some(url.as_str()) {
-        let _ = run_cli(
+        let added = run_cli(
             "antigravity",
-            vec!["mcp".into(), "add".into(), "agentdeck".into(), url],
+            vec!["mcp".into(), "add".into(), "agentdeck".into(), url.clone()],
         )
         .await;
+        // Not remembered as linked: the next turn tries again.
+        if !added.ok {
+            return;
+        }
     }
     // A headless agy refuses any MCP tool that no rule allows ("a tool required the mcp permission that headless mode cannot prompt for"),
     // so linking alone leaves the tools unusable. This allows the AgentDeck browser's tools and nothing else.
@@ -802,7 +814,14 @@ pub async fn ensure_agy_link() {
             &["mcp(agentdeck/*)".to_string()],
         );
     }
+    if let Ok(mut checked) = AGY_LINK_CHECKED.lock() {
+        *checked = Some((url, Instant::now()));
+    }
 }
+
+/// The address the Antigravity link was last confirmed at, and when (see `ensure_agy_link`).
+static AGY_LINK_CHECKED: std::sync::Mutex<Option<(String, Instant)>> = std::sync::Mutex::new(None);
+const AGY_LINK_TTL: Duration = Duration::from_secs(60);
 
 /// The MCP servers a custom provider may use in a chat: the ones in the user's Claude, Codex and Antigravity
 /// configs (each name once), minus the disabled ones, AgentDeck's own browser, and other projects' servers.

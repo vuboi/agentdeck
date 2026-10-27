@@ -362,19 +362,55 @@ pub fn detect_run_targets(cwd: String) -> Vec<RunTarget> {
     detect(&cwd)
 }
 
-/// Starts `command` as a server AgentDeck owns and returns the address it answers at, once it does. The address is
-/// the one the server prints (a dev server moves to the next port when its own is taken); the guess `url` is used
-/// when it prints none. A server that already answers at the guess is not started again.
-#[tauri::command]
-pub async fn run_target(
-    command: String,
-    cwd: String,
-    url: Option<String>,
-) -> Result<String, RunFailure> {
-    let guess = url.as_deref().map(crate::browser::parse).transpose()?;
+/// Whether the script `command` runs reads answers from the keyboard (a prompt library, readline): it is started with
+/// a keyboard that answers it, instead of with none.
+pub fn needs_keyboard(command: &str, cwd: &str) -> bool {
+    script_of(command, cwd)
+        .and_then(|script| wrapper_of(&script))
+        .is_some_and(|file| uses_prompts(&Path::new(cwd).join(file)))
+}
+
+/// The log without colour codes (for the part of a log that is looked at as text).
+pub fn plain(log: &str) -> String {
+    strip_codes(log)
+}
+
+/// Starts `command` as a server AgentDeck owns and waits until a page answers. The address is the one the server
+/// prints (a dev server moves to the next port when its own is taken); the guess `guess` is used when it prints none.
+/// A server that already answers at the guess is not started again.
+///
+/// A script that asks questions is answered (`answers`, in order; else the first option, a free port, the default):
+/// it starts with a keyboard when its wrapper reads one, and a script that turns out to wait for an answer is started
+/// again with one. A guess whose port another program holds moves to the next free port.
+///
+/// Returns the page's address and, when this call started the server, the log file.
+pub async fn bring_up(
+    command: &str,
+    cwd: &str,
+    guess: Option<tauri::Url>,
+    answers: &[String],
+) -> Result<(tauri::Url, Option<std::path::PathBuf>), RunFailure> {
     if let Some(guess) = guess.as_ref() {
         if let Some(target) = crate::browser::ready(guess).await {
-            return Ok(target.to_string());
+            return Ok((target, None));
+        }
+    }
+    let mut command = command.to_string();
+    let mut guess = guess;
+    let mut options = crate::servers::Options {
+        interactive: needs_keyboard(&command, cwd),
+        answers: answers.to_vec(),
+        env: Vec::new(),
+    };
+    // Something else holds the port the page was expected on: the same server, on the next free one.
+    if let Some(port) = guess.as_ref().and_then(|target| target.port_or_known_default()) {
+        let (moved, free, env) = crate::servers::prepare_port(&command, port);
+        if free != port {
+            command = moved;
+            options.env = env;
+            if let Some(target) = guess.as_mut() {
+                let _ = target.set_port(Some(free));
+            }
         }
     }
     // The log and the process are kept under the port; a command with no guess gets a number of its own.
@@ -384,19 +420,19 @@ pub async fn run_target(
         .unwrap_or_else(|| {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (&command, &cwd).hash(&mut hasher);
+            (&command, cwd).hash(&mut hasher);
             40_000 + (hasher.finish() % 20_000) as u16
         });
-    crate::servers::start(&command, &cwd, key)?;
-    let started = std::time::Instant::now();
+    let log = crate::servers::start_with(&command, cwd, key, &options)?;
+    let mut started = std::time::Instant::now();
     // The log as it was at the last look, and since when it has not changed: a script waiting for an answer is silent.
     let mut seen = String::new();
     let mut quiet_since = started;
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        let log = crate::servers::read_log(key);
-        if log != seen {
-            seen = log;
+        let text = crate::servers::read_log(key);
+        if text != seen {
+            seen = text;
             quiet_since = std::time::Instant::now();
         }
         // The address the server printed answers (over HTTP, at the scheme it speaks): that is the page.
@@ -406,7 +442,7 @@ pub async fn run_target(
         if let Some(printed) = printed {
             if let Some(target) = crate::browser::ready(&printed).await {
                 crate::servers::set_url(key, target.as_str());
-                return Ok(target.to_string());
+                return Ok((target, Some(log)));
             }
         }
         // It printed nothing we know: the guess, once it answers, is the page.
@@ -416,21 +452,41 @@ pub async fn run_target(
                 None => None,
             } {
                 crate::servers::set_url(key, target.as_str());
-                return Ok(target.to_string());
+                return Ok((target, Some(log)));
             }
         }
         if crate::servers::exited(key) {
-            return Err(failure(&command, &cwd, &seen, Ended::Exited));
+            return Err(failure(&command, cwd, &seen, Ended::Exited));
         }
-        // No keyboard here: a script that asks a question will wait for ever. Say so, and do not keep it running.
+        // It asks and nobody answers: it is started again with a keyboard, once. With one already, it is left to the user.
         if quiet_since.elapsed().as_secs() >= 5 && looks_interactive(&seen) {
             let _ = crate::servers::server_stop(Some(key));
-            return Err(failure(&command, &cwd, &seen, Ended::Asking));
+            if options.interactive {
+                return Err(failure(&command, cwd, &seen, Ended::Asking));
+            }
+            options.interactive = true;
+            crate::servers::start_with(&command, cwd, key, &options)?;
+            started = std::time::Instant::now();
+            seen = String::new();
+            quiet_since = started;
+            continue;
         }
         if started.elapsed().as_secs() > 120 {
-            return Err(failure(&command, &cwd, &seen, Ended::Silent));
+            return Err(failure(&command, cwd, &seen, Ended::Silent));
         }
     }
+}
+
+/// `bring_up` for the Preview's Run button: the address of the page, as text.
+#[tauri::command]
+pub async fn run_target(
+    command: String,
+    cwd: String,
+    url: Option<String>,
+) -> Result<String, RunFailure> {
+    let guess = url.as_deref().map(crate::browser::parse).transpose()?;
+    let (target, _) = bring_up(&command, &cwd, guess, &[]).await?;
+    Ok(target.to_string())
 }
 
 /// Why a start failed, for the Preview to show: what happened, the last lines of the log (colour codes and noise

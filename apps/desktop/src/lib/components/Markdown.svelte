@@ -301,6 +301,19 @@
       if (command?.trim()) runInTerminal(terminalCommand(command, folder));
       return;
     }
+    const table = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-copy-table]');
+    if (table) {
+      // Tab-separated rows: a paste into a spreadsheet or a document keeps the columns.
+      const rows = [...(table.closest('.md-table')?.querySelectorAll('tr') ?? [])].map((row) =>
+        [...row.children].map((cell) => (cell.textContent ?? '').trim()).join('\t'),
+      );
+      void navigator.clipboard.writeText(rows.join('\n')).then(() => {
+        table.setAttribute('data-copied', '');
+        clearTimeout(copiedTimers.get(table));
+        copiedTimers.set(table, setTimeout(() => table.removeAttribute('data-copied'), 1800));
+      });
+      return;
+    }
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-copy]');
     const code = button?.closest('.md-code')?.querySelector('code');
     if (!button || !code) return;

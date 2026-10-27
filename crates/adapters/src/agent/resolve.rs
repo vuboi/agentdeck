@@ -6,6 +6,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Stdio;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use super::Provider;
 
@@ -121,6 +123,31 @@ fn common_dirs(
 /// Adds the same well-known CLI folders used for resolution to the child process PATH. This matters
 /// for npm shims such as `opencode.cmd`: the shim may need its matching `node` executable on PATH.
 pub(super) fn augmented_path() -> Option<OsString> {
+    let current = std::env::var_os("PATH");
+    let mut cache = PATH_CACHE.lock().ok()?;
+    if let Some((key, at, value)) = cache.as_ref() {
+        if *key == current && at.elapsed() < CACHE_TTL {
+            return value.clone();
+        }
+    }
+    let value = build_augmented_path();
+    *cache = Some((current, Instant::now(), value.clone()));
+    value
+}
+
+/// How long a computed PATH or binary location is reused. The folders it was built from change only when the user
+/// installs a CLI or a Node version, so a minute of staleness costs nothing; a changed PATH invalidates at once.
+const CACHE_TTL: Duration = Duration::from_secs(60);
+
+type PathCache = Mutex<Option<(Option<OsString>, Instant, Option<OsString>)>>;
+static PATH_CACHE: PathCache = Mutex::new(None);
+
+/// Binary locations found by `resolve_binary`, by provider id and PATH it was found with. Misses are not kept, so
+/// installing a CLI is seen on the next turn.
+type BinaryCache = Mutex<Vec<(String, Option<OsString>, Instant, PathBuf)>>;
+static BINARY_CACHE: BinaryCache = Mutex::new(Vec::new());
+
+fn build_augmented_path() -> Option<OsString> {
     let mut dirs = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -203,18 +230,45 @@ pub fn resolve_binary(provider: &dyn Provider) -> OsString {
             os,
         )
     };
-    pinned
-        .or_else(|| {
-            provider
-                .candidates()
-                .into_iter()
-                .find(|path| path.is_file())
-        })
+    if let Some(path) = pinned {
+        return path.into_os_string();
+    }
+    // Every turn asks: the scans below stat dozens of paths (slow behind antivirus on Windows). Reuse a hit while
+    // the file is still there.
+    let current_path = std::env::var_os("PATH");
+    if let Ok(cache) = BINARY_CACHE.lock() {
+        let hit = cache.iter().find(|(id, key, at, path)| {
+            id == provider.id()
+                && *key == current_path
+                && at.elapsed() < CACHE_TTL
+                && path.is_file()
+        });
+        if let Some((_, _, _, path)) = hit {
+            return path.clone().into_os_string();
+        }
+    }
+    let found = provider
+        .candidates()
+        .into_iter()
+        .find(|path| path.is_file())
         .or_else(from_path)
         .or_else(from_common)
-        .or_else(from_shell)
-        .map(PathBuf::into_os_string)
-        .unwrap_or_else(|| provider.binary().into())
+        .or_else(from_shell);
+    match found {
+        Some(path) => {
+            if let Ok(mut cache) = BINARY_CACHE.lock() {
+                cache.retain(|(id, ..)| id != provider.id());
+                cache.push((
+                    provider.id().to_string(),
+                    current_path,
+                    Instant::now(),
+                    path.clone(),
+                ));
+            }
+            path.into_os_string()
+        }
+        None => provider.binary().into(),
+    }
 }
 
 #[cfg(test)]
@@ -236,6 +290,44 @@ mod tests {
         assert_eq!(find_in(here(), "tool", "linux"), None);
         assert_eq!(find_in(here(), "other", "macos"), Some(dir.join("other")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct Located(PathBuf);
+    impl Provider for Located {
+        fn id(&self) -> &'static str {
+            "resolve-cache-test"
+        }
+        fn binary(&self) -> &'static str {
+            "resolve-cache-test-bin"
+        }
+        fn candidates(&self) -> Vec<PathBuf> {
+            vec![self.0.clone()]
+        }
+        fn args(&self, _req: &super::super::TurnRequest) -> Vec<String> {
+            Vec::new()
+        }
+        fn parse_line(&self, _line: &str) -> Vec<super::super::AgentEvent> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn a_found_binary_is_reused_until_it_disappears() {
+        let file = std::env::temp_dir().join(format!("ag-resolve-cache-{}", std::process::id()));
+        std::fs::write(&file, "").unwrap();
+        let provider = Located(file.clone());
+        assert_eq!(resolve_binary(&provider), file.clone().into_os_string());
+        // Served from the cache even when the provider no longer lists it.
+        let moved = Located(PathBuf::from("/nowhere"));
+        assert_eq!(resolve_binary(&moved), file.clone().into_os_string());
+        // A removed file is not returned from the cache.
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(resolve_binary(&moved), OsString::from("resolve-cache-test-bin"));
+    }
+
+    #[test]
+    fn augmented_path_is_stable_between_calls() {
+        assert_eq!(augmented_path(), augmented_path());
     }
 
     #[test]

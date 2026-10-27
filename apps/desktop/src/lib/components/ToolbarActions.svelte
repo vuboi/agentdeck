@@ -25,7 +25,7 @@
     zWave={false}
     zType="ghost"
     zSize="sm"
-    class="size-7! {terminal.open ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : '!bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary'}"
+    class="size-8! {terminal.open ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : '!bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary'}"
     aria-label={terminal.open ? 'Hide terminal' : 'Show terminal'}
     aria-pressed={terminal.open}
     title={terminal.open ? 'Hide terminal (Ctrl+`)' : 'Show terminal (Ctrl+`)'}
@@ -37,7 +37,7 @@
     zWave={false}
     zType="ghost"
     zSize="sm"
-    class="size-7! {layout.themePanelOpen ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : '!bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary'}"
+    class="size-8! {layout.themePanelOpen ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : '!bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary'}"
     id="theme-trigger"
     bind:ref={trigger}
     aria-label="Theme colors"
@@ -48,7 +48,7 @@
   >
     <ZIcon zType="lucidePalette" class="size-4" />
   </ZButton>
-  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label={layout.toolsOpen ? 'Hide tools panel' : 'Show tools panel'} title={layout.toolsOpen ? 'Hide tools' : 'Show tools'} onclick={toggleTools}>
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label={layout.toolsOpen ? 'Hide tools panel' : 'Show tools panel'} title={layout.toolsOpen ? 'Hide tools' : 'Show tools'} onclick={toggleTools}>
     <ZIcon zType={'lucidePanelRight'} class="size-4" />
   </ZButton>
 </div>

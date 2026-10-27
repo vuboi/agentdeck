@@ -33,7 +33,7 @@
   // Layout, outside in: sidebar | [left zone | (top zone / chat / bottom zone / terminal) | right zone] | tools.
   // Every pane is a fixed px size kept in layout.sizes; splitters between them change those sizes.
   // A zone takes space only while a window is dragged or while it holds tools.
-  const MIN = { chat: 400, sidebar: 160, tools: 220, left: 200, right: 200, top: 120, bottom: 120, terminal: 80 };
+  const MIN = { chat: 520, sidebar: 160, tools: 220, left: 200, right: 200, top: 120, bottom: 120, terminal: 80 };
   // Side panes shrink with the window (their width is the flex basis). The conversation keeps its own minimum,
   // so when the window is too narrow the whole shell scrolls sideways instead of panes overlapping.
   const SIDE = 'min-w-0 shrink overflow-hidden';

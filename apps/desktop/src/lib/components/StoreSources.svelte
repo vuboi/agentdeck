@@ -5,6 +5,7 @@
   import { addSource, catalog, loadSources, refreshCatalog, removeSource, sources } from '../store.svelte';
   import StoreEmpty from './StoreEmpty.svelte';
   import StoreBar from './StoreBar.svelte';
+  import { clearTopActions, setTopActions } from '../store-actions.svelte';
   import { debounced } from '../debounce.svelte';
 
   const icon = (name: string) => name as ZIconName;
@@ -13,6 +14,14 @@
   // The search box also takes the address of a new source: the plus adds what is typed.
   let address = $state('');
   const searched = debounced(() => address);
+  const owner = Symbol('sources');
+  $effect(() => {
+    setTopActions(owner, [
+      { id: 'add', label: 'Add source', icon: 'lucidePlus', onclick: () => void add(), disabled: !isUrl, busy: adding },
+      { id: 'refresh', label: 'Refresh the catalog', icon: 'lucideRefreshCw', onclick: () => void refreshCatalog(), busy: catalog.refreshing },
+    ]);
+    return () => clearTopActions(owner);
+  });
   const shown = $derived(sources.urls.filter((url) => url.toLowerCase().includes(searched.value.trim().toLowerCase())));
   const isUrl = $derived(/^https:\/\/\S+$/.test(address.trim()));
   let adding = $state(false);
@@ -29,10 +38,7 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col text-xs">
-  <StoreBar bind:query={address} placeholder="Search sources, or paste a git address (https://…)" actions={[
-    { id: 'add', label: 'Add source', icon: 'lucidePlus', onclick: () => void add(), disabled: !isUrl, busy: adding },
-    { id: 'refresh', label: 'Refresh the catalog', icon: 'lucideRefreshCw', onclick: () => void refreshCatalog(), busy: catalog.refreshing },
-  ]} />
+  <StoreBar bind:query={address} placeholder="Search sources, or paste a git address (https://…)" />
 
   <div class="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]">
     {#if sources.urls.length === 0}
@@ -40,7 +46,7 @@
     {:else if shown.length === 0}
       <StoreEmpty icon="lucideSearch" text="No source matches" />
     {:else}
-      <ul class="m-0 flex list-none flex-col gap-2 p-3">
+      <ul class="m-0 flex list-none flex-col gap-2 p-1.5">
         {#each shown as url (url)}
           <li class="flex items-center gap-2 rounded-md border border-border bg-card p-2.5">
             <span class="min-w-0 flex-1 truncate font-mono text-[11px]">{url}</span>
@@ -53,7 +59,7 @@
     {/if}
 
     {#if catalog.errors.length > 0}
-      <ul class="m-0 list-none px-3 pb-3 text-amber-600 dark:text-amber-400">
+      <ul class="m-0 list-none px-1.5 pb-1.5 text-amber-600 dark:text-amber-400">
         {#each catalog.errors as problem (problem)}<li>{problem}</li>{/each}
       </ul>
     {/if}

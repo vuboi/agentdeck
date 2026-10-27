@@ -14,6 +14,7 @@ use tokio::process::Command;
 
 pub use super::resolve::resolve_binary;
 use super::resolve::augmented_path;
+use super::stall::Watchdog;
 use super::{AgentEvent, Provider, TurnRequest};
 
 /// How long output may still come in after the CLI exited. A process it left running (a dev server started in the
@@ -174,6 +175,8 @@ pub async fn drive_turn(
         .map(|err| tokio::spawn(drain_stderr(err, Arc::clone(&stderr_kept))));
 
     let mut finished = false;
+    let mut stalled = false;
+    let mut watchdog = Watchdog::new(provider.stall_limit());
     // Set once the CLI has exited, with the time after which its pipe is no longer read.
     let mut exited: Option<(std::io::Result<std::process::ExitStatus>, tokio::time::Instant)> = None;
     if let Some(stdout) = child.stdout.take() {
@@ -191,12 +194,21 @@ pub async fn drive_turn(
                         exited = Some((status, tokio::time::Instant::now() + EXIT_GRACE));
                         continue;
                     }
+                    // Alive but silent for too long: end the turn and the whole tree.
+                    _ = tokio::time::sleep_until(watchdog.deadline()) => {
+                        emit(AgentEvent::Error { message: watchdog.message() });
+                        finished = true;
+                        stalled = true;
+                        break;
+                    }
                 },
             };
             let Ok(Some(bytes)) = next else { break };
+            watchdog.touch(); // any line, even one nobody understands, shows the CLI is alive
             let text = String::from_utf8_lossy(&bytes);
             let line = text.strip_suffix('\r').unwrap_or(&text);
             for event in provider.parse_line(line) {
+                watchdog.note(&event);
                 finished |= matches!(event, AgentEvent::Done { .. } | AgentEvent::Error { .. });
                 emit(event);
             }
@@ -209,7 +221,10 @@ pub async fn drive_turn(
     }
 
     // Ended on its own: what the CLI left running in the background (a dev server) is not ours to stop.
-    tree.disarm();
+    // A stalled turn is the exception: the guard ends the whole tree when it drops.
+    if !stalled {
+        tree.disarm();
+    }
     let status = match exited {
         Some((status, _)) => status,
         None => {
@@ -391,6 +406,64 @@ echo '{"type":"result","is_error":false,"result":"pong","session_id":"s1"}'"#,
         .await;
         let _ = std::fs::remove_file(&path);
         assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+    }
+
+    /// `Fake` with a short stall limit, so the watchdog can be seen working in a second.
+    struct Impatient;
+    impl Provider for Impatient {
+        fn id(&self) -> &'static str {
+            "impatient"
+        }
+        fn binary(&self) -> &'static str {
+            "impatient"
+        }
+        fn candidates(&self) -> Vec<std::path::PathBuf> {
+            Vec::new()
+        }
+        fn args(&self, _req: &TurnRequest) -> Vec<String> {
+            Vec::new()
+        }
+        fn parse_line(&self, line: &str) -> Vec<AgentEvent> {
+            super::super::claude::Claude.parse_line(line)
+        }
+        fn stall_limit(&self) -> Duration {
+            Duration::from_secs(1)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_silent_cli_is_ended_with_a_clear_error() {
+        let path = script("silent", "sleep 30");
+        let mut events = Vec::new();
+        let run = drive_turn(path.clone().into_os_string(), &Impatient, &req(), |e| {
+            events.push(e)
+        });
+        let ended = tokio::time::timeout(Duration::from_secs(10), run).await;
+        let _ = std::fs::remove_file(&path);
+        assert!(ended.is_ok(), "the watchdog did not end the turn");
+        assert_eq!(
+            events,
+            vec![AgentEvent::Error {
+                message: "agent produced no output for 1 s".into()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn any_output_line_resets_the_watchdog() {
+        // 5 lines 0.4 s apart: 2 s in all, over the 1 s limit, but never silent for 1 s.
+        let path = script(
+            "slow",
+            r#"for i in 1 2 3 4 5; do echo 'not json, but alive'; sleep 0.4; done
+echo '{"type":"result","is_error":false,"result":"pong","session_id":"s1"}'"#,
+        );
+        let mut events = Vec::new();
+        drive_turn(path.clone().into_os_string(), &Impatient, &req(), |e| {
+            events.push(e)
+        })
+        .await;
+        let _ = std::fs::remove_file(&path);
+        assert!(matches!(events.last(), Some(AgentEvent::Done { .. })), "{events:?}");
     }
 
     #[tokio::test]

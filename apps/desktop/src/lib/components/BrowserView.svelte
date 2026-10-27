@@ -1,10 +1,11 @@
 <script lang="ts">
   import MenuButton from './MenuButton.svelte';
+  import { TRIGGER_ON } from '../popover';
   import { guide } from '../guide.svelte';
   import { fly } from 'svelte/transition';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { revealTab } from '../tab-strip';
-  import { ZDrawer, ZIcon, ZLoading, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZDrawer, ZIcon, ZLoading, ZPopover, ZSwitch, zModalService, zTooltip } from '@shival99/z-ui-svelte';
   import { toast } from '../toast';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
@@ -43,6 +44,11 @@
     asRunFailure,
     failureText,
     addBrowserExtension,
+    listBrowserExtensions,
+    enableBrowserExtension,
+    reloadBrowserExtension,
+    removeBrowserExtension,
+    type BrowserExtension,
     terminalCommand,
     type RunTarget,
     reload,
@@ -372,6 +378,8 @@
   });
   let lockButton = $state<HTMLElement | null>(null);
   let lockOpen = $state(false);
+  /** Extensions run in the Windows Preview only (WebView2). */
+  const canExtend = inTauri() && /windows/i.test(navigator.userAgent);
 
   // ---- tabs: no scrollbar; when they do not fit an arrow lists them all, and the front one stays in view ----
   let tabStrip: HTMLDivElement | undefined = $state();
@@ -746,7 +754,8 @@
           ...(browser.annotateCount > 0 ? [{ label: 'Add notes to chat', icon: 'lucidePlus' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: busy !== '', onClick: () => void addMarksToChat() }] : []),
         ]
       : []),
-    { label: /windows/i.test(navigator.userAgent) ? 'Add unpacked extension…' : 'Extensions require Windows', icon: 'lucidePuzzle' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: 'before', disabled: !inTauri() || !tab.opened || !/windows/i.test(navigator.userAgent), onClick: () => void addExtension() },
+    // Always offered (on Windows): with no page open the extension is put in place and loads with the next one.
+    { label: canExtend ? 'Add unpacked extension…' : 'Extensions require Windows', icon: 'lucidePuzzle' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: 'before', disabled: !canExtend, onClick: () => void addExtension() },
     { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: compact ? 'before' : undefined, disabled: !tab.url, onClick: () => void openExternal(tab.url) },
     { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url).then(() => toast.success('Address copied')) },
     { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
@@ -759,10 +768,62 @@
   async function addExtension() {
     try {
       const name = await addBrowserExtension(tab.id);
-      if (name) toast.success(`Added ${name} to Browser Preview`);
+      if (name) toast.success(tab.opened ? `Added ${name} to Browser Preview` : `Added ${name}: it loads when a page opens`);
+      if (name && extOpen) void loadExtensions();
     } catch (error) {
       toast.error(String(error));
     }
+  }
+
+  // The toolbar's extension menu: what the Preview profile has, each with on/off, reload, remove, and its toolbar page.
+  let extOpen = $state(false);
+  let extButton = $state<HTMLElement | null>(null);
+  let extensions = $state<BrowserExtension[]>([]);
+  let extLoading = $state(false);
+  /** The extension an action runs on (its id), so only its row shows it. */
+  let extBusy = $state('');
+  async function loadExtensions() {
+    extLoading = true;
+    try {
+      extensions = await listBrowserExtensions(tab.id);
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      extLoading = false;
+    }
+  }
+  function toggleExtensions() {
+    extOpen = !extOpen;
+    if (extOpen) void loadExtensions();
+  }
+  async function onExtension(item: BrowserExtension, action: () => Promise<unknown>, done: string) {
+    extBusy = item.id;
+    try {
+      await action();
+      toast.success(done);
+      await loadExtensions();
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      extBusy = '';
+    }
+  }
+  function dropExtension(item: BrowserExtension) {
+    zModalService.danger({
+      zTitle: `Remove ${item.name}?`,
+      zContent: 'It is removed from Browser Preview, with its copied files.',
+      zConfirmStyle: 'dialog',
+      zOkText: 'Remove',
+      zOkIcon: 'lucideTrash2',
+      zCancelText: 'Cancel',
+      zWidth: '400px',
+      onOk: () => void onExtension(item, () => removeBrowserExtension(tab.id, item.id), `${item.name} removed`),
+    });
+  }
+  function openExtensionPage(item: BrowserExtension) {
+    if (!item.popup) return;
+    extOpen = false;
+    openInPreview(item.popup, 'new');
   }
 
   // What runs in the background (servers started from the Preview or by an agent): open it, or stop it.
@@ -848,7 +909,7 @@
     <div class="grid flex-1 place-items-center p-6 text-center text-xs text-muted-foreground">The browser runs in the AgentDeck desktop app.</div>
   {:else}
     <!-- Tabs -->
-    <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-1" role="tablist" aria-label="Browser tabs">
+    <div class="flex h-10 shrink-0 items-center gap-1 border-b border-border px-1.5" role="tablist" aria-label="Browser tabs">
       <div class="relative flex min-w-0 shrink items-center">
       <div bind:this={tabStrip} bind:clientWidth={tabStripWidth} onscroll={() => (tabScrolled = (tabStrip?.scrollLeft ?? 0) > 1)} class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
         {#each browser.tabs as item (item.id)}
@@ -857,7 +918,7 @@
             role="tab"
             tabindex="0"
             aria-selected={item.id === browser.activeId}
-            class="group/tab flex h-7 min-w-24 max-w-44 shrink-0 cursor-pointer items-center gap-1.5 rounded-md pr-1 pl-2 text-xs outline-none {item.id === browser.activeId ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+            class="group/tab flex h-8 min-w-24 max-w-44 shrink-0 cursor-pointer items-center gap-1.5 rounded-md pr-1 pl-2 text-xs outline-none {item.id === browser.activeId ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
             onclick={() => selectTab(item.id)}
             onkeydown={(event) => event.key === 'Enter' && selectTab(item.id)}
             title={tabTitle(item)}
@@ -891,17 +952,17 @@
           <TabListButton items={tabListItems} onpick={selectTab} label="Open tabs" />
         </div>
       {/if}
-      <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary {tabsFull() ? 'opacity-40' : ''}" aria-label="New tab" aria-disabled={tabsFull()} {@attach zTooltip({ content: tabsFull() ? `Tab limit reached (${MAX_TABS})` : 'New tab', position: 'top' })} onclick={addTab}>
+      <button type="button" class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary {tabsFull() ? 'opacity-40' : ''}" aria-label="New tab" aria-disabled={tabsFull()} {@attach zTooltip({ content: tabsFull() ? `Tab limit reached (${MAX_TABS})` : 'New tab', position: 'top' })} onclick={addTab}>
         <ZIcon zType="lucidePlus" class="size-4" />
       </button>
     </div>
 
     <!-- Address bar: navigation and address stay together; page tools live in the row below. -->
-    <div bind:clientWidth={barWidth} class="flex shrink-0 items-center gap-1 border-b border-border px-1 py-2">
+    <div bind:clientWidth={barWidth} class="flex h-10 shrink-0 items-center gap-1 border-b border-border px-1.5">
       <div class="flex shrink-0 items-center gap-0.5">
-        <button type="button" class={icon} aria-label="Back" {@attach zTooltip({ content: 'Back', position: 'top' })} onclick={() => void back()}><ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-4" /></button>
-        <button type="button" class={icon} aria-label="Forward" {@attach zTooltip({ content: 'Forward', position: 'top' })} onclick={() => void forward()}><ZIcon zType={'lucideArrowRight' as ZIconName} class="size-4" /></button>
-        <button type="button" class={icon} aria-label={tab.loading ? 'Stop' : 'Reload'} {@attach zTooltip({ content: tab.loading ? 'Stop loading' : 'Reload', position: 'top' })} onclick={() => void (tab.loading ? stop() : reload())}>
+        <button type="button" class="{icon} size-8!" aria-label="Back" {@attach zTooltip({ content: 'Back', position: 'top' })} onclick={() => void back()}><ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-4" /></button>
+        <button type="button" class="{icon} size-8!" aria-label="Forward" {@attach zTooltip({ content: 'Forward', position: 'top' })} onclick={() => void forward()}><ZIcon zType={'lucideArrowRight' as ZIconName} class="size-4" /></button>
+        <button type="button" class="{icon} size-8!" aria-label={tab.loading ? 'Stop' : 'Reload'} {@attach zTooltip({ content: tab.loading ? 'Stop loading' : 'Reload', position: 'top' })} onclick={() => void (tab.loading ? stop() : reload())}>
           {#if tab.loading}<ZLoading zLoading zSpinner="spinner" zSize="xs" zColor="primary" />{:else}<ZIcon zType={'lucideRotateCw' as ZIconName} class="size-4" />{/if}
         </button>
       </div>
@@ -909,7 +970,7 @@
         <button
           bind:this={lockButton}
           type="button"
-          class="absolute top-0.5 left-0.5 z-10 grid size-6 cursor-pointer place-items-center rounded outline-none hover:bg-primary/10 {security?.kind === 'secure' ? 'text-emerald-600 dark:text-emerald-400' : security?.kind === 'insecure' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}"
+          class="absolute top-0.5 left-0.5 z-10 grid size-7 cursor-pointer place-items-center rounded outline-none hover:bg-primary/10 {security?.kind === 'secure' ? 'text-emerald-600 dark:text-emerald-400' : security?.kind === 'insecure' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}"
           aria-label={security ? 'Site information' : 'Search'}
           aria-expanded={lockOpen}
           disabled={!security}
@@ -929,7 +990,7 @@
         <input
           bind:this={addressInput}
           bind:value={address}
-          class="h-7 w-full border bg-muted/40 pr-3 pl-8 text-xs outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:bg-background {suggestOpen ? 'rounded-t-md rounded-b-none border-primary border-b-border bg-background' : 'rounded-md border-border'}"
+          class="h-8 w-full border bg-muted/40 pr-3 pl-9 text-xs outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:bg-background {suggestOpen ? 'rounded-t-md rounded-b-none border-primary border-b-border bg-background' : 'rounded-md border-border'}"
           placeholder="Search or enter an address"
           aria-label="Address"
           role="combobox"
@@ -1007,7 +1068,7 @@
               role="radio"
               aria-checked={browser.device === item.value}
               aria-label={item.label}
-              class="grid h-6 w-7 cursor-pointer place-items-center rounded-sm outline-none {browser.device === item.value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+              class="grid h-7 w-8 cursor-pointer place-items-center rounded-sm outline-none {browser.device === item.value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
               {@attach zTooltip({ content: item.label, position: 'top' })}
               onclick={() => (browser.device = item.value)}
             >
@@ -1085,6 +1146,60 @@
         {/each}
       </div>
       <div data-page-menu class="flex shrink-0 items-center gap-1">
+        {#if canExtend}
+          <button bind:this={extButton} type="button" class="{icon} {extOpen ? TRIGGER_ON : ''}" aria-label="Extensions" aria-expanded={extOpen} {@attach zTooltip({ content: 'Extensions', position: 'top' })} onclick={toggleExtensions}>
+            <ZIcon zType={'lucidePuzzle' as ZIconName} class="size-4" />
+          </button>
+          <ZPopover anchor={extButton} bind:open={extOpen} zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth={320}>
+            {#snippet children()}
+              <div class="flex flex-col text-xs">
+                <div class="flex items-center gap-2 px-3 pt-2.5 pb-2">
+                  <ZIcon zType={'lucidePuzzle' as ZIconName} class="size-3.5 text-muted-foreground" />
+                  <span class="font-medium">Extensions</span>
+                  {#if extensions.length}<span class="rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground tabular-nums">{extensions.length}</span>{/if}
+                  {#if extLoading}<ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="primary" />{/if}
+                </div>
+                {#if extensions.length === 0 && !extLoading}
+                  <p class="m-0 mx-2 mb-2 rounded-lg border border-dashed border-border px-3 py-4 text-center text-muted-foreground">No extension yet. Add an unpacked one: a folder with a manifest.json.</p>
+                {/if}
+                <div class="flex max-h-80 flex-col gap-1.5 overflow-y-auto px-2 pb-2">
+                  {#each extensions as item (item.id || item.name)}
+                    {@const busyRow = extBusy !== '' && extBusy === item.id}
+                    <!-- One card each: its logo and name on top, what can be done to it below. -->
+                    <div class="rounded-lg border border-border bg-card/40 transition-colors hover:border-primary/30">
+                      <button type="button" class="flex w-full items-center gap-2.5 px-2.5 pt-2.5 pb-2 text-left outline-none {item.popup && item.enabled ? 'cursor-pointer' : 'cursor-default'}" disabled={!item.popup || !item.enabled} title={item.popup && item.enabled ? 'Open its page in a new tab' : item.name} onclick={() => openExtensionPage(item)}>
+                        <span class="grid size-7 shrink-0 place-items-center rounded-md bg-muted {item.enabled ? '' : 'grayscale opacity-60'}">
+                          {#if item.icon}<img src={item.icon} alt="" class="size-5 object-contain" />{:else}<ZIcon zType={'lucidePuzzle' as ZIconName} class="size-4 text-muted-foreground" />{/if}
+                        </span>
+                        <span class="min-w-0 flex-1">
+                          <span class="block truncate font-medium {item.enabled ? 'text-foreground' : 'text-muted-foreground'}">{item.name}</span>
+                          <span class="mt-0.5 block truncate text-[11px] text-muted-foreground">{!item.id ? 'Loads when a page opens' : item.enabled ? (item.popup ? 'On · click to open its page' : 'On') : 'Off'}</span>
+                        </span>
+                      </button>
+                      <div class="flex items-center gap-1 border-t border-border/60 px-2.5 py-1.5">
+                        <ZSwitch zVariant="dot" zSize="sm" checked={item.enabled} zLoading={busyRow} zDisabled={!item.id || busyRow} onChange={(on) => void onExtension(item, () => enableBrowserExtension(tab.id, item.id, on), on ? `${item.name} turned on` : `${item.name} turned off`)} />
+                        <span class="ml-1.5 text-[11px] text-muted-foreground">{item.enabled ? 'On' : 'Off'}</span>
+                        <span class="flex-1"></span>
+                        <button type="button" class="inline-flex h-5 shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 text-[10px] text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40" aria-label="Reload {item.name}" disabled={!item.id || !item.enabled || busyRow} onclick={() => void onExtension(item, () => reloadBrowserExtension(tab.id, item.id), `${item.name} reloaded`)}>
+                          <ZIcon zType={'lucideRefreshCw' as ZIconName} class="size-2.5" /> Reload
+                        </button>
+                        <button type="button" class="inline-flex h-5 shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 text-[10px] text-destructive outline-none hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40" aria-label="Remove {item.name}" disabled={!item.id || busyRow} onclick={() => dropExtension(item)}>
+                          <ZIcon zType={'lucideTrash2' as ZIconName} class="size-2.5" /> Remove
+                        </button>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+                {#if extensions.some((item) => !item.id)}
+                  <p class="m-0 px-3 pb-2 text-[11px] text-muted-foreground">Open a page to turn them on or off, reload or remove them.</p>
+                {/if}
+                <button type="button" class="flex items-center justify-center gap-1.5 border-t border-border px-3 py-2 font-medium text-primary outline-none hover:bg-primary/10" onclick={() => void addExtension()}>
+                  <ZIcon zType={'lucidePlus' as ZIconName} class="size-3.5" /> Add unpacked extension…
+                </button>
+              </div>
+            {/snippet}
+          </ZPopover>
+        {/if}
         <MenuButton items={moreItems} icon={compact ? 'lucideMenu' : 'lucideEllipsis'} label="More tools" width={240} />
       </div>
     </div>
@@ -1141,7 +1256,7 @@
       {/if}
 
       {#if !started}
-        <div class="absolute grid place-items-center p-6 text-center text-xs text-muted-foreground {deviceBox ? '' : 'inset-0'}" style:left={deviceBox ? `${deviceBox.x}px` : undefined} style:top={deviceBox ? `${deviceBox.y}px` : undefined} style:width={deviceBox ? `${deviceBox.w}px` : undefined} style:height={deviceBox ? `${deviceBox.h}px` : undefined}>
+        <div class="absolute grid place-items-center p-1.5 text-center text-xs text-muted-foreground {deviceBox ? '' : 'inset-0'}" style:left={deviceBox ? `${deviceBox.x}px` : undefined} style:top={deviceBox ? `${deviceBox.y}px` : undefined} style:width={deviceBox ? `${deviceBox.w}px` : undefined} style:height={deviceBox ? `${deviceBox.h}px` : undefined}>
           <div class="flex flex-col items-center gap-2">
             <ZIcon zType="lucideGlobe" zSize="28" class="size-7 opacity-60" />
             <p class="m-0">{targets.length ? 'Run the project, or enter an address above.' : 'Search or enter an address above.'}</p>

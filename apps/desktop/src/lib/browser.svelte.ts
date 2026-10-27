@@ -553,6 +553,13 @@ export async function addBrowserExtension(tab: string): Promise<string | null> {
   return call<string>('browser_add_extension', { tab, path });
 }
 
+/** An extension of the Preview profile (src-tauri/src/browser_extensions.rs). `id` is empty while no page is open. */
+export type BrowserExtension = { id: string; name: string; enabled: boolean; popup: string | null; icon: string | null };
+export const listBrowserExtensions = (tab: string) => call<BrowserExtension[]>('browser_extensions', { tab });
+export const enableBrowserExtension = (tab: string, id: string, enabled: boolean) => call('browser_extension_enable', { tab, id, enabled });
+export const reloadBrowserExtension = (tab: string, id: string) => call('browser_extension_reload', { tab, id });
+export const removeBrowserExtension = (tab: string, id: string) => call('browser_extension_remove', { tab, id });
+
 /** A local address (a dev server) is opened in the AgentDeck browser instead of leaving the app. */
 export const isLocalUrl = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(url);
 

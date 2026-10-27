@@ -37,9 +37,9 @@
   }
   const kindOf = (card: ReturnType<typeof cardOf>, record: ReturnType<typeof recordOf>) => (record?.agent ?? card.agent ?? '').toLowerCase();
 
-  const STATUS: Record<CardState, string> = { running: 'Working', background: 'Running in the background', approval: 'Needs approval', done: 'Answered', failed: 'Failed', stopped: 'Stopped' };
-  const TONE: Record<CardState, string> = { running: 'text-primary', background: 'text-primary', approval: 'text-warning', done: 'text-emerald-500', failed: 'text-destructive', stopped: 'text-muted-foreground' };
-  const live = (state: CardState) => state === 'running' || state === 'background' || state === 'approval';
+  const STATUS: Record<CardState, string> = { queued: 'Queued', running: 'Working', background: 'Running in the background', approval: 'Needs approval', done: 'Answered', failed: 'Failed', stopped: 'Stopped' };
+  const TONE: Record<CardState, string> = { queued: 'text-muted-foreground', running: 'text-primary', background: 'text-primary', approval: 'text-warning', done: 'text-emerald-500', failed: 'text-destructive', stopped: 'text-muted-foreground' };
+  const live = (state: CardState) => state === 'queued' || state === 'running' || state === 'background' || state === 'approval';
 
   /** The time the task has taken, read again each second while it works. */
   function took(card: ReturnType<typeof cardOf>): string {
@@ -71,9 +71,9 @@
           <span class="shrink-0 font-medium">{nameOf(card, record)}</span>
           <span class="min-w-0 flex-1 truncate text-muted-foreground">{doing(card) || firstLine(card.task)}</span>
           <span class="inline-flex min-w-0 shrink items-center gap-1 overflow-hidden whitespace-nowrap {TONE[card.state]}">
-            {#if card.state === 'running' || card.state === 'background'}
+            {#if card.state === 'running' || card.state === 'background' || card.state === 'queued'}
               <ZLoading zLoading zSpinner={LOADER.reasoning} zSize="2xs" zColor="current" />
-              <span class="block min-w-0 truncate [&>*]:block [&>*]:truncate"><ZShimmerText zBase="var(--primary)" zPeak="var(--foreground)" zText={STATUS[card.state]} /></span>
+              <span class="stream-label block min-w-0 truncate [&>*]:block [&>*]:truncate"><ZShimmerText zBase="var(--primary)" zPeak="var(--foreground)" zText={STATUS[card.state]} /></span>
             {:else if card.state === 'approval'}
               <ZIcon zType={'lucideShieldAlert' as ZIconName} class="size-3.5" /> {STATUS[card.state]}
             {:else if card.state === 'done'}
@@ -109,7 +109,7 @@
             {#if card.report}
               <p class="m-0 max-h-72 overflow-auto leading-snug break-words whitespace-pre-wrap text-muted-foreground">{card.report}</p>
             {:else if live(card.state)}
-              <p class="m-0 text-muted-foreground/70 italic">{card.state === 'background' ? 'Running in the background: the report comes back to the chat when it is done.' : 'Waiting for the report…'}</p>
+              <p class="m-0 text-muted-foreground/70 italic">{card.state === 'queued' ? 'Queued: at most 3 workers run at once; it starts when one finishes.' : card.state === 'background' ? 'Running in the background: the report comes back to the chat when it is done.' : 'Waiting for the report…'}</p>
             {:else}
               <p class="m-0 text-muted-foreground/70 italic">No report</p>
             {/if}

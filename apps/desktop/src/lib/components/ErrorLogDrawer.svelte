@@ -115,7 +115,7 @@
       <ZTabs
         zTabs={[{ value: 'all', label: 'All' }, ...areasHere.map((area) => ({ value: area, label: AREAS[area].label }))]}
         zType="segmented"
-        zSize="xs"
+        zSize="sm"
         zTabsOnly
         zNavFullWidth
         zCache={false}

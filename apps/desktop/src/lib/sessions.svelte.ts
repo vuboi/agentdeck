@@ -15,7 +15,7 @@ import {
 } from './history';
 import { messages as mockMessages, type Block, type Message } from './mock';
 import { openInPreview } from './browser.svelte';
-import { trackActivity } from './activity.svelte';
+import { logRequest, trackActivity } from './activity.svelte';
 import { logTalk } from './activity.svelte';
 import { guide } from './guide.svelte';
 import { parseQuestions, QUESTION_RULE } from './questions';
@@ -31,6 +31,9 @@ import {
   delegateReady,
   listenDelegateAborts,
   listenDelegateCalls,
+  enterWorkerSlot,
+  releaseWorkerSlot,
+  listenWorkerSlots,
   listenAgentEvents,
   replyDelegateCall,
   prewarmAgent,
@@ -432,15 +435,17 @@ const localReady = getPref<{
 }>('local.state').then(
   (saved) => {
     if (!saved) return;
-    // A reply that was still running when the app closed is not running any more.
+    // A reply that was still running when the app closed is not running any more: its open blocks are closed (as a
+    // stopped turn closes them), and its chat is idle, or the send button would stay a stop button after a reload.
     for (const [id, list] of Object.entries(saved.messages ?? {}))
       localMessages[id] = list.map((message) => ({
         ...message,
         agent: renamedAgent(message.agent),
         live: false,
+        blocks: applyAgentEvent(message.blocks, { kind: 'error', message: 'stopped' }).blocks,
       }));
     for (const savedItem of saved.sessions ?? []) {
-      const item = renamedSession(savedItem);
+      const item = { ...renamedSession(savedItem), status: 'idle' as const };
       // Empty new chats saved by an earlier version are not restored.
       if (isEmptyDraft(item)) continue;
       if (!workspace.sessions.some((existing) => existing.id === item.id))
@@ -452,6 +457,18 @@ const localReady = getPref<{
   () => {
     // Nothing saved, or no IndexedDB: start empty.
   },
+);
+
+// The two most recent chats (other than the open one) start their CLI a moment after start-up, so the first message to
+// either does not wait for it. Bounded: the idle pool keeps only a few processes (warm.rs), and prewarmChat throttles.
+void localReady.then(() =>
+  setTimeout(() => {
+    const recent = workspace.sessions
+      .filter((item) => !item.draft && item.id !== workspace.activeId)
+      .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+      .slice(0, 2);
+    for (const item of recent) prewarmChat(item.id);
+  }, 3000),
 );
 
 // The open session is saved on its own, so switching sessions survives a reload even without a send.
@@ -930,6 +947,29 @@ export type Queued = {
 };
 export const queued = $state<Record<string, Queued[]>>({});
 
+/** An agent whose account is being switched: a send to it waits, since the CLI it would start keeps the old sign-in
+ *  until the switch is done (see account-epoch.svelte.ts). The sends are kept whole (prompt, preface, silent turn) and
+ *  made, in order, when the switch ends. */
+const switchingAgent = (agent: string) => Boolean(connectors.busy[`switch:${agent}`]);
+const afterSwitch = new Map<string, (() => void)[]>();
+let switchingBefore = new Set<string>();
+$effect.root(() => {
+  $effect(() => {
+    const now = new Set(
+      Object.keys(connectors.busy)
+        .filter((key) => key.startsWith('switch:'))
+        .map((key) => key.slice('switch:'.length)),
+    );
+    for (const agent of switchingBefore) {
+      if (now.has(agent)) continue;
+      const waiting = afterSwitch.get(agent) ?? [];
+      afterSwitch.delete(agent);
+      for (const go of waiting) go();
+    }
+    switchingBefore = now;
+  });
+});
+
 type SessionWorkBatch = { failed: boolean };
 const sessionWorkBatches: Record<string, SessionWorkBatch> = {};
 
@@ -1043,7 +1083,13 @@ export function stopTurn(sessionId: string) {
     for (const member of state.members) if (replies[member.childId]) stopTurn(member.childId);
   }
   if (!replies[sessionId]) {
-    // Nothing is running any more but the chat still says so (a lost event): clear it.
+    // Nothing is running any more but the chat still says so (a lost event): clear it, and close the reply that was
+    // still open, so its thinking and text stop spinning.
+    const open = liveReplies[sessionId];
+    if (open?.live) {
+      open.blocks = applyAgentEvent(open.blocks, { kind: 'error', message: 'stopped' }).blocks;
+      open.live = false;
+    }
     const stuck = workspace.sessions.find((item) => item.id === sessionId);
     if (stuck?.status === 'working')
       stuck.status = hasSideTurn(sessionId) ? 'working' : 'idle';
@@ -1139,8 +1185,19 @@ function missedTurns(
   return `Earlier in this chat, other agents answered these turns (you were not part of them):\n\n${digest}\n\n---\nNow the user says:\n`;
 }
 
-/** When each chat's CLI was last asked to start ahead, so typing does not ask on every key. */
+/** When each chat's CLI was last asked to start ahead (by chat, agent and model), so typing does not ask on every key. */
 const prewarmedAt = new Map<string, number>();
+
+
+/** The conversation id a Claude chat takes after an account switch (by account epoch), so the CLI started ahead for it is the one used. */
+const accountNext: Record<string, { epoch: number; id: string }> = {};
+function accountConversationId(sessionId: string, epoch: number): string {
+  const ready = accountNext[sessionId];
+  if (ready?.epoch === epoch) return ready.id;
+  const id = crypto.randomUUID();
+  accountNext[sessionId] = { epoch, id };
+  return id;
+}
 
 /**
  * Starts the CLI of a chat whose next message is being typed (Claude, Codex, Antigravity keep it open between turns,
@@ -1151,28 +1208,39 @@ const prewarmedAt = new Map<string, number>();
 export function prewarmChat(sessionId: string) {
   const session = workspace.sessions.find((item) => item.id === sessionId);
   if (!session || !inTauri() || !['claude', 'codex', 'antigravity'].includes(session.agent) || isRunning(session.id)) return;
-  const now = Date.now();
-  if (now - (prewarmedAt.get(session.id) ?? 0) < 60_000) return;
-  prewarmedAt.set(session.id, now);
-  const first = session.source ?? session.agents?.[0] ?? session.agent;
   const selectedModel = modelFor(session);
+  const now = Date.now();
   const epoch = accountEpoch[session.agent] ?? 0;
+  // The account is part of the throttle: a switch makes a new CLI worth starting at once.
+  const throttle = `${session.id}|${session.agent}|${selectedModel}|${epoch}`;
+  if (now - (prewarmedAt.get(throttle) ?? 0) < 60_000) return;
+  prewarmedAt.set(throttle, now);
+  const first = session.source ?? session.agents?.[0] ?? session.agent;
   let cliId: string | null;
   let resume: boolean;
   if (session.agent === first) {
-    if (session.conversationModel && session.conversationModel !== selectedModel) return;
-    if (session.agentEpoch !== undefined && session.agentEpoch !== epoch) return;
-    const prefix = `${session.agent}:`;
-    const fromId = session.agentStarted === false ? undefined : session.id.startsWith(prefix) ? session.id.slice(prefix.length) : undefined;
-    if (!session.agentSession && !fromId && session.agent === 'claude') session.agentSession = crypto.randomUUID();
-    cliId = session.agentSession ?? fromId ?? null;
-    resume = cliId !== null && (session.agentStarted ?? !!session.path);
+    if (session.agentEpoch !== undefined && session.agentEpoch !== epoch) {
+      // The account changed: the next turn starts a new conversation under it (see startTurn). Its CLI is started now,
+      // with the id that turn will use, so the first message does not wait for the start.
+      cliId = session.agent === 'claude' ? accountConversationId(session.id, epoch) : null;
+      resume = false;
+    } else if (session.conversationModel && session.conversationModel !== selectedModel && !liveModel(session.agent)) {
+      // Another model starts a new conversation (see startTurn), which its CLI starts on its own when the message comes.
+      cliId = null;
+      resume = false;
+    } else {
+      const prefix = `${session.agent}:`;
+      const fromId = session.agentStarted === false ? undefined : session.id.startsWith(prefix) ? session.id.slice(prefix.length) : undefined;
+      if (!session.agentSession && !fromId && session.agent === 'claude') session.agentSession = crypto.randomUUID();
+      cliId = session.agentSession ?? fromId ?? null;
+      resume = cliId !== null && (session.agentStarted ?? !!session.path);
+    }
   } else {
     const own = session.agentIds?.[session.agent];
     // A first turn of Claude here picks its id then; Codex and Antigravity name theirs, so they start without one.
     if (!own && session.agent === 'claude') return;
     if (own && own.epoch !== undefined && own.epoch !== epoch) return;
-    if (session.agentModels?.[session.agent] && session.agentModels[session.agent] !== selectedModel) return;
+    if (session.agentModels?.[session.agent] && session.agentModels[session.agent] !== selectedModel && !liveModel(session.agent)) return;
     cliId = own?.id || null;
     resume = cliId !== null && Boolean(own?.started);
   }
@@ -1183,6 +1251,34 @@ export function prewarmChat(sessionId: string) {
     agentSession: cliId,
     resume,
     model: selectedModel,
+    permissionMode: PERMISSION_MODE[turnOptions.permission],
+    effort: (session.stepEffort ?? turnOptions.effort) as Effort,
+    allowedTools: [...(approved[session.id] ?? [])],
+    cwd,
+  }).catch(() => {});
+}
+
+/**
+ * Starts the CLI of the agent a chat would fall back to (Settings: keep working when an agent fails) while the chat's own
+ * agent works, so a failure at a limit does not also wait for a cold start. Only Codex and Antigravity name their own
+ * conversation, so only they can be started ahead without an id; Claude as a fallback starts when it is needed.
+ */
+function prewarmFallback(session: SessionItem) {
+  if (!connectors.recovery.enabled || !inTauri()) return;
+  const target = recoveryChain().find((agent) => agent !== session.agent && ['codex', 'antigravity'].includes(agent));
+  const model = target ? MODELS[target as Agent]?.[0]?.value : undefined;
+  if (!target || !model) return;
+  const throttle = `${session.id}|${target}|${model}|fallback`;
+  const now = Date.now();
+  if (now - (prewarmedAt.get(throttle) ?? 0) < 300_000) return;
+  prewarmedAt.set(throttle, now);
+  const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
+  void prewarmAgent({
+    session: session.id,
+    agent: target,
+    agentSession: null,
+    resume: false,
+    model,
     permissionMode: PERMISSION_MODE[turnOptions.permission],
     effort: (session.stepEffort ?? turnOptions.effort) as Effort,
     allowedTools: [...(approved[session.id] ?? [])],
@@ -1217,6 +1313,8 @@ function startTurn(
   const prefix = `${session.agent}:`;
   let cliId: string | null;
   let resume: boolean;
+  /** The conversation so far was put in `forkContext` for a new session (model or account change). */
+  let digested = false;
   const selectedModel = modelFor(session);
   rememberLastChat(
     session.agent,
@@ -1234,21 +1332,25 @@ function startTurn(
     const known = session.agentSession ?? fromId;
     cliId = known ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
     const modelChanged = Boolean(
-      session.conversationModel && session.conversationModel !== selectedModel,
+      session.conversationModel && session.conversationModel !== selectedModel && !liveModel(session.agent),
     );
     if (modelChanged) {
-      cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
+      // Codex and Antigravity name their new conversation themselves.
+      cliId = null;
       session.agentStarted = false;
+      session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id), MODEL_LEAD);
+      digested = true;
     }
     // A conversation begun under another account starts a new session: resuming the old one stalls. What was said
     // so far goes with the first message, so the agent does not lose the work in progress.
     const epoch = accountEpoch[session.agent] ?? 0;
     const accountChanged = session.agentEpoch !== undefined && session.agentEpoch !== epoch;
     if (accountChanged) {
-      cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
+      cliId = session.agent === 'claude' ? accountConversationId(session.id, epoch) : null;
       session.agentStarted = false;
       session.agentSession = undefined;
-      session.forkContext = (session.forkContext ?? '') + handoffFor(session.id, text);
+      if (!digested) session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id));
+      digested = true;
     }
     session.agentEpoch = epoch;
     if (cliId) session.agentSession = cliId;
@@ -1269,17 +1371,22 @@ function startTurn(
     if (cliId && !own.id) own.id = cliId;
     const modelChanged = Boolean(
       session.agentModels?.[session.agent] &&
-      session.agentModels[session.agent] !== selectedModel,
+      session.agentModels[session.agent] !== selectedModel &&
+      !liveModel(session.agent),
     );
-    if (modelChanged)
-      cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
+    if (modelChanged) {
+      cliId = null;
+      session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id), MODEL_LEAD);
+      digested = true;
+    }
     // The same account rule as the chat's first agent: a new session, with the conversation so far.
     const accountChanged = own.epoch !== undefined && own.epoch !== epoch;
     if (accountChanged) {
       cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
       own.started = false;
       if (cliId) own.id = cliId;
-      session.forkContext = (session.forkContext ?? '') + handoffFor(session.id, text);
+      if (!digested) session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id));
+      digested = true;
     }
     own.epoch = epoch;
     resume = cliId !== null && !modelChanged && !accountChanged && own.started;
@@ -1294,6 +1401,7 @@ function startTurn(
   }
   const turn = nextId();
   turns[session.id] = turn;
+  if (!isWorkerChat(session.id)) prewarmFallback(session);
   const list = messagesOf(session.id);
   // A silent turn (the hand-back) continues the finished reply that handed work out: it is one message on screen.
   const host = silent ? list.at(-1) : undefined;
@@ -1323,7 +1431,9 @@ function startTurn(
   }
   // A silent turn (the hand-back) has no message of its own: its reply simply follows the message that handed work out.
   const context =
-    preface + (session.forkContext ?? '') + missedTurns(session, list, !silent);
+    // The whole conversation already goes with a new session (a model or account change): the turns of the other agents
+    // are in it, so they are not added a second time.
+    preface + (session.forkContext ?? '') + (digested ? '' : missedTurns(session, list, !silent));
   session.forkContext = undefined;
   const asked = silent ? undefined : list.at(-1);
   if (!continues) list.push(reply);
@@ -1345,7 +1455,7 @@ function startTurn(
       ),
     );
     // A message that starts with `/name` is a command: its text goes to the agent, the chat keeps what was typed.
-    const body = await expandSlash(text, session.agent, cwd);
+    const body = isWorkerChat(session.id) ? text : await expandSlash(text, session.agent, cwd);
     if (session.agent === 'custom') {
       // A custom provider has no CLI to keep the conversation: the whole chat goes along with every turn.
       const target = parseCustomModel(selectedModel);
@@ -1439,11 +1549,29 @@ function startTurn(
       (attached
         ? `${body || (files.length && !paths.length ? 'Look at the attached file.' : 'Look at the attached image.')}\n\n${attached}`
         : body);
+    logRequest(
+      session.id,
+      session.title,
+      workspace.projects.find((project) => project.id === session.projectId)?.name ?? '',
+      agentLabel(session.agent, selectedModel ?? undefined),
+      selectedModel,
+      [
+        `Agent: ${session.agent}`,
+        `Model: ${selectedModel ?? 'default'}`,
+        `Effort: ${session.stepEffort ?? turnOptions.effort}`,
+        `Permission: ${turnOptions.permission}`,
+        `Conversation: ${resume ? `continues ${cliId}` : cliId ? `new (${cliId})` : 'new'}`,
+        `Folder: ${cwd ?? 'none'}`,
+        `Message: ${prompt.length} characters${images.length ? `, ${images.length} picture(s)` : ''}${files.length ? `, ${files.length} file(s)` : ''}`,
+      ].join('\n'),
+      session.agent,
+    );
     await sendAgentTurn({
       session: session.id,
       turn,
       agent: session.agent,
       prompt,
+      keepOpen: !isWorkerChat(session.id),
       agentSession: cliId,
       resume,
       // A model of another agent (left over from a switch) is never sent: the agent's own first model goes instead.
@@ -1629,7 +1757,12 @@ function sendNextQueued(sessionId: string) {
 const renderWaiters: Record<
   string,
   { messageId: string; blocks: Set<number> }
-> = {};
+> = $state({});
+
+/** Whether the reply is still being written out on screen (its text is not all rendered yet, see `replyBlockRendered`). */
+export function replyRendering(sessionId: string, messageId: string): boolean {
+  return renderWaiters[sessionId]?.messageId === messageId;
+}
 
 /** Called after a response block's final text has reached the DOM. */
 export function replyBlockRendered(
@@ -1688,6 +1821,40 @@ function recoveryFor(session: SessionItem, message: string): { kind: FailureKind
   return { kind, plan };
 }
 
+/**
+ * The CLI answered (part of) a turn with another model than the chat's. A fallback of the whole session ("session" scope,
+ * or none: older CLIs only had that) is followed: the chat's model becomes the one now serving, so the picker shows the
+ * truth and the next turn does not switch back. A "local" one (a sub-agent, a side question) leaves the chat's model as it
+ * is. Either way the reply gets one line saying what happened.
+ */
+function noteModelFallback(session: SessionItem, reply: Message, line: string) {
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  const text = (key: string, camel: string) => (typeof data[key] === 'string' ? data[key] : typeof data[camel] === 'string' ? data[camel] : '') as string;
+  const to = text('fallback_model', 'fallbackModel');
+  const from = text('original_model', 'originalModel');
+  const local = data.scope === 'local';
+  // Only a model the picker knows is taken over: `modelFor` would replace any other one with the agent's first model.
+  const known = (MODELS[session.agent] ?? []).some((item) => item.value === to);
+  const moves = !local && data.direction !== 'revert' && known;
+  if (moves && session.model !== to) {
+    session.model = to;
+    session.conversationModel = to;
+    window.dispatchEvent(new CustomEvent('agentdeck:agent-moved', { detail: { sessionId: session.id, agent: session.agent, model: to } }));
+  }
+  const said = text('content', 'content').trim();
+  const note =
+    said ||
+    (local
+      ? `Only that response came from ${modelLabel(to)}; the chat stays on ${modelLabel(from)}.`
+      : `${modelLabel(from) || 'The model'} could not answer: the chat continues on ${modelLabel(to)}.`);
+  reply.blocks = [...reply.blocks, { kind: 'response', text: `> ↻ ${note}` }];
+}
+
 /** Moves a chat to another agent (its first model), as picking it in the composer would. */
 export function moveChatTo(session: SessionItem, agent: Agent) {
   const model = MODELS[agent]?.[0]?.value ?? session.model;
@@ -1697,6 +1864,15 @@ export function moveChatTo(session: SessionItem, agent: Agent) {
   }
   session.agent = agent;
   session.model = model;
+  // A worker chat that moved on (after a failure) is handled by that agent now: the task says so, so its card and its
+  // report name the agent that answers.
+  const task = Object.values(delegateTasks).find((record) => record.childId === session.id);
+  if (task) {
+    task.agent = agent;
+    task.agentId = agent;
+    task.model = model;
+    task.label = `${agentLabel(agent, model)} · ${modelLabel(model)}`;
+  }
   // The composer keeps a picker per chat: it follows, or it would put the old agent back.
   window.dispatchEvent(new CustomEvent('agentdeck:agent-moved', { detail: { sessionId: session.id, agent, model } }));
 }
@@ -1903,8 +2079,11 @@ export function handleAgentEvent(
       ? `Tool failed: ${event.output.slice(0, 300)}`
       : `Finished ${documentTask.progress.replace(/^Agent is running /, '')}`;
   }
-  // A line of the CLI the chat does not show: it is only kept in the Audit log.
-  if (event.kind === 'raw') return;
+  // A line of the CLI the chat does not show: it is only kept in the Audit log. A model fallback is the one it does show.
+  if (event.kind === 'raw') {
+    if (reply && event.source === 'claude' && /^model_(refusal_)?fallback$/.test(event.label)) noteModelFallback(session, reply, event.line);
+    return;
+  }
   if (!reply) {
     if (event.kind === 'done' || event.kind === 'error') {
       delete replies[sessionId];
@@ -2473,7 +2652,7 @@ void getPref<TaskRecord[]>(TASKS_KEY)
   .then((saved) => {
     for (const item of Array.isArray(saved) ? saved : []) {
       if (delegateTasks[item.id]) continue;
-      const lost = item.state === 'running' || item.state === 'approval';
+      const lost = item.state === 'queued' || item.state === 'running' || item.state === 'approval';
       delegateTasks[item.id] = lost
         ? {
             ...item,
@@ -2577,12 +2756,18 @@ function statusText(record: TaskRecord): string {
     label: record.label,
     took: span((record.endedAt ?? Date.now()) - record.startedAt),
   };
-  if (record.state === 'running' || record.state === 'approval') {
+  if (
+    record.state === 'queued' ||
+    record.state === 'running' ||
+    record.state === 'approval'
+  ) {
     return formatTaskResult(
       { ...head, verdict: 'running' },
       record.state === 'approval'
         ? 'Waiting: the worker needs the user to approve a step in its chat.'
-        : 'Still working.',
+        : record.state === 'queued'
+          ? 'Queued: at most 3 workers run at once; it starts when one finishes.'
+          : 'Still working.',
     );
   }
   const verdict: Verdict =
@@ -2710,7 +2895,7 @@ function startTask(
     id: taskId,
     caller: caller.id,
     childId: id,
-    state: 'running',
+    state: 'queued',
     wait,
     label,
     agent,
@@ -2758,10 +2943,38 @@ function startTask(
   };
   stepWaiters.set(id, settle);
   const brief = `You were asked by another agent (${agentLabel(caller.agent, caller.model)}), who is working for the user in this project, to do the task below on your own. Answer fully, as you would for the user. ${REPORT_RULE} ${LANGUAGE_RULE}`;
-  send(id, task, [], [], [], { preface: `${brief}\n\n` });
+  // At most MAX_PARALLEL_WORKERS run at once (delegate.rs keeps the line); the rest wait as `queued`. A free place
+  // starts the worker at once, so three calls of one turn run side by side.
+  slotStarts.set(taskId, () => {
+    const record = delegateTasks[taskId];
+    if (!record || record.state !== 'queued' || !taskRuns.has(taskId)) return;
+    record.state = 'running';
+    record.startedAt = Date.now();
+    send(id, task, [], [], [], { preface: `${brief}\n\n` });
+    persistLocal();
+  });
   persistLocal();
-  if (wait) return;
-  reply(startedText({ taskId, childId: id, label }));
+  void enterWorkerSlot(taskId)
+    // A gate that cannot answer must not block the work.
+    .catch(() => true)
+    .then((granted) => {
+      // Ended (stopped, timed out) before the gate answered: its release came first and freed nothing, so the place
+      // it was just given goes back now.
+      if (!taskRuns.has(taskId)) {
+        void releaseWorkerSlot(taskId).catch(() => undefined);
+        return;
+      }
+      if (!wait) reply(startedText({ taskId, childId: id, label }, !granted));
+      if (granted) startQueued(taskId);
+    });
+}
+
+/** The worker waits for a place: the function that starts it once the place is given. */
+const slotStarts = new Map<string, () => void>();
+function startQueued(taskId: string) {
+  const start = slotStarts.get(taskId);
+  slotStarts.delete(taskId);
+  start?.();
 }
 
 /** Ends a task: the record, the worker's chat, and the answer: to the tool call that waits, or to the caller in line. */
@@ -2778,6 +2991,9 @@ function finishTask(
     failSessionWork(record.caller);
   clearTimeout(run.timer);
   taskRuns.delete(taskId);
+  slotStarts.delete(taskId);
+  // Its place goes to the next one in line (a task that never started leaves the line).
+  void releaseWorkerSlot(taskId).catch(() => undefined);
   stepWaiters.delete(record.childId);
   record.endedAt = Date.now();
   record.state =
@@ -2908,6 +3124,7 @@ if (inTauri()) {
   // The page before this one is gone with its chats: calls still waiting for it are answered with an error.
   void delegateReady().catch(() => undefined);
   void listenDelegateCalls(onDelegateCall);
+  void listenWorkerSlots(startQueued);
   // The Preview agent's memory of pages (page-memory.ts): its tools read and write the store through this.
   void startPageMemoryBridge();
   void listenDelegateAborts((callId) => {
@@ -4031,6 +4248,7 @@ function runBeside(
     turn,
     agent: session.agent,
     prompt: context + prompt,
+    keepOpen: false,
     // A conversation of its own: Claude takes the id we choose, the others name theirs on the first turn.
     agentSession: session.agent === 'claude' ? crypto.randomUUID() : null,
     resume: false,
@@ -4430,6 +4648,13 @@ function send(
   const body = text.trim();
   const files = extra.files ?? [];
   if (!session || replies[sessionId]) return;
+  // Waits behind the account switch of its agent, whole and in order (see switchingAgent).
+  if (switchingAgent(session.agent)) {
+    const waiting = afterSwitch.get(session.agent) ?? [];
+    waiting.push(() => send(sessionId, text, images, elements, mentions, extra));
+    afterSwitch.set(session.agent, waiting);
+    return;
+  }
   // The user took over: a wait for a limit to reset is over. (The recovery's own turns are silent.)
   if (!extra.silent) {
     delete resumes[sessionId];
@@ -4574,18 +4799,25 @@ function handoffFor(sessionId: string, prompt: string): string {
 
 /** What an agent is told after an account switch: the conversation so far, without the message it is about to get.
  *  The new session has no history of its own, so this is how the work in progress carries over. */
-function handoffDigest(list: Message[]): string {
+function handoffDigest(
+  list: Message[],
+  lead = 'The account was switched, so this is a new session of the same conversation. Continue the work in progress; do not redo what is already done.',
+): string {
   // Not the message about to be answered (the last one of the user), and not a reply that only holds an error line.
   const last = list.at(-1);
   const onlyError =
     last?.role === 'assistant' &&
     last.blocks.every((block) => block.kind === 'response' && (!block.text.trim() || block.text.trim().startsWith('⚠')));
   const before = last?.role === 'user' || onlyError ? list.slice(0, -1) : list;
-  return forkDigest(
-    before,
-    'The account was switched, so this is a new session of the same conversation. Continue the work in progress; do not redo what is already done.',
-  );
+  return forkDigest(before, lead);
 }
+
+/** Whether a chat's CLI switches its model in the same conversation (Claude's `set_model`, see warm.rs): a model change
+ *  then keeps the conversation. The other agents start a new one (and carry the turns so far, see MODEL_LEAD). */
+const liveModel = (agent: string) => agent === 'claude';
+
+/** What a model change carries over: a new CLI conversation cannot resume the old one, so the turns so far go with the next message. */
+const MODEL_LEAD = 'The model was changed, so this is a new session of the same conversation. Continue the work in progress; do not redo what is already done.';
 
 /** What a fork is told of the conversation it came from: the turns so far, newest kept when it is long. */
 function forkDigest(list: Message[], lead = 'This chat is a fork of an earlier conversation.'): string {

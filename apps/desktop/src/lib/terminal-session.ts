@@ -28,6 +28,8 @@ type Live = {
   term: Terminal;
   fit: FitAddon;
   search: SearchAddon;
+  /** The GPU renderer while it is attached (none: the DOM renderer draws). */
+  webgl?: WebglAddon;
   cwd?: string;
   /** The shell profile this tab asked for (an id from `pty_shells`); none: the default shell. */
   shell?: string;
@@ -347,6 +349,25 @@ async function begin(id: string, session: Live) {
   }
 }
 
+/**
+ * GPU drawing for a terminal that is open. A lost GPU context drops the renderer back to the DOM one; the GPU renderer
+ * is then attached again after a short wait, up to `retries` times, instead of staying off until the tab is reopened.
+ */
+function attachWebgl(id: string, session: Live, retries: number) {
+  try {
+    const gl = new WebglAddon();
+    gl.onContextLoss(() => {
+      gl.dispose();
+      session.webgl = undefined;
+      if (retries > 0) setTimeout(() => live.get(id) === session && attachWebgl(id, session, retries - 1), 1000);
+    });
+    session.term.loadAddon(gl);
+    session.webgl = gl;
+  } catch {
+    // No WebGL: the canvas-less DOM renderer stays.
+  }
+}
+
 function create(id: string, cwd: string | undefined, hooks: SessionHooks): Live {
   const windows = navigator.userAgent.includes('Windows');
   const term = new Terminal({
@@ -488,19 +509,15 @@ export function attachSession(id: string, container: HTMLElement, cwd: string | 
     existing.hooks.status(existing.exited ? 'exited' : 'running');
     existing.reportScroll();
     fitSession(id);
+    // Glyphs cached on the GPU can be stale after the box was away: they are drawn again.
+    existing.webgl?.clearTextureAtlas();
     existing.term.refresh(0, existing.term.rows - 1);
     return;
   }
   const session = create(id, cwd, hooks);
   session.shell = shell;
   session.term.open(container);
-  try {
-    const gl = new WebglAddon();
-    gl.onContextLoss(() => gl.dispose());
-    session.term.loadAddon(gl);
-  } catch {
-    // No WebGL: the canvas-less DOM renderer stays.
-  }
+  attachWebgl(id, session, 2);
   // The shell starts at the size of the box once it has settled, not at the size of a panel that is still opening: a
   // shell that draws its prompt with cursor queries (Nushell) was born at one size and resized a moment later, and
   // left a blank gap above its first line. The wait is the panel's slide (about a quarter of a second).

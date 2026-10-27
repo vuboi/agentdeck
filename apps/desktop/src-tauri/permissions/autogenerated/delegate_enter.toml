@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delegate-enter"
+description = "Enables the delegate_enter command without any pre-configured scope."
+commands.allow = ["delegate_enter"]
+
+[[permission]]
+identifier = "deny-delegate-enter"
+description = "Denies the delegate_enter command without any pre-configured scope."
+commands.deny = ["delegate_enter"]

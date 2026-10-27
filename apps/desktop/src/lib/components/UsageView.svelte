@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ZIcon } from '@shival99/z-ui-svelte';
+  import { ZIcon, ZTabs } from '@shival99/z-ui-svelte';
   import ProjectSelect from './ProjectSelect.svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { modelLabel } from '../models.svelte';
@@ -78,6 +78,10 @@
     return [...map.values()].sort((a, b) => b.tokens - a.tokens);
   });
   const draftPrice = $state<Record<string, { input: string; output: string; cacheRead: string }>>({});
+  // A price box for each model without one is made here, not in the template: a template must not change state.
+  $effect.pre(() => {
+    for (const line of unpriced) if (!draftPrice[line.model]) draftPrice[line.model] = { input: '', output: '', cacheRead: '' };
+  });
   function savePrice(model: string) {
     const draft = draftPrice[model];
     if (!draft || draft.input === '' || draft.output === '') return;
@@ -182,12 +186,8 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-1 flex-col text-xs" role="tabpanel" aria-label="Usage">
-  <div class="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-    <div class="flex rounded-md bg-muted p-0.5" role="tablist" aria-label="Range">
-      {#each RANGES as item (item.value)}
-        <button type="button" role="tab" aria-selected={range === item.value} class="cursor-pointer rounded px-2.5 py-0.5 {range === item.value ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (range = item.value)}>{item.label}</button>
-      {/each}
-    </div>
+  <div class="flex shrink-0 items-center gap-2 border-b border-border px-1.5 py-1.5">
+    <ZTabs zTabs={RANGES.map(({ value, label }) => ({ value, label }))} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={range} onTabChange={(next) => (range = next as typeof range)} />
     {#if projectIds.length > 1}
       <ProjectSelect bind:value={project} options={projectIds} label={projectName} class="ml-auto" />
     {/if}
@@ -204,7 +204,7 @@
       </p>
     </div>
   {:else}
-    <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-3">
+    <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-1.5">
       <div class="grid grid-cols-2 gap-2">
         {#each [
           { label: 'Cost', value: total.priced ? money(total.cost) : '–', hint: total.priced ? (total.priced < total.replies ? `Counts ${total.priced} of ${total.replies} replies: the others are of models without a price (below).` : undefined) : 'No reply here has a price: Codex, Gemini and local models report none. Type one under "Models without a price".' },
@@ -315,7 +315,8 @@
           <p class="m-0 mb-2 leading-normal text-muted-foreground">These models report no cost. Type their price in USD per million tokens and every reply, old ones too, is counted. A subscription is not charged by the token: leave it empty to count tokens only.</p>
           <ul class="m-0 flex list-none flex-col gap-2 p-0">
             {#each unpriced as line (line.model)}
-              {@const draft = (draftPrice[line.model] ??= { input: '', output: '', cacheRead: '' })}
+              {@const draft = draftPrice[line.model]}
+              {#if draft}
               <li class="rounded-lg border border-border px-2.5 py-2">
                 <div class="flex items-baseline gap-2">
                   <span class="min-w-0 flex-1 truncate font-medium" title={line.model}>{modelLabel(line.model)}</span>
@@ -327,6 +328,7 @@
                   <label class="flex flex-col gap-0.5 text-[10px] text-muted-foreground">Cache $/M<input type="number" min="0" step="any" inputmode="decimal" bind:value={draft.cacheRead} onchange={() => savePrice(line.model)} class="h-7 min-w-0 rounded-md border border-border bg-background px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary" placeholder="auto" /></label>
                 </div>
               </li>
+              {/if}
             {/each}
           </ul>
         </section>

@@ -89,12 +89,17 @@ impl Provider for Claude {
     }
 
     fn environment(&self, req: &TurnRequest) -> Vec<(String, String)> {
+        // No auto-update check, telemetry or feature-flag fetch on start-up: measured on a cold start, the first answer
+        // comes 0.4 to 1.3 s sooner and the process ends faster. (It also turns Remote Control off: not used here.)
+        let mut env = vec![("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_string(), "1".to_string())];
         // An API key wins over the signed-in plan in Claude Code's sign-in order: the turn spends Console credit.
-        req.api_key
-            .iter()
-            .filter(|key| !key.is_empty())
-            .map(|key| ("ANTHROPIC_API_KEY".to_string(), key.clone()))
-            .collect()
+        env.extend(
+            req.api_key
+                .iter()
+                .filter(|key| !key.is_empty())
+                .map(|key| ("ANTHROPIC_API_KEY".to_string(), key.clone())),
+        );
+        env
     }
 
     fn args(&self, req: &TurnRequest) -> Vec<String> {
@@ -171,6 +176,19 @@ impl Provider for Claude {
 
     fn warm_message(&self, prompt: &str) -> String {
         serde_json::json!({ "type": "user", "message": { "role": "user", "content": prompt } }).to_string()
+    }
+
+    fn interrupt_mode(&self) -> super::interrupt::InterruptMode {
+        super::interrupt::InterruptMode::StreamJson
+    }
+
+    fn live_model(&self) -> bool {
+        true
+    }
+
+    fn model_switch_line(&self, request_id: &str, model: &str) -> String {
+        // The CLI's own `set_model` control request: it keeps the conversation and changes the model of the next turn.
+        serde_json::json!({ "type": "control_request", "request_id": request_id, "request": { "subtype": "set_model", "model": model } }).to_string()
     }
 
     fn parse_line(&self, line: &str) -> Vec<AgentEvent> {
@@ -257,6 +275,17 @@ impl Provider for Claude {
                     image: super::result_image(&block["content"]),
                 })
                 .collect(),
+            // The CLI moved a turn to another model (a refusal, an overload, a model that is gone). Passed on as it is:
+            // the chat says so and, when the whole session moved (`scope` other than "local"), follows the new model.
+            Some("system")
+                if matches!(value["subtype"].as_str(), Some("model_refusal_fallback" | "model_fallback")) =>
+            {
+                vec![AgentEvent::Raw {
+                    source: "claude".to_string(),
+                    label: value["subtype"].as_str().unwrap_or_default().to_string(),
+                    line: line.to_string(),
+                }]
+            }
             Some("result") => {
                 let denied: Vec<PermissionRequest> = value["permission_denials"]
                     .as_array()
@@ -321,12 +350,13 @@ mod tests {
 
     #[test]
     fn an_api_key_reaches_the_cli_as_its_environment() {
-        assert!(Claude.environment(&req(false)).is_empty());
+        let quiet = ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_string(), "1".to_string());
+        assert_eq!(Claude.environment(&req(false)), vec![quiet.clone()]);
         let mut with_key = req(false);
         with_key.api_key = Some("sk-ant-test".into());
         assert_eq!(
             Claude.environment(&with_key),
-            vec![("ANTHROPIC_API_KEY".to_string(), "sk-ant-test".to_string())]
+            vec![quiet, ("ANTHROPIC_API_KEY".to_string(), "sk-ant-test".to_string())]
         );
     }
 
@@ -384,6 +414,24 @@ mod tests {
                 cost_usd: Some(0.5)
             }]
         );
+    }
+
+    #[test]
+    fn a_model_fallback_is_passed_on_and_other_system_lines_are_not() {
+        let line = r#"{"type":"system","subtype":"model_refusal_fallback","direction":"retry","scope":"local","original_model":"opus","fallback_model":"sonnet"}"#;
+        assert!(matches!(Claude.parse_line(line).as_slice(), [AgentEvent::Raw { label, .. }] if label == "model_refusal_fallback"));
+        assert!(Claude.parse_line(r#"{"type":"system","subtype":"init"}"#).is_empty());
+    }
+
+    #[test]
+    fn a_model_switch_is_the_cli_set_model_control_request() {
+        let line = Claude.model_switch_line("agentdeck-model-1", "sonnet");
+        assert!(!line.contains('\n'));
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["type"], "control_request");
+        assert_eq!(value["request_id"], "agentdeck-model-1");
+        assert_eq!(value["request"]["subtype"], "set_model");
+        assert_eq!(value["request"]["model"], "sonnet");
     }
 
     #[test]

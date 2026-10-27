@@ -24,6 +24,7 @@
     addAccount,
     cancelAccountAdd,
     allowSystemNotifications,
+    setKeepAwake,
     cancelLogin,
     connectors,
     consumeCodexResetCredit,
@@ -1100,6 +1101,16 @@
                     if (problem) toast.error(problem);
                     else toast.success('Test notification sent. If nothing appeared, check Focus Assist / Do Not Disturb.');
                   }}><ZIcon zType={'lucideBell' as ZIconName} class="size-3.5" /> Send a test</ZButton>
+              </section>
+
+              <section class="rounded-xl border border-border p-4">
+                <div class="flex items-start gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm font-medium">Prevent system sleep</div>
+                    <p class="mt-0.5 text-xs text-muted-foreground">Keeps the computer awake while AgentDeck is open, so a long agent task or a reply being waited for is not cut off when the system suspends. The screen may still turn off. Works on Windows, macOS and Linux.</p>
+                  </div>
+                  <ZSwitch zVariant="dot" checked={connectors.alerts.keepAwake !== false} zSize="sm" onChange={(value) => void setKeepAwake(value)} />
+                </div>
               </section>
 
               <section class="rounded-xl border border-border p-4">

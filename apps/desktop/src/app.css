@@ -282,6 +282,12 @@ html[data-warming] [data-z-popover] {
 .md-table th, .md-table td { padding: 0.4rem 0.8rem; text-align: left; border: 0; }
 .md-table th { font-weight: 600; color: var(--muted-foreground); font-size: 0.75rem; border-bottom: 1px solid var(--border); }
 .md-table tr + tr td { border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent); }
+/* Words stay whole (a "Mức" or "minor" cell does not split into letters), headers stay on one line, the "#" column hugs its
+   number, and a long code span (a path) may wrap anywhere, so it does not claim a column of its own. */
+.md-table th { white-space: nowrap; }
+.md-table th, .md-table td { overflow-wrap: normal; word-break: normal; }
+.md-table td:first-child, .md-table th:first-child { width: 1%; white-space: nowrap; }
+.md-table td code { overflow-wrap: anywhere; }
 .md img { max-width: 100%; border-radius: var(--radius-large); }
 .md-code { margin: 0 0 0.75rem; overflow: clip; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
 .md-code-head, .md-code-foot { position: relative; display: flex; align-items: center; justify-content: space-between; background: var(--muted); color: var(--muted-foreground); font-size: 0.6875rem; }
@@ -292,6 +298,11 @@ html[data-warming] [data-z-popover] {
 .md-code-head button:hover, .md-code-foot button:hover { background: var(--accent); color: var(--foreground); }
 .md-code-head button svg, .md-code-foot button svg { grid-area: 1 / 1; transition: opacity 0.18s, transform 0.18s; }
 .md-code-head .ic-check, .md-code-foot .ic-check { opacity: 0; transform: scale(0.4); color: var(--success, #22c55e); }
+.md-table .md-code-head { border-radius: 0; }
+
+/* Running labels (Thinking, Reasoning, Working, a Shimmer status) read at the size of the streamed answer. One place: a
+   component that shows such a label uses this class, not its own size. */
+.stream-label { font-size: var(--text-sm); line-height: var(--text-sm--line-height); }
 .md-code-head button[data-copied] .ic-copy, .md-code-foot button[data-copied] .ic-copy { opacity: 0; transform: scale(0.4); }
 .md-code-head button[data-copied] .ic-check, .md-code-foot button[data-copied] .ic-check { opacity: 1; transform: scale(1); }
 .md-code-head .ic-check path, .md-code-foot .ic-check path { stroke-dasharray: 24; stroke-dashoffset: 24; }

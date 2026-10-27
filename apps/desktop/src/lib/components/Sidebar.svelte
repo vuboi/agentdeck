@@ -672,7 +672,7 @@
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 pl-3" data-tauri-drag-region>
     <Logo class="size-5" />
     <span class="text-xs font-semibold" data-tauri-drag-region>AgentDeck</span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-7! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : layout.sidebarCollapsed && layout.sidebarDrawer ? pinSidebar() : setSidebarCollapsed(true))}>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-8! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : layout.sidebarCollapsed && layout.sidebarDrawer ? pinSidebar() : setSidebarCollapsed(true))}>
       <ZIcon zType={'lucidePanelLeft' as ZIconName} class="size-3.5" />
     </ZButton>
   </div>
@@ -680,14 +680,14 @@
   <div class="border-b border-border px-2 py-2">
     <div class="flex gap-1">
       <!-- Lit while the open chat is a new one nobody wrote in yet; the message box is focused, ready to type. -->
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 min-w-0 flex-1 justify-start gap-2 px-2 text-xs {pending ? 'bg-[color-mix(in_oklab,var(--color-primary)_16%,var(--color-background))]! text-foreground!' : ''}" onclick={() => openNewChatTab()}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-8 min-w-0 flex-1 justify-start gap-2 px-2 text-xs {pending ? 'bg-[color-mix(in_oklab,var(--color-primary)_16%,var(--color-background))]! text-foreground!' : ''}" onclick={() => openNewChatTab()}>
         <ZIcon zType="lucidePlus" class="size-3.5" />
         New session
       </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Search chats (Ctrl+P)" title="Search chats (Ctrl+P)" onclick={() => (searchOpen = true)}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! shrink-0 p-0" aria-label="Search chats (Ctrl+P)" title="Search chats (Ctrl+P)" onclick={() => (searchOpen = true)}>
         <ZIcon zType="lucideSearch" class="size-3.5" />
       </ZButton>
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Add project folder" title="Add project folder" onclick={() => void pickProject()}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! shrink-0 p-0" aria-label="Add project folder" title="Add project folder" onclick={() => void pickProject()}>
         <ZIcon zType={'lucideFolderPlus' as ZIconName} class="size-3.5" />
       </ZButton>
     </div>

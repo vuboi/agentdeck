@@ -202,7 +202,7 @@ export function reportDigest(answer: string): string {
   return clean.length > DIGEST_MAX ? `…${clean.slice(-DIGEST_MAX)}` : clean;
 }
 
-export type TaskState = 'running' | 'approval' | 'done' | 'failed' | 'stopped';
+export type TaskState = 'queued' | 'running' | 'approval' | 'done' | 'failed' | 'stopped';
 export type Verdict = 'done' | 'failed' | 'stopped' | 'timed out';
 
 const oneLine = (reason: string, max = 300) => {
@@ -237,7 +237,8 @@ export function parseTaskResult(output: string): { taskId: string; childId: stri
 }
 
 /** The immediate answer of a task started in the background. */
-export function startedText(head: Omit<TaskHeader, 'verdict' | 'took'>): string {
+export function startedText(head: Omit<TaskHeader, 'verdict' | 'took'>, queued = false): string {
+  if (queued) return formatTaskResult({ ...head, verdict: 'running' }, 'Queued: at most 3 workers run at once, so it starts as soon as one finishes. Its short report is delivered to you as a new message when it is done, so do not poll or wait for it; task_status and task_stop are there if you need them.');
   return formatTaskResult({ ...head, verdict: 'running' }, 'Started in the background: it keeps working while you carry on with other things. When it finishes its short report is delivered to you as a new message, so do not poll or wait for it; task_status and task_stop are there if you need them.');
 }
 
@@ -304,7 +305,7 @@ export type TaskRecord = {
   endedAt?: number;
 };
 
-export type CardState = 'running' | 'background' | 'approval' | 'done' | 'failed' | 'stopped';
+export type CardState = 'queued' | 'running' | 'background' | 'approval' | 'done' | 'failed' | 'stopped';
 export type TaskCard = {
   taskId?: string;
   childId?: string;

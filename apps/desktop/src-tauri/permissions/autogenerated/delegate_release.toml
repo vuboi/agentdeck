@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delegate-release"
+description = "Enables the delegate_release command without any pre-configured scope."
+commands.allow = ["delegate_release"]
+
+[[permission]]
+identifier = "deny-delegate-release"
+description = "Denies the delegate_release command without any pre-configured scope."
+commands.deny = ["delegate_release"]

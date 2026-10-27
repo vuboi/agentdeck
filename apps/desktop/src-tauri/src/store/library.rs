@@ -11,7 +11,7 @@ use super::lock;
 use crate::slash_commands;
 
 /// The agents that read skills from a folder AgentDeck can write to.
-pub const SKILL_AGENTS: [&str; 2] = ["claude", "codex"];
+pub const SKILL_AGENTS: [&str; 4] = ["claude", "codex", "opencode", "antigravity"];
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct SkillItem {
@@ -40,6 +40,14 @@ fn skill_folders(home: &Path, agent: &str) -> Vec<PathBuf> {
             home.join(".codex").join("skills"),
             home.join(".agents").join("skills"),
         ],
+        // OpenCode's own folders (`{skill,skills}/**/SKILL.md` under its config). It also reads `~/.claude/skills` and
+        // `~/.agents/skills`, so a skill given to Claude or Codex is already visible to it.
+        "opencode" => vec![
+            home.join(".config").join("opencode").join("skills"),
+            home.join(".config").join("opencode").join("skill"),
+        ],
+        // Antigravity (agy) reads the skills of its config folder.
+        "antigravity" => vec![home.join(".gemini").join("config").join("skills")],
         _ => Vec::new(),
     }
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-keep-awake-set"
+description = "Enables the keep_awake_set command without any pre-configured scope."
+commands.allow = ["keep_awake_set"]
+
+[[permission]]
+identifier = "deny-keep-awake-set"
+description = "Denies the keep_awake_set command without any pre-configured scope."
+commands.deny = ["keep_awake_set"]

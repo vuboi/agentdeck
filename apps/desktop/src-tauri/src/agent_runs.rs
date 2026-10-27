@@ -3,13 +3,15 @@
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 use ag_adapters::agent::antigravity::Antigravity;
 use ag_adapters::agent::claude::Claude;
 use ag_adapters::agent::codex::Codex;
 use ag_adapters::agent::opencode::OpenCode;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
-use ag_adapters::agent::warm::drive_warm_turn;
+use ag_adapters::agent::interrupt::{StopHandle, StopToken, INTERRUPT_DEADLINE};
+use ag_adapters::agent::warm::drive_warm_turn_with;
 use ag_adapters::agent::{AgentEvent, Provider, TurnRequest};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -29,16 +31,39 @@ struct AgentEnvelope {
 struct Run {
     turn: String,
     handle: tauri::async_runtime::JoinHandle<()>,
+    /// How to ask the run to stop gracefully (an interrupt, so its warm CLI survives). `None` for a run that cannot
+    /// (a custom provider): it is aborted.
+    stop: Option<StopHandle>,
+}
+
+/// Extra time after the adapter's own deadline before the task is aborted, for a run stuck where its deadline is not read
+/// (waiting for the chat's lock, starting a CLI).
+const ABORT_GRACE: Duration = Duration::from_secs(5);
+
+/// Stops a run: an interrupt the CLI answers by ending the turn, so the process stays warm and the half-done step is kept.
+/// The task is aborted (which kills the CLI's process tree) only if it is still running after `INTERRUPT_DEADLINE`.
+fn stop_run(run: Run) {
+    let Some(stop) = run.stop else {
+        run.handle.abort();
+        return;
+    };
+    stop.stop();
+    let mut handle = run.handle;
+    tauri::async_runtime::spawn(async move {
+        if tokio::time::timeout(INTERRUPT_DEADLINE + ABORT_GRACE, &mut handle).await.is_err() {
+            handle.abort();
+        }
+    });
 }
 
 /// The runs in progress, per chat, so one can be stopped.
 static RUNNING: LazyLock<Mutex<HashMap<String, Run>>> = LazyLock::new(Default::default);
 
 /// Keeps `handle` as the chat's run. A chat runs one turn at a time: the run it replaces is stopped.
-fn track(session: String, turn: String, handle: tauri::async_runtime::JoinHandle<()>) {
+fn track(session: String, turn: String, handle: tauri::async_runtime::JoinHandle<()>, stop: Option<StopHandle>) {
     if let Ok(mut running) = RUNNING.lock() {
-        if let Some(previous) = running.insert(session, Run { turn, handle }) {
-            previous.handle.abort();
+        if let Some(previous) = running.insert(session, Run { turn, handle, stop }) {
+            stop_run(previous);
         }
     }
 }
@@ -80,21 +105,27 @@ async fn run_turn(
     turn: String,
     provider: Box<dyn Provider>,
     req: TurnRequest,
+    keep_open: bool,
+    mut stop: StopToken,
 ) {
     if provider.id() == "antigravity" {
         mcp_manage::ensure_agy_link().await;
     }
     let binary = resolve_binary(provider.as_ref());
     // Claude, Codex and Antigravity keep their CLI open between the chat's turns (see `warm.rs`); OpenCode starts one per turn.
-    let warm = drive_warm_turn(binary.clone(), provider.as_ref(), &req, |event| {
-        emit(&app, &session, &turn, event)
-    })
-    .await;
-    if !warm {
-        drive_turn(binary, provider.as_ref(), &req, |event| {
+    // A turn that runs for another one (a side answer, a delegated worker, a step of a flow) is run once, not kept: it
+    // would sit idle for twenty minutes and push the processes of the chats people are in out of the pool.
+    let warm = keep_open
+        && drive_warm_turn_with(binary.clone(), provider.as_ref(), &req, stop.clone(), |event| {
             emit(&app, &session, &turn, event)
         })
         .await;
+    if !warm {
+        // A per-turn process has no interrupt message: a stop drops the turn, which ends its process tree.
+        tokio::select! {
+            () = drive_turn(binary, provider.as_ref(), &req, |event| emit(&app, &session, &turn, event)) => {}
+            () = stop.stopped() => {}
+        }
     }
     forget(&session, &turn);
 }
@@ -162,6 +193,7 @@ pub(crate) async fn agent_send(
     allowed_tools: Vec<String>,
     cwd: Option<String>,
     api_key: Option<String>,
+    keep_open: Option<bool>,
 ) -> Result<(), String> {
     let provider = provider_for(&agent)?;
     let req = TurnRequest {
@@ -176,14 +208,17 @@ pub(crate) async fn agent_send(
         owner: Some(session.clone()),
         api_key,
     };
+    let (stop, token) = StopHandle::new();
     let handle = tauri::async_runtime::spawn(run_turn(
         app,
         session.clone(),
         turn.clone(),
         provider,
         req,
+        keep_open.unwrap_or(true),
+        token,
     ));
-    track(session, turn, handle);
+    track(session, turn, handle, Some(stop));
     Ok(())
 }
 
@@ -226,11 +261,11 @@ pub(crate) async fn custom_send(
         .await;
         forget(&chat, &this_turn);
     });
-    track(session, turn, handle);
+    track(session, turn, handle, None);
     Ok(())
 }
 
-/// Stops the run of a chat: its CLI process is killed with the task. With `turn`, only that turn is stopped: a stop
+/// Stops the run of a chat: its CLI is interrupted and keeps running, warm (see `stop_run`). With `turn`, only that turn is stopped: a stop
 /// that reaches this side after the chat's next message was sent must not kill the new run (it would never answer).
 #[tauri::command]
 pub(crate) fn agent_stop(session: String, turn: Option<String>) {
@@ -238,7 +273,7 @@ pub(crate) fn agent_stop(session: String, turn: Option<String>) {
         let current = running.get(&session).map(|run| run.turn.as_str());
         if current.is_some() && (turn.is_none() || turn.as_deref() == current) {
             if let Some(run) = running.remove(&session) {
-                run.handle.abort();
+                stop_run(run);
             }
         }
     }

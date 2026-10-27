@@ -1,15 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fly } from 'svelte/transition';
-  import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, zModalService } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { askConfirm } from '../confirm.svelte';
   import { TRIGGER_ON } from '../popover';
   import { catalog, installCatalogItem, loadCatalog, loadMoreCatalog, refreshCatalog, store, withAck, type CatalogFilter, type CatalogItem } from '../store.svelte';
   import AgentLogo from './AgentLogo.svelte';
   import PickerPopover, { type PickerItem } from './PickerPopover.svelte';
   import StoreEmpty from './StoreEmpty.svelte';
   import StoreBar from './StoreBar.svelte';
+  import { clearTopActions, setTopActions } from '../store-actions.svelte';
   import { debounced } from '../debounce.svelte';
   import StoreSkeleton, { GUTTER, ROW } from './StoreSkeleton.svelte';
 
@@ -18,7 +17,7 @@
   // The catalog of plugins, MCP servers and skills. Rust filters it and hands over a page at a time: the next page loads
   // when the list is scrolled near its end, so the first view never waits for thousands of items.
   type Kind = 'all' | CatalogItem['kind'];
-  type AgentFilter = 'all' | 'claude' | 'codex';
+  type AgentFilter = 'all' | 'claude' | 'codex' | 'opencode' | 'antigravity';
   const KINDS: { value: Kind; label: string; icon: string }[] = [
     { value: 'all', label: 'All kinds', icon: 'lucideLayers' },
     { value: 'plugin', label: 'Plugins', icon: 'lucidePuzzle' },
@@ -29,6 +28,9 @@
     { value: 'all', label: 'Any agent' },
     { value: 'claude', label: 'Claude' },
     { value: 'codex', label: 'Codex' },
+    // Skills only: plugins and MCP entries of the catalog are for Claude and Codex.
+    { value: 'opencode', label: 'OpenCode' },
+    { value: 'antigravity', label: 'Antigravity' },
   ];
 
   let query = $state('');
@@ -54,6 +56,11 @@
   );
 
   const searched = debounced(() => query);
+  const owner = Symbol('discover');
+  $effect(() => {
+    setTopActions(owner, [{ id: 'refresh', label: 'Refresh the catalog', icon: 'lucideRefreshCw', onclick: () => void refreshCatalog(), busy: catalog.refreshing }]);
+    return () => clearTopActions(owner);
+  });
   const filter = $derived<CatalogFilter>({ query: searched.value, kind, agent });
 
   // A new filter reads its first page; the search waits for typing to stop (`debounced`), so each key does not ask Rust. The
@@ -77,9 +84,6 @@
       filtering = false;
     })();
   });
-
-  // Rows come in one after another; a page past the first screen does not wait for its delay.
-  const rise = (index: number) => ({ y: 6, duration: 180, delay: Math.min(index % 40, 12) * 25 });
 
   onMount(async () => {
     await loadCatalog(filter);
@@ -108,8 +112,16 @@
 
   async function install(item: CatalogItem) {
     if (item.kind === 'mcp') {
-      const yes = await askConfirm({ title: `Install ${item.name}?`, text: `It will run on this computer:\n${mcpCommand(item)}`, ok: 'Install' });
-      if (yes) await installCatalogItem(item, true);
+      zModalService.show({
+        zTitle: `Install ${item.name}?`,
+        zContent: `It will run on this computer:\n${mcpCommand(item)}`,
+        zConfirmStyle: 'dialog',
+        zOkText: 'Install',
+        zOkIcon: 'lucideDownload',
+        zCancelText: 'Cancel',
+        zWidth: '400px',
+        onOk: () => void installCatalogItem(item, true),
+      });
       return;
     }
     await withAck((acknowledged) => installCatalogItem(item, acknowledged), item.name);
@@ -117,16 +129,16 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col">
-  <StoreBar bind:query placeholder="Search plugins, MCP servers, skills" actions={[{ id: 'refresh', label: 'Refresh the catalog', icon: 'lucideRefreshCw', onclick: () => void refreshCatalog(), busy: catalog.refreshing }]}>
+  <StoreBar bind:query placeholder="Search plugins, MCP servers, skills" >
     {#snippet filters()}
       <span bind:this={kindButton}>
-        <ZButton zWave={false} zType="outline" zSize="sm" class="h-9 gap-1.5 px-3 text-xs {kindOpen ? TRIGGER_ON : ''}" aria-expanded={kindOpen} onclick={() => (kindOpen = !kindOpen)}>
+        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs {kindOpen ? TRIGGER_ON : ''}" aria-expanded={kindOpen} onclick={() => (kindOpen = !kindOpen)}>
           {KINDS.find((option) => option.value === kind)?.label}
           <ZIcon zType={icon('lucideChevronDown')} class="size-3" />
         </ZButton>
       </span>
       <span bind:this={agentButton}>
-        <ZButton zWave={false} zType="outline" zSize="sm" class="h-9 gap-1.5 px-3 text-xs {agentOpen ? TRIGGER_ON : ''}" aria-expanded={agentOpen} onclick={() => (agentOpen = !agentOpen)}>
+        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs {agentOpen ? TRIGGER_ON : ''}" aria-expanded={agentOpen} onclick={() => (agentOpen = !agentOpen)}>
           {#if agent !== 'all'}<AgentLogo {agent} class="size-3.5" />{/if}
           {AGENTS.find((option) => option.value === agent)?.label}
           <ZIcon zType={icon('lucideChevronDown')} class="size-3" />
@@ -139,7 +151,7 @@
   <PickerPopover anchor={agentButton} bind:open={agentOpen} items={agentItems} size="sm" fitContent width={160} label="Agent" onpick={(item) => { agent = item.data; agentOpen = false; }} />
 
   {#if catalog.error}
-    <p class="m-0 mx-3 mt-2 rounded-md border border-destructive/30 bg-destructive/10 p-2 text-destructive">{catalog.error}</p>
+    <p class="m-0 mx-1.5 mt-1.5 rounded-md border border-destructive/30 bg-destructive/10 p-2 text-destructive">{catalog.error}</p>
   {/if}
   {#if catalog.errors.length > 0}
     <ul class="m-0 list-none px-3 pt-2 text-[11px] text-amber-600 dark:text-amber-400">
@@ -148,14 +160,14 @@
   {/if}
 
   <div bind:this={scroller} class="flex min-h-0 flex-1 flex-col overflow-y-auto text-xs {GUTTER}">
-    {#if catalog.refreshing || filtering || (catalog.loading && catalog.items.length === 0)}
+    {#if catalog.items.length === 0 && (catalog.refreshing || filtering || catalog.loading)}
       <StoreSkeleton />
     {:else if catalog.items.length === 0}
       <StoreEmpty icon="lucideSearch" text={catalog.fetchedAt && (query || kind !== 'all' || agent !== 'all') ? 'Nothing matches this search.' : 'The catalog is empty.'} hint={catalog.fetchedAt ? '' : 'Press refresh to read the agents\' plugin lists, the MCP registry and your skill sources.'} />
     {:else}
-      <ul class="m-0 flex list-none flex-col gap-2 p-3">
-        {#each catalog.items as item, index (item.key)}
-          <li class="flex items-start gap-2.5 rounded-md border border-border bg-card p-2.5 {ROW.catalog}" in:fly={rise(index)}>
+      <ul class="m-0 flex list-none flex-col gap-2 p-1.5">
+        {#each catalog.items as item (item.key)}
+          <li class="flex items-start gap-2.5 rounded-md border border-border bg-card p-2.5 {ROW.catalog}">
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-1.5">
                 <span class="truncate font-medium text-foreground">{item.name}</span>
@@ -169,7 +181,7 @@
               </div>
             </div>
             <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2.5 text-xs" zLoading={store.busy === `catalog:${item.key}`} onclick={() => void install(item)}>
-              Install
+              <ZIcon zType="lucideDownload" class="size-3.5" /> Install
             </ZButton>
           </li>
         {/each}

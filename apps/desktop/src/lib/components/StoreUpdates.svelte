@@ -5,6 +5,7 @@
   import { checkUpdates, store, updateSkill, updates, withAck } from '../store.svelte';
   import StoreEmpty from './StoreEmpty.svelte';
   import StoreBar from './StoreBar.svelte';
+  import { clearTopActions, setTopActions } from '../store-actions.svelte';
   import { debounced } from '../debounce.svelte';
   import StoreSkeleton, { GUTTER, ROW } from './StoreSkeleton.svelte';
 
@@ -16,6 +17,11 @@
 
   let query = $state('');
   const searched = debounced(() => query);
+  const owner = Symbol('updates');
+  $effect(() => {
+    setTopActions(owner, [{ id: 'refresh', label: 'Check for updates', icon: 'lucideRefreshCw', onclick: () => void checkUpdates(), busy: updates.checking }]);
+    return () => clearTopActions(owner);
+  });
   const shown = $derived(updates.items.filter((item) => `${item.name} ${item.source}`.toLowerCase().includes(searched.value.trim().toLowerCase())));
 
   const update = (name: string) => withAck((acknowledged) => updateSkill(name, acknowledged), `The new version of ${name}`);
@@ -23,7 +29,7 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col text-xs">
-  <StoreBar bind:query placeholder="Search skills from git sources" actions={[{ id: 'refresh', label: 'Check for updates', icon: 'lucideRefreshCw', onclick: () => void checkUpdates(), busy: updates.checking }]} />
+  <StoreBar bind:query placeholder="Search skills from git sources" />
 
   {#if updates.checking && updates.items.length === 0}
     <StoreSkeleton variant="plugin" />
@@ -33,7 +39,7 @@
     <StoreEmpty icon="lucideSearch" text="Nothing matches this search." />
   {:else}
     <div class="flex min-h-0 flex-1 flex-col overflow-y-auto {GUTTER}">
-      <ul class="m-0 flex list-none flex-col gap-2 p-3">
+      <ul class="m-0 flex list-none flex-col gap-2 p-1.5">
         {#each shown as item, index (item.name)}
           <li class="flex items-center gap-2 rounded-md border border-border bg-card p-2.5 {ROW.plugin}" in:fly={rise(index)}>
             <div class="min-w-0 flex-1">

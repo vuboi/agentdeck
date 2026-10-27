@@ -3,8 +3,11 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 mod agent_runs;
+mod awake;
+mod answers;
 mod bridge;
 mod browser;
+mod browser_extensions;
 mod cdp;
 mod changes;
 mod computer;
@@ -2072,10 +2075,13 @@ pub fn run() {
             agent_runs::agent_send,
             agent_runs::agent_warm_reset,
             agent_runs::agent_prewarm,
+            awake::keep_awake_set,
             agent_runs::custom_send,
             agent_runs::agent_stop,
             delegate::delegate_reply,
             delegate::delegate_ready,
+            delegate::delegate_enter,
+            delegate::delegate_release,
             page_memory::page_memory_reply,
             attachment_save,
             attachment_save_file,
@@ -2098,6 +2104,10 @@ pub fn run() {
             browser::browser_show,
             browser::browser_pick_extension,
             browser::browser_add_extension,
+            browser_extensions::browser_extensions,
+            browser_extensions::browser_extension_enable,
+            browser_extensions::browser_extension_reload,
+            browser_extensions::browser_extension_remove,
             browser::browser_bounds,
             browser::browser_hide,
             browser::browser_navigate,
@@ -2141,6 +2151,7 @@ pub fn run() {
             tauri::RunEvent::Exit => {
                 servers::kill_all();
                 pty::kill_all();
+                awake::release();
             }
             _ => {}
         });

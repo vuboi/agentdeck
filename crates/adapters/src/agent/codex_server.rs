@@ -14,7 +14,9 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use super::codex::APP_CONTEXT;
-use super::warm::{holds, park, send, settings_key, start, take_server, Warm, EXIT_GRACE};
+use super::interrupt::{self, Interrupter, Signal, StopToken};
+use super::stall::Watchdog;
+use super::warm::{holds, lock_of, park, send, settings_key, start, take_server, Warm, EXIT_GRACE};
 use super::{AgentEvent, Provider, TurnRequest};
 
 /// A reply to a handshake request that takes longer than this means the server is not coming up.
@@ -232,7 +234,18 @@ async fn thread(warm: &mut Warm, mut params: Value, resume: Option<&str>) -> Res
     let reply = match resume {
         Some(thread) => {
             params["threadId"] = json!(thread);
-            request(warm, "thread/resume", params).await?
+            // The server that held the thread before may still be going down (a stopped turn kills it a moment
+            // later): Codex refuses a second writer until it has.
+            let mut tries = 0;
+            loop {
+                match request(warm, "thread/resume", params.clone()).await {
+                    Err(message) if message.contains("active writer") && tries < 6 => {
+                        tries += 1;
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    other => break other?,
+                }
+            }
         }
         None => {
             params["ephemeral"] = json!(false);
@@ -272,6 +285,8 @@ pub async fn prewarm(binary: OsString, provider: &dyn Provider, req: &TurnReques
     if provider.prepare(req).is_err() {
         return;
     }
+    let lock = lock_of(&chat);
+    let _turn = lock.lock().await;
     let params = thread_params(req);
     let (key, args, env) = identity(provider, req, &params);
     // A server with these settings is enough: the turn opens its thread on it in a fraction of a second.
@@ -291,11 +306,26 @@ enum Ending {
     Closed,
 }
 
-/// Reads notifications until the turn is over, answering what the server asks of the client.
-async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, emit: &mut impl FnMut(AgentEvent)) -> Ending {
+/// Reads notifications until the turn is over, answering what the server asks of the client. A stop (`stop`) sends
+/// `turn/interrupt` (as soon as the turn's id is known) and keeps reading: the turn ends as interrupted and the server
+/// stays up. One silent for the deadline is given up (`Failed`: the caller ends it).
+async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, stop: StopToken, emit: &mut impl FnMut(AgentEvent)) -> Ending {
     let mut translate = Translate::default();
+    let mut stopper = Interrupter::new(stop);
+    // The id of this turn (from `turn/start`'s reply or `turn/started`), and the id of the interrupt request once sent.
+    let mut turn: Option<String> = None;
+    let mut interrupt_id: Option<u64> = None;
+    let mut wants_interrupt = false;
     let mut deadline: Option<tokio::time::Instant> = None;
+    let mut dog = Watchdog::new(provider.stall_limit());
     loop {
+        if wants_interrupt && interrupt_id.is_none() {
+            if let Some(turn) = &turn {
+                warm.rpc += 1;
+                interrupt_id = Some(warm.rpc);
+                let _ = write(warm, &interrupt::codex_interrupt_request(warm.rpc, thread, turn)).await;
+            }
+        }
         let next = match deadline {
             Some(at) => tokio::time::timeout_at(at, warm.lines.next_segment()).await.unwrap_or(Ok(None)),
             None => tokio::select! {
@@ -304,12 +334,32 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, emit:
                     deadline = Some(tokio::time::Instant::now() + EXIT_GRACE);
                     continue;
                 }
+                _ = tokio::time::sleep_until(dog.deadline()) => {
+                    emit(AgentEvent::Error { message: dog.message() });
+                    return Ending::Failed;
+                }
+                signal = stopper.signal() => {
+                    if signal == Signal::Ask {
+                        wants_interrupt = true;
+                        continue;
+                    }
+                    emit(interrupt::killed(Some(thread)));
+                    return Ending::Failed;
+                }
             },
         };
         let Ok(Some(bytes)) = next else { return Ending::Closed };
+        dog.touch();
         let Ok(message) = serde_json::from_slice::<Value>(&bytes) else { continue };
         let method = message["method"].as_str().unwrap_or_default();
         if method.is_empty() {
+            // The reply to the interrupt: the turn's own end follows as `turn/completed`, so nothing to do.
+            if interrupt_id.is_some() && message.get("id").and_then(Value::as_u64) == interrupt_id {
+                continue;
+            }
+            if let Some(id) = message["result"]["turn"]["id"].as_str() {
+                turn.get_or_insert_with(|| id.to_owned());
+            }
             // The reply to `turn/start`: only a refusal matters.
             if let Some(error) = message.get("error") {
                 emit(AgentEvent::Error { message: error["message"].as_str().unwrap_or("Codex refused the message").to_owned() });
@@ -324,15 +374,24 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, emit:
             continue;
         }
         let params = &message["params"];
+        if method == "turn/started" && params["threadId"].as_str().is_none_or(|id| id == thread) {
+            if let Some(id) = params["turn"]["id"].as_str() {
+                turn.get_or_insert_with(|| id.to_owned());
+            }
+        }
         // Sub-agents run on threads of their own; their notifications are not this turn's.
         if params["threadId"].as_str().is_some_and(|other| other != thread) {
             continue;
         }
         let mut ending = None;
         for event in translate.events(provider, method, params) {
+            dog.note(&event);
+            let event = if stopper.asked() { interrupt::stopped(event, Some(thread)) } else { event };
             match &event {
                 AgentEvent::Done { .. } => ending = Some(Ending::Done),
-                AgentEvent::Error { .. } => ending = Some(Ending::Failed),
+                // The server reports a failed turn as its own notification and stays up for the next turn: it is kept, as
+                // a Claude process is (warm.rs), and only the turn is over.
+                AgentEvent::Error { .. } => ending = Some(Ending::Done),
                 _ => {}
             }
             emit(event);
@@ -345,7 +404,7 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, emit:
 
 /// Runs one turn on the chat's Codex server (starting it if the chat has none that fits). `false`, having emitted
 /// nothing, when the turn has no chat to keep a server for.
-pub async fn drive(binary: OsString, provider: &dyn Provider, req: &TurnRequest, mut emit: impl FnMut(AgentEvent)) -> bool {
+pub async fn drive(binary: OsString, provider: &dyn Provider, req: &TurnRequest, stop: StopToken, mut emit: impl FnMut(AgentEvent)) -> bool {
     let Some(chat) = req.owner.clone() else {
         return false;
     };
@@ -355,6 +414,8 @@ pub async fn drive(binary: OsString, provider: &dyn Provider, req: &TurnRequest,
     }
     // Resets what the parser keeps for a turn (the folder a changed file is read from).
     let _ = provider.args(req);
+    let lock = lock_of(&chat);
+    let _turn = lock.lock().await;
     let params = thread_params(req);
     let (key, args, env) = identity(provider, req, &params);
 
@@ -414,7 +475,7 @@ pub async fn drive(binary: OsString, provider: &dyn Provider, req: &TurnRequest,
     for event in provider.parse_line(&json!({ "type": "thread.started", "thread_id": thread }).to_string()) {
         emit(event);
     }
-    match read_turn(&mut warm, provider, &thread, &mut emit).await {
+    match read_turn(&mut warm, provider, &thread, stop, &mut emit).await {
         Ending::Done => park(chat, warm),
         Ending::Failed => drop(warm),
         Ending::Closed => {
