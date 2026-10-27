@@ -143,7 +143,7 @@
         <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary"><ZIcon zType={(item.kind === 'audio' ? 'lucideMusic' : item.kind === 'video' ? 'lucideFilm' : item.kind === 'image' ? 'lucideImage' : 'lucideFile') as ZIconName} class="size-4.5 animate-pulse" /></span>
         <span class="flex min-w-0 flex-col leading-tight">
           <span class="truncate text-sm font-medium text-foreground">{item.name}</span>
-          <span class="text-[11px] text-muted-foreground">Creating…</span>
+          <span class="mt-0.5 text-[11px] text-muted-foreground">Creating…</span>
         </span>
       </div>
     {/each}
@@ -175,7 +175,7 @@
             <span class="grid size-11 shrink-0 place-items-center rounded-lg bg-background text-primary"><ZIcon zType={'lucideAudioLines' as ZIconName} class="size-5 {state.playing ? 'animate-pulse' : ''}" /></span>
             <span class="flex min-w-0 flex-1 flex-col leading-tight">
               <span class="truncate text-sm font-semibold text-foreground" title={item.path}>{item.name}</span>
-              <span class="truncate text-xs text-muted-foreground">{typeLabel(item)} · {fileSizeLabel(sizes[item.path])}</span>
+              <span class="mt-0.5 truncate text-xs text-muted-foreground">{typeLabel(item)} · {fileSizeLabel(sizes[item.path])}</span>
             </span>
             <button type="button" class="grid size-9 shrink-0 cursor-pointer place-items-center rounded-full bg-background text-foreground outline-none transition hover:bg-primary/15 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring" aria-label={state.playing ? `Pause ${item.name}` : `Play ${item.name}`} onclick={() => void toggle(item)}>
               <ZIcon zType={(state.playing ? 'lucidePause' : 'lucidePlay') as ZIconName} class="size-4" />

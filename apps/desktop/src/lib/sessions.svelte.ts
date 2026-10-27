@@ -442,7 +442,13 @@ const localReady = getPref<{
         ...message,
         agent: renamedAgent(message.agent),
         live: false,
-        blocks: applyAgentEvent(message.blocks, { kind: 'error', message: 'stopped' }).blocks,
+        blocks: [
+          ...applyAgentEvent(message.blocks, { kind: 'error', message: 'stopped' }).blocks,
+          // Said once, on the reply that was cut: the work may be half done, and "continue" picks it up.
+          ...(message.live && message.role === 'assistant'
+            ? [{ kind: 'response' as const, text: '> ↻ The app closed while this reply was being written. Send "continue" to pick it up.' }]
+            : []),
+        ],
       }));
     for (const savedItem of saved.sessions ?? []) {
       const item = { ...renamedSession(savedItem), status: 'idle' as const };
@@ -4831,11 +4837,19 @@ const EDIT_LEAD = 'The user edited an earlier message, so this is a new session 
 /** What a model change carries over: a new CLI conversation cannot resume the old one, so the turns so far go with the next message. */
 const MODEL_LEAD = 'The model was changed, so this is a new session of the same conversation. Continue the work in progress; do not redo what is already done.';
 
+/** How many of the last messages a digest keeps whole when "Compress context" is on, and how much of each older one. */
+const DIGEST_WHOLE = 6;
+const DIGEST_OLD_CHARS = 400;
+
 /** What a fork is told of the conversation it came from: the turns so far, newest kept when it is long. */
 function forkDigest(list: Message[], lead = 'This chat is a fork of an earlier conversation.'): string {
-  const lines = list
-    .filter((message) => !hiddenPrompt(message))
-    .map((message) => {
+  const shown = list.filter((message) => !hiddenPrompt(message));
+  // With "Compress context" on, only the last turns go whole: older ones keep their start, so a long chat moved to a new
+  // session reads like a summary instead of filling the window with the full history.
+  const whole = automation.compress ? Math.max(0, shown.length - DIGEST_WHOLE) : 0;
+  const lines = shown
+    .map((message, index) => {
+      const limit = index < whole ? DIGEST_OLD_CHARS : 2500;
       const text = message.blocks
         .flatMap((block) =>
           block.kind === 'response'
@@ -4847,7 +4861,7 @@ function forkDigest(list: Message[], lead = 'This chat is a fork of an earlier c
         .join('\n')
         .trim();
       return text
-        ? `${message.role === 'user' ? 'User' : 'Assistant'}: ${text.length > 2500 ? `${text.slice(0, 2500)}…` : text}`
+        ? `${message.role === 'user' ? 'User' : 'Assistant'}: ${text.length > limit ? `${text.slice(0, limit)}…` : text}`
         : '';
     })
     .filter(Boolean);

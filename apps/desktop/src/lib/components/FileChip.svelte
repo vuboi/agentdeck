@@ -22,7 +22,7 @@
     </span>
     <span class="flex min-w-0 flex-col leading-tight">
       <span class="truncate text-xs font-medium text-foreground">{name}</span>
-      <span class="truncate text-[11px] text-muted-foreground">{kind.label}{size ? ` · ${fileSizeLabel(size)}` : ''}</span>
+      <span class="mt-0.5 truncate text-[11px] text-muted-foreground">{kind.label}{size ? ` · ${fileSizeLabel(size)}` : ''}</span>
     </span>
   </button>
   {#if onremove}
