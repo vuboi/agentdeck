@@ -318,3 +318,6 @@
 .flow-canvas .flow-edge-talk ~ .flow-chip {
   color: rgb(168 85 247);
 }
+
+/* The lines between the members of a team: dashed, apart from the hand-over lines. */
+.flow-edge-team { stroke-dasharray: 5 4; }

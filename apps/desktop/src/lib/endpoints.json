@@ -28,14 +28,62 @@
     "ollama": "http://127.0.0.1:11434"
   },
   "local": [
-    { "kind": "ollama", "label": "Ollama", "base": "http://127.0.0.1:11434" },
-    { "kind": "openai", "label": "LM Studio", "base": "http://127.0.0.1:1234/v1" },
-    { "kind": "openai", "label": "llama.cpp", "base": "http://127.0.0.1:8080/v1" }
+    {
+      "kind": "ollama",
+      "label": "Ollama",
+      "base": "http://127.0.0.1:11434"
+    },
+    {
+      "kind": "openai",
+      "label": "LM Studio",
+      "base": "http://127.0.0.1:1234/v1"
+    },
+    {
+      "kind": "openai",
+      "label": "llama.cpp",
+      "base": "http://127.0.0.1:8080/v1"
+    }
   ],
   "freeCloud": [
-    { "name": "Google Gemini", "base": "https://generativelanguage.googleapis.com/v1beta/openai", "keyEnv": "GEMINI_API_KEY", "model": "gemini-flash-latest", "note": "Gemini Flash, generous daily limit", "keyUrl": "https://aistudio.google.com/app/apikey" },
-    { "name": "Groq", "base": "https://api.groq.com/openai/v1", "keyEnv": "GROQ_API_KEY", "model": "", "note": "Very fast open models", "keyUrl": "https://console.groq.com/keys" },
-    { "name": "Cerebras", "base": "https://api.cerebras.ai/v1", "keyEnv": "CEREBRAS_API_KEY", "model": "", "note": "High throughput open models", "keyUrl": "https://cloud.cerebras.ai" },
-    { "name": "OpenRouter (free)", "base": "https://openrouter.ai/api/v1", "keyEnv": "OPENROUTER_API_KEY", "model": "", "note": "Many \":free\" models, one key", "keyUrl": "https://openrouter.ai/settings/keys" }
+    {
+      "name": "Google Gemini",
+      "base": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "keyEnv": "GEMINI_API_KEY",
+      "model": "gemini-flash-latest",
+      "note": "Gemini Flash, generous daily limit",
+      "keyUrl": "https://aistudio.google.com/app/apikey"
+    },
+    {
+      "name": "Groq",
+      "base": "https://api.groq.com/openai/v1",
+      "keyEnv": "GROQ_API_KEY",
+      "model": "",
+      "note": "Very fast open models",
+      "keyUrl": "https://console.groq.com/keys"
+    },
+    {
+      "name": "Cerebras",
+      "base": "https://api.cerebras.ai/v1",
+      "keyEnv": "CEREBRAS_API_KEY",
+      "model": "",
+      "note": "High throughput open models",
+      "keyUrl": "https://cloud.cerebras.ai"
+    },
+    {
+      "name": "OpenRouter (free)",
+      "base": "https://openrouter.ai/api/v1",
+      "keyEnv": "OPENROUTER_API_KEY",
+      "model": "",
+      "note": "Many \":free\" models, one key",
+      "keyUrl": "https://openrouter.ai/settings/keys"
+    },
+    {
+      "name": "Cloudflare Workers AI",
+      "base": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+      "keyEnv": "CLOUDFLARE_API_TOKEN",
+      "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "note": "10,000 free neurons a day, open models",
+      "keyUrl": "https://dash.cloudflare.com/profile/api-tokens"
+    }
   ]
 }

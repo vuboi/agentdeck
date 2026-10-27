@@ -127,4 +127,9 @@
   <!-- Where a question between two steps is drawn from and to (a run only): on the side, out of the way of the flow. -->
   <Handle id="talk-out" type="source" position={across ? Position.Bottom : Position.Right} class="flow-talk-handle" isConnectable={false} />
   <Handle id="talk-in" type="target" position={across ? Position.Bottom : Position.Right} class="flow-talk-handle" isConnectable={false} />
+  {#if data.team}
+    <!-- Where the line to the neighbouring members of a team starts and ends: on the card's sides. -->
+    <Handle id="team-out" type="source" position={Position.Right} style="top: 50%" class="flow-talk-handle" isConnectable={false} />
+    <Handle id="team-in" type="target" position={Position.Left} style="top: 50%" class="flow-talk-handle" isConnectable={false} />
+  {/if}
 </div>

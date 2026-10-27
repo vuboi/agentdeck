@@ -108,6 +108,7 @@ export function addUsage(reply: Message, event: Extract<AgentEvent, { kind: 'usa
     tokens.input += event.input_tokens;
     tokens.cacheRead += event.cache_read_tokens;
     tokens.cacheWrite += event.cache_write_tokens;
+    reply.context = event.input_tokens + event.cache_read_tokens + event.cache_write_tokens;
     reply.callOutput = 0;
   }
   tokens.output += Math.max(0, event.output_tokens - (reply.callOutput ?? 0));

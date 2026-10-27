@@ -14,6 +14,7 @@ mod delegate;
 mod detect;
 mod devtools;
 mod endpoints;
+mod error_log;
 mod fs_ops;
 mod image_gen;
 mod image_history;
@@ -1998,6 +1999,10 @@ pub fn run() {
             connectors::provider_quota,
             connectors::claude_console_credit,
             notify::system_notify,
+            error_log::error_log_append,
+            error_log::error_log_read,
+            error_log::error_log_save,
+            error_log::error_log_clear,
             connectors::local_scan,
             audit_append,
             audit_read,

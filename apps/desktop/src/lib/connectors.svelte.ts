@@ -81,7 +81,7 @@ export const connectors = $state({
   errors: {} as Record<string, string>,
   alerts: { enabled: true, threshold: 90, system: true, systemChosen: false },
   /** When a turn fails: retry, or let the next agent (provider) of `chain` carry on; never another account (turn-failure.ts). */
-  recovery: { enabled: true, chain: ['claude', 'codex', 'opencode', 'antigravity'] as string[], /** At a usage limit with nowhere to move, carry on by itself once the limit resets. */ autoResume: true },
+  recovery: { enabled: false, chain: ['claude', 'codex', 'opencode', 'antigravity'] as string[], /** At a usage limit with nowhere to move, carry on by itself once the limit resets. */ autoResume: true, /** The user set `enabled` themself (it was on by default before). */ chosen: false },
   custom: [] as CustomProvider[],
   /** Claude Console API credit: Claude Code runs on this key (billed to the credit) for the `credit:` models. */
   claudeCredit: { apiKey: '', sessionKey: '', enabled: true } as ClaudeCredit,
@@ -539,6 +539,8 @@ Promise.all([getPref<CustomProvider[]>('providers.custom'), getPref<typeof conne
   if (custom) connectors.custom = custom;
   if (credit) connectors.claudeCredit = { ...connectors.claudeCredit, ...credit };
   if (recovery) connectors.recovery = { ...connectors.recovery, ...recovery };
+  // Moving to another agent used to run by itself: it is off now until the user switches it on (model popover).
+  if (!connectors.recovery.chosen) connectors.recovery = { ...connectors.recovery, enabled: false, chosen: true };
   if (alerts) connectors.alerts = { ...connectors.alerts, ...alerts };
   // System notifications used to start switched off, so most people never saw a finished task announced. They are on
   // now; a saved "off" from before the user ever chose (no `systemChosen`) is turned on once.

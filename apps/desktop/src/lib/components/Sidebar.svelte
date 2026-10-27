@@ -3,7 +3,7 @@
   import { closeOnScroll } from '../close-on-scroll';
   import { customProviderName } from '../models.svelte';
   import { tick, untrack } from 'svelte';
-  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZPopover, ZScrollArea, ZTree, zModalService } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZPopover, ZTree, zModalService } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import Logo from './Logo.svelte';
   import { toast } from '../toast';
@@ -617,6 +617,11 @@
   import { openSettings, warnings } from '../connectors.svelte';
   import { ticker } from '../clock.svelte';
   const limitWarnings = $derived(warnings(ticker.min));
+  // The notes of an update: back to their top once the download starts, so the bar and the start of the notes show.
+  let notesEl: HTMLDivElement | undefined = $state();
+  $effect(() => {
+    if (updater.status === 'downloading') notesEl?.scrollTo({ top: 0, behavior: 'smooth' });
+  });
 </script>
 
 <ZPopover anchor={tipRow} bind:open={tipOpen} zTrigger="manual" zPosition="right" zOffset={6} zWidth={200}>
@@ -868,13 +873,13 @@
 
 <SearchPalette bind:open={searchOpen} />
 
-<ZModal bind:open={updateOpen} zTitle={updater.status === 'error' ? 'Update failed' : `AgentDeck ${updater.version} is available`} zWidth="460px" zBodyClass="min-h-0! p-0" zOkText={updater.status === 'downloading' ? 'Downloading…' : updater.status === 'error' ? 'Try again' : 'Download and restart'} zCancelText="Later" onOk={installUpdate}>
+<ZModal bind:open={updateOpen} zTitle={updater.status === 'error' ? 'Update failed' : `AgentDeck ${updater.version} is available`} zWidth="620px" zBodyClass="min-h-0! p-0" zOkText={updater.status === 'downloading' ? 'Downloading…' : updater.status === 'error' ? 'Try again' : 'Download and restart'} zCancelText="Later" onOk={installUpdate}>
   <div class="flex flex-col text-xs">
     {#if updater.status === 'error'}
       <p class="m-0 px-6 py-3 text-destructive">{updater.error}</p>
     {:else}
-      <!-- z-ui's own slim overlay scrollbar, on the modal's edge: the padding is inside the scroller. -->
-      {#if updater.notes}<ZScrollArea class="max-h-72"><div class="px-6 py-3"><Markdown text={updater.notes} /></div></ZScrollArea>{/if}
+      <!-- The app's own scrollbar (as in the chat: 12px, arrows at both ends), on the modal's edge. -->
+      {#if updater.notes}<div bind:this={notesEl} class="scrollbar-full max-h-[min(60vh,32rem)] overflow-y-auto"><div class="px-6 py-3 text-sm"><Markdown text={updater.notes} /></div></div>{/if}
       <div class="px-6 pb-3 {updater.notes ? '' : 'pt-3'}">
         {#if updater.status === 'downloading'}
           <div class="h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full bg-primary transition-[width]" style:width="{Math.max(updater.progress, 0.03) * 100}%"></div></div>

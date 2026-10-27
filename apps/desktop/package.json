@@ -18,7 +18,7 @@
     "@codemirror/commands": "6.11.1",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.15",
-    "@shival99/z-ui-svelte": "0.1.11",
+    "@shival99/z-ui-svelte": "0.1.12",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-notification": "^2.7.0",
     "@tauri-apps/plugin-process": "^2.4.0",

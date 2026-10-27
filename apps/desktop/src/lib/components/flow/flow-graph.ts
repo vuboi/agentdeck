@@ -12,7 +12,10 @@ export const COL = 296;
 
 export type FlowState = 'idle' | 'running' | 'done' | 'failed' | 'skipped';
 export type FlowDir = 'down' | 'right';
-export type StepData = { step: WorkflowStep; index: number; state: FlowState; mode: 'edit' | 'run'; node?: RunNode; dir?: FlowDir };
+export type StepData = { step: WorkflowStep; index: number; state: FlowState; mode: 'edit' | 'run'; node?: RunNode; dir?: FlowDir; /** A member of a team: it has handles for the lines between members. */ team?: boolean };
+export type TeamEdgeData = { live: boolean; label: string; span: number };
+/** What a team canvas needs: the messages sent so far, from the saved queue. */
+export type TeamView = { sent: { from: string; to: string; waiting: boolean }[] };
 export type EndData = { kind: 'start' | 'end'; state: FlowState; mode: 'edit' | 'run'; run?: DelegateRun; dir?: FlowDir };
 export type EdgeData = { state: 'idle' | 'active' | 'done' | 'skipped' | 'failed' | 'stopped' | 'talking' | 'talk'; mode: 'edit' | 'run'; cuttable: boolean; label: string; oncut?: () => void };
 
@@ -38,7 +41,7 @@ function autoLayoutH(graph: WorkflowStep[]): Map<string, { x: number; y: number 
   return at;
 }
 
-export function buildFlow(graph: WorkflowStep[], mode: 'edit' | 'run', run: DelegateRun | undefined, cut: (from: string, to: string) => void, dir: FlowDir = 'down'): { nodes: Node[]; edges: Edge[] } {
+export function buildFlow(graph: WorkflowStep[], mode: 'edit' | 'run', run: DelegateRun | undefined, cut: (from: string, to: string) => void, dir: FlowDir = 'down', team?: TeamView): { nodes: Node[]; edges: Edge[] } {
   const links = inputsOf(graph);
   // The editor always reads top to bottom; only a run can be turned to read left to right.
   const across = mode === 'run' && dir === 'right';
@@ -69,7 +72,7 @@ export function buildFlow(graph: WorkflowStep[], mode: 'edit' | 'run', run: Dele
 
   const nodes: Node[] = [
     { id: 'start', type: 'end', position: across ? { x: 0, y: centreY(starters) + 45 } : { x: centre(starters) + 16, y: top - START_GAP }, sourcePosition: outPos, data: { kind: 'start', state: stateOf('start'), mode, run, dir: side } satisfies EndData, deletable: false },
-    ...graph.map((step, index) => ({ id: step.id, type: 'step', position: place(step), sourcePosition: outPos, targetPosition: inPos, data: { step, index, state: stateOf(step.id), mode, node: nodeOf(step.id), dir: side } satisfies StepData })),
+    ...graph.map((step, index) => ({ id: step.id, type: 'step', position: place(step), sourcePosition: outPos, targetPosition: inPos, data: { step, index, state: stateOf(step.id), mode, node: nodeOf(step.id), dir: side, team: team !== undefined && index > 0 } satisfies StepData })),
     { id: 'end', type: 'end', position: across ? { x: last + STAGE_W, y: centreY(sinks) + 45 } : { x: centre(sinks) + 16, y: bottom + ROW }, targetPosition: inPos, data: { kind: 'end', state: stateOf('end'), mode, run, dir: side } satisfies EndData, deletable: false },
   ];
 
@@ -107,6 +110,33 @@ export function buildFlow(graph: WorkflowStep[], mode: 'edit' | 'run', run: Dele
   }
   if (sinks.length === 0) link('start', 'end', false);
   for (const sink of sinks) link(sink.id, 'end', false);
+  // A team: neighbouring members (all but the planner, side by side) are joined by a short straight line in the gap
+  // between their cards, an arrow at both ends: they send each other messages (team.ts). Members farther apart talk
+  // too, but a line across the cards in between would only clutter the canvas. In a run the line says how many
+  // messages went each way and glows while one waits in a queue.
+  if (team && !across) {
+    const crew = graph.slice(1);
+    crew.slice(0, -1).forEach((one, k) => {
+      const two = crew[k + 1];
+      const go = team.sent.filter((message) => message.from === one.name && message.to === two.name);
+      const back = team.sent.filter((message) => message.from === two.name && message.to === one.name);
+      const live = [...go, ...back].some((message) => message.waiting);
+      const colour = live ? 'color-mix(in srgb, var(--primary, #6366f1) 70%, var(--background, #fff))' : 'var(--flow-edge, #94a3b8)';
+      edges.push({
+        id: `team:${one.id}~${two.id}`,
+        source: one.id,
+        sourceHandle: 'team-out',
+        target: two.id,
+        targetHandle: 'team-in',
+        type: 'team',
+        deletable: false,
+        selectable: false,
+        markerStart: { type: MarkerType.ArrowClosed, width: 11, height: 11, color: colour },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 11, height: 11, color: colour },
+        data: { live, span: 0, label: run && (go.length || back.length) ? `${go.length} → · ← ${back.length}` : '' } satisfies TeamEdgeData,
+      });
+    });
+  }
   // A step that asked an earlier one: an arrow back up, from the asker to the one it asked, curving out at the side.
   for (const item of run?.nodes ?? []) {
     for (const talk of item.talks ?? []) {

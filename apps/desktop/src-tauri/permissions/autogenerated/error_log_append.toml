@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-error-log-append"
+description = "Enables the error_log_append command without any pre-configured scope."
+commands.allow = ["error_log_append"]
+
+[[permission]]
+identifier = "deny-error-log-append"
+description = "Denies the error_log_append command without any pre-configured scope."
+commands.deny = ["error_log_append"]

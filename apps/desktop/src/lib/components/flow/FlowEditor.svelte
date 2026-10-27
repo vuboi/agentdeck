@@ -3,9 +3,9 @@
   import { untrack } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
-  import { ZButton, ZDrawer, ZIcon, ZInput, ZModal, ZSelect } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDrawer, ZIcon, ZInput, ZModal, ZSelect, ZSwitch } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { findModel, modelSources } from '../../models.svelte';
+  import { findModel, freeFirst, modelSources } from '../../models.svelte';
   import { type Agent } from '../../sessions.svelte';
   import { closeFlow, flowEditor, flowKind, flowProblem, removeStep, savePreset, type WorkflowStep } from '../../workflows.svelte';
   import FlowCanvas from './FlowCanvas.svelte';
@@ -44,7 +44,31 @@
 
   /** "agent|model" of every model the agents offer: what a step's model picker lists. */
   const choices = $derived(
-    modelSources().flatMap((source) => source.models().map((model) => ({ value: `${source.provider}|${model.value}`, label: `${source.label} · ${model.label}`, agent: source.provider as Agent, model: model.label }))),
+    // Every model of every agent and enabled provider; the free models of a source come before its paid ones.
+    modelSources().flatMap((source) =>
+      freeFirst(source.models()).items.map((model) => ({
+        value: `${source.provider}|${model.value}`,
+        label: `${source.label} · ${model.label}`,
+        agent: source.provider as Agent,
+        model: model.label,
+      })),
+    ),
+  );
+  /**
+   * The same models as a tree for the select: one node per source (Claude, Codex, a provider…), its models inside. The
+   * select opens at the sources, goes into one on a click, and still searches every model at once.
+   */
+  const tree = $derived(
+    modelSources().map((source) => {
+      const models = freeFirst(source.models()).items;
+      return {
+        value: `source:${source.key}`,
+        label: source.label,
+        agent: source.provider as Agent,
+        model: `${models.length} model${models.length === 1 ? '' : 's'}`,
+        children: models.map((model) => ({ value: `${source.provider}|${model.value}`, label: `${source.label} · ${model.label}`, agent: source.provider as Agent, model: model.label })),
+      };
+    }).filter((node) => node.children.length > 0),
   );
   const EFFORT_LABEL: Record<string, string> = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-High', max: 'Max', ultra: 'Ultra' };
   /** The levels the step's model takes, led by "the chat's own level". */
@@ -116,16 +140,23 @@
 
 <svelte:window onkeydown={key} />
 
-{#snippet choice(item: { label: string; agent: Agent; model: string })}
+{#snippet choice(item: { label: string; agent: Agent; model: string; children?: unknown[] })}
   <span class="flex min-w-0 items-center gap-2">
-    <AgentLogo agent={item.agent} model={item.model} class="size-4 shrink-0" />
-    <span class="truncate">{item.label.split(' · ')[0]}</span>
-    <span class="truncate text-muted-foreground">{item.model}</span>
+    <AgentLogo agent={item.agent} model={item.children ? undefined : item.model} class="size-4 shrink-0" />
+    {#if item.children}
+      <!-- A source: its name and how many models it holds; a click goes into it. -->
+      <span class="truncate">{item.label}</span>
+      <span class="truncate text-muted-foreground">{item.model}</span>
+    {:else}
+      <span class="truncate">{item.label.split(' · ')[0]}</span>
+      <span class="truncate text-muted-foreground">{item.model}</span>
+    {/if}
   </span>
 {/snippet}
 
 {#snippet drawerTitle()}
   <span class="flex w-full min-w-0 items-center gap-2">
+    <ZIcon zType={icon(selected === 'end' ? 'lucideBot' : 'lucideSettings2')} class="size-4 shrink-0 text-muted-foreground" />
     <span class="truncate">{selected === 'end' ? 'Orchestrator' : 'Step settings'}</span>
     <span class="flex-1"></span>
     <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! bg-muted/60! p-0!" aria-label="Close" onclick={closeDrawer}><ZIcon zType={icon('lucideX')} class="size-4" /></ZButton>
@@ -172,7 +203,7 @@
       </div>
       <ZButton zWave={false} zType="outline" class="size-9! bg-muted/60! p-0!" aria-label="Close the editor" onclick={closeFlow}><ZIcon zType={icon('lucideX')} class="size-4" /></ZButton>
     </header>
-    <FlowCanvas bind:steps={draft.steps} bind:selected mode="edit" minimap onlayout={keepLayout} class="flex-1" />
+    <FlowCanvas bind:steps={draft.steps} bind:selected mode="edit" minimap onlayout={keepLayout} team={draft.mode === 'team'} class="flex-1" />
   </div>
 
   <ZDrawer bind:open={drawer} zPlacement="right" zWidth="420px" zFloating zClosable={false} zMaskClosable={false} zTitle={drawerTitle} footer={drawerFooter}>
@@ -183,7 +214,11 @@
         <div class="flex flex-col gap-1.5 text-xs">
           <span class="font-medium">Agent and model</span>
           <ZSelect
-            zOptions={choices}
+            zOptions={tree}
+            zTree
+            zTreeRootLabel="All models"
+            zShowSearch
+            zPlaceholderSearch="Search models…"
             value={choiceOf(step.agent, step.model)}
             onValueChange={(value) => {
               const text = String(value);
@@ -234,6 +269,13 @@
     <div class="flex flex-col gap-3">
       <label class="flex flex-col gap-1.5 text-xs"><span class="font-medium">Name</span><ZInput bind:value={draft.name} zPlaceholder="Flow name" /></label>
       <label class="flex flex-col gap-1.5 text-xs"><span class="font-medium">Description</span><ZInput zType="textarea" bind:value={draft.description} zPlaceholder="What this flow is for" /></label>
+      <div class="flex items-start gap-3 rounded-lg border border-border p-3">
+        <div class="min-w-0 flex-1 text-xs">
+          <div class="font-medium">Team mode</div>
+          <p class="m-0 mt-0.5 text-[11px] leading-snug text-muted-foreground">The first step plans. The others work at the same time, each in its own chat, and send each other messages (SEND @name) through a saved queue until all are done. The run goes on after a restart.</p>
+        </div>
+        <ZSwitch checked={draft.mode === 'team'} zSize="sm" onChange={(value) => { if (draft) draft.mode = value ? 'team' : undefined; }} />
+      </div>
       {#if problem}<p class="m-0 text-[11px] leading-snug text-muted-foreground">Cannot save yet: {problem.charAt(0).toLowerCase()}{problem.slice(1)}</p>{/if}
     </div>
   </ZModal>

@@ -24,6 +24,9 @@
   import { addLink, inputsOf, newStep, normalizeGraph, removeLink, removeStep, wouldCycle, type WorkflowStep } from '../../workflows.svelte';
   import EndNode from './EndNode.svelte';
   import FlowEdge from './FlowEdge.svelte';
+  import TeamEdge from './TeamEdge.svelte';
+  import { allPresets } from '../../workflows.svelte';
+  import { teamViewOf } from '../../sessions.svelte';
   import StepNode from './StepNode.svelte';
   import { buildFlow } from './flow-graph';
   import { confirmDelete } from './confirm';
@@ -35,11 +38,12 @@
     run,
     minimap = false,
     onlayout,
-  }: { steps: WorkflowStep[]; selected?: string | null; mode: 'edit' | 'run'; run?: DelegateRun; minimap?: boolean; onlayout?: () => void } = $props();
+    team = false,
+  }: { steps: WorkflowStep[]; selected?: string | null; mode: 'edit' | 'run'; run?: DelegateRun; minimap?: boolean; onlayout?: () => void; /** The flow is a team (the editor says so; a run is looked up by its preset). */ team?: boolean } = $props();
 
   const icon = (name: string) => name as ZIconName;
   const nodeTypes: NodeTypes = { step: StepNode, end: EndNode } as unknown as NodeTypes;
-  const edgeTypes: EdgeTypes = { flow: FlowEdge } as unknown as EdgeTypes;
+  const edgeTypes: EdgeTypes = { flow: FlowEdge, team: TeamEdge } as unknown as EdgeTypes;
   const flow = useSvelteFlow();
   const updateNodeInternals = useUpdateNodeInternals();
 
@@ -96,7 +100,8 @@
 
   // The canvas follows the flow (and, in a run, the state of every step); a card being dragged is left alone.
   $effect(() => {
-    const built = buildFlow(graph, mode, run, cut, runLayout.dir);
+    const isTeam = team || (run ? allPresets().find((item) => item.name === run.preset)?.mode === 'team' : false);
+    const built = buildFlow(graph, mode, run, cut, runLayout.dir, isTeam ? teamViewOf(run?.id) : undefined);
     let cancelled = false;
     untrack(() => {
       nodes = built.nodes.map((node) => ({ ...node, selected: node.id === selected }));

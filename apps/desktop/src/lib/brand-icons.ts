@@ -24,12 +24,16 @@ const svgUrl = (svg: string) => `data:image/svg+xml;utf8,${encodeURIComponent(sv
  * Brand logos of known API hosts, as images (data URLs) like an uploaded provider logo. One-colour marks get their
  * brand colour so they show on light and dark backgrounds alike.
  */
+// Cloudflare Workers AI: an orange cloud.
+const CLOUDFLARE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path fill="#F38020" d="M24.6 23.5H7.4a5.4 5.4 0 0 1-.9-10.7 7.6 7.6 0 0 1 14.6-2.3 5.6 5.6 0 0 1 3.5 13Z"/><path fill="#FBAE40" d="M26.2 23.5h-4.7l1-3.4a2.7 2.7 0 0 0-2.6-3.4h-.4a6 6 0 0 1 9.1 3.6 3.2 3.2 0 0 1-2.4 3.2Z"/></svg>';
+
 const PROVIDER_BRANDS: { host: string; logo: string }[] = [
   { host: 'generativelanguage.googleapis.com', logo: svgUrl(GEMINI_SVG) },
   { host: 'api.groq.com', logo: svgUrl(GROQ_SVG) },
   { host: 'api.cerebras.ai', logo: svgUrl(CEREBRAS_SVG.replace(/currentColor/g, '#F15A29')) },
   { host: 'openrouter.ai', logo: svgUrl(OPENROUTER_SVG.replace(/#ffff\b/g, '#6566F1')) },
   { host: 'api.openai.com', logo: svgUrl(OPENAI_SVG.replace(/currentColor/g, '#10A37F')) },
+  { host: 'api.cloudflare.com', logo: svgUrl(CLOUDFLARE_SVG) },
 ];
 
 /** The brand logo of an API address the app knows (Gemini, Groq, Cerebras, OpenRouter, OpenAI); undefined otherwise. */

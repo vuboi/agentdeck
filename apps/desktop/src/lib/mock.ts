@@ -34,6 +34,10 @@ export type Message = {
   model?: string;
   /** The output count of the model call in progress (reports are totals per call). */
   callOutput?: number;
+  /** Tokens the last model call of the turn read (its input with the cache): how full the context is. */
+  context?: number;
+  /** The reply of an auto-compress (`/compact`) turn. */
+  compressed?: boolean;
   /** Exact cost reported by the CLI when the turn ended. */
   cost?: number;
   /** The agent that wrote this reply. A chat can switch agents, so each reply keeps its own. */

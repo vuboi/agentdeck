@@ -12,12 +12,13 @@
     run,
     minimap = false,
     onlayout,
+    team = false,
     class: className = '',
-  }: { steps: WorkflowStep[]; selected?: string | null; mode?: 'edit' | 'run'; run?: DelegateRun; minimap?: boolean; onlayout?: () => void; class?: string } = $props();
+  }: { steps: WorkflowStep[]; selected?: string | null; mode?: 'edit' | 'run'; run?: DelegateRun; minimap?: boolean; onlayout?: () => void; team?: boolean; class?: string } = $props();
 </script>
 
 <div class="relative min-h-0 {className}">
   <SvelteFlowProvider>
-    <FlowInner bind:steps bind:selected {mode} {run} {minimap} {onlayout} />
+    <FlowInner bind:steps bind:selected {mode} {run} {minimap} {onlayout} {team} />
   </SvelteFlowProvider>
 </div>

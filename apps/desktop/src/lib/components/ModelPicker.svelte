@@ -9,6 +9,7 @@
   import { allPresets, assignPreset, createFlow, presetOf } from '../workflows.svelte';
   import { findModel, freeFirst, modelSources } from '../models.svelte';
   import { CREDIT_PREFIX } from '../credit-model';
+  import { automation, fallbackOn, setFallback } from '../automation.svelte';
   import SectionTitle from './SectionTitle.svelte';
 
   let {
@@ -305,6 +306,28 @@
           <div class="mt-1 text-[11px] leading-snug text-muted-foreground">Faster output, higher usage</div>
         </div>
         <ZSwitch bind:checked={fast} />
+      </section>
+
+      <section aria-label="Automation">
+        <SectionTitle label="AUTOMATION" />
+        <div class="flex flex-col gap-2 px-0.5">
+          {#each [
+            { key: 'compress', icon: 'lucideShrink', title: 'Auto-compress context', note: 'Claude: compact a long chat before it runs out of room', on: automation.compress, set: (value: boolean) => (automation.compress = value) },
+            { key: 'fallback', icon: 'lucideRoute', title: 'Auto fallback', note: 'At a limit or a server error, the next agent carries on', on: fallbackOn(), set: setFallback },
+            { key: 'orchestrate', icon: 'lucideWorkflow', title: 'Auto-orchestrate', note: 'Hand light or separate parts to other agents', on: automation.orchestrate, set: (value: boolean) => (automation.orchestrate = value) },
+          ] as row (row.key)}
+            <div class="flex items-center justify-between gap-6">
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-medium">
+                  <ZIcon zType={row.icon as ZIconName} class="size-3.5 text-muted-foreground" />
+                  {row.title}
+                </div>
+                <div class="mt-0.5 text-[11px] leading-snug text-muted-foreground">{row.note}</div>
+              </div>
+              <ZSwitch checked={row.on} zSize="sm" onChange={row.set} />
+            </div>
+          {/each}
+        </div>
       </section>
 
       <section aria-label="Permissions">

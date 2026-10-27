@@ -41,6 +41,11 @@ export type WorkflowPreset = {
   steps: WorkflowStep[];
   coordination?: CoordinationPolicy;
   builtin?: boolean;
+  /**
+   * `team`: the first step plans (a BA), the others are members that work side by side and send each other messages
+   * through a saved queue until all are done (team.ts). Unset: the steps run in stages, as drawn.
+   */
+  mode?: 'stages' | 'team';
 };
 
 const step = (name: string, agent: Agent, prompt: string, extra: Partial<WorkflowStep> = {}): WorkflowStep => ({
@@ -53,6 +58,10 @@ const step = (name: string, agent: Agent, prompt: string, extra: Partial<Workflo
   condition: { mode: 'always', text: '' },
   ...extra,
 });
+
+/** The planner of a team preset: the app adds which sections to write (one per member, whatever the roles). */
+const PLANNER_PROMPT =
+  'You are the BA and tech lead. Read the parts of the project that matter, then write the plan; change no file. The shared part is the contract every member builds against: endpoints with method, path, request and response shapes, data models, file layout, naming. Order the tasks of each member so nobody waits idle: say what each can do before the others are ready.';
 
 export const BUILT_IN_PRESETS: WorkflowPreset[] = [
   {
@@ -77,6 +86,34 @@ export const BUILT_IN_PRESETS: WorkflowPreset[] = [
       step('Research A', 'claude', 'Investigate the question in the code and docs. Report findings with file paths and evidence.'),
       step('Research B', 'codex', 'Investigate the question from another angle (alternatives, risks, prior art). Report findings with evidence.', { parallel: true }),
       step('Research C', 'antigravity', 'Look for pitfalls and edge cases the others may miss. Report them briefly.', { parallel: true }),
+    ],
+  },
+  {
+    id: 'builtin-team-frontend-backend',
+    name: 'Product team (BA → Frontend + Backend)',
+    description: 'A planner splits the feature; frontend and backend build side by side and keep each other informed through a queue.',
+    orchestrator: 'Say what each member built, what was agreed between them (APIs, data), and what is left or broken. Short.',
+    builtin: true,
+    mode: 'team',
+    steps: [
+      step('Planner', 'claude', PLANNER_PROMPT),
+      step('Backend', 'codex', 'You are the backend developer. Build the backend part of the plan against the shared contract: models, endpoints, validation, tests. Each time a piece the frontend needs is ready (an endpoint works, a shape changed), tell the frontend at once.'),
+      step('Frontend', 'claude', 'You are the frontend developer. Build the frontend part of the plan against the shared contract. Do not wait for the backend: build the screens first on mock data shaped like the contract, then wire each part to the real API as the backend tells you it is ready. Tell the backend what you need or what in the contract does not work.', { parallel: true }),
+    ],
+  },
+  {
+    id: 'builtin-team-full',
+    name: 'Full team (BA → Frontend + Backend + QA + DevOps)',
+    description: 'Frontend and backend build side by side; QA tests each part as it is ready and sends bugs back; DevOps sets up build, CI and deployment.',
+    orchestrator: 'Say what each member did, the bugs QA found and whether they were fixed, how to run and deploy it, and what is left. Short.',
+    builtin: true,
+    mode: 'team',
+    steps: [
+      step('Planner', 'claude', PLANNER_PROMPT),
+      step('Backend', 'codex', 'You are the backend developer. Build the backend part of the plan against the shared contract, with tests. Tell the frontend and QA as soon as a piece works (what, where, how to call it). Fix the bugs QA sends you and say when each is fixed.'),
+      step('Frontend', 'claude', 'You are the frontend developer. Build the screens first on mock data shaped like the contract, then wire them to the API as the backend says each part is ready. Tell QA what is ready to test and how to open it. Fix the bugs QA sends you and say when each is fixed.', { parallel: true }),
+      step('QA', 'claude', 'You are the QA tester. Write the test cases from the plan first. Test each part as soon as a member says it is ready: run the tests, open the page in the Preview (browser_open, browser_screenshot, browser_console), call the API. Send each bug to the member who owns it with the steps to reproduce, expected and actual. Retest what they say is fixed. Change no product code; you may add tests. Say STATUS: done only when what was planned passes.', { parallel: true }),
+      step('DevOps', 'codex', 'You are the DevOps engineer. Set up what the plan needs to build, run and ship it: scripts, environment examples (never real secrets), Docker or similar, CI checks (lint, build, tests). Tell the others the commands to run it locally, and ask them for what you need (ports, environment variables, build steps).', { parallel: true }),
     ],
   },
   {

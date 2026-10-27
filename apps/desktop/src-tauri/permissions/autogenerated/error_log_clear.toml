@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-error-log-clear"
+description = "Enables the error_log_clear command without any pre-configured scope."
+commands.allow = ["error_log_clear"]
+
+[[permission]]
+identifier = "deny-error-log-clear"
+description = "Denies the error_log_clear command without any pre-configured scope."
+commands.deny = ["error_log_clear"]

@@ -1,5 +1,7 @@
 <script lang="ts">
   import ProjectSelect from './ProjectSelect.svelte';
+  import ErrorLogDrawer from './ErrorLogDrawer.svelte';
+  import { errorLog } from '../error-log.svelte';
   import DevEmpty from './DevEmpty.svelte';
   import LiveCommand from './LiveCommand.svelte';
   import { ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
@@ -15,6 +17,8 @@
 
   // One list for everything the agents run: live calls and chat errors appear as they happen; the final call
   // snapshot is kept on disk. Rows are grouped by day, and only the selected range is rendered.
+
+  let logOpen = $state(false);
 
   /** Brings the chat a call belongs to to the front. The chat may be gone (deleted, or a chat that was only here). */
   function openChat(sessionId: string) {
@@ -328,6 +332,10 @@
     <button type="button" class="grid size-7 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-40" aria-label="Copy the failures" disabled={failures.length === 0} {@attach zTooltip({ content: copied ? 'Copied' : `Copy ${failures.length} failure${failures.length === 1 ? '' : 's'}`, position: 'top' })} onclick={copyFailures}>
       <ZIcon zType={(copied ? 'lucideCheck' : 'lucideCopy') as ZIconName} class="size-4" />
     </button>
+    <button type="button" class="relative grid size-7 cursor-pointer place-items-center rounded {logOpen ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" aria-label="Error log" aria-expanded={logOpen} {@attach zTooltip({ content: 'Error log: errors and hangs, to debug', position: 'top' })} onclick={() => (logOpen = !logOpen)}>
+      <ZIcon zType={'lucideScrollText' as ZIconName} class="size-4" />
+      {#if errorLog.count > 0}<span class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-destructive px-1 text-center text-[9px] leading-3.5 text-white">{errorLog.count > 99 ? '99+' : errorLog.count}</span>{/if}
+    </button>
     <button type="button" class="grid size-7 cursor-pointer place-items-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary" aria-label="Clear the whole log" {@attach zTooltip({ content: 'Clear all', position: 'top' })} onclick={clearAudit}>
       <ZIcon zType={'lucideBan' as ZIconName} class="size-4" />
     </button>
@@ -358,3 +366,5 @@
     {/if}
   </div>
 </div>
+
+<ErrorLogDrawer bind:open={logOpen} />
