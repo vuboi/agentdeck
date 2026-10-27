@@ -1957,6 +1957,7 @@ pub fn run() {
             servers::init(move |port| {
                 let _ = handle.emit("server-log", serde_json::json!({ "port": port }));
             });
+            servers::adopt_agents();
             if let Ok(url) = std::env::var("AGENTDECK_BROWSER_SELFTEST") {
                 browser::selftest(app.handle().clone(), url);
             }

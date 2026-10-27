@@ -220,7 +220,6 @@
         {#each [
           { label: 'Cost', value: total.priced ? money(total.cost) : '–', hint: total.priced ? (total.priced < total.replies ? `Counts ${total.priced} of ${total.replies} replies: the others are of models without a price (below).` : undefined) : 'No reply here has a price: Codex, Gemini and local models report none. Type one under "Models without a price".' },
           { label: 'Tokens', value: shortCount(total.tokens) },
-          { label: 'Replies', value: String(total.replies) },
           { label: 'Avg tokens / reply', value: shortCount(Math.round(total.tokens / Math.max(total.replies, 1))) },
           { label: 'Cache hit', value: cacheHit === null ? '–' : `${Math.round(cacheHit * 100)}%`, hint: 'Share of the prompt read from the provider cache instead of paid in full: higher means cheaper and faster. 0% can mean the provider does not report it.' },
           { label: 'Avg reply time', value: total.avgMs ? seconds(total.avgMs) : '–' },

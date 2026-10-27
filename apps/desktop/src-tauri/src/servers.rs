@@ -52,11 +52,29 @@ mod job {
 
     /// Puts a started server (and, from now on, everything it starts) under the app's job.
     pub fn adopt(child: &std::process::Child) {
-        if let Some(job) = handle() {
-            // SAFETY: both handles are valid: the job lives for the whole run, the child is still owned by the caller.
-            let _ = unsafe { AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())) };
+        adopt_handle(child.as_raw_handle());
+    }
+
+    /// The same for an agent CLI (a tokio child, see `ag_adapters::agent::runner::on_spawn`): killing the app ends it too.
+    pub fn adopt_agent(child: &tokio::process::Child) {
+        if let Some(raw) = child.raw_handle() {
+            adopt_handle(raw);
         }
     }
+
+    fn adopt_handle(raw: std::os::windows::io::RawHandle) {
+        if let Some(job) = handle() {
+            // SAFETY: both handles are valid: the job lives for the whole run, the child is still owned by the caller.
+            let _ = unsafe { AssignProcessToJobObject(job, HANDLE(raw)) };
+        }
+    }
+}
+
+/// Ties every agent CLI to the app's job (Windows), so a killed app leaves none running. Elsewhere a CLI leads its own
+/// process group and ends with its turn.
+pub fn adopt_agents() {
+    #[cfg(windows)]
+    ag_adapters::agent::runner::on_spawn(job::adopt_agent);
 }
 
 /// What tells the page that the log of the server on a port grew (set once at start-up; tests run without one). A

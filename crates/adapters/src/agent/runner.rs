@@ -62,6 +62,22 @@ pub(super) fn command_for(binary: OsString, args: &[String]) -> Command {
     command
 }
 
+/// Called with every agent CLI the crate starts, right after it starts (the app ties it to its own lifetime: on Windows a
+/// job object that ends it, and what it started, when the app ends, even when the app is killed and drops run no more).
+type SpawnHook = fn(&tokio::process::Child);
+static ON_SPAWN: std::sync::OnceLock<SpawnHook> = std::sync::OnceLock::new();
+
+/// Sets the function told of each CLI started (once, at start-up).
+pub fn on_spawn(hook: SpawnHook) {
+    let _ = ON_SPAWN.set(hook);
+}
+
+pub(super) fn spawned(child: &tokio::process::Child) {
+    if let Some(hook) = ON_SPAWN.get() {
+        hook(child);
+    }
+}
+
 /// Stops the whole process tree of a turn that is dropped before it ends (the user stopped it, or sent an edited
 /// message). `kill_on_drop` ends only the process the app started: on Windows that is the `cmd /C` around a `.cmd`
 /// CLI, and everywhere a CLI started by a wrapper (an npm shim, `node`) keeps its own children. They kept running,
@@ -155,6 +171,7 @@ pub async fn drive_turn(
             });
         }
     };
+    spawned(&child);
     let mut tree = TreeGuard(child.id());
 
     // Written apart from the reader: a long prompt must not hold up the output, and the CLI reads all of it

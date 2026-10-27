@@ -29,7 +29,7 @@
 
   // An answer as rich text: headings, lists, tables, quotes, links and code cards with a copy button.
   // Code is coloured once the answer has stopped streaming, so nothing flickers while text arrives.
-  let { text, streaming = false, onrendered }: { text: string; streaming?: boolean; onrendered?: () => void } = $props();
+  let { text, streaming = false, onrendered, flush = false }: { text: string; streaming?: boolean; onrendered?: () => void; /** Show the rest at once (a newer message came after this one). */ flush?: boolean } = $props();
 
   // Text arrives in bursts. It is revealed at a steady, time-based pace instead (faster when more is waiting),
   // whole words at a time, and each new word fades in, as in Claude and ChatGPT. A finished answer that was
@@ -42,9 +42,12 @@
   const MIN_CPS = 30;
   const MAX_CPS = 120;
   const DRAIN_SECONDS = 4;
-  const DONE_MIN_CPS = 90;
-  const DONE_MAX_CPS = 400;
-  const DONE_DRAIN_SECONDS = 8;
+  // Once the run is over, what is left is shown within about 3 s, at most about 10 characters a frame: quick enough
+  // that a finished reply does not look like it is still running, slow enough that words still come one after another
+  // instead of in chunks. A newer message shows the rest at once (`flush`).
+  const DONE_MIN_CPS = 150;
+  const DONE_MAX_CPS = 600;
+  const DONE_DRAIN_SECONDS = 3;
   const FADE_MS = 220;
   const STAGGER_MS = 18;
   // Past FADE_LIMIT words in flight, new ones simply appear: fading dozens at once costs frames.
@@ -69,7 +72,7 @@
     const source = text;
     const target = source.length;
     if (streaming) live = true;
-    if (!live || reducedMotion) {
+    if (!live || reducedMotion || (flush && !streaming)) {
       shown = pace = target;
       return;
     }

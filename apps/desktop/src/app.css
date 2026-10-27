@@ -288,6 +288,11 @@ html[data-warming] [data-z-popover] {
 .md-table th, .md-table td { overflow-wrap: normal; word-break: normal; }
 .md-table td:first-child, .md-table th:first-child { width: 1%; white-space: nowrap; }
 .md-table td code { overflow-wrap: anywhere; }
+/* Columns size to their content up to a reading width, then wrap: a long cell no longer takes the whole table and leaves
+   the next column a sliver. The table fills the card, and scrolls sideways only when the columns need more. */
+.md-table table { width: max-content; min-width: 100%; }
+.md-cell { max-width: 22rem; min-width: 4rem; }
+.md-table td:first-child .md-cell { min-width: 0; }
 .md img { max-width: 100%; border-radius: var(--radius-large); }
 .md-code { margin: 0 0 0.75rem; overflow: clip; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
 .md-code-head, .md-code-foot { position: relative; display: flex; align-items: center; justify-content: space-between; background: var(--muted); color: var(--muted-foreground); font-size: 0.6875rem; }

@@ -4523,6 +4523,15 @@ export function editMessage(messageId: string, text: string) {
     localMessages[session.id] = list;
     persistLocal();
   }
+  // The CLI's conversation still holds the turns just removed: resumed, the agent would see them (and answer them again).
+  // Every agent of the chat starts a new one, told what is left of the chat.
+  session.agentStarted = false;
+  session.agentSession = undefined;
+  for (const own of Object.values(session.agentIds ?? {})) {
+    own.id = '';
+    own.started = false;
+  }
+  session.forkContext = (session.forkContext ?? '') + handoffDigest(list, EDIT_LEAD);
   send(session.id, text, images, elements, [], { files });
 }
 
@@ -4815,6 +4824,9 @@ function handoffDigest(
 /** Whether a chat's CLI switches its model in the same conversation (Claude's `set_model`, see warm.rs): a model change
  *  then keeps the conversation. The other agents start a new one (and carry the turns so far, see MODEL_LEAD). */
 const liveModel = (agent: string) => agent === 'claude';
+
+/** What an edited message carries over: the chat before it (the edited message and what came after are gone). */
+const EDIT_LEAD = 'The user edited an earlier message, so this is a new session of the same conversation, without what came after it. Continue from here; do not repeat work that the turns below do not show.';
 
 /** What a model change carries over: a new CLI conversation cannot resume the old one, so the turns so far go with the next message. */
 const MODEL_LEAD = 'The model was changed, so this is a new session of the same conversation. Continue the work in progress; do not redo what is already done.';
