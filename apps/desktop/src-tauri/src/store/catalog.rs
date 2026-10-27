@@ -10,6 +10,7 @@
 //! cloned, and an MCP server is shown with its exact command for the user to accept.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -106,10 +107,67 @@ pub fn checked_source(url: &str) -> Result<String, String> {
     Ok(url)
 }
 
-pub fn read_cache(home: &Path) -> Option<Cache> {
+fn read_cache(home: &Path) -> Option<Cache> {
     std::fs::read_to_string(cache_file(home))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
+}
+
+/// The catalog held in memory. It has thousands of items, so the file is read once, not on every page the UI asks for.
+static MEMORY: Mutex<Option<Arc<Cache>>> = Mutex::new(None);
+
+/// The catalog, read from its file the first time. Empty (`fetched_at` 0) until a refresh has run.
+pub fn cached(home: &Path) -> Arc<Cache> {
+    let mut slot = MEMORY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    slot.get_or_insert_with(|| Arc::new(read_cache(home).unwrap_or_default())).clone()
+}
+
+fn remember(cache: Cache) -> Arc<Cache> {
+    let cache = Arc::new(cache);
+    *MEMORY.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::clone(&cache));
+    cache
+}
+
+/// What the Discover tab narrows the catalog by. An empty kind or agent (or `all`) means every one.
+#[derive(Deserialize, Default, Debug)]
+#[serde(default)]
+pub struct Filter {
+    pub query: String,
+    pub kind: String,
+    pub agent: String,
+}
+
+/// One page of the matching items; the UI asks for the next one when the list is scrolled near its end.
+#[derive(Serialize, Debug)]
+pub struct Page {
+    pub items: Vec<CatalogItem>,
+    /// How many items match the filter in all (not only this page).
+    pub total: usize,
+    pub fetched_at: u64,
+    pub errors: Vec<String>,
+}
+
+fn any(value: &str) -> bool {
+    value.is_empty() || value == "all"
+}
+
+/// `limit` items of the catalog that match `filter`, starting at `offset`.
+pub fn page(cache: &Cache, filter: &Filter, offset: usize, limit: usize) -> Page {
+    let words: Vec<String> = filter.query.to_lowercase().split_whitespace().map(str::to_owned).collect();
+    let matching = cache.items.iter().filter(|item| {
+        (any(&filter.kind) || item.kind == filter.kind)
+            && (any(&filter.agent) || item.agents.contains(&filter.agent))
+            && (words.is_empty() || {
+                let text = format!("{} {} {}", item.name, item.summary, item.publisher).to_lowercase();
+                words.iter().all(|word| text.contains(word.as_str()))
+            })
+    });
+    Page {
+        total: matching.clone().count(),
+        items: matching.skip(offset).take(limit).cloned().collect(),
+        fetched_at: cache.fetched_at,
+        errors: cache.errors.clone(),
+    }
 }
 
 fn write_cache(home: &Path, cache: &Cache) -> Result<(), String> {
@@ -129,7 +187,7 @@ fn now() -> u64 {
 }
 
 /// Rebuilds the whole catalog and writes the cache. A source that fails is listed in `errors`; the rest still shows.
-pub async fn refresh(home: &Path) -> Result<Cache, String> {
+pub async fn refresh(home: &Path) -> Result<Arc<Cache>, String> {
     // The four kinds of source do not depend on each other, so they are read at the same time. Skill repositories are
     // cloned one after another, so a long list does not start many clones at once.
     let sources = read_sources(home);
@@ -162,7 +220,7 @@ pub async fn refresh(home: &Path) -> Result<Cache, String> {
     }
     let cache = Cache { fetched_at: now(), items, errors };
     write_cache(home, &cache)?;
-    Ok(cache)
+    Ok(remember(cache))
 }
 
 /// The plugins one CLI offers, read from its `plugin list --available --json` output.
@@ -396,5 +454,54 @@ mod tests {
     fn only_https_sources_are_accepted() {
         assert!(checked_source("https://github.com/anthropics/skills/").is_ok());
         assert!(checked_source("http://example.com/x").is_err());
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+
+    fn item(name: &str, kind: &str, agent: &str) -> CatalogItem {
+        CatalogItem {
+            key: format!("{kind}:{name}"),
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+            summary: String::new(),
+            version: String::new(),
+            publisher: "pub".to_owned(),
+            agents: vec![agent.to_owned()],
+            install: Install::Skill { url: String::new(), subpath: String::new() },
+        }
+    }
+
+    fn cache() -> Cache {
+        Cache {
+            fetched_at: 5,
+            errors: Vec::new(),
+            items: (0..10).map(|n| item(&format!("tool-{n}"), if n % 2 == 0 { "plugin" } else { "mcp" }, "claude")).chain([item("other", "skill", "codex")]).collect(),
+        }
+    }
+
+    #[test]
+    fn pages_follow_each_other_and_report_the_total() {
+        let cache = cache();
+        let all = Filter::default();
+        let first = page(&cache, &all, 0, 4);
+        let second = page(&cache, &all, 4, 4);
+        assert_eq!((first.total, first.items.len(), second.items.len()), (11, 4, 4));
+        assert_eq!(first.items[0].name, "tool-0");
+        assert_eq!(second.items[0].name, "tool-4");
+        assert!(page(&cache, &all, 8, 4).items.len() == 3, "the last page is short");
+    }
+
+    #[test]
+    fn the_filter_narrows_by_text_kind_and_agent() {
+        let cache = cache();
+        let by_text = Filter { query: "TOOL-3".to_owned(), ..Filter::default() };
+        assert_eq!(page(&cache, &by_text, 0, 50).total, 1);
+        let by_kind = Filter { kind: "mcp".to_owned(), ..Filter::default() };
+        assert_eq!(page(&cache, &by_kind, 0, 50).total, 5);
+        let by_agent = Filter { agent: "codex".to_owned(), ..Filter::default() };
+        assert_eq!(page(&cache, &by_agent, 0, 50).items[0].name, "other");
     }
 }

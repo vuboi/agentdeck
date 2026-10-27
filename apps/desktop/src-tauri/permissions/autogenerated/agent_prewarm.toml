@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-agent-prewarm"
+description = "Enables the agent_prewarm command without any pre-configured scope."
+commands.allow = ["agent_prewarm"]
+
+[[permission]]
+identifier = "deny-agent-prewarm"
+description = "Denies the agent_prewarm command without any pre-configured scope."
+commands.deny = ["agent_prewarm"]

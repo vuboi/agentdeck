@@ -25,7 +25,7 @@ const STDERR_KEEP: usize = 16 * 1024;
 
 /// Reads stderr while the CLI runs, keeping only its tail. A pipe nobody reads fills up (4 KB on Windows) and the
 /// CLI then blocks on its next write, so the turn would never end.
-async fn drain_stderr(mut stderr: tokio::process::ChildStderr, kept: Arc<Mutex<Vec<u8>>>) {
+pub(super) async fn drain_stderr(mut stderr: tokio::process::ChildStderr, kept: Arc<Mutex<Vec<u8>>>) {
     let mut chunk = [0u8; 4096];
     while let Ok(read) = stderr.read(&mut chunk).await {
         if read == 0 {
@@ -41,7 +41,7 @@ async fn drain_stderr(mut stderr: tokio::process::ChildStderr, kept: Arc<Mutex<V
 }
 
 /// Windows cannot start a `.cmd`/`.bat` file through `CreateProcess` with arguments directly.
-fn command_for(binary: OsString, args: &[String]) -> Command {
+pub(super) fn command_for(binary: OsString, args: &[String]) -> Command {
     #[cfg(windows)]
     {
         let is_batch = Path::new(&binary)
@@ -75,28 +75,34 @@ impl TreeGuard {
 
 impl Drop for TreeGuard {
     fn drop(&mut self) {
-        let Some(pid) = self.0 else { return };
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            let _ = std::process::Command::new("taskkill")
-                .args(["/T", "/F", "/PID", &pid.to_string()])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .creation_flags(0x0800_0000)
-                .spawn();
+        if let Some(pid) = self.0 {
+            kill_tree(pid);
         }
-        // macOS and Linux: the CLI leads a process group of its own (see `drive_turn`), so the group is ended.
-        #[cfg(unix)]
-        {
-            let _ = std::process::Command::new("kill")
-                .args(["-KILL", "--", &format!("-{pid}")])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-        }
+    }
+}
+
+/// Ends a process and everything it started. Fire and forget: the kill runs on its own.
+pub(super) fn kill_tree(pid: u32) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x0800_0000)
+            .spawn();
+    }
+    // macOS and Linux: the CLI leads a process group of its own (see `drive_turn`), so the group is ended.
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", "--", &format!("-{pid}")])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
     }
 }
 

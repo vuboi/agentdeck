@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
-  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { fly } from 'svelte/transition';
+  import { ZButton } from '@shival99/z-ui-svelte';
   import { checkUpdates, store, updateSkill, updates, withAck } from '../store.svelte';
-
-  const icon = (name: string) => name as ZIconName;
+  import StoreEmpty from './StoreEmpty.svelte';
+  import StoreBar from './StoreBar.svelte';
+  import { debounced } from '../debounce.svelte';
+  import StoreSkeleton, { GUTTER, ROW } from './StoreSkeleton.svelte';
 
   // Library skills that came from a git source, compared with that source. An update is scanned again before it replaces
   // the library copy; a caution asks first, a block stops the update.
@@ -12,35 +14,43 @@
     if (!updates.checked) void checkUpdates();
   });
 
+  let query = $state('');
+  const searched = debounced(() => query);
+  const shown = $derived(updates.items.filter((item) => `${item.name} ${item.source}`.toLowerCase().includes(searched.value.trim().toLowerCase())));
+
   const update = (name: string) => withAck((acknowledged) => updateSkill(name, acknowledged), `The new version of ${name}`);
+  const rise = (index: number) => ({ y: 6, duration: 180, delay: Math.min(index, 12) * 25 });
 </script>
 
-<div class="flex flex-col gap-3 text-xs">
-  <div class="flex items-center gap-2">
-    <span class="text-muted-foreground">{updates.items.length} skills from git sources</span>
-    <ZButton zWave={false} zType="outline" zSize="sm" class="ml-auto h-7 gap-1.5 px-2.5 text-xs" zLoading={updates.checking} onclick={() => void checkUpdates()}>
-      <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5 {updates.checking ? 'animate-spin' : ''}" /> Check for updates
-    </ZButton>
-  </div>
+<div class="flex min-h-0 flex-1 flex-col text-xs">
+  <StoreBar bind:query placeholder="Search skills from git sources" actions={[{ id: 'refresh', label: 'Check for updates', icon: 'lucideRefreshCw', onclick: () => void checkUpdates(), busy: updates.checking }]} />
 
-  <ul class="m-0 flex list-none flex-col gap-2 p-0">
-    {#each updates.items as item (item.name)}
-      <li class="flex items-center gap-2 rounded-md border border-border bg-card p-2.5">
-        <div class="min-w-0 flex-1">
-          <div class="truncate font-medium text-foreground">{item.name}</div>
-          <div class="truncate font-mono text-[11px] text-muted-foreground">{item.source}</div>
-          {#if item.error}<div class="text-destructive">{item.error}</div>{/if}
-        </div>
-        {#if item.changed}
-          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-2.5 text-xs" zLoading={store.busy === `update:${item.name}`} onclick={() => void update(item.name)}>
-            Update
-          </ZButton>
-        {:else if !item.error}
-          <span class="text-muted-foreground">up to date</span>
-        {/if}
-      </li>
-    {:else}
-      <li class="text-muted-foreground">{updates.checked ? 'No skill from a git source is installed.' : 'Checking…'}</li>
-    {/each}
-  </ul>
+  {#if updates.checking && updates.items.length === 0}
+    <StoreSkeleton variant="plugin" />
+  {:else if updates.items.length === 0}
+    <StoreEmpty icon="lucideSparkles" text="No skill from a git source" hint="Skills you install from a repository show up here, with their updates." />
+  {:else if shown.length === 0}
+    <StoreEmpty icon="lucideSearch" text="Nothing matches this search." />
+  {:else}
+    <div class="flex min-h-0 flex-1 flex-col overflow-y-auto {GUTTER}">
+      <ul class="m-0 flex list-none flex-col gap-2 p-3">
+        {#each shown as item, index (item.name)}
+          <li class="flex items-center gap-2 rounded-md border border-border bg-card p-2.5 {ROW.plugin}" in:fly={rise(index)}>
+            <div class="min-w-0 flex-1">
+              <div class="truncate font-medium text-foreground">{item.name}</div>
+              <div class="truncate font-mono text-[11px] text-muted-foreground">{item.source}</div>
+              {#if item.error}<div class="text-destructive">{item.error}</div>{/if}
+            </div>
+            {#if item.changed}
+              <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-2.5 text-xs" zLoading={store.busy === `update:${item.name}`} onclick={() => void update(item.name)}>
+                Update
+              </ZButton>
+            {:else if !item.error}
+              <span class="text-muted-foreground">up to date</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
 </div>

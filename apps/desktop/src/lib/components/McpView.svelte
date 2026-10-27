@@ -13,7 +13,6 @@
     loadMcp,
     mcp,
     removeMcp,
-    testAllMcp,
     testMcp,
     usageByServer,
     type AddSpec,
@@ -21,11 +20,17 @@
     type McpAgent,
     type McpEntry,
   } from '../mcp.svelte';
+  import { mcpLogin, store } from '../store.svelte';
+  import StoreSkeleton from './StoreSkeleton.svelte';
+
+  // The Store's bar above holds the search, the test-all and reload buttons and the plus that opens the add form.
+  let { query = '', adding = $bindable(false) }: { query?: string; adding?: boolean } = $props();
 
   const icon = (name: string) => name as ZIconName;
 
-  const entries = $derived(mcp.overview?.entries ?? []);
-  const usage = $derived(usageByServer(new Set(entries.map((entry) => entry.name))));
+  const all = $derived(mcp.overview?.entries ?? []);
+  const entries = $derived(all.filter((entry) => `${entry.name} ${entry.target} ${entry.agents.join(' ')}`.toLowerCase().includes(query.trim().toLowerCase())));
+  const usage = $derived(usageByServer(new Set(all.map((entry) => entry.name))));
   const totals = $derived.by(() => {
     let calls = 0;
     let failed = 0;
@@ -39,7 +44,6 @@
   });
 
   let open = $state<Record<string, boolean>>({});
-  let adding = $state(false);
   let confirmRemove = $state<McpEntry | null>(null);
 
   const HEALTH: Record<Health, { label: string; tone: string; dot: string }> = {
@@ -106,30 +110,10 @@
   onMount(() => {
     void loadMcp();
   });
-  const refreshAndTest = async () => {
-    await loadMcp();
-    void testAllMcp();
-  };
 </script>
 
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="MCP">
-  <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-3 text-[13px]">
-    <span class="font-semibold">MCP</span>
-    <span class="text-muted-foreground tabular-nums">{entries.length}</span>
-    {#if mcp.loading}<ZIcon zType={icon('lucideLoaderCircle')} class="size-3 animate-spin text-muted-foreground" />{/if}
-    <span class="ml-auto"></span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Test every server" title="Test every server" disabled={entries.length === 0} onclick={() => void refreshAndTest()}>
-      <ZIcon zType={icon('lucideActivity')} class="size-3.5" />
-    </ZButton>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-muted-foreground" aria-label="Reload the list" title="Reload the list" onclick={() => void loadMcp()}>
-      <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5 {mcp.loading ? 'animate-spin' : ''}" />
-    </ZButton>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1 px-2 text-xs {adding ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : ''}" aria-expanded={adding} onclick={() => (adding = !adding)}>
-      <ZIcon zType={icon('lucidePlus')} class="size-3.5" /> Add
-    </ZButton>
-  </div>
-
-  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]">
     {#if !inTauri()}
       <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground">
         <ZIcon zType={icon('lucidePlug')} zSize="28" class="size-7 opacity-60" />
@@ -139,7 +123,7 @@
     {:else}
       <!-- Totals from the Tasks log -->
       <div class="grid grid-cols-3 gap-px border-b border-border bg-border text-center">
-        {#each [{ label: 'Servers', value: String(entries.length) }, { label: 'Calls', value: compact(totals.calls) + (totals.failed ? ` · ${totals.failed} failed` : '') }, { label: 'Tokens ≈', value: compact(totals.tokens) }] as cell (cell.label)}
+        {#each [{ label: 'Servers', value: String(all.length) }, { label: 'Calls', value: compact(totals.calls) + (totals.failed ? ` · ${totals.failed} failed` : '') }, { label: 'Tokens ≈', value: compact(totals.tokens) }] as cell (cell.label)}
           <div class="bg-background px-2 py-2">
             <div class="truncate text-sm font-semibold tabular-nums">{cell.value}</div>
             <div class="text-[10px] tracking-wide text-muted-foreground uppercase">{cell.label}</div>
@@ -158,14 +142,17 @@
           </ZButton>
         </div>
       {:else if !mcp.overview}
-        <div class="flex flex-col gap-2 p-3" aria-busy="true">
-          {#each [0, 1, 2] as row (row)}<div class="h-16 animate-pulse rounded-lg border border-border bg-muted/30"></div>{/each}
-        </div>
-      {:else if entries.length === 0}
+        <StoreSkeleton />
+      {:else if all.length === 0}
         <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground">
           <ZIcon zType={icon('lucidePlug')} zSize="28" class="size-7 opacity-60" />
           <h3 class="m-0 text-sm font-medium text-foreground">No MCP server yet</h3>
-          <p class="m-0 max-w-56 text-xs leading-normal">Give your agents tools: press Add.</p>
+          <p class="m-0 max-w-56 text-xs leading-normal">Give your agents tools: press +.</p>
+        </div>
+      {:else if entries.length === 0}
+        <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground">
+          <ZIcon zType={icon('lucideSearch')} zSize="28" class="size-7 opacity-60" />
+          <h3 class="m-0 text-sm font-medium text-foreground">No server matches</h3>
         </div>
       {:else}
         <ul class="m-0 flex list-none flex-col gap-2 p-3">
@@ -198,6 +185,12 @@
                 <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Test {entry.name}" title="Start it and list its tools" disabled={test?.state === 'testing' || entry.disabled} onclick={() => void testMcp(entry.id)}>
                   <ZIcon zType={icon(test?.state === 'testing' ? 'lucideLoaderCircle' : 'lucideZap')} class="size-3 {test?.state === 'testing' ? 'animate-spin' : ''}" />
                 </ZButton>
+                <!-- A server behind OAuth signs in for Codex here (Claude Code asks by itself the first time it is used). -->
+                {#if !entry.builtin && entry.transport === 'http' && entry.agents.includes('codex')}
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Log in to {entry.name}" title="Log in over OAuth (Codex)" disabled={store.busy === `login:${entry.name}`} onclick={() => void mcpLogin('codex', entry.name)}>
+                    <ZIcon zType={icon(store.busy === `login:${entry.name}` ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3 {store.busy === `login:${entry.name}` ? 'animate-spin' : ''}" />
+                  </ZButton>
+                {/if}
                 {#if !entry.builtin}
                   <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0 text-muted-foreground hover:!border-destructive/60 hover:!bg-destructive/10 hover:!text-destructive" aria-label="Remove {entry.name}" title="Remove from {entry.agents.join(', ')}" disabled={mcp.busy.startsWith('remove')} onclick={() => (confirmRemove = entry)}>
                     <ZIcon zType={icon('lucideTrash2')} class="size-3" />

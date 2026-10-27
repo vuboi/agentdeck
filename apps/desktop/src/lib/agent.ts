@@ -24,12 +24,10 @@ export type FileChange = { path: string; added: number; removed: number; before:
 
 export type AgentEnvelope = { session: string; turn: string; event: AgentEvent };
 
-/** Start one turn. Resolves as soon as the CLI is started; the answer arrives as `agent-event`s. */
-export async function sendAgentTurn(args: {
+/** What a turn is started with, apart from its message. */
+export type AgentTurnSettings = {
   session: string;
-  turn: string;
   agent: string;
-  prompt: string;
   agentSession: string | null;
   resume: boolean;
   model: string | null;
@@ -37,12 +35,25 @@ export async function sendAgentTurn(args: {
   effort: string | null;
   allowedTools: string[];
   cwd: string | null;
-}): Promise<void> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  // A `credit:` Claude model runs the same CLI on the Console API key, so the turn spends API credit (models.svelte.ts).
+};
+
+/** The model and key a turn runs on: a `credit:` Claude model runs the same CLI on the Console API key, so the turn
+ *  spends API credit (models.svelte.ts). */
+function billing(args: AgentTurnSettings): { model: string | null; apiKey: string | null } {
   const credit = args.agent === 'claude' ? creditModel(args.model) : null;
-  const apiKey = credit ? connectors.claudeCredit.apiKey.trim() || null : null;
-  await invoke('agent_send', { ...args, model: credit ?? args.model, apiKey });
+  return { model: credit ?? args.model, apiKey: credit ? connectors.claudeCredit.apiKey.trim() || null : null };
+}
+
+/** Start one turn. Resolves as soon as the CLI is started; the answer arrives as `agent-event`s. */
+export async function sendAgentTurn(args: AgentTurnSettings & { turn: string; prompt: string }): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('agent_send', { ...args, ...billing(args) });
+}
+
+/** Starts the chat's CLI ahead of its next turn (the user is typing it), with the settings that turn will have. */
+export async function prewarmAgent(args: AgentTurnSettings): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('agent_prewarm', { ...args, ...billing(args) });
 }
 
 /** Start one turn on a custom provider: an OpenAI-compatible server that gets the whole conversation. */

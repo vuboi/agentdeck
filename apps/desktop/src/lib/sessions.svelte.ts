@@ -33,6 +33,7 @@ import {
   listenDelegateCalls,
   listenAgentEvents,
   replyDelegateCall,
+  prewarmAgent,
   saveAttachment,
   sendAgentTurn,
   sendCustomTurn,
@@ -87,6 +88,7 @@ import { parseResetAt } from './limit-reset';
 import { requestSystemNotificationPermission, sendSystemNotification } from './system-notifications';
 import { dequeue, enqueue } from './queue';
 import { accountEpoch } from './account-epoch.svelte';
+import { needsContext } from './context-need';
 import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from './handback';
 import { joinContinuations } from './continuations';
 import {
@@ -1048,6 +1050,9 @@ export function stopTurn(sessionId: string) {
     return;
   }
   const turn = turns[sessionId];
+  // Every agent and provider stops here, so every stopped reply says so, with how long it had run.
+  const live = liveReplies[sessionId];
+  if (live?.live) live.stoppedAfter = Date.now() - (live.startedAt ?? Date.now());
   void stopAgentTurn(sessionId, turn).catch(() => {});
   handleAgentEvent(sessionId, { kind: 'error', message: 'stopped' }, turn);
 }
@@ -1134,6 +1139,57 @@ function missedTurns(
   return `Earlier in this chat, other agents answered these turns (you were not part of them):\n\n${digest}\n\n---\nNow the user says:\n`;
 }
 
+/** When each chat's CLI was last asked to start ahead, so typing does not ask on every key. */
+const prewarmedAt = new Map<string, number>();
+
+/**
+ * Starts the CLI of a chat whose next message is being typed (Claude, Codex, Antigravity keep it open between turns,
+ * see warm.rs), with what `startTurn` will send, so the first turn does not wait for it to load. Nothing is changed in
+ * the chat, except that a new Claude chat gets the conversation id its first turn will use. A turn that will start a
+ * new conversation (another model, another account) is left to start on its own.
+ */
+export function prewarmChat(sessionId: string) {
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  if (!session || !inTauri() || !['claude', 'codex', 'antigravity'].includes(session.agent) || isRunning(session.id)) return;
+  const now = Date.now();
+  if (now - (prewarmedAt.get(session.id) ?? 0) < 60_000) return;
+  prewarmedAt.set(session.id, now);
+  const first = session.source ?? session.agents?.[0] ?? session.agent;
+  const selectedModel = modelFor(session);
+  const epoch = accountEpoch[session.agent] ?? 0;
+  let cliId: string | null;
+  let resume: boolean;
+  if (session.agent === first) {
+    if (session.conversationModel && session.conversationModel !== selectedModel) return;
+    if (session.agentEpoch !== undefined && session.agentEpoch !== epoch) return;
+    const prefix = `${session.agent}:`;
+    const fromId = session.agentStarted === false ? undefined : session.id.startsWith(prefix) ? session.id.slice(prefix.length) : undefined;
+    if (!session.agentSession && !fromId && session.agent === 'claude') session.agentSession = crypto.randomUUID();
+    cliId = session.agentSession ?? fromId ?? null;
+    resume = cliId !== null && (session.agentStarted ?? !!session.path);
+  } else {
+    const own = session.agentIds?.[session.agent];
+    // A first turn of Claude here picks its id then; Codex and Antigravity name theirs, so they start without one.
+    if (!own && session.agent === 'claude') return;
+    if (own && own.epoch !== undefined && own.epoch !== epoch) return;
+    if (session.agentModels?.[session.agent] && session.agentModels[session.agent] !== selectedModel) return;
+    cliId = own?.id || null;
+    resume = cliId !== null && Boolean(own?.started);
+  }
+  const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
+  void prewarmAgent({
+    session: session.id,
+    agent: session.agent,
+    agentSession: cliId,
+    resume,
+    model: selectedModel,
+    permissionMode: PERMISSION_MODE[turnOptions.permission],
+    effort: (session.stepEffort ?? turnOptions.effort) as Effort,
+    allowedTools: [...(approved[session.id] ?? [])],
+    cwd,
+  }).catch(() => {});
+}
+
 /** One CLI run (`claude -p`, `codex exec`) in `session`, with a fresh live reply. Images go to disk first so the CLI can open them. */
 function startTurn(
   session: SessionItem,
@@ -1192,7 +1248,7 @@ function startTurn(
       cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
       session.agentStarted = false;
       session.agentSession = undefined;
-      session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id));
+      session.forkContext = (session.forkContext ?? '') + handoffFor(session.id, text);
     }
     session.agentEpoch = epoch;
     if (cliId) session.agentSession = cliId;
@@ -1223,7 +1279,7 @@ function startTurn(
       cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
       own.started = false;
       if (cliId) own.id = cliId;
-      session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id));
+      session.forkContext = (session.forkContext ?? '') + handoffFor(session.id, text);
     }
     own.epoch = epoch;
     resume = cliId !== null && !modelChanged && !accountChanged && own.started;
@@ -1544,21 +1600,6 @@ export function needsUserInput(sessionId: string): boolean {
   return false;
 }
 
-/** Codex cannot take a second turn beside its reply, so everything waiting goes out together as one message. */
-function takeAllQueued(sessionId: string): Queued | undefined {
-  const waiting = queued[sessionId];
-  if (!waiting?.length) return undefined;
-  delete queued[sessionId];
-  if (waiting.length === 1) return waiting[0];
-  return {
-    text: waiting.map((item) => item.text.trim()).filter(Boolean).join('\n\n'),
-    images: waiting.flatMap((item) => item.images),
-    elements: waiting.flatMap((item) => item.elements),
-    mentions: waiting.flatMap((item) => item.mentions ?? []),
-    files: waiting.flatMap((item) => item.files ?? []),
-  };
-}
-
 /** Dispatches one queued message only after the active turn and all user decisions are complete. */
 function sendNextQueued(sessionId: string) {
   if (hasOutstandingSessionWork(sessionId)) return;
@@ -1567,8 +1608,8 @@ function sendNextQueued(sessionId: string) {
   // remove it from the queue, then `send` would reject it because the priority turn is now running.
   setTimeout(() => {
     if (hasOutstandingSessionWork(sessionId)) return;
-    const agent = workspace.sessions.find((entry) => entry.id === sessionId)?.agent;
-    const next = agent === 'codex' ? takeAllQueued(sessionId) : dequeue(queued, sessionId);
+    // One at a time, whatever the agent: after a stop the next message goes out and the rest stay in line.
+    const next = dequeue(queued, sessionId);
     if (next) {
       send(sessionId, next.text, next.images, next.elements, next.mentions, {
         files: next.files,
@@ -1841,8 +1882,11 @@ export function handleAgentEvent(
     event.kind === 'error' &&
     /no rollout found|no conversation found/i.test(event.message)
   ) {
+    // The CLI no longer has the conversation this id named (a thread whose run was cut short, a cleaned-up session).
+    // The next turn starts a new one, and is given what was said so far as text, so the work in progress is not lost.
     session.agentStarted = false;
     session.agentSession = undefined;
+    session.forkContext = (session.forkContext ?? '') + handoffFor(sessionId, lastRequest(sessionId));
   }
   trackActivity(
     sessionId,
@@ -4028,8 +4072,8 @@ function filesInUse(sessionId: string): string[] {
   return [...new Set(files.filter(Boolean))].slice(0, 20);
 }
 
-/** Whether a message can be answered beside the busy turn now (else it waits in the queue). Codex never does it:
- * a side answer would land in the middle of its reply, so its messages wait and go out together after it. */
+/** Whether a message can be answered beside the busy turn now (else it waits in the queue). Codex and OpenCode never
+ * do it: a side answer would land in the middle of their reply, so their messages wait in line, one turn each. */
 export function canRunBeside(sessionId: string, item: Pick<Queued, 'images' | 'mentions'>): boolean {
   const session = workspace.sessions.find((entry) => entry.id === sessionId);
   return (
@@ -4037,6 +4081,7 @@ export function canRunBeside(sessionId: string, item: Pick<Queued, 'images' | 'm
     !!session &&
     session.agent !== 'custom' &&
     session.agent !== 'codex' &&
+    session.agent !== 'opencode' &&
     Boolean(replies[sessionId]) &&
     !needsUserInput(sessionId) &&
     !presetOf(sessionId) &&
@@ -4521,10 +4566,21 @@ if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', () => persistLocal());
 }
 
+/** The conversation so far for a new session, but only when the message it is about to get cannot stand without it:
+ *  one that names its subject goes as it is (see context-need.ts), so a session is not loaded with history for nothing. */
+function handoffFor(sessionId: string, prompt: string): string {
+  return needsContext(prompt) ? handoffDigest(messagesOf(sessionId)) : '';
+}
+
 /** What an agent is told after an account switch: the conversation so far, without the message it is about to get.
  *  The new session has no history of its own, so this is how the work in progress carries over. */
 function handoffDigest(list: Message[]): string {
-  const before = list.at(-1)?.role === 'user' ? list.slice(0, -1) : list;
+  // Not the message about to be answered (the last one of the user), and not a reply that only holds an error line.
+  const last = list.at(-1);
+  const onlyError =
+    last?.role === 'assistant' &&
+    last.blocks.every((block) => block.kind === 'response' && (!block.text.trim() || block.text.trim().startsWith('⚠')));
+  const before = last?.role === 'user' || onlyError ? list.slice(0, -1) : list;
   return forkDigest(
     before,
     'The account was switched, so this is a new session of the same conversation. Continue the work in progress; do not redo what is already done.',

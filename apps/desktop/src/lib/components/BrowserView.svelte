@@ -535,24 +535,37 @@
   });
 
   /** The inspector: point at an element in the live page and click it. It goes to the message box as an element, with no picture. */
+  // Inspect stays on after an element is picked, so several can be added one after another. The toggle, Escape, a
+  // new page or another tab ends it.
+  let keepPicking = false;
+
   async function pick() {
     if (browser.picking) {
+      keepPicking = false;
       void cancelPick();
       return;
     }
     browser.error = '';
+    keepPicking = true;
     try {
       if (browser.annotating) await stopAnnotating();
-      const picked = await pickElement();
-      if (!picked) return;
-      const { element, url, title } = picked;
-      const id = workspace.activeId;
-      // A picture of the element alone, so the agent sees it next to its markup.
-      const picture = await captureElement(browser.activeId, element.box);
-      draftElements[id] = [...(draftElements[id] ?? []), { id: crypto.randomUUID(), picture, tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url, title }];
-      toast.success('Element added to the message');
+      while (keepPicking) {
+        const picked = await pickElement();
+        if (!picked || !keepPicking) return;
+        // The mode stays lit while the element is captured, so the button does not flicker between two picks.
+        browser.picking = true;
+        const { element, url, title } = picked;
+        const id = workspace.activeId;
+        // A picture of the element alone, so the agent sees it next to its markup.
+        const picture = await captureElement(browser.activeId, element.box);
+        draftElements[id] = [...(draftElements[id] ?? []), { id: crypto.randomUUID(), picture, tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url, title }];
+        toast.success('Element added to the message');
+      }
     } catch (error) {
       browser.error = String(error);
+    } finally {
+      keepPicking = false;
+      browser.picking = false;
     }
   }
 

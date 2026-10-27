@@ -27,7 +27,8 @@
   // The steps an agent took, as one quiet line: "Created 2 files, ran 8 commands  +222 −0". While the agent
   // is still working that line carries the only loader, with the current step and a running clock; open it
   // for the list of steps, open a step for its command, output or diff.
-  let { items, thoughts = [], live = false, startedAt, stateKey }: { items: CommandBlock[]; thoughts?: ThinkingBlock[]; live?: boolean; startedAt?: number; stateKey: string } = $props();
+  // `working`: the reply is still being made and this is its newest group, so the summary shimmers like a running step.
+  let { items, thoughts = [], live = false, working = false, startedAt, stateKey }: { items: CommandBlock[]; thoughts?: ThinkingBlock[]; live?: boolean; working?: boolean; startedAt?: number; stateKey: string } = $props();
 
   // What is open lives outside the list (see open-groups.svelte.ts), so it is still open when the chat comes back.
   const view = $derived(groupState(stateKey));
@@ -205,7 +206,7 @@
       <span class="tabular-nums">{seconds}</span>
     {:else}
       {#if thoughts.length > 0}<ZIcon zType="lucideBrain" class="size-3 shrink-0" />{/if}
-      {#if items.some((item) => item.status === 'running')}
+      {#if working || items.some((item) => item.status === 'running')}
         <ZShimmerText class="truncate font-medium" zText={summarize(items)} />
       {:else}
         <span class="truncate font-medium">{summarize(items)}</span>

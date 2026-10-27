@@ -1,3 +1,4 @@
+import { inTauri } from './history';
 import { getPref, setPref } from './prefs';
 
 // Counts the account switches of each agent. A conversation begun under one account is not resumed under another:
@@ -19,4 +20,6 @@ void getPref<Record<string, number>>(KEY).then((saved) => {
 export function accountSwitched(agent: string) {
   accountEpoch[agent] = (accountEpoch[agent] ?? 0) + 1;
   void setPref(KEY, { ...accountEpoch });
+  // A CLI kept open between turns still holds the old sign-in: it is ended, so the next message starts with the new one.
+  if (inTauri()) void import('@tauri-apps/api/core').then(({ invoke }) => invoke('agent_warm_reset', { agent })).catch(() => {});
 }

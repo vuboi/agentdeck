@@ -40,6 +40,7 @@
     canRunBeside,
     type Queued,
     sendMessage,
+    prewarmChat,
     stopTurn,
     AGENT_ICON as agentIcon,
     turnOptions,
@@ -84,6 +85,8 @@
     if (!sent && !value.trim() && before.trim()) cleared[sessionId] = before;
     if (value.trim()) delete cleared[sessionId];
     drafts[sessionId] = value;
+    // Typing a message starts the agent's CLI, so it is up by the time the message is sent.
+    if (!sent && value.trim()) prewarmChat(sessionId);
   };
   const setMentions = (value: Mention[]) => {
     draftMentions[sessionId] = value;

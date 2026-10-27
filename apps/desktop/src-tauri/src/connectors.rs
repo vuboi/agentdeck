@@ -654,7 +654,15 @@ pub async fn connector_install(app: AppHandle, id: String) -> Result<(), String>
     };
     let (program, args): (PathBuf, Vec<String>) = match id.as_str() {
         "codex" => node_tool("@openai/codex")?,
-        "opencode" => node_tool("@opencode/cli")?,
+        "opencode" => {
+            // Its `opencode` command is the native binary that the package's postinstall script puts in place: without
+            // this npm (11+) skips the script and leaves a command that does not exist.
+            let (program, mut args) = node_tool("@opencode/cli")?;
+            if args.first().is_some_and(|first| first == "install") {
+                args.push("--allow-scripts=@opencode/cli".into());
+            }
+            (program, args)
+        }
         // Pinned to the version that was read through (see `pins` in endpoints.json): a newer one is looked at before it is used.
         "codex-auth" => node_tool(&format!("@loongphy/codex-auth@{}", ENDPOINTS.pins.codex_auth))?,
         "cswap" => {

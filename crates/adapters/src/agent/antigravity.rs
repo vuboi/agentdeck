@@ -207,6 +207,18 @@ impl Provider for Antigravity {
         args
     }
 
+    /// The same settings with each message read as a JSON line (`--input-format stream-json`, agy 1.1.15+). The prompt
+    /// flag stays, empty and attached (`-p=`), so print mode is on without taking the next flag as its prompt.
+    fn warm_args(&self, req: &TurnRequest) -> Option<Vec<String>> {
+        let mut args = self.args(req);
+        args.splice(0..2, ["--input-format".to_string(), "stream-json".to_string(), "-p=".to_string()]);
+        Some(args)
+    }
+
+    fn warm_message(&self, prompt: &str) -> String {
+        serde_json::json!({ "event": "user", "message": { "role": "user", "content": [{ "type": "text", "text": prompt }] } }).to_string()
+    }
+
     fn prepare(&self, req: &TurnRequest) -> Result<(), String> {
         let rules: Vec<String> = req
             .allowed_tools

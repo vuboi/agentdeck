@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-catalog-page"
+description = "Enables the store_catalog_page command without any pre-configured scope."
+commands.allow = ["store_catalog_page"]
+
+[[permission]]
+identifier = "deny-store-catalog-page"
+description = "Denies the store_catalog_page command without any pre-configured scope."
+commands.deny = ["store_catalog_page"]

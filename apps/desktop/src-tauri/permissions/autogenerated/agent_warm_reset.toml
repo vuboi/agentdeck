@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-agent-warm-reset"
+description = "Enables the agent_warm_reset command without any pre-configured scope."
+commands.allow = ["agent_warm_reset"]
+
+[[permission]]
+identifier = "deny-agent-warm-reset"
+description = "Denies the agent_warm_reset command without any pre-configured scope."
+commands.deny = ["agent_warm_reset"]

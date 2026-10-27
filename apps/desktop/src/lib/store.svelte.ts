@@ -202,32 +202,86 @@ export type CatalogItem = {
   agents: string[];
   install: { how: 'plugin' | 'mcp' | 'skill'; [field: string]: unknown };
 };
-export type Catalog = { fetched_at: number; items: CatalogItem[]; errors: string[] };
+/** What the Discover tab narrows the catalog by; Rust filters and cuts the list, so only scrolled-to pages are held here. */
+export type CatalogFilter = { query: string; kind: string; agent: string };
+type CatalogPage = { items: CatalogItem[]; total: number; fetched_at: number; errors: string[] };
+
+const PAGE_SIZE = 40;
 
 export const catalog = $state({
+  /** The pages loaded so far, in order. */
   items: [] as CatalogItem[],
+  /** How many items match the filter in all. */
+  total: 0,
   errors: [] as string[],
   fetchedAt: 0,
+  /** The first page is on its way (the list is empty or about to be replaced). */
   loading: false,
+  /** A later page is on its way. */
+  more: false,
+  /** The catalog is being rebuilt from its sources. */
+  refreshing: false,
   error: '',
 });
 
 export const sources = $state({ urls: [] as string[] });
 
-export async function loadCatalog(refresh = false) {
-  if (!inTauri() || catalog.loading) return;
+// A filter change or a refresh starts a new list; an answer for an older one is dropped.
+let generation = 0;
+let filter: CatalogFilter = { query: '', kind: 'all', agent: 'all' };
+
+/** The first page for this filter, replacing the list. */
+export async function loadCatalog(next: CatalogFilter = filter) {
+  if (!inTauri()) return;
+  filter = next;
+  const mine = ++generation;
   catalog.loading = true;
+  catalog.more = false;
   catalog.error = '';
   try {
-    const found = await call<Catalog>('store_catalog', { refresh });
-    catalog.items = found.items;
-    catalog.errors = found.errors;
-    catalog.fetchedAt = found.fetched_at;
+    const page = await call<CatalogPage>('store_catalog_page', { filter, offset: 0, limit: PAGE_SIZE });
+    if (mine !== generation) return;
+    catalog.items = page.items;
+    catalog.total = page.total;
+    catalog.errors = page.errors;
+    catalog.fetchedAt = page.fetched_at;
+  } catch (error) {
+    if (mine === generation) catalog.error = message(error);
+  } finally {
+    if (mine === generation) catalog.loading = false;
+  }
+}
+
+/** The next page, when the list is scrolled near its end. Does nothing while a page is on its way or all are loaded. */
+export async function loadMoreCatalog() {
+  if (!inTauri() || catalog.loading || catalog.more || catalog.items.length >= catalog.total) return;
+  const mine = generation;
+  catalog.more = true;
+  try {
+    const page = await call<CatalogPage>('store_catalog_page', { filter, offset: catalog.items.length, limit: PAGE_SIZE });
+    if (mine !== generation) return;
+    catalog.items.push(...page.items);
+    catalog.total = page.total;
+  } catch (error) {
+    if (mine === generation) catalog.error = message(error);
+  } finally {
+    if (mine === generation) catalog.more = false;
+  }
+}
+
+/** Rebuilds the catalog from every source, then reads the first page again. */
+export async function refreshCatalog() {
+  if (!inTauri() || catalog.refreshing) return;
+  catalog.refreshing = true;
+  catalog.loading = true;
+  try {
+    await call('store_catalog_refresh');
   } catch (error) {
     catalog.error = message(error);
   } finally {
-    catalog.loading = false;
+    catalog.refreshing = false;
   }
+  await loadCatalog();
 }
 
 export function installCatalogItem(item: CatalogItem, acknowledged: boolean) {

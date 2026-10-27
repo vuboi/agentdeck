@@ -161,6 +161,18 @@ impl Provider for Claude {
         args
     }
 
+    /// The same settings, with each message read as a JSON line: `-p` keeps the conversation going for every line.
+    fn warm_args(&self, req: &TurnRequest) -> Option<Vec<String>> {
+        let mut args = self.args(req);
+        args.push("--input-format".to_string());
+        args.push("stream-json".to_string());
+        Some(args)
+    }
+
+    fn warm_message(&self, prompt: &str) -> String {
+        serde_json::json!({ "type": "user", "message": { "role": "user", "content": prompt } }).to_string()
+    }
+
     fn parse_line(&self, line: &str) -> Vec<AgentEvent> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return Vec::new();

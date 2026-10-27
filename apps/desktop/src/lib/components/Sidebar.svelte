@@ -602,11 +602,6 @@
   import { openSettings, warnings } from '../connectors.svelte';
   import { ticker } from '../clock.svelte';
   const limitWarnings = $derived(warnings(ticker.min));
-  // The notes of an update: back to their top once the download starts, so the bar and the start of the notes show.
-  let notesEl: HTMLDivElement | undefined = $state();
-  $effect(() => {
-    if (updater.status === 'downloading') notesEl?.scrollTo({ top: 0, behavior: 'smooth' });
-  });
 </script>
 
 <ZPopover anchor={tipRow} bind:open={tipOpen} zTrigger="manual" zPosition="right" zOffset={6} zWidth={200}>
@@ -864,7 +859,8 @@
       <p class="m-0 px-6 py-3 text-destructive">{updater.error}</p>
     {:else}
       <!-- The app's own scrollbar (as in the chat: 12px, arrows at both ends), on the modal's edge. -->
-      {#if updater.notes}<div bind:this={notesEl} class="scrollbar-full max-h-[min(60vh,32rem)] overflow-y-auto"><div class="px-6 py-3 text-sm"><Markdown text={updater.notes} /></div></div>{/if}
+      <!-- The notes scroll on their own; the progress bar sits below them, so starting the download leaves the reading place alone. -->
+      {#if updater.notes}<div class="scrollbar-full max-h-[min(60vh,32rem)] overflow-y-auto"><div class="px-6 py-3 text-sm"><Markdown text={updater.notes} /></div></div>{/if}
       <div class="px-6 pb-3 {updater.notes ? '' : 'pt-3'}">
         {#if updater.status === 'downloading'}
           <div class="h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full bg-primary transition-[width]" style:width="{Math.max(updater.progress, 0.03) * 100}%"></div></div>

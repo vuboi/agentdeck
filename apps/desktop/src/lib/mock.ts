@@ -29,6 +29,8 @@ export type Message = {
   startedAt?: number;
   /** How long the reply took, once finished. */
   ms?: number;
+  /** The user stopped the reply this many ms after it started: shown as "You stopped after …". */
+  stoppedAfter?: number;
   /** Tokens the reply used so far (all its model calls), and the model it ran on, for the cost estimate. */
   tokens?: import('./usage').Tokens;
   model?: string;

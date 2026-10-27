@@ -9,6 +9,7 @@ use ag_adapters::agent::claude::Claude;
 use ag_adapters::agent::codex::Codex;
 use ag_adapters::agent::opencode::OpenCode;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
+use ag_adapters::agent::warm::drive_warm_turn;
 use ag_adapters::agent::{AgentEvent, Provider, TurnRequest};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -84,11 +85,64 @@ async fn run_turn(
         mcp_manage::ensure_agy_link().await;
     }
     let binary = resolve_binary(provider.as_ref());
-    drive_turn(binary, provider.as_ref(), &req, |event| {
+    // Claude, Codex and Antigravity keep their CLI open between the chat's turns (see `warm.rs`); OpenCode starts one per turn.
+    let warm = drive_warm_turn(binary.clone(), provider.as_ref(), &req, |event| {
         emit(&app, &session, &turn, event)
     })
     .await;
+    if !warm {
+        drive_turn(binary, provider.as_ref(), &req, |event| {
+            emit(&app, &session, &turn, event)
+        })
+        .await;
+    }
     forget(&session, &turn);
+}
+
+/// Ends the CLIs kept open between turns, for one agent or all (`agent: None`). Called after an account switch: a CLI
+/// that is already running keeps the account it started with.
+#[tauri::command]
+pub(crate) fn agent_warm_reset(agent: Option<String>) {
+    ag_adapters::agent::warm::reset(agent.as_deref());
+}
+
+/// Starts a chat's agent CLI while its message is still being typed (Claude, Codex, Antigravity keep it open between
+/// turns), so the first turn does not wait for the CLI to load. The arguments are the ones `agent_send` will get.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // one parameter per field the frontend sends
+pub(crate) async fn agent_prewarm(
+    session: String,
+    agent: String,
+    agent_session: Option<String>,
+    resume: bool,
+    model: Option<String>,
+    permission_mode: Option<String>,
+    effort: Option<String>,
+    allowed_tools: Vec<String>,
+    cwd: Option<String>,
+    api_key: Option<String>,
+) -> Result<(), String> {
+    let provider = provider_for(&agent)?;
+    let req = TurnRequest {
+        prompt: String::new(),
+        session_id: agent_session,
+        resume,
+        model,
+        permission_mode,
+        effort,
+        allowed_tools,
+        cwd: cwd.map(Into::into),
+        owner: Some(session),
+        api_key,
+    };
+    tauri::async_runtime::spawn(async move {
+        if provider.id() == "antigravity" {
+            mcp_manage::ensure_agy_link().await;
+        }
+        let binary = resolve_binary(provider.as_ref());
+        ag_adapters::agent::warm::prewarm(binary, provider.as_ref(), &req).await;
+    });
+    Ok(())
 }
 
 /// Sends one user message to an agent CLI. Returns at once; the answer arrives as `agent-event`s.

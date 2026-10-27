@@ -24,7 +24,7 @@
   import { agentDisplayName } from '../provider-registry';
   import AgentLogo from './AgentLogo.svelte';
   import { theme } from '../theme.svelte';
-  import { segments } from '../blocks';
+  import { elapsed, segments } from '../blocks';
   import { openAttachment, openImages, preview, releasePreview, revealPreviewed } from '../preview.svelte';
   import ArtifactCards from './ArtifactCards.svelte';
   import ChatBlock from './ChatBlock.svelte';
@@ -1003,7 +1003,7 @@
                         <!-- The newest group of a running reply is the live line; it carries the only loader. -->
                         <!-- Step lines in a row sit close together, like one list. -->
                         <div class="{afterSteps(parts, position) ? '-mt-1.5' : ''} {parts[position + 1]?.kind === 'block' ? '-mb-0.5' : ''}">
-                          <CommandGroup items={segment.items} thoughts={segment.thoughts} live={false} startedAt={message.startedAt} stateKey="{workspace.activeId}:{message.id}:{position}" />
+                          <CommandGroup items={segment.items} thoughts={segment.thoughts} live={false} working={Boolean(message.live) && isRunning(workspace.activeId) && !parts.slice(position + 1).some((part) => part.kind === 'block' && part.block.kind !== 'loading')} startedAt={message.startedAt} stateKey="{workspace.activeId}:{message.id}:{position}" />
                         </div>
                       {:else if segment.kind === 'plan'}
                         <PlanCard items={segment.items} />
@@ -1016,11 +1016,14 @@
                     <ArtifactCards blocks={message.blocks} root={(activeSession() && projectOf(activeSession()!)?.path) || null} live={Boolean(message.live) && isRunning(workspace.activeId)} />
                     <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
                          editing…), as in Claude and Codex; the steps above stay plain, finished lines. -->
+                    {#if message.stoppedAfter !== undefined && !message.live}
+                      <p class="m-0 text-xs text-muted-foreground">You stopped after {elapsed(message.stoppedAfter)}</p>
+                    {/if}
 </div>
                   <!-- The status line and the footer share one fixed-height slot, so the row does not jump when the reply ends. -->
                   <!-- Live only while the chat really runs: a reply left marked live (a lost "done") shows its footer. -->
                   {@const showLive = message.live && isRunning(workspace.activeId)}
-                  {#if showLive || message.blocks.length > 0}
+                  {#if showLive || message.blocks.length > 0 || message.stoppedAfter !== undefined}
                     <div class="relative h-[30px] w-full shrink-0">
                       {#if showLive}
                         <div class="absolute inset-x-0 bottom-0 flex h-5 items-center"><LiveStatus {message} /></div>

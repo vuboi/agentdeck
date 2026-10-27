@@ -231,16 +231,19 @@ pub async fn store_discard_staged(job_id: String) -> Result<(), String> {
 // ---------------------------------------------------------------------------------------------------------------
 // Catalog and its sources
 
-/// The catalog. Reads the cache unless `refresh` is set, which rebuilds it from every source.
+/// One page of the catalog that matches `filter`. The list is filtered and cut here, so the UI only ever holds the pages
+/// it has scrolled to, not the thousands of items in all.
 #[tauri::command]
-pub async fn store_catalog(refresh: bool) -> Result<catalog::Cache, String> {
+pub async fn store_catalog_page(filter: catalog::Filter, offset: usize, limit: usize) -> Result<catalog::Page, String> {
     let home = home()?;
-    if !refresh {
-        if let Some(cache) = catalog::read_cache(&home) {
-            return Ok(cache);
-        }
-    }
-    catalog::refresh(&home).await
+    blocking(move || Ok(catalog::page(&catalog::cached(&home), &filter, offset, limit.clamp(1, 200)))).await
+}
+
+/// Rebuilds the catalog from every source. Returns its totals (no items): the UI then asks for the first page again.
+#[tauri::command]
+pub async fn store_catalog_refresh() -> Result<catalog::Page, String> {
+    let cache = catalog::refresh(&home()?).await?;
+    Ok(catalog::page(&cache, &catalog::Filter::default(), 0, 0))
 }
 
 /// Installs one catalog item. The item's own install plan is the only thing run; the list is not trusted.

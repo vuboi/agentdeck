@@ -6,9 +6,11 @@
 pub mod antigravity;
 pub mod claude;
 pub mod codex;
+mod codex_server;
 pub mod opencode;
 pub mod resolve;
 pub mod runner;
+pub mod warm;
 
 use serde::Serialize;
 
@@ -154,6 +156,16 @@ pub trait Provider: Send + Sync {
     /// Emits a terminal event when a CLI exits without one in its stream.
     fn finish(&self, _req: &TurnRequest) -> Option<AgentEvent> {
         None
+    }
+    /// Arguments for a CLI that stays open between the turns of a chat and reads each message as one JSON line on
+    /// stdin (see `warm.rs`). `None`: one process per turn. Starting a CLI loads its settings, plugins, skills, MCP
+    /// servers and hooks every time; a kept process pays that once.
+    fn warm_args(&self, _req: &TurnRequest) -> Option<Vec<String>> {
+        None
+    }
+    /// The JSON line (without its newline) that sends one message to a warm process.
+    fn warm_message(&self, _prompt: &str) -> String {
+        String::new()
     }
 }
 

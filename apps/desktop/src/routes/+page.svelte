@@ -33,7 +33,7 @@
   // Layout, outside in: sidebar | [left zone | (top zone / chat / bottom zone / terminal) | right zone] | tools.
   // Every pane is a fixed px size kept in layout.sizes; splitters between them change those sizes.
   // A zone takes space only while a window is dragged or while it holds tools.
-  const MIN = { sidebar: 160, tools: 220, left: 200, right: 200, top: 120, bottom: 120, terminal: 80 };
+  const MIN = { chat: 400, sidebar: 160, tools: 220, left: 200, right: 200, top: 120, bottom: 120, terminal: 80 };
   // Side panes shrink with the window (their width is the flex basis). The conversation keeps its own minimum,
   // so when the window is too narrow the whole shell scrolls sideways instead of panes overlapping.
   const SIDE = 'min-w-0 shrink overflow-hidden';
@@ -84,7 +84,8 @@
     const left = showZones && shows('left') ? Math.max(MIN.left, layout.sizes.left) + 1 : 0;
     const right = showZones && shows('right') ? Math.max(MIN.right, layout.sizes.right) + 1 : 0;
     const toolsSplitter = showTools || layout.toolsWidthAnimating ? 1 : 0;
-    return Math.max(0, innerW - 280 - sidebar - left - right - toolsSplitter);
+    // The conversation keeps its own minimum: dragging the tools panel wider stops there instead of covering the input.
+    return Math.max(0, innerW - MIN.chat - sidebar - left - right - toolsSplitter);
   });
   const toolsPanelWidth = $derived(Math.min(layout.sizes.tools, Math.max(MIN.tools, toolsAvailableWidth)));
 
@@ -193,7 +194,7 @@
       <Splitter axis="x" label="Resize left zone" onDelta={grow('left', 1, MIN.left, maxW)} />
     {/if}
 
-    <div class="flex h-full min-w-[400px] flex-1 flex-col">
+    <div class="flex h-full flex-1 flex-col" style:min-width="{MIN.chat}px">
       {#if showZones && shows('top')}
         <div transition:slide={{ duration: 240 }} class="flex flex-col {SIDE} w-full [&>*]:w-full [&>*]:min-h-0 [&>*]:flex-1" style:height="{layout.sizes.top}px">
           <DockZone zone="top" />
