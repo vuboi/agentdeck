@@ -149,6 +149,10 @@
     return [...out.values()].sort((a, b) => a.key.localeCompare(b.key));
   });
   const peak = $derived(Math.max(...bars.map((bar) => bar.cost), 0.000001));
+  /** The bar that cost most, named in the chart's heading. */
+  const peakBar = $derived(bars.reduce<Bar | undefined>((best, bar) => (!best || bar.cost > best.cost ? bar : best), undefined));
+  /** The bar under the pointer (its index), for the tooltip. */
+  let hover = $state<number | null>(null);
   const agentsSeen = $derived([...new Set(rows.map((item) => item.agent))]);
   // Labels under a few bars only, so they never run into each other.
   const labelEvery = $derived(Math.max(1, Math.ceil(bars.length / 6)));
@@ -219,26 +223,54 @@
         {/each}
       </div>
 
-      <section>
-        <h3 class="m-0 mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Cost over time</h3>
-        <div class="flex h-24 items-end gap-px" role="img" aria-label="Cost per {range === 'day' ? 'hour' : range === 'all' ? 'week' : 'day'}">
-          {#each bars as bar (bar.key)}
-            <div class="flex h-full min-w-0 flex-1 flex-col justify-end" title="{bar.label}: {money(bar.cost)}">
-              <div class="flex w-full flex-col-reverse overflow-hidden rounded-t-sm" style:height="{(bar.cost / peak) * 100}%">
-                {#each Object.entries(bar.byAgent) as [agent, cost] (agent)}
-                  <div class={AGENT_BAR[agent] ?? 'bg-muted-foreground'} style:height="{bar.cost > 0 ? (cost / bar.cost) * 100 : 0}%"></div>
-                {/each}
-              </div>
-            </div>
-          {/each}
+      <section class="rounded-xl border border-border px-3 pt-2.5 pb-2.5">
+        <div class="mb-2 flex items-baseline gap-2">
+          <h3 class="m-0 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Cost over {range === 'day' ? 'the day, by hour' : range === 'all' ? 'time, by week' : 'time, by day'}</h3>
+          {#if peakBar && peakBar.cost > 0}<span class="ml-auto text-[11px] text-muted-foreground tabular-nums">Most: <b class="font-medium text-foreground">{peakBar.label}{range === 'day' ? 'h' : ''}</b> · {money(peakBar.cost)}</span>{/if}
         </div>
-        <div class="mt-1 flex gap-px text-[10px] text-muted-foreground tabular-nums">
-          {#each bars as bar, index (bar.key)}
-            <span class="min-w-0 flex-1 overflow-visible text-center whitespace-nowrap">{index % labelEvery === 0 ? bar.label : ''}</span>
-          {/each}
+        <div class="flex gap-2">
+          <!-- The scale: what the top of the chart is, and the middle. -->
+          <div class="flex h-24 w-9 shrink-0 flex-col justify-between text-right text-[10px] leading-none text-muted-foreground tabular-nums" aria-hidden="true">
+            <span>{peak > 0.000001 ? money(peak) : ''}</span>
+            <span>{peak > 0.000001 ? money(peak / 2) : ''}</span>
+            <span>{money(0)}</span>
+          </div>
+          <div class="relative min-w-0 flex-1">
+            <div class="pointer-events-none absolute inset-x-0 top-0 flex h-24 flex-col justify-between" aria-hidden="true">
+              <span class="border-t border-dashed border-border/70"></span>
+              <span class="border-t border-dashed border-border/70"></span>
+              <span class="border-t border-border"></span>
+            </div>
+            <div class="relative flex h-24 items-end gap-px" role="img" aria-label="Cost per {range === 'day' ? 'hour' : range === 'all' ? 'week' : 'day'}" onpointerleave={() => (hover = null)}>
+              {#each bars as bar, index (bar.key)}
+                <div class="group relative flex h-full min-w-0 flex-1 flex-col justify-end" role="presentation" onpointerenter={() => (hover = index)}>
+                  <div class="flex w-full flex-col-reverse overflow-hidden rounded-t-sm transition-opacity {hover !== null && hover !== index ? 'opacity-50' : ''}" style:height="{bar.cost > 0 ? Math.max((bar.cost / peak) * 100, 2) : 0}%">
+                    {#each Object.entries(bar.byAgent) as [agent, cost] (agent)}
+                      <div class={AGENT_BAR[agent] ?? 'bg-muted-foreground'} style:height="{bar.cost > 0 ? (cost / bar.cost) * 100 : 0}%"></div>
+                    {/each}
+                  </div>
+                  {#if hover === index}
+                    <!-- Hours, days or weeks with nothing spent say so too. -->
+                    <div class="pointer-events-none absolute bottom-full z-10 mb-1 w-max max-w-44 rounded-md border border-border bg-popover px-2 py-1 text-[11px] shadow-md {index < bars.length / 2 ? 'left-0' : 'right-0'}">
+                      <div class="font-medium">{range === 'day' ? `${bar.label}:00` : range === 'all' ? `Week of ${bar.label}` : bar.label}</div>
+                      <div class="text-muted-foreground tabular-nums">{bar.cost > 0 ? money(bar.cost) : 'Nothing spent'}</div>
+                      {#each Object.entries(bar.byAgent) as [agent, cost] (agent)}
+                        <div class="flex items-center gap-1 text-muted-foreground tabular-nums"><span class="size-1.5 rounded-sm {AGENT_BAR[agent] ?? 'bg-muted-foreground'}"></span>{AGENT_NAME[agent] ?? agent} {money(cost)}</div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+            <div class="mt-1 flex gap-px text-[10px] text-muted-foreground tabular-nums">
+              {#each bars as bar, index (bar.key)}
+                <span class="min-w-0 flex-1 overflow-visible text-center whitespace-nowrap">{index % labelEvery === 0 ? bar.label : ''}</span>
+              {/each}
+            </div>
+          </div>
         </div>
         {#if agentsSeen.length > 1}
-          <div class="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
             {#each agentsSeen as agent (agent)}<span class="flex items-center gap-1"><span class="size-2 rounded-sm {AGENT_BAR[agent] ?? 'bg-muted-foreground'}"></span>{AGENT_NAME[agent] ?? agent}</span>{/each}
           </div>
         {/if}

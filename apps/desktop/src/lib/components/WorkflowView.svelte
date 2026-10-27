@@ -270,9 +270,8 @@
       <ZIcon zType={icon('lucideWorkflow')} zSize="28" class="size-7 opacity-60" />
       <h2 class="text-sm font-medium text-foreground">{delegateRuns.length > 0 ? 'No run in this range' : 'No run yet'}</h2>
       <p class="m-0 max-w-60 text-xs leading-normal">
-        Put a flow on this chat (Use, above) and send a message, or hand a task to another agent from any chat. Type <code class="rounded bg-muted px-1 py-0.5 font-mono text-foreground">@claude</code>,
-        <code class="rounded bg-muted px-1 py-0.5 font-mono text-foreground">@codex</code> or
-        <code class="rounded bg-muted px-1 py-0.5 font-mono text-foreground">@antigravity</code> and the task.
+        A run appears here when several agents work together. Pick a flow for this chat (the Flow row in the model menu) and send a message, or type
+        <code class="rounded bg-muted px-1 py-0.5 font-mono text-foreground">@</code> in any chat, choose an agent or provider and write the task.
       </p>
     </div>
   {:else}
