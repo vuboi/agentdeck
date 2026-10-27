@@ -274,7 +274,7 @@
           <div class="font-medium">Team mode</div>
           <p class="m-0 mt-0.5 text-[11px] leading-snug text-muted-foreground">The first step plans. The others work at the same time, each in its own chat, and send each other messages (SEND @name) through a saved queue until all are done. The run goes on after a restart.</p>
         </div>
-        <ZSwitch checked={draft.mode === 'team'} zSize="sm" onChange={(value) => { if (draft) draft.mode = value ? 'team' : undefined; }} />
+        <ZSwitch zVariant="dot" checked={draft.mode === 'team'} zSize="sm" onChange={(value) => { if (draft) draft.mode = value ? 'team' : undefined; }} />
       </div>
       {#if problem}<p class="m-0 text-[11px] leading-snug text-muted-foreground">Cannot save yet: {problem.charAt(0).toLowerCase()}{problem.slice(1)}</p>{/if}
     </div>

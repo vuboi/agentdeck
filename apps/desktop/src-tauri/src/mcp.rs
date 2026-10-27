@@ -339,6 +339,80 @@ fn find_js(query: &str) -> String {
     .replace("__HELPERS__", PAGE_HELPERS)
 }
 
+/// Stores the elements the last `browser_elements` / `browser_find` numbered (`window.__adEls`), with their selectors.
+async fn remember_seen(app: &AppHandle, params: &HashMap<String, String>) {
+    let Ok(answer) = crate::bridge::answer(app, "/eval", params, crate::page_memory::MEMO_JS).await else {
+        return;
+    };
+    let Some(text) = answer["result"].as_str() else {
+        return;
+    };
+    if let Ok(seen) = serde_json::from_str::<Value>(text) {
+        if seen["elements"].as_array().is_some_and(|list| !list.is_empty()) {
+            crate::page_memory::store(app, seen);
+        }
+    }
+}
+
+/// `browser_recall` and `browser_remember`.
+async fn memory_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Value {
+    let mut params = HashMap::new();
+    if !chat.is_empty() {
+        params.insert("chat".to_string(), chat.to_string());
+    }
+    let url = match crate::bridge::answer(app, "/eval", &params, "location.href").await {
+        Ok(answer) => answer["result"].as_str().unwrap_or_default().trim_matches('"').to_owned(),
+        Err(error) => return error_reply(error),
+    };
+    if !url.starts_with("http") {
+        return error_reply("open a web page in the Preview first (browser_open)".into());
+    }
+    if name == "browser_remember" {
+        let goal = args["goal"].as_str().unwrap_or_default().trim();
+        let steps: Vec<&str> = args["steps"]
+            .as_str()
+            .unwrap_or_default()
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        if goal.is_empty() || steps.is_empty() {
+            return error_reply("give a goal and at least one step".into());
+        }
+        return match crate::page_memory::ask(app, "remember", json!({ "url": url, "goal": goal, "steps": steps })).await {
+            Ok(_) => text_reply(format!("Remembered {} steps for \"{goal}\".", steps.len())),
+            Err(error) => error_reply(error),
+        };
+    }
+    let query = args["query"].as_str().unwrap_or_default().trim();
+    if query.is_empty() {
+        return error_reply("say what you are looking for".into());
+    }
+    let limit = args["limit"].as_u64().unwrap_or(8).clamp(1, 20);
+    let found = match crate::page_memory::ask(app, "recall", json!({ "url": url, "query": query, "limit": limit })).await {
+        Ok(text) => serde_json::from_str::<Value>(&text).unwrap_or(Value::Null),
+        Err(error) => return error_reply(error),
+    };
+    let selectors: Vec<String> = found["hits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|hit| hit["selector"].as_str().map(str::to_owned))
+        .collect();
+    let live = if selectors.is_empty() {
+        Vec::new()
+    } else {
+        match crate::bridge::answer(app, "/eval", &params, &crate::page_memory::verify_js(&selectors)).await {
+            Ok(answer) => answer["result"]
+                .as_str()
+                .and_then(|text| serde_json::from_str::<Vec<Value>>(text).ok())
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    };
+    text_reply(crate::page_memory::format_recall(&found, &live))
+}
+
 fn text_reply(text: String) -> Value {
     json!({ "content": [{ "type": "text", "text": text }] })
 }
@@ -374,9 +448,16 @@ async fn element_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> 
         _ => None,
     };
     if let Some(script) = script {
+        let remember = matches!(name, "browser_elements" | "browser_find");
         return match crate::bridge::answer(app, "/eval", &params, &script).await {
             Ok(answer) => match value_of(answer) {
-                Value::String(text) => text_reply(text),
+                Value::String(text) => {
+                    // What the agent was just shown is kept for the next visit (browser_recall).
+                    if remember {
+                        remember_seen(app, &params).await;
+                    }
+                    text_reply(text)
+                }
                 other if other["error"].is_string() => {
                     error_reply(other["error"].as_str().unwrap_or_default().to_string())
                 }
@@ -442,6 +523,7 @@ pub(crate) fn tool_list() -> Value {
             .chain(crate::index::tool_defs())
             .chain(crate::devtools::tool_defs())
             .chain(crate::delegate::tool_defs())
+            .chain(crate::page_memory::tool_defs())
             .chain([
                 json!({"name":"computer_screen_size","description":"Read the size of the Windows primary display.","inputSchema":{"type":"object","properties":{}}}),
                 json!({"name":"computer_screenshot","description":"Capture the Windows primary display. Requires user approval because it shares screen contents with the agent.","inputSchema":{"type":"object","properties":{}}}),
@@ -506,6 +588,9 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Val
             Ok(()) => text_reply(format!("Preview zoom set to {:.0}%", factor.clamp(0.25, 3.0) * 100.0)),
             Err(error) => error_reply(error),
         };
+    }
+    if crate::page_memory::is_tool(name) {
+        return memory_tool(app, name, args, chat).await;
     }
     if name.starts_with("computer_") {
         return computer_tool(app, name, args, chat).await;

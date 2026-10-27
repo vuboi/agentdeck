@@ -72,6 +72,7 @@ import { getPref, setPref } from './prefs';
 import { estimateCost, recordUsage } from './usage';
 import { automation, COMPRESS_AT, contextWindow } from './automation.svelte';
 import { logError } from './error-log.svelte';
+import { startPageMemoryBridge } from './page-memory-bridge';
 import { inboxOf, inboxText, MAX_TEAM_TURNS, parseTeamReply, planFor, teamFinished, teamText, type TeamMember, type TeamMessage, type TeamState } from './team';
 import {
   customModelId,
@@ -2823,6 +2824,8 @@ if (inTauri()) {
   // The page before this one is gone with its chats: calls still waiting for it are answered with an error.
   void delegateReady().catch(() => undefined);
   void listenDelegateCalls(onDelegateCall);
+  // The Preview agent's memory of pages (page-memory.ts): its tools read and write the store through this.
+  void startPageMemoryBridge();
   void listenDelegateAborts((callId) => {
     for (const [taskId, run] of taskRuns)
       if (run.callId === callId) stopTask(taskId, 'abort');

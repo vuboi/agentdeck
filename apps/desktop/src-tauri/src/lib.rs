@@ -16,6 +16,7 @@ mod devtools;
 mod endpoints;
 mod error_log;
 mod fs_ops;
+mod image_backend;
 mod image_gen;
 mod image_history;
 mod index;
@@ -23,6 +24,7 @@ mod mcp;
 mod mcp_client;
 mod mcp_manage;
 mod notify;
+mod page_memory;
 mod privacy;
 mod pty;
 mod servers;
@@ -415,7 +417,15 @@ fn models_of(agent: &str) -> Vec<ag_adapters::models::ModelInfo> {
         "claude" => ag_adapters::models::claude(&home),
         "opencode" => {
             let binary = resolve_binary(&OpenCode::default());
-            ag_adapters::models::opencode(&ag_adapters::agent::opencode::models_listing(binary))
+            let cache = std::env::var_os("XDG_CACHE_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".cache"))
+                .join("opencode")
+                .join("models.json");
+            ag_adapters::models::opencode(
+                &ag_adapters::agent::opencode::models_listing(binary),
+                std::fs::read_to_string(cache).ok().as_deref(),
+            )
         }
         "codex" => {
             let codex_home = std::env::var_os("CODEX_HOME")
@@ -2041,6 +2051,7 @@ pub fn run() {
             agent_runs::agent_stop,
             delegate::delegate_reply,
             delegate::delegate_ready,
+            page_memory::page_memory_reply,
             attachment_save,
             attachment_save_file,
             browser_save_guide,

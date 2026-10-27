@@ -86,7 +86,7 @@ export async function startRun(args: { prompt: string; choices: (ImageModelChoic
   gen.activeRunId = null;
   const finish = trackImageRun(args.project, args.prompt, args.choices.map((choice) => choice.label).join(', '));
   try {
-    const result = await generateImages({ prompt: args.prompt, models: args.choices.map(({ model, backend }) => ({ model, backend })), variants: args.variants, cwd: args.cwd, referencePaths: await args.referencePaths(), settings: args.settings });
+    const result = await generateImages({ prompt: args.prompt, models: args.choices.map(({ model, backend, custom }) => ({ model, backend, custom })), variants: args.variants, cwd: args.cwd, referencePaths: await args.referencePaths(), settings: args.settings });
     gen.activeRunId = result.run_id;
     gen.failureLines = result.failures.map((failure) => `${failure.model} #${failure.variant}: ${failure.error}`);
     gen.previews = await withPreviews(result.images);
@@ -130,13 +130,13 @@ export async function openRun(run: ImageHistoryRun) {
 }
 
 /** Asks the prompt model for suggestions. The answer lands here, so it is there when the panel is opened again. */
-export async function runSuggest(args: { prompt: string; model: string; provider: string; referencePaths: () => Promise<string[]>; settings: ImageSettings }) {
+export async function runSuggest(args: { prompt: string; model: string; provider: string; custom?: { kind: string; baseUrl: string; apiKey: string | null; keyEnv: string | null }; referencePaths: () => Promise<string[]>; settings: ImageSettings }) {
   if (gen.suggesting) return;
   gen.suggesting = true;
   gen.suggestions = [];
   gen.keywords = [];
   try {
-    const result = await suggestImagePrompts({ prompt: args.prompt, model: args.model, provider: args.provider, referencePaths: await args.referencePaths(), settings: args.settings });
+    const result = await suggestImagePrompts({ prompt: args.prompt, model: args.model, provider: args.provider, custom: args.custom, referencePaths: await args.referencePaths(), settings: args.settings });
     gen.suggestions = result.suggestions;
     gen.keywords = result.keywords;
     if (!result.suggestions.length) toast.error('The prompt model returned no suggestions');

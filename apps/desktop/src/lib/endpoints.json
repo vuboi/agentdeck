@@ -85,5 +85,14 @@
       "note": "10,000 free neurons a day, open models",
       "keyUrl": "https://dash.cloudflare.com/profile/api-tokens"
     }
-  ]
+  ],
+  "app": {
+    "repo": "https://github.com/vuboi/agentdeck",
+    "releases": "https://github.com/vuboi/agentdeck/releases",
+    "issues": "https://github.com/vuboi/agentdeck/issues/new"
+  },
+  "pins": {
+    "codexAuth": "0.3.1",
+    "claudeSwap": "0.28.0"
+  }
 }

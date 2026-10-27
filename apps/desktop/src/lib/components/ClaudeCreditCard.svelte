@@ -75,7 +75,7 @@
     </span>
   </span>
   {#if connectors.claudeCredit.apiKey}
-    <ZSwitch checked={connectors.claudeCredit.enabled} zSize="sm" onChange={(value) => (connectors.claudeCredit.enabled = value)} />
+    <ZSwitch zVariant="dot" checked={connectors.claudeCredit.enabled} zSize="sm" onChange={(value) => (connectors.claudeCredit.enabled = value)} />
   {/if}
   {#if connectors.claudeCredit.sessionKey}
     <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Read the credit again" title="Read the credit again" disabled={claudeCreditState.busy} onclick={() => void refreshClaudeCredit()}>

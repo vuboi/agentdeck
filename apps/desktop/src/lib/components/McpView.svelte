@@ -217,7 +217,7 @@
                           Claude, Codex, OpenCode and your custom providers always have it. Antigravity gets it by itself before each turn, so "debug the page" works there too. Turn it off to keep agy on its own browser.
                         </div>
                       </div>
-                      <ZSwitch checked={auto} zSize="sm" zLoading={mcp.busy === 'agy'} zDisabled={mcp.busy === 'agy'} onChange={(value) => void linkAgy(value)} />
+                      <ZSwitch zVariant="dot" checked={auto} zSize="sm" zLoading={mcp.busy === 'agy'} zDisabled={mcp.busy === 'agy'} onChange={(value) => void linkAgy(value)} />
                     </div>
                     <p class="m-0 flex items-start gap-1.5 leading-snug text-muted-foreground">
                       <ZIcon zType={icon('lucideShieldCheck')} class="mt-px size-3 shrink-0" />
@@ -367,7 +367,7 @@
             <ZIcon zType={icon(agent === 'claude' ? 'brandClaude' : 'brandGemini')} class="size-4 shrink-0" />
           {/if}
           <span class="flex-1 font-medium {AGENT[agent].tone}">{AGENT[agent].label}</span>
-          <ZSwitch bind:checked={form.agents[agent as McpAgent]} zSize="sm" />
+          <ZSwitch zVariant="dot" bind:checked={form.agents[agent as McpAgent]} zSize="sm" />
         </div>
       {/each}
     </fieldset>

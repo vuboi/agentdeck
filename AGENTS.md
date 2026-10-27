@@ -40,3 +40,8 @@
   như `ZDropdownMenuItem`; không dùng `ZDropdownMenu` nữa.
 - Select lọc theo project: `ProjectSelect`. Danh sách tab có tìm kiếm: `TabListButton`.
 - Mở file từ đường dẫn bất kỳ: `openProjectFile` (`file-viewer.svelte.ts`) với các hàm trong `src/lib/paths.ts`; không tự cắt/ghép đường dẫn.
+
+## Hai popover model (chat input và ô tạo ảnh AI): luôn sửa đồng bộ
+- `ModelPicker.svelte` (chat) và `ImageGenerator.svelte` (gen ảnh) dựng cùng kiểu popover: danh sách nested, Fast mode, effort, divider
+  Free / Hide / Paid. Sửa giao diện hay thứ tự ở một bên thì sửa luôn bên kia trong cùng lượt (cỡ công tắc `zSize="sm"`, divider,
+  scrollbar, thứ tự model). Thứ tự và divider model dùng chung `freeFirst` trong `src/lib/models.svelte.ts`: đừng tự xếp lại ở từng chỗ.

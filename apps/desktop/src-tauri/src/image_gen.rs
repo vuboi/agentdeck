@@ -10,8 +10,10 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
+use crate::image_backend::{backend_for, Job};
+
 /// Set by `image_stop`: the run in progress stops before its next candidate.
-static CANCELLED: AtomicBool = AtomicBool::new(false);
+pub(crate) static CANCELLED: AtomicBool = AtomicBool::new(false);
 /// Process ids of the generator runs in progress, so `image_stop` can end them.
 static ACTIVE: LazyLock<Mutex<Vec<u32>>> = LazyLock::new(Default::default);
 /// The app's resource folder: the codex-imagen script is bundled there (see `tauri.conf.json`).
@@ -34,6 +36,9 @@ const SUGGEST_INSTRUCTIONS: &str = r#"You improve prompts for image generation. 
 pub struct ImageModelRequest {
     pub model: String,
     pub backend: String,
+    /// The Gemini provider (address and key) a `gemini` model is generated on.
+    #[serde(default)]
+    pub custom: Option<CustomSuggester>,
 }
 
 /// What the user picked under the prompt box. `None` means "Auto": no instruction is sent for that setting.
@@ -123,6 +128,20 @@ pub struct ImagePromptSuggestRequest {
     pub reference_paths: Vec<String>,
     #[serde(default)]
     pub config: ImageConfig,
+    /// A custom provider (OpenAI-compatible or Ollama) that writes the suggestions: `provider` is then `custom`.
+    #[serde(default)]
+    pub custom: Option<CustomSuggester>,
+}
+
+/// Where a custom provider is, and its key (typed in the settings, or read from the named environment variable).
+#[derive(Debug, Deserialize)]
+pub struct CustomSuggester {
+    pub kind: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub key_env: Option<String>,
 }
 
 /// A short term the model suggests for one of the settings (or a plain keyword for the prompt).
@@ -204,7 +223,6 @@ fn generate(request: ImageGenerateRequest) -> Result<ImageGenerateResult, String
         .unwrap_or(DEFAULT_VARIANTS)
         .clamp(1, MAX_VARIANTS);
     CANCELLED.store(false, Ordering::SeqCst);
-    let script = imagen_script()?;
     let output_root = output_root(request.cwd.as_deref())?;
     let run_id = unique_run_name();
     let run_folder = output_root.join(&run_id);
@@ -224,7 +242,7 @@ fn generate(request: ImageGenerateRequest) -> Result<ImageGenerateResult, String
     for model in &selected_models {
         let model_name = model.model.trim().to_string();
         let backend = model.backend.trim().to_string();
-        if model_name.is_empty() || !matches!(backend.as_str(), "responses" | "images") {
+        if model_name.is_empty() || backend_for(&backend).is_none() {
             for variant in 1..=variants {
                 failures.push(ImageGenerationFailure {
                     model: model_name.clone(),
@@ -240,15 +258,20 @@ fn generate(request: ImageGenerateRequest) -> Result<ImageGenerateResult, String
                 break;
             }
             let output = run_folder.join(format!("{}-{variant}.png", safe_name(&model_name)));
-            match generate_one(
-                &script,
-                &prompt_text,
+            let job = Job {
+                prompt: &prompt_text,
                 variant,
-                &model_name,
-                &backend,
-                &output,
-                &references,
-            ) {
+                model: &model_name,
+                output: &output,
+                references: &references,
+                config: &request.config,
+                provider: model.custom.as_ref(),
+            };
+            let made = match backend_for(&backend) {
+                Some(found) => found.generate(&job),
+                None => Err("invalid image model or backend".to_string()),
+            };
+            match made {
                 Ok(paths) => images.extend(paths.into_iter().map(|path| GeneratedImage {
                     model: model_name.clone(),
                     backend: backend.clone(),
@@ -332,6 +355,13 @@ fn suggest(request: ImagePromptSuggestRequest) -> Result<ImagePromptSuggestResul
             model,
             "OpenCode",
         );
+    }
+    if provider == "custom" {
+        let custom = request
+            .custom
+            .as_ref()
+            .ok_or("the provider's address is missing")?;
+        return tauri::async_runtime::block_on(suggest_with_custom(custom, model, &input));
     }
     if provider == "claude" || model.starts_with("claude-") {
         return suggest_with_claude(&input, model, &references);
@@ -499,6 +529,64 @@ fn suggest_with_cli(
     })
 }
 
+/// One chat completion on a custom provider (the reference images are not sent: it reads text only).
+async fn suggest_with_custom(
+    custom: &CustomSuggester,
+    model: &str,
+    input: &str,
+) -> Result<ImagePromptSuggestResult, String> {
+    let key = custom
+        .api_key
+        .clone()
+        .filter(|key| !key.is_empty())
+        .or_else(|| {
+            custom
+                .key_env
+                .as_deref()
+                .filter(|name| !name.is_empty())
+                .and_then(|name| std::env::var(name).ok())
+        });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut request = client
+        .post(crate::custom_chat::chat_url(&custom.kind, &custom.base_url))
+        .json(&serde_json::json!({
+            "model": model,
+            "stream": false,
+            "messages": [{ "role": "user", "content": input }],
+        }));
+    if let Some(key) = key {
+        request = request.bearer_auth(key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("could not reach the provider: {error}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| format!("the provider's answer is not JSON: {error}"))?;
+    if !status.is_success() {
+        let detail = body["error"]["message"].as_str().unwrap_or("no detail");
+        return Err(trim_error(&format!("the provider answered {status}: {detail}")));
+    }
+    let text = body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or_default();
+    let (suggestions, keywords) = parse_suggestions(text);
+    if suggestions.is_empty() {
+        return Err("the provider returned no suggestions".to_string());
+    }
+    Ok(ImagePromptSuggestResult {
+        model: model.to_string(),
+        suggestions,
+        keywords,
+    })
+}
+
 /// The text the model reads: the instructions, the picked settings, the reference images and the user's prompt.
 fn suggest_input(prompt: &str, brief: &str, references: &[PathBuf]) -> String {
     let mut text = format!("{SUGGEST_INSTRUCTIONS}\n\n");
@@ -580,11 +668,11 @@ const VARIATIONS: [&str; 4] = [
     "Use a quieter, minimal composition with generous negative space and a different mood.",
 ];
 
-fn variation_hint(variant: u8) -> &'static str {
+pub(crate) fn variation_hint(variant: u8) -> &'static str {
     VARIATIONS[(usize::from(variant).max(1) - 1) % VARIATIONS.len()]
 }
 
-fn generate_one(
+pub(crate) fn generate_one(
     script: &Path,
     prompt: &str,
     variant: u8,
@@ -669,7 +757,7 @@ fn generate_one(
     Ok(paths)
 }
 
-fn imagen_script() -> Result<PathBuf, String> {
+pub(crate) fn imagen_script() -> Result<PathBuf, String> {
     let relative = Path::new(".codex/skills/codex-imagen/scripts/codex-imagen.mjs");
     let mut candidates = Vec::new();
     if let Some(path) = std::env::var_os("AGENTDECK_CODEX_IMAGEN_SCRIPT") {
@@ -757,7 +845,7 @@ fn safe_name(value: &str) -> String {
     }
 }
 
-fn trim_error(value: &str) -> String {
+pub(crate) fn trim_error(value: &str) -> String {
     const MAX: usize = 800;
     let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if compact.chars().count() <= MAX {

@@ -14,7 +14,7 @@
   import Splitter from './Splitter.svelte';
   import { layout, pinSidebar, setSidebarCollapsed, sidebarTree } from '../layout.svelte';
   import { getPref, setPref } from '../prefs';
-  import { appInfo, checkForUpdate, FAKE_UPDATE, installUpdate, startUpdateChecks, updater, useFakeUpdate } from '../updater.svelte';
+  import { appInfo, FAKE_UPDATE, installUpdate, runUpdateCheck, startUpdateChecks, updater, updateUi, useFakeUpdate } from '../updater.svelte';
   import Markdown from './Markdown.svelte';
   import {
     addProject,
@@ -133,13 +133,12 @@
     });
   }
   // App updates: checked in the background; the button next to Settings shows a dot when one is waiting.
-  let updateOpen = $state(false);
   // The recents drawer (folded sidebar, narrow window) goes away once Settings or the update dialog is used. The update
   // dialog belongs to this sidebar, so the drawer waits until it is closed: closing it earlier would take the dialog along.
   const closeDrawer = () => (layout.sidebarDrawer = false);
   let updateWasOpen = false;
   $effect(() => {
-    const open = updateOpen;
+    const open = updateUi.open;
     if (updateWasOpen && !open) closeDrawer();
     updateWasOpen = open;
   });
@@ -148,23 +147,9 @@
   $effect(() => {
     if (FAKE_UPDATE) useFakeUpdate();
   });
-  // The icon turns while a check runs, and for at least a moment so a quick answer is still seen.
-  let spinning = $state(false);
-  const turning = $derived(spinning || updater.status === 'checking' || updater.status === 'downloading');
-  async function onUpdateClick() {
-    if (updater.status === 'idle' || updater.status === 'error') {
-      spinning = true;
-      const [found] = await Promise.all([checkForUpdate(), new Promise((resolve) => setTimeout(resolve, 900))]);
-      spinning = false;
-      if (found) updateOpen = true;
-      else {
-        closeDrawer();
-        if (updater.status === 'error') toast.error(`Could not check for updates: ${updater.error}`);
-        else if (updater.error === 'none') toast.info('No update has been published yet');
-        else toast.success('AgentDeck is up to date');
-      }
-    } else updateOpen = true;
-  }
+  // The icon turns while a check runs, and for at least a moment so a quick answer is still seen (runUpdateCheck).
+  const turning = $derived(updateUi.spinning || updater.status === 'checking' || updater.status === 'downloading');
+  const onUpdateClick = () => runUpdateCheck(closeDrawer);
   function toggleMore(key: string, done = false) {
     const next = { ...showPages };
     if (done) delete next[key];
@@ -873,7 +858,7 @@
 
 <SearchPalette bind:open={searchOpen} />
 
-<ZModal bind:open={updateOpen} zTitle={updater.status === 'error' ? 'Update failed' : `AgentDeck ${updater.version} is available`} zWidth="620px" zBodyClass="min-h-0! p-0" zOkText={updater.status === 'downloading' ? 'Downloading…' : updater.status === 'error' ? 'Try again' : 'Download and restart'} zCancelText="Later" onOk={installUpdate}>
+<ZModal bind:open={updateUi.open} zTitle={updater.status === 'error' ? 'Update failed' : `AgentDeck ${updater.version} is available`} zWidth="620px" zBodyClass="min-h-0! p-0" zOkText={updater.status === 'downloading' ? 'Downloading…' : updater.status === 'error' ? 'Try again' : 'Download and restart'} zCancelText="Later" onOk={installUpdate}>
   <div class="flex flex-col text-xs">
     {#if updater.status === 'error'}
       <p class="m-0 px-6 py-3 text-destructive">{updater.error}</p>

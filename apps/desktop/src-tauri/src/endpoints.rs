@@ -44,8 +44,17 @@ pub struct Local {
     pub base: String,
 }
 
+/// The versions of the third-party account tools that were read through and are installed (never `latest`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pins {
+    pub codex_auth: String,
+    pub claude_swap: String,
+}
+
 #[derive(Deserialize)]
 pub struct Endpoints {
+    pub pins: Pins,
     pub anthropic: Anthropic,
     pub openrouter: OpenRouter,
     pub chatgpt: ChatGpt,

@@ -154,7 +154,7 @@ fn restricted_leak(history: &[ChatMessage]) -> Option<String> {
 }
 
 /// The address of the chat route for a provider kind.
-fn chat_url(kind: &str, base: &str) -> String {
+pub(crate) fn chat_url(kind: &str, base: &str) -> String {
     let base = base.trim().trim_end_matches('/');
     match kind {
         "ollama" => format!("{base}/v1/chat/completions"),

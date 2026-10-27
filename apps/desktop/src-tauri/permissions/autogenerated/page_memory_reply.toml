@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-page-memory-reply"
+description = "Enables the page_memory_reply command without any pre-configured scope."
+commands.allow = ["page_memory_reply"]
+
+[[permission]]
+identifier = "deny-page-memory-reply"
+description = "Denies the page_memory_reply command without any pre-configured scope."
+commands.deny = ["page_memory_reply"]

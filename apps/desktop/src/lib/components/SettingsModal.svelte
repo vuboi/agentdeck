@@ -3,6 +3,8 @@
   import { fade, scale } from 'svelte/transition';
   import AgentLogo from './AgentLogo.svelte';
   import ClaudeCreditCard from './ClaudeCreditCard.svelte';
+  import Logo from './Logo.svelte';
+  import { appInfo, runUpdateCheck, updateUi } from '../updater.svelte';
   import { ENDPOINTS } from '../endpoints';
   import SecretInput from './SecretInput.svelte';
   import { ZButton, ZIcon, ZInput, ZModal, ZSelect, ZSlider, ZSwitch, zSortable } from '@shival99/z-ui-svelte';
@@ -65,6 +67,7 @@
     { id: 'alerts', label: 'Limit alerts', icon: 'lucideBell', hint: 'Warn before a limit' },
     { id: 'sync', label: 'Sync', icon: 'lucideCloudUpload', hint: 'History backup (planned)' },
     { id: 'computer', label: 'Computer use', icon: 'lucideMonitor', hint: 'Windows control via MCP' },
+    { id: 'about', label: 'About', icon: 'lucideInfo', hint: 'Version and links' },
   ];
 
   let computerUseEnabled = $state(false);
@@ -484,7 +487,7 @@
           <h2 class="text-sm font-semibold">{NAV.find((item) => item.id === settings.section)?.label}</h2>
           <span class="ml-auto"></span>
           {#if settings.section === 'connectors'}
-            <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1.5 px-2 text-xs" title="Check CLIs and reload usage" disabled={refreshingAll} onclick={() => void refreshAll(true)}>
+            <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2 text-xs" title="Check CLIs and reload usage" disabled={refreshingAll} onclick={() => void refreshAll(true)}>
               <ZIcon zType={icon(refreshingAll ? 'lucideLoaderCircle' : 'lucideRefreshCw')} class="size-3.5 {refreshingAll ? 'animate-spin' : ''}" /> Refresh
             </ZButton>
           {/if}
@@ -820,7 +823,7 @@
                               <div class="mb-1 font-medium">Switch automatically</div>
                               <div class="text-muted-foreground">When the account in use has under {auto.five_hour}% (5h) or {auto.weekly}% (weekly) left, codex-auth moves to the next one in the background.</div>
                             </div>
-                            <ZSwitch checked={auto.enabled} zSize="sm" zDisabled={Boolean(connectors.busy['auto:codex'])} onChange={(value) => void setCodexAutoSwitch(value, auto.five_hour, auto.weekly)} />
+                            <ZSwitch zVariant="dot" checked={auto.enabled} zSize="sm" zDisabled={Boolean(connectors.busy['auto:codex'])} onChange={(value) => void setCodexAutoSwitch(value, auto.five_hour, auto.weekly)} />
                           </div>
                           {#if connectors.errors['auto:codex']}<p class="mt-1 text-xs text-destructive" role="alert">{connectors.errors['auto:codex']}</p>{/if}
                         {/if}
@@ -841,7 +844,7 @@
                 <div class="mb-2 flex items-center gap-2">
                   <h3 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">On this computer</h3>
                   <span class="ml-auto"></span>
-                  <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 gap-1.5 px-2 text-xs" disabled={connectors.scanning} onclick={() => void scanLocal()}>
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={connectors.scanning} onclick={() => void scanLocal()}>
                     <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5 {connectors.scanning ? 'animate-spin' : ''}" /> Scan
                   </ZButton>
                 </div>
@@ -911,7 +914,7 @@
                           <span class="flex items-center gap-1.5 truncate text-sm font-medium">{provider.name}{#if provider.restricted}<span class="shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400" title="May train on what it is sent: gets no project data">Free tier</span>{/if}</span>
                           <span class="block truncate text-[11px] text-muted-foreground">{KINDS.find((kind) => kind.value === provider.kind)?.label} · {provider.baseUrl}{provider.defaultModel ? ` · ${provider.defaultModel}` : ''}{provider.apiKey ? ` · key ••••${provider.apiKey.slice(-4)}` : ''}</span>
                         </span>
-                        <ZSwitch bind:checked={provider.enabled} zSize="sm" />
+                        <ZSwitch zVariant="dot" bind:checked={provider.enabled} zSize="sm" />
                         <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Edit {provider.name}" onclick={() => edit(provider)}>
                           <ZIcon zType={icon('lucidePencil')} class="size-3.5" />
                         </ZButton>
@@ -926,6 +929,42 @@
               </section>
             </div>
 
+          {:else if settings.section === 'about'}
+            <div class="flex flex-col items-center gap-5 py-2 text-center" in:fade={{ duration: 200 }}>
+              <!-- The logo in a dashed frame, centred: what AgentDeck is, which version, and where to find it. -->
+              <div class="grid size-24 place-items-center rounded-3xl border-2 border-dashed border-border bg-card/40">
+                <Logo class="size-12" />
+              </div>
+              <div class="flex flex-col items-center gap-1.5">
+                <h2 class="m-0 text-xl font-semibold">AgentDeck</h2>
+                <span class="rounded-full border border-border bg-muted/50 px-2.5 py-0.5 font-mono text-xs text-muted-foreground tabular-nums">{appInfo.version ? `v${appInfo.version}` : 'dev build'}</span>
+              </div>
+              <p class="m-0 max-w-md text-sm leading-relaxed text-muted-foreground">
+                One desktop for your AI coding agents: Claude, Codex, Antigravity, OpenCode and any provider, working side by side with a browser, your files and a terminal. Chats, keys and settings stay on this computer.
+              </p>
+              <div class="flex flex-wrap items-center justify-center gap-2">
+                <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs" onclick={() => void openExternal(ENDPOINTS.app.repo)}>
+                  <!-- lucide dropped brand icons: the GitHub mark is drawn here so it also shows offline. -->
+                  <svg viewBox="0 0 16 16" class="size-3.5" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg> GitHub
+                </ZButton>
+                <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs" onclick={() => void openExternal(ENDPOINTS.app.releases)}>
+                  <ZIcon zType={icon('lucideTag')} class="size-3.5" /> Releases
+                </ZButton>
+                {#if appInfo.version}
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs" onclick={() => void openExternal(`${ENDPOINTS.app.releases}/tag/v${appInfo.version}`)}>
+                    <ZIcon zType={icon('lucideScrollText')} class="size-3.5" /> What's new in v{appInfo.version}
+                  </ZButton>
+                {/if}
+                <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs" onclick={() => void openExternal(ENDPOINTS.app.issues)}>
+                  <ZIcon zType={icon('lucideBug')} class="size-3.5" /> Report an issue
+                </ZButton>
+              </div>
+              <ZButton zWave={false} zSize="sm" class="h-8 gap-1.5 px-4 text-xs" disabled={updateUi.spinning} onclick={() => void runUpdateCheck()}>
+                <ZIcon zType={icon(updateUi.spinning ? 'lucideLoaderCircle' : 'lucideRefreshCw')} class="size-3.5 {updateUi.spinning ? 'animate-spin' : ''}" /> {updateUi.spinning ? 'Checking…' : 'Check for updates'}
+              </ZButton>
+              <p class="m-0 text-[11px] text-muted-foreground">Built with Tauri 2, Svelte 5 and Rust.</p>
+            </div>
+
           {:else if settings.section === 'computer'}
             <div class="flex flex-col gap-4" in:fade={{ duration: 200 }}>
               <section class="flex items-start gap-3 rounded-xl border border-border bg-card/40 p-4">
@@ -933,7 +972,7 @@
                   <h3 class="text-sm font-semibold">Allow agents to use this Windows computer</h3>
                   <p class="mt-1 text-xs text-muted-foreground">Expose shared AgentDeck MCP tools to Claude, Codex and Antigravity for screenshots, clicks and typing.</p>
                 </div>
-                <ZSwitch checked={computerUseEnabled} zSize="sm" zDisabled={isPreviewCopy() || !inTauri()} onChange={(value) => void setComputerUse(value)} />
+                <ZSwitch zVariant="dot" checked={computerUseEnabled} zSize="sm" zDisabled={isPreviewCopy() || !inTauri()} onChange={(value) => void setComputerUse(value)} />
               </section>
               <p class="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">Every screenshot, click, scroll, key press and text entry pauses for approval in the chat before it runs. Turning this off immediately blocks future computer-use calls. Antigravity must also have the AgentDeck MCP server enabled in the MCP settings.</p>
               {#if computerUseEnabled && !inTauri()}<p class="text-xs text-destructive">This feature is available in the Windows desktop app.</p>{/if}
@@ -955,12 +994,12 @@
                   <div class="flex min-h-9 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs">
                     <ZIcon zType={icon('lucideMessagesSquare')} class="size-4 shrink-0 text-muted-foreground" />
                     <span class="min-w-0 flex-1"><span class="font-medium">Include chat history</span> <span class="text-muted-foreground">(bigger file)</span></span>
-                    <ZSwitch checked={transfer.withHistory} zSize="sm" onChange={(value) => (transfer.withHistory = value)} />
+                    <ZSwitch zVariant="dot" checked={transfer.withHistory} zSize="sm" onChange={(value) => (transfer.withHistory = value)} />
                   </div>
                   <div class="flex min-h-9 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs">
                     <ZIcon zType={icon('lucideKeyRound')} class="size-4 shrink-0 text-muted-foreground" />
                     <span class="min-w-0 flex-1"><span class="font-medium">Include provider API keys</span> <span class="text-muted-foreground">(stored as plain text in the file)</span></span>
-                    <ZSwitch checked={transfer.withKeys} zSize="sm" onChange={(value) => (transfer.withKeys = value)} />
+                    <ZSwitch zVariant="dot" checked={transfer.withKeys} zSize="sm" onChange={(value) => (transfer.withKeys = value)} />
                   </div>
                 </fieldset>
                 <div class="mt-3 flex flex-wrap items-center gap-2">
@@ -1027,7 +1066,7 @@
                   <div class="text-sm font-medium">Warn me before a limit</div>
                   <p class="mt-0.5 text-xs text-muted-foreground">Every 5 minutes AgentDeck reads the usage of the account in use. When a window reaches the level below, you get a message that names the account and the better one to switch to.</p>
                 </div>
-                <ZSwitch bind:checked={connectors.alerts.enabled} zSize="sm" />
+                <ZSwitch zVariant="dot" bind:checked={connectors.alerts.enabled} zSize="sm" />
               </section>
 
               <section class="rounded-xl border border-border p-4 {connectors.alerts.enabled ? '' : 'opacity-50'}">
@@ -1045,7 +1084,7 @@
                     <div class="text-sm font-medium">System notification</div>
                     <p class="mt-0.5 text-xs text-muted-foreground">Show quota warnings and finished session tasks in Windows, macOS, or Linux notifications.</p>
                   </div>
-                  <ZSwitch checked={connectors.alerts.system} zSize="sm" onChange={(value) => void allowSystemNotifications(value)} />
+                  <ZSwitch zVariant="dot" checked={connectors.alerts.system} zSize="sm" onChange={(value) => void allowSystemNotifications(value)} />
                 </div>
                 <!-- Under the text, apart from the switch: a test is a one-off, the switch is the setting. -->
                 <ZButton
@@ -1067,14 +1106,14 @@
                     <div class="text-sm font-medium">Keep working when an agent fails</div>
                     <p class="mt-0.5 text-xs text-muted-foreground">A passing error is tried again. At a usage limit or a sign-out the next agent below carries on from where it stopped. Accounts are never switched automatically: switch them yourself.</p>
                   </div>
-                  <ZSwitch checked={connectors.recovery.enabled} zSize="sm" onChange={(value) => (connectors.recovery = { ...connectors.recovery, enabled: value, chosen: true })} />
+                  <ZSwitch zVariant="dot" checked={connectors.recovery.enabled} zSize="sm" onChange={(value) => (connectors.recovery = { ...connectors.recovery, enabled: value, chosen: true })} />
                 </div>
                 <div class="mt-3 flex items-start gap-3 rounded-lg border border-border px-3 py-2.5">
                   <div class="min-w-0 flex-1">
                     <div class="text-xs font-medium">Auto-continue when a limit resets</div>
                     <p class="mt-0.5 text-[11px] text-muted-foreground">When a chat stops at a usage limit and no other agent can take over, it carries on by itself once the limit resets (the time is read from the error or the account's usage). A card above the message box shows the time and lets you cancel or try again now.</p>
                   </div>
-                  <ZSwitch checked={connectors.recovery.autoResume} zSize="sm" onChange={(value) => (connectors.recovery.autoResume = value)} />
+                  <ZSwitch zVariant="dot" checked={connectors.recovery.autoResume} zSize="sm" onChange={(value) => (connectors.recovery.autoResume = value)} />
                 </div>
                 <ol
                   class="mt-3 flex flex-col gap-1 {connectors.recovery.enabled ? '' : 'pointer-events-none opacity-50'}"
@@ -1219,7 +1258,7 @@
             <div class="text-xs font-medium">Free tier: keep private data away</div>
             <p class="mt-0.5 text-[11px] text-muted-foreground">Free plans may keep and train on what they are sent. This provider then gets web search only: no files, code, terminal, browser or MCP tools, and no project text. Other agents may hand it light public work (search, emails, prompts, scripts) after checking it holds nothing private.</p>
           </div>
-          <ZSwitch checked={Boolean(draft.restricted)} zSize="sm" onChange={(value) => { if (draft) draft.restricted = value; }} />
+          <ZSwitch zVariant="dot" checked={Boolean(draft.restricted)} zSize="sm" onChange={(value) => { if (draft) draft.restricted = value; }} />
         </div>
       </div>
     </form>

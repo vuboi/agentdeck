@@ -17,6 +17,8 @@ export type ModelOption = {
   /** Reasoning levels the model takes; empty when unknown. */
   efforts?: string[];
   defaultEffort?: string;
+  /** The CLI keeps it out of its own picker; it still runs. Listed last, under "Hide". */
+  hidden?: boolean;
 };
 
 export type ModelSource = {
@@ -131,30 +133,45 @@ export function customProviderName(value: string | undefined | null): string | u
 /** The model entry for a provider and id, if listed. */
 export const findModel = (provider: ProviderId, value: string) => catalog[provider]?.find((item) => item.value === value);
 
-type Listed = { value: string; label: string; description: string; efforts: string[]; default_effort: string | null };
+type Listed = { value: string; label: string; description: string; efforts: string[]; default_effort: string | null; hidden?: boolean };
 
 /** Reads each CLI's own model list; a CLI that has none (not installed, never run) keeps the built-in one. */
+/**
+ * Whether each CLI's own model list has been read yet. Until it has, the list in the catalogue is only a fallback: a
+ * picker shows a loading state instead of it, so the list is never drawn and then replaced and reordered.
+ */
+export const modelsReady = $state<Record<ProviderId, boolean>>({ claude: false, codex: false, antigravity: false, opencode: false, custom: true });
+
 export async function loadModels() {
-  if (!inTauri()) return;
-  const { invoke } = await import('@tauri-apps/api/core');
-  for (const provider of ['claude', 'codex', 'antigravity', 'opencode'] as const) {
-    try {
-      const listed = await invoke<Listed[]>('models_list', { agent: provider });
-      if (listed.length) {
-        const models = listed.map((item) => ({
-          value: item.value,
-          label: item.label,
-          description: item.description || undefined,
-          efforts: item.efforts,
-          defaultEffort: item.default_effort ?? undefined,
-        }));
-        if (provider === 'claude') claudeOwn = models;
-        else catalog[provider] = models;
-      }
-    } catch {
-      // Keep the built-in list.
-    }
+  if (!inTauri()) {
+    for (const provider of Object.keys(modelsReady) as ProviderId[]) modelsReady[provider] = true;
+    return;
   }
+  const { invoke } = await import('@tauri-apps/api/core');
+  // All at once: a slow CLI (OpenCode starts a process to list its models) must not hold the others back.
+  await Promise.all(
+    (['claude', 'codex', 'antigravity', 'opencode'] as const).map(async (provider) => {
+      try {
+        const listed = await invoke<Listed[]>('models_list', { agent: provider });
+        if (listed.length) {
+          const models = listed.map((item) => ({
+            value: item.value,
+            label: item.label,
+            description: item.description || undefined,
+            efforts: item.efforts,
+            defaultEffort: item.default_effort ?? undefined,
+            hidden: item.hidden || undefined,
+          }));
+          if (provider === 'claude') claudeOwn = models;
+          else catalog[provider] = models;
+        }
+      } catch {
+        // Keep the built-in list.
+      } finally {
+        modelsReady[provider] = true;
+      }
+    }),
+  );
 }
 void loadModels();
 
@@ -189,11 +206,43 @@ export function modelLabel(value: string | undefined | null): string {
 export const isFreeModel = (item: { value: string }) => /[-:]free$/i.test(item.value);
 
 /**
- * A model list with the free models first and the paid ones after; each group keeps the catalogue's order. `paidAt`
- * is the index of the first paid model when both kinds are there (where the pickers draw their "Paid" divider), else -1.
+ * A model that needs credit on top of the plan (Claude's Fable): it works only once money is added, so the pickers
+ * list it last, under the "Paid" divider. Credit variants (`credit:`) have their own divider.
  */
-export function freeFirst<T extends { value: string }>(items: T[]): { items: T[]; paidAt: number } {
-  const free = items.filter(isFreeModel);
-  const paid = items.filter((item) => !isFreeModel(item));
-  return { items: [...free, ...paid], paidAt: free.length && paid.length ? free.length : -1 };
+export const isPaidOnlyModel = (item: { value: string }) => !item.value.startsWith(CREDIT_PREFIX) && /fable/i.test(item.value);
+
+/** A divider of the model lists: where it goes (the index of the model it stands above) and its name. */
+export type ModelDivider = { at: number; label: string };
+
+/**
+ * A model list in the order the pickers show it, with the dividers between its groups: Free first, then Hide (the ones
+ * the CLI keeps out of its own picker), then Paid; without free models, the ones the plan covers, Hide, then those that
+ * need credit; the credit variants last (Claude credit). A divider is drawn only where it separates something: "Free" above the free
+ * models when others follow, "Paid" where the paid ones start, and so on.
+ */
+export function freeFirst<T extends { value: string; hidden?: boolean }>(items: T[]): { items: T[]; dividers: ModelDivider[] } {
+  const credit = items.filter((item) => item.value.startsWith(CREDIT_PREFIX));
+  const own = items.filter((item) => !item.value.startsWith(CREDIT_PREFIX));
+  const hidden = own.filter((item) => item.hidden);
+  const shown = own.filter((item) => !item.hidden);
+  const free = shown.filter(isFreeModel);
+  const rest = shown.filter((item) => !isFreeModel(item));
+  const included = rest.filter((item) => !isPaidOnlyModel(item));
+  const paidOnly = rest.filter(isPaidOnlyModel);
+  // Free, then Hide, then Paid. Where nothing is free (Codex, Claude) the models the plan covers come first, the hidden
+  // ones after them, then those that need credit.
+  const groups: [string, T[]][] = free.length
+    ? [['Free', free], ['Hide', hidden], ['Paid', included], ['Paid', paidOnly], ['Claude credit', credit]]
+    : [['', included], ['Hide', hidden], ['Paid', paidOnly], ['Claude credit', credit]];
+  const dividers: ModelDivider[] = [];
+  const named = new Set<string>();
+  let at = 0;
+  for (const [label, group] of groups) {
+    if (group.length && label && !named.has(label) && (at > 0 || label === 'Free')) {
+      dividers.push({ at, label });
+      named.add(label);
+    }
+    at += group.length;
+  }
+  return { items: groups.flatMap(([, group]) => group), dividers };
 }

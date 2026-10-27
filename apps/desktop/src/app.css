@@ -463,3 +463,12 @@ body {
 .z-show-more > [id][class*="transition-[max-height]"] {
   transition-duration: 350ms;
 }
+
+/* The hover box of a list (zHoverGlide) is left where the last hovered row was, invisible. When the list then gets
+   shorter (another provider's models, a search) that old place lies below the new end and makes the list scroll for
+   no reason, until the box moves again. Hidden, it waits at the top; it is placed again on the next hover. */
+[data-z-hover-glide-highlight][style*="opacity: 0;"] {
+  transform: none !important;
+  top: 0 !important;
+  left: 0 !important;
+}

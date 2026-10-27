@@ -19,6 +19,8 @@ pub struct ModelInfo {
     /// Reasoning levels the model accepts, in order.
     pub efforts: Vec<String>,
     pub default_effort: Option<String>,
+    /// The CLI keeps it out of its own picker; it still runs with `--model`. The pickers list it last, under "Hide".
+    pub hidden: bool,
 }
 
 const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
@@ -33,6 +35,7 @@ fn claude_model(value: &str, label: &str, description: &str, default_effort: &st
             .map(|level| level.to_string())
             .collect(),
         default_effort: Some(default_effort.into()),
+        hidden: false,
     }
 }
 
@@ -90,7 +93,8 @@ pub fn claude(home: &Path) -> Vec<ModelInfo> {
     models
 }
 
-/// Codex's models from its cached catalogue, in its own order. Empty when Codex has not run yet.
+/// Codex's models from its cached catalogue: the ones it lists first, in its own order, then the ones it hides from
+/// its own picker (they still run with `-m`), flagged `hidden`. Empty when Codex has not run yet.
 pub fn codex(codex_home: &Path) -> Vec<ModelInfo> {
     let Some(catalogue) = std::fs::read_to_string(codex_home.join("models_cache.json"))
         .ok()
@@ -98,23 +102,23 @@ pub fn codex(codex_home: &Path) -> Vec<ModelInfo> {
     else {
         return Vec::new();
     };
-    let mut entries: Vec<&Value> = catalogue["models"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|model| model["visibility"] == "list")
-        .collect();
-    entries.sort_by_key(|model| model["priority"].as_i64().unwrap_or(i64::MAX));
+    let mut entries: Vec<&Value> = catalogue["models"].as_array().into_iter().flatten().collect();
+    // Listed models first, each group by Codex's own priority.
+    entries.sort_by_key(|model| {
+        (
+            model["visibility"] != "list",
+            model["priority"].as_i64().unwrap_or(i64::MAX),
+        )
+    });
     entries
         .into_iter()
         .filter_map(|model| {
             let value = model["slug"].as_str()?;
+            let hidden = model["visibility"] != "list";
+            let name = model["display_name"].as_str().unwrap_or(value).replace('-', " ");
             Some(ModelInfo {
                 value: value.into(),
-                label: model["display_name"]
-                    .as_str()
-                    .unwrap_or(value)
-                    .replace('-', " "),
+                label: name,
                 description: model["description"].as_str().unwrap_or_default().into(),
                 efforts: model["supported_reasoning_levels"]
                     .as_array()
@@ -123,6 +127,7 @@ pub fn codex(codex_home: &Path) -> Vec<ModelInfo> {
                     .filter_map(|level| level["effort"].as_str().map(str::to_owned))
                     .collect(),
                 default_effort: model["default_reasoning_level"].as_str().map(str::to_owned),
+                hidden,
             })
         })
         .collect()
@@ -130,8 +135,10 @@ pub fn codex(codex_home: &Path) -> Vec<ModelInfo> {
 
 /// OpenCode's models from the output of `opencode models`: one `provider/model` line each (`opencode-go/kimi-k3`),
 /// with Windows line endings. The CLI publishes no reasoning levels for them (a variant is `provider/model#name`),
-/// so none are offered rather than guessed.
-pub fn opencode(listing: &str) -> Vec<ModelInfo> {
+/// so none are offered rather than guessed. `catalogue` is its cached models.dev list (`~/.cache/opencode/models.json`):
+/// the CLI leaves the deprecated and alpha models out of its listing but still runs them, so those of the providers
+/// it lists are added, flagged `hidden`.
+pub fn opencode(listing: &str, catalogue: Option<&str>) -> Vec<ModelInfo> {
     let mut models: Vec<ModelInfo> = Vec::new();
     for id in listing
         .lines()
@@ -148,8 +155,43 @@ pub fn opencode(listing: &str) -> Vec<ModelInfo> {
             description: provider.into(),
             efforts: Vec::new(),
             default_effort: None,
+            hidden: false,
         });
     }
+    let Some(catalogue) = catalogue.and_then(|text| serde_json::from_str::<Value>(text).ok()) else {
+        return models;
+    };
+    let providers: Vec<String> = models
+        .iter()
+        .filter_map(|model| model.value.split_once('/').map(|(provider, _)| provider.to_owned()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut hidden: Vec<ModelInfo> = Vec::new();
+    for provider in providers {
+        let Some(entries) = catalogue[&provider]["models"].as_object() else {
+            continue;
+        };
+        for (slug, entry) in entries {
+            if !matches!(entry["status"].as_str(), Some("deprecated" | "alpha")) {
+                continue;
+            }
+            let id = format!("{provider}/{slug}");
+            if models.iter().chain(hidden.iter()).any(|model| model.value == id) {
+                continue;
+            }
+            hidden.push(ModelInfo {
+                label: entry["name"].as_str().map_or_else(|| title(slug), str::to_owned),
+                value: id,
+                description: provider.clone(),
+                efforts: Vec::new(),
+                default_effort: None,
+                hidden: true,
+            });
+        }
+    }
+    hidden.sort_by(|a, b| a.value.cmp(&b.value));
+    models.extend(hidden);
     models
 }
 
@@ -239,6 +281,7 @@ pub fn antigravity(listing: &str) -> Vec<ModelInfo> {
             description: String::new(),
             efforts,
             default_effort,
+            hidden: false,
         });
         folded.push(base);
     }
@@ -252,6 +295,7 @@ fn plain(id: &str, label: &str) -> ModelInfo {
         description: String::new(),
         efforts: Vec::new(),
         default_effort: None,
+        hidden: false,
     }
 }
 
@@ -267,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_lists_only_the_visible_models_with_their_levels() {
+    fn codex_lists_the_visible_models_first_and_the_hidden_ones_marked() {
         let dir = scratch("codex");
         std::fs::write(
             dir.join("models_cache.json"),
@@ -281,8 +325,9 @@ mod tests {
         let models = codex(&dir);
         assert_eq!(
             models.iter().map(|m| m.value.as_str()).collect::<Vec<_>>(),
-            ["gpt-a", "gpt-b"]
+            ["gpt-a", "gpt-b", "hidden"]
         );
+        assert!(models[2].hidden && !models[0].hidden);
         assert_eq!(models[1].efforts, ["low", "high"]);
         assert_eq!(models[1].default_effort.as_deref(), Some("low"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -346,7 +391,7 @@ gpt-oss-120b-medium	GPT-OSS 120B (Medium)
     fn opencode_lists_every_provider_line_with_a_readable_name() {
         // The real output has Windows line endings and a few three-part ids.
         let listing = "opencode-go/beam-free\r\nopencode-go/gpt-6-luna\r\nopencode/deepseek-v4.1-flash-free\r\nmsg_agent/qwen/qwen3.6-35b-a3b\r\nopencode-go/beam-free\r\n";
-        let models = opencode(listing);
+        let models = opencode(listing, None);
         assert_eq!(
             models.iter().map(|m| m.value.as_str()).collect::<Vec<_>>(),
             [
@@ -367,8 +412,31 @@ gpt-oss-120b-medium	GPT-OSS 120B (Medium)
     }
 
     #[test]
+    fn opencode_adds_the_deprecated_models_of_its_providers_as_hidden() {
+        let catalogue = r#"{
+            "opencode":{"models":{
+                "big-pickle":{"name":"Big Pickle"},
+                "old-free":{"name":"Old Free","status":"deprecated"},
+                "new-alpha":{"name":"New Alpha","status":"alpha"},
+                "stable-beta":{"name":"Stable Beta","status":"beta"}}},
+            "other":{"models":{"gone":{"name":"Gone","status":"deprecated"}}}
+        }"#;
+        let models = opencode("opencode/big-pickle
+", Some(catalogue));
+        assert_eq!(
+            models.iter().map(|m| (m.value.as_str(), m.hidden)).collect::<Vec<_>>(),
+            [
+                ("opencode/big-pickle", false),
+                ("opencode/new-alpha", true),
+                ("opencode/old-free", true)
+            ]
+        );
+        assert_eq!(models[2].label, "Old Free");
+    }
+
+    #[test]
     fn opencode_ignores_what_is_not_a_model_id() {
-        assert!(opencode("").is_empty());
-        assert!(opencode("Fetching models...\n\n").is_empty());
+        assert!(opencode("", None).is_empty());
+        assert!(opencode("Fetching models...\n\n", None).is_empty());
     }
 }

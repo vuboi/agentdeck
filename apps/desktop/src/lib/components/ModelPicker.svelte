@@ -7,7 +7,7 @@
   import { agyBlocks, agyModes } from '../agy-modes.svelte';
   import { AGENT_TEXT, turnOptions, workspace, type Agent, type Effort, type Permission } from '../sessions.svelte';
   import { allPresets, assignPreset, createFlow, presetOf } from '../workflows.svelte';
-  import { findModel, freeFirst, modelSources } from '../models.svelte';
+  import { findModel, freeFirst, modelSources, modelsReady } from '../models.svelte';
   import { CREDIT_PREFIX } from '../credit-model';
   import { automation, fallbackOn, setFallback } from '../automation.svelte';
   import SectionTitle from './SectionTitle.svelte';
@@ -80,8 +80,6 @@
   const modelsOf = (key: string) => sourceOf(key).models();
   // Free models first, the paid ones after a divider (models.svelte.ts).
   const subList = $derived.by(() => freeFirst(modelsOf(subProvider)));
-  // Claude's models billed to the Console API credit come last, after their own divider (credit-model.ts).
-  const creditAt = $derived(subList.items.findIndex((item) => item.value.startsWith(CREDIT_PREFIX)));
   // The row the chosen model belongs to: a custom provider has its own, the CLIs are found by agent.
   const currentSource = $derived(sources.find((source) => source.provider === agent && source.models().some((item) => item.value === model)) ?? sources.find((source) => source.provider === agent) ?? sources[0]);
   // A model billed to the API credit says so wherever its name is shown alone.
@@ -250,8 +248,11 @@
             >
               <AgentLogo agent={source.provider} model={source.provider === 'custom' ? source.models()[0]?.value : undefined} class="size-3.5 shrink-0" />
               <!-- The provider's name has priority and stays whole; the chosen model takes what room is left and is cut. -->
-              <span class="truncate {current ? 'max-w-[60%] shrink-0' : 'min-w-0 flex-1'}">{source.label}</span>
-              {#if current}<span class="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground" {@attach zTooltip({ content: current, position: 'right', autoDetect: true, offset: 6 })}>{current}</span>{/if}
+              <!-- Name and model share one baseline: their sizes differ, so centring each box would set them off. -->
+              <span class="flex min-w-0 flex-1 items-baseline gap-2">
+                <span class="truncate {current ? 'max-w-[60%] shrink-0' : 'min-w-0 flex-1'}">{source.label}</span>
+                {#if current}<span class="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground">{current}</span>{/if}
+              </span>
               <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
             </button>
           {/each}
@@ -305,7 +306,7 @@
           </div>
           <div class="mt-1 text-[11px] leading-snug text-muted-foreground">Faster output, higher usage</div>
         </div>
-        <ZSwitch bind:checked={fast} />
+        <ZSwitch zVariant="dot" bind:checked={fast} zSize="sm" />
       </section>
 
       <section aria-label="Automation">
@@ -324,7 +325,7 @@
                 </div>
                 <div class="mt-0.5 text-[11px] leading-snug text-muted-foreground">{row.note}</div>
               </div>
-              <ZSwitch checked={row.on} zSize="sm" onChange={row.set} />
+              <ZSwitch zVariant="dot" checked={row.on} zSize="sm" onChange={row.set} />
             </div>
           {/each}
         </div>
@@ -404,6 +405,11 @@
           </button>
         </div>
       </div>
+    {:else if !modelsReady[sourceOf(subProvider).provider]}
+      <!-- The CLI's own list is still being read: rows that stand where its models will, instead of a list that would be replaced. -->
+      <div class="flex w-full flex-col gap-1 px-2 py-2" role="status" aria-label="Loading models">
+        {#each [70, 55, 82, 48] as width (width)}<span class="h-4 animate-pulse rounded bg-muted" style:width="{width}%"></span>{/each}
+      </div>
     {:else if modelsOf(subProvider).length === 0}
       <div class="flex w-full flex-col items-center gap-1.5 px-3 py-4 text-center">
         <ZIcon zType="lucideShieldAlert" class="size-5 text-muted-foreground" />
@@ -414,8 +420,7 @@
       <div class="flex w-full flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1" style:max-height="{subMax}px" role="radiogroup" tabindex="-1" aria-label="{sourceOf(subProvider).label} models" onpointerenter={keepSub} onpointerleave={leaveSub} {@attach glide()}>
         {#each subList.items as item, index (item.value)}
           {@const selected = agent === sourceOf(subProvider).provider && model === item.value}
-          {#if index === subList.paidAt}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Paid</span><span class="h-px flex-1 bg-border"></span></div>{/if}
-          {#if index === creditAt && creditAt > 0}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Claude credit</span><span class="h-px flex-1 bg-border"></span></div>{/if}
+          {#each subList.dividers.filter((divider) => divider.at === index) as divider (divider.label)}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>{divider.label}</span><span class="h-px flex-1 bg-border"></span></div>{/each}
           <button
             type="button"
             role="radio"

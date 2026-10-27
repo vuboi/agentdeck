@@ -17,7 +17,8 @@
   } from '../agent';
   import { openImages } from '../preview.svelte';
   import { clearSuggestions, draft, gen, openRun, refreshHistory, runSuggest, startRun, stopRun, type Preview } from '../image-gen.svelte';
-  import { findModel, freeFirst, modelCatalog, modelLabel, type ProviderId } from '../models.svelte';
+  import { findModel, freeFirst, modelCatalog, modelLabel, modelSources, modelsReady, parseCustomModel, type ProviderId } from '../models.svelte';
+  import { connectors } from '../connectors.svelte';
   import { inTauri } from '../history';
   import { toast } from '../toast';
   import DevEmpty from './DevEmpty.svelte';
@@ -26,7 +27,7 @@
 
   type ImageModel = ImageModelChoice & { label: string };
 
-  const models: ImageModel[] = [
+  const openAiModels: ImageModel[] = [
     // Only models verified against this flow's Responses or Images backend belong here.
     { model: 'gpt-6.1-sol', backend: 'responses', label: 'GPT 6.1 Sol' },
     { model: 'gpt-6-astra', backend: 'responses', label: 'GPT 6 Astra' },
@@ -37,6 +38,27 @@
     { model: 'gpt-5.6-luna', backend: 'responses', label: 'GPT 5.6 Luna' },
     { model: 'gpt-image-2', backend: 'images', label: 'GPT Image 2' },
   ];
+  // Google's image models (Nano Banana), from the Gemini API's model list. They need the key of a Gemini provider.
+  const GEMINI_HOST = 'generativelanguage.googleapis.com';
+  const geminiModels: { model: string; label: string }[] = [
+    { model: 'gemini-nano-banana-2.1', label: 'Nano Banana 2.1' },
+    { model: 'gemini-3.1-flash-lite-image', label: 'Nano Banana 2 Lite' },
+    { model: 'gemini-3.1-flash-image', label: 'Nano Banana 2' },
+    { model: 'gemini-3-pro-image', label: 'Nano Banana Pro' },
+  ];
+  /** The enabled Gemini provider with a key (typed or in its environment variable), if the user set one up. */
+  const geminiProvider = $derived(connectors.custom.find((item) => item.enabled && item.baseUrl.includes(GEMINI_HOST) && (item.apiKey || item.keyEnv)));
+  const geminiReady = $derived(!!geminiProvider);
+  const gemini = $derived<ImageModel[]>(
+    geminiProvider
+      ? geminiModels.map((item) => ({
+          ...item,
+          backend: 'gemini' as const,
+          custom: { kind: geminiProvider.kind, base_url: geminiProvider.baseUrl, api_key: geminiProvider.apiKey || null, key_env: geminiProvider.keyEnv || null },
+        }))
+      : [],
+  );
+  const models = $derived<ImageModel[]>([...openAiModels, ...gemini]);
   // Match the backend's per-run limit without increasing the default generation workload.
   const MAX_IMAGE_MODELS = 4;
   // A panel that opens by growing from its top edge and goes by shrinking and fading, so what is below it never jumps.
@@ -195,22 +217,22 @@
   const variantCount = $derived(Math.max(1, Math.min(4, Math.round(variants))));
   const candidateCount = $derived(selectedModels.length * variantCount);
   const settingsSummary = $derived(selectedModels.map((value) => models.find((item) => item.model === value)?.label ?? value).join(', ') || 'No model');
-  // Models that can write the prompt suggestions, grouped by the CLI they run through.
-  const promptGroups = $derived.by(() => {
-    const catalog = modelCatalog();
-    const codex = new Set<string>(['gpt-6-luna']);
-    for (const item of catalog.codex) codex.add(item.value);
-    const groups = [
-      { provider: 'codex', label: 'Codex', items: [...codex].map((value) => ({ value, label: modelLabel(value) })) },
-      { provider: 'claude', label: 'Claude', icon: 'brandClaude' as ZIconName, items: catalog.claude.map((item) => ({ value: item.value, label: item.label })) },
-      { provider: 'antigravity', label: 'Antigravity', icon: 'brandGemini' as ZIconName, items: catalog.antigravity.map((item) => ({ value: item.value, label: item.label })) },
-      { provider: 'opencode', label: 'OpenCode', icon: 'lucideTerminal' as ZIconName, items: catalog.opencode.map((item) => ({ value: item.value, label: item.label })) },
-    ];
-    return groups;
-  });
+  // Models that can write the prompt suggestions: every source the chat's model picker lists (the agents and each enabled
+  // provider, a new one too), so a provider or connector added in the settings shows here at once.
+  const promptGroups = $derived(
+    modelSources().map((source) => ({
+      provider: source.key,
+      agent: source.provider as ProviderId,
+      label: source.label,
+      icon: source.icon,
+      logo: source.logo,
+      items: source.models().map((item) => ({ value: item.value, label: item.label, hidden: item.hidden })),
+    })),
+  );
   const promptModels = $derived(promptGroups.flatMap((group) => group.items));
   // The effort levels follow the model that writes the suggestions, as they do in the chat picker.
-  const promptProvider = $derived((promptGroups.find((group) => group.items.some((item) => item.value === promptModel))?.provider ?? 'codex') as ProviderId);
+  const promptSource = $derived(promptGroups.find((group) => group.items.some((item) => item.value === promptModel)));
+  const promptProvider = $derived((promptSource?.agent ?? 'codex') as ProviderId);
   const effortTabs = $derived.by(() => {
     const levels: string[] = findModel(promptProvider, promptModel)?.efforts ?? ['low', 'medium', 'high', 'max'];
     return levels.map((value) => ({ value, label: EFFORT_LABEL[value] ?? value }));
@@ -272,7 +294,17 @@
       toast.error('Enter an image prompt or add a reference image first');
       return;
     }
-    void runSuggest({ prompt: prompt.trim(), model: promptModel, provider: promptProvider, referencePaths, settings: settingsPayload() });
+    // A custom provider's model is `<provider id>::<model>`: the call goes to its address with its own model name.
+    const target = parseCustomModel(promptModel);
+    const custom = target ? connectors.custom.find((item) => item.id === target.providerId) : undefined;
+    void runSuggest({
+      prompt: prompt.trim(),
+      model: target?.model ?? promptModel,
+      provider: custom ? 'custom' : promptProvider,
+      custom: custom ? { kind: custom.kind, baseUrl: custom.baseUrl, apiKey: custom.apiKey || null, keyEnv: custom.keyEnv || null } : undefined,
+      referencePaths,
+      settings: settingsPayload(),
+    });
   }
 
   function useSuggestion(value: string) {
@@ -713,7 +745,7 @@
                 <SectionTitle label="PROMPT MODEL" />
                 <div class="flex flex-col gap-0.5">
                   {#each promptGroups as group (group.provider)}
-                    {@const activeProvider = promptProvider === group.provider}
+                    {@const activeProvider = promptSource?.provider === group.provider}
                     <button
                       type="button"
                       role="menuitem"
@@ -730,11 +762,16 @@
                         <ZIcon zSvg={OPENAI_SVG} class="size-3.5 shrink-0 text-foreground" />
                       {:else if group.provider === 'opencode'}
                         <ZIcon zSvg={OPENCODE_SVG} class="size-3.5 shrink-0 text-foreground" />
+                      {:else if group.logo}
+                        <img src={group.logo} alt="" class="size-3.5 shrink-0 object-contain" />
                       {:else}
                         <ZIcon zType={group.icon} class="size-3.5 shrink-0 text-muted-foreground" />
                       {/if}
-                      <span class="flex-1 truncate">{group.label}</span>
-                      {#if activeProvider}<span class="max-w-32 truncate text-[11px] text-muted-foreground" {@attach zTooltip({ content: promptModelLabel, position: 'right', autoDetect: true })}>{promptModelLabel}</span>{/if}
+                      <!-- As in the chat's model picker: the provider's name keeps its room, the model's gives way (truncated). -->
+                      <span class="flex min-w-0 flex-1 items-baseline gap-2">
+                        <span class="truncate {activeProvider ? 'max-w-[60%] shrink-0' : 'min-w-0 flex-1'}">{group.label}</span>
+                        {#if activeProvider}<span class="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground">{promptModelLabel}</span>{/if}
+                      </span>
                       <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
                     </button>
                   {/each}
@@ -779,7 +816,7 @@
                   </div>
                   <div class="mt-1 text-[11px] leading-snug text-muted-foreground">Faster output, higher usage</div>
                 </div>
-                <ZSwitch bind:checked={fast} />
+                <ZSwitch zVariant="dot" bind:checked={fast} zSize="sm" />
               </section>
             </div>
           {/snippet}
@@ -788,7 +825,8 @@
         <ZPopover anchor={modelsRow} bind:open={modelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={173}>
           {#snippet children()}
             <div class="flex w-full flex-col gap-0.5 p-1.5 text-xs" role="menu" aria-label="Image models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
-              {#each models as item (item.model)}
+              <div class="mr-1 flex shrink-0 items-center gap-2 px-1.5 py-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Codex</span><span class="h-px flex-1 bg-border"></span></div>
+              {#each openAiModels as item (item.model)}
                 {@const active = selectedModels.includes(item.model)}
                 <button
                   type="button"
@@ -804,6 +842,27 @@
                   {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
                 </button>
               {/each}
+              <div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-1.5 py-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Google Gemini</span><span class="h-px flex-1 bg-border"></span></div>
+              {#if geminiReady}
+              {#each gemini as item (item.model)}
+                {@const active = selectedModels.includes(item.model)}
+                <button
+                  type="button"
+                  data-glide-item
+                  role="menuitemcheckbox"
+                  aria-checked={active}
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : ''}"
+                  onclick={() => toggleModel(item.model)}
+                  {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}
+                >
+                  <ZIcon zType="lucideSparkles" class="size-3.5 shrink-0 text-foreground" />
+                  <span class="min-w-0 flex-1 truncate">{item.label}</span>
+                  {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
+                </button>
+              {/each}
+              {:else}
+                <p class="m-0 px-1.5 py-1 text-[11px] leading-snug text-muted-foreground">Add a Gemini API key in Settings, Cloud providers, to use Nano Banana.</p>
+              {/if}
             </div>
           {/snippet}
         </ZPopover>
@@ -813,7 +872,12 @@
             {@const selectedGroup = promptGroups.find((group) => group.provider === promptSubProvider)}
             {@const sorted = freeFirst(selectedGroup?.items ?? [])}
             <div class="flex w-full flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1 text-xs" style:max-height="320px" role="radiogroup" aria-label="Prompt models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
-              {#if !selectedGroup?.items.length}
+              {#if selectedGroup && !modelsReady[selectedGroup.agent]}
+                <!-- The CLI's own list is still being read: rows that stand where its models will, instead of a list that would be replaced. -->
+                <div class="flex w-full flex-col gap-1 px-2 py-2" role="status" aria-label="Loading models">
+                  {#each [70, 55, 82, 48] as width (width)}<span class="h-4 animate-pulse rounded bg-muted" style:width="{width}%"></span>{/each}
+                </div>
+              {:else if !selectedGroup?.items.length}
                 <!-- The same empty state as the chat's model picker: the provider listed no models. -->
                 <div class="flex w-full flex-col items-center gap-1.5 px-2 py-3 text-center">
                   <ZIcon zType="lucideShieldAlert" class="size-5 text-muted-foreground" />
@@ -821,9 +885,9 @@
                   <p class="m-0 text-[11px] leading-snug text-muted-foreground">{selectedGroup?.label ?? 'This provider'} returned no models, or its provider has an error. Check it in Settings.</p>
                 </div>
               {/if}
-              {#each sorted.items as item, index (item.value)}
+              {#each selectedGroup && modelsReady[selectedGroup.agent] ? sorted.items : [] as item, index (item.value)}
                 {@const active = item.value === promptModel}
-                {#if index === sorted.paidAt}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Paid</span><span class="h-px flex-1 bg-border"></span></div>{/if}
+                {#each sorted.dividers.filter((divider) => divider.at === index) as divider (divider.label)}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>{divider.label}</span><span class="h-px flex-1 bg-border"></span></div>{/each}
                 <button
                   type="button"
                   data-glide-item

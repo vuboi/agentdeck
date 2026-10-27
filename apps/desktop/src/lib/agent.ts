@@ -95,7 +95,10 @@ export async function readFileBytes(path: string): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>('read_file_bytes', { path });
 }
 
-export type ImageModelChoice = { model: string; backend: 'responses' | 'images' };
+/** The Gemini provider a `gemini` model is generated on (its address and key). */
+export type ImageProvider = { kind: string; base_url: string; api_key: string | null; key_env: string | null };
+/** `backend` names the generator that makes the image (image_backend.rs); a new one is added there and listed in the panel. */
+export type ImageModelChoice = { model: string; backend: 'responses' | 'images' | 'gemini'; custom?: ImageProvider };
 export type GeneratedImage = { model: string; backend: string; path: string; variant: number };
 export type ImageGenerationFailure = { model: string; backend: string; variant: number; error: string };
 export type ImageGenerateResult = { run_id: string; images: GeneratedImage[]; failures: ImageGenerationFailure[] };
@@ -150,13 +153,14 @@ export async function listImageHistory(limit = 50): Promise<ImageHistoryRun[]> {
 }
 
 /** Asks the authenticated Codex Responses API to improve an image prompt. */
-export async function suggestImagePrompts(args: { prompt: string; model: string; provider?: string; referencePaths?: string[]; settings?: ImageSettings }): Promise<ImagePromptSuggestResult> {
+export async function suggestImagePrompts(args: { prompt: string; model: string; provider?: string; custom?: { kind: string; baseUrl: string; apiKey: string | null; keyEnv: string | null }; referencePaths?: string[]; settings?: ImageSettings }): Promise<ImagePromptSuggestResult> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<ImagePromptSuggestResult>('image_prompt_suggest', {
     request: {
       prompt: args.prompt,
       model: args.model,
       provider: args.provider ?? null,
+      custom: args.custom ? { kind: args.custom.kind, base_url: args.custom.baseUrl, api_key: args.custom.apiKey, key_env: args.custom.keyEnv } : null,
       reference_paths: args.referencePaths ?? [],
       config: args.settings ?? {},
     },

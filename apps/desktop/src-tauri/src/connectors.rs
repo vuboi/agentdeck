@@ -134,11 +134,34 @@ pub(crate) struct Captured {
     pub stderr: String,
 }
 
+/// The account tools AgentDeck uses (`codex-auth`, `cswap`) have commands it never needs. `codex-auth app` downloads a
+/// patched Codex build from a third party and `cswap upgrade` replaces the tool itself: neither may be started from here,
+/// whatever an account id or a future change passes along. Only the commands below run; anything else is refused.
+fn account_tool_allows(program: &Path, args: &[&str]) -> Result<(), String> {
+    let name = program
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let allowed: &[&str] = match name.as_str() {
+        "codex-auth" => &["list", "switch", "remove", "login"],
+        "cswap" => &["list", "switch"],
+        _ => return Ok(()),
+    };
+    match args.first() {
+        Some(first) if allowed.contains(first) => Ok(()),
+        other => Err(format!(
+            "{name} {} is not one AgentDeck runs",
+            other.copied().unwrap_or_default()
+        )),
+    }
+}
+
 pub(crate) async fn capture(
     program: &Path,
     args: &[&str],
     limit: Duration,
 ) -> Result<Captured, String> {
+    account_tool_allows(program, args)?;
     let child = command(program)
         .args(args)
         .spawn()
@@ -229,6 +252,7 @@ async fn run_logged_with_idle_timeout(
     idle_limit: Option<Duration>,
     auth_watch_provider: Option<&str>,
 ) -> Result<(), String> {
+    account_tool_allows(program, args)?;
     let initial_auth = match auth_watch_provider {
         Some(provider) => Some(login_status(provider).await),
         None => None,
@@ -631,13 +655,18 @@ pub async fn connector_install(app: AppHandle, id: String) -> Result<(), String>
     let (program, args): (PathBuf, Vec<String>) = match id.as_str() {
         "codex" => node_tool("@openai/codex")?,
         "opencode" => node_tool("@opencode/cli")?,
-        "codex-auth" => node_tool("@loongphy/codex-auth")?,
+        // Pinned to the version that was read through (see `pins` in endpoints.json): a newer one is looked at before it is used.
+        "codex-auth" => node_tool(&format!("@loongphy/codex-auth@{}", ENDPOINTS.pins.codex_auth))?,
         "cswap" => {
             let uv = which("uv")
                 .ok_or("`uv` is needed for claude-swap: install it from docs.astral.sh/uv first")?;
             (
                 uv,
-                vec!["tool".into(), "install".into(), "claude-swap".into()],
+                vec![
+                    "tool".into(),
+                    "install".into(),
+                    format!("claude-swap=={}", ENDPOINTS.pins.claude_swap),
+                ],
             )
         }
         "claude" => {
@@ -2513,6 +2542,24 @@ pub async fn local_scan() -> Vec<LocalServer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_account_tools_run_only_the_commands_agentdeck_needs() {
+        let tool = |name: &str| PathBuf::from(format!("C:/bin/{name}.cmd"));
+        for command in ["list", "switch", "remove", "login"] {
+            assert!(account_tool_allows(&tool("codex-auth"), &[command]).is_ok());
+        }
+        // The command that downloads a third-party Codex build, and anything that is not a command at all.
+        assert!(account_tool_allows(&tool("codex-auth"), &["app"]).is_err());
+        assert!(account_tool_allows(&tool("codex-auth"), &["--help"]).is_err());
+        assert!(account_tool_allows(&tool("codex-auth"), &[]).is_err());
+        assert!(account_tool_allows(&tool("cswap"), &["list", "--json"]).is_ok());
+        assert!(account_tool_allows(&tool("cswap"), &["upgrade"]).is_err());
+        assert!(account_tool_allows(&tool("cswap"), &["remove"]).is_err());
+        // Other programs are not this guard's business.
+        assert!(account_tool_allows(&tool("claude"), &["auth", "login"]).is_ok());
+    }
+
 
     #[test]
     fn codex_registry_gives_accounts_and_windows() {

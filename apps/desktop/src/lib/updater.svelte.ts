@@ -46,6 +46,7 @@ export function useFakeUpdate() {
   updater.status = 'available';
 }
 import { inTauri } from './history';
+import { toast } from './toast';
 
 /** Look for an update. `quiet` keeps a failed check silent (the background checks). Returns true if one is waiting. */
 export async function checkForUpdate(quiet = false): Promise<boolean> {
@@ -72,6 +73,33 @@ export async function checkForUpdate(quiet = false): Promise<boolean> {
     updater.error = none ? 'none' : String(error);
     return false;
   }
+}
+
+/** The update dialog (it lives in the sidebar) and whether a check the user asked for is running. */
+export const updateUi = $state({ open: false, spinning: false });
+
+/**
+ * The check the user asks for (the button next to Settings, the About page): the icon turns for at least a moment so a
+ * quick answer is still seen; an update opens its dialog, no update says so in a toast. `done` runs once it is answered
+ * (the sidebar's drawer goes away then). A dialog already waiting opens at once.
+ */
+export async function runUpdateCheck(done?: () => void) {
+  if (updateUi.spinning) return;
+  if (updater.status !== 'idle' && updater.status !== 'error') {
+    updateUi.open = true;
+    return;
+  }
+  updateUi.spinning = true;
+  const [found] = await Promise.all([checkForUpdate(), new Promise((resolve) => setTimeout(resolve, 900))]);
+  updateUi.spinning = false;
+  if (found) {
+    updateUi.open = true;
+    return;
+  }
+  done?.();
+  if (updater.status === 'error') toast.error(`Could not check for updates: ${updater.error}`);
+  else if (updater.error === 'none') toast.info('No update has been published yet');
+  else toast.success(`AgentDeck is up to date${appInfo.version ? ` (v${appInfo.version})` : ''}`);
 }
 
 /** Download and install the waiting update, then restart into it. */
