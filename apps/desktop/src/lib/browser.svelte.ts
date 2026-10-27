@@ -170,11 +170,8 @@ export async function listenToPage() {
     if (payload.event === 'started') {
       if (!isErrorUrl(payload.url)) tab.url = payload.url;
       if (tab.id === browser.activeId) {
-        // A new page takes the marks with it: leave the mode.
-        regionSelectionResolve?.(null);
-        regionSelectionResolve = null;
-        browser.annotating = false;
-        browser.annotateCount = 0;
+        // A new page takes the marks and the picker with it: leave both modes.
+        dropPageModes();
         browser.console = [];
         browser.network = [];
       }
@@ -243,8 +240,10 @@ export function selectTab(id: string) {
   if (!browser.tabs.some((tab) => tab.id === id)) return;
   // An error belongs to the page it came from.
   if (id !== browser.activeId) browser.error = '';
-  // The marks belong to the page they were drawn on: leaving it ends the mode there.
+  // The marks and the picker belong to the page they are on: leaving it ends them there (before the switch, so the
+  // old page is the one told).
   if (browser.annotating && id !== browser.activeId) void stopAnnotating();
+  if (browser.picking && id !== browser.activeId) void cancelPick();
   browser.activeId = id;
 }
 
@@ -407,6 +406,7 @@ export const stop = () => run('window.stop()');
 
 /** The pages are created again with the new device's user agent (it cannot change on a live page), at the same address. */
 export async function recreateBrowser() {
+  dropPageModes();
   for (const tab of browser.tabs) {
     // Marked closed first: a placement running meanwhile must not reach a page that is going away.
     const was = tab.opened;
@@ -474,15 +474,40 @@ export async function selectCaptureRegion(): Promise<{ box: Rect; viewport: { w:
   }
 }
 
+/** Ends the pick that is waiting, here in the app, whether or not its page can still answer. */
+let abortPick: (() => void) | null = null;
+
 /** Lets the user click an element in the live page; resolves with it (and where it is), or null when cancelled. */
 export async function pickElement(): Promise<{ element: PickedElement; url: string; title: string } | null> {
   browser.picking = true;
+  // The page may go away mid-pick (another device recreates it, a reload, another tab): the pick then ends from here,
+  // instead of waiting minutes for an answer that cannot come.
+  const aborted = new Promise<null>((resolve) => (abortPick = () => resolve(null)));
   try {
-    const report = await ask<Report & { element: PickedElement | null; url?: string; title?: string }>('pick', null, 300000);
-    return report.element ? { element: report.element, url: report.url ?? '', title: report.title ?? '' } : null;
+    const report = await Promise.race([ask<Report & { element: PickedElement | null; url?: string; title?: string }>('pick', null, 300000), aborted]);
+    return report?.element ? { element: report.element, url: report.url ?? '', title: report.title ?? '' } : null;
   } finally {
+    abortPick = null;
     browser.picking = false;
   }
+}
+
+/** Ends inspecting: the wait in the app at once, then the page's own picker if the page is still there. */
+export async function cancelPick() {
+  abortPick?.();
+  await run("window.__agentdeck && window.__agentdeck.run('', 'unpick')").catch(() => {});
+}
+
+/** The page is gone or replaced: the pick and the marks went with it, so both modes end here without asking it. */
+function dropPageModes() {
+  abortPick?.();
+  regionSelectionResolve?.(null);
+  regionSelectionResolve = null;
+  browser.annotating = false;
+  browser.annotateCount = 0;
+  browser.annotateUndo = false;
+  browser.annotateRedo = false;
+  browser.annotateSelected = false;
 }
 /** Starts marking up the live page with a tool, or switches the tool. */
 export async function annotate(tool: AnnotateTool) {
@@ -512,7 +537,6 @@ export async function stopAnnotating() {
   await ask('ann', { clear: true }).catch(() => {});
 }
 
-export const cancelPick = () => run("window.__agentdeck && window.__agentdeck.run('', 'unpick')");
 
 /** Pins a note to an element. */
 export function addComment(element: Pick<PickedElement, 'selector' | 'html' | 'box'>, note: string) {

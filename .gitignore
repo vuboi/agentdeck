@@ -20,3 +20,5 @@
 
 # images and checks the app generates for the user
 /.agentdeck/
+!apps/desktop/.env.development
+!apps/desktop/.env.production

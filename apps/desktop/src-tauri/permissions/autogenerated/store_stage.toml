@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-stage"
+description = "Enables the store_stage command without any pre-configured scope."
+commands.allow = ["store_stage"]
+
+[[permission]]
+identifier = "deny-store-stage"
+description = "Denies the store_stage command without any pre-configured scope."
+commands.deny = ["store_stage"]

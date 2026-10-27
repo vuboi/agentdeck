@@ -7,7 +7,7 @@
   import type { Message } from '../mock';
 
   // Under each answer: copy, fork, how long it took, and how long ago it was (hover for the date).
-  let { message, onfork, onedit, oncopyall, end = false }: { message: Message; onfork: () => void; onedit?: () => void; /** Your message with attachments: copies text, pictures, notes and files together. */ oncopyall?: () => void; end?: boolean } = $props();
+  let { message, onfork, onedit, oncopyall, end = false }: { message: Message; onfork: () => void; onedit?: () => void; /** Your message with attachments: Copy takes text, pictures, notes and files together. */ oncopyall?: () => void | Promise<void>; end?: boolean } = $props();
 
   // The buttons show only while the row is hovered or focused, and each one costs a tooltip and an icon to mount: a
   // row scrolled into view gets an empty line of the same height, and the buttons the first time it is pointed at.
@@ -31,13 +31,18 @@
     };
   }
 
+  // One Copy for every message: a message with attachments copies them too, so pasting it in the message box brings
+  // back the pictures, notes and files, not only the words.
   let copied = $state(false);
   async function copy() {
     try {
-      await navigator.clipboard.writeText(answerText(message.blocks));
+      if (oncopyall) await oncopyall();
+      else {
+        await navigator.clipboard.writeText(answerText(message.blocks));
+        toast.success('Copied');
+      }
       copied = true;
       setTimeout(() => (copied = false), 1500);
-      toast.success('Copied');
     } catch {
       toast.error('Could not copy');
     }
@@ -46,14 +51,9 @@
 
 <div class="mt-2.5 flex h-5 items-center {end ? 'flex-row-reverse' : '-ml-1'} gap-1 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 focus-within:opacity-100" {@attach arm}>
   {#if armed}
-  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Copy answer" onclick={copy} {@attach zTooltip({ content: copied ? 'Copied' : 'Copy', position: 'top' })}>
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label={oncopyall ? 'Copy with attachments' : 'Copy answer'} onclick={copy} {@attach zTooltip({ content: copied ? 'Copied' : oncopyall ? 'Copy with attachments' : 'Copy', position: 'top' })}>
     <ZIcon zType={copied ? 'lucideCheck' : 'lucideCopy'} zSize="14" class="size-[14px]!" />
   </ZButton>
-  {#if oncopyall}
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Copy all with attachments" onclick={oncopyall} {@attach zTooltip({ content: 'Copy all (with attachments)', position: 'top' })}>
-      <ZIcon zType={'lucideCopyPlus' as ZIconName} zSize="14" class="size-[14px]!" />
-    </ZButton>
-  {/if}
   <ZButton zWave={false} zType="ghost" zSize="sm" class="size-5! p-0 !bg-transparent !shadow-none !ring-0 !outline-none hover:!bg-transparent hover:!text-primary focus-visible:!text-primary" aria-label="Fork chat from here" onclick={onfork} {@attach zTooltip({ content: 'Fork chat', position: 'top' })}>
     <ZIcon zType="lucideGitBranchPlus" zSize="14" class="size-[14px]!" />
   </ZButton>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ZIcon, ZLoading, ZPopover, ZShowMore } from '@shival99/z-ui-svelte';
   import ElementCard from './ElementCard.svelte';
+  import { TRIGGER_ON } from '../popover';
   import { LOADER, loaderFor } from '../loaders';
   import type { Block } from '../mock';
   import Markdown from './Markdown.svelte';
@@ -95,7 +96,7 @@
   {#if block.state !== 'pending'}<PermissionCard {block} {agent} {onanswer} />{/if}
 {:else if block.kind === 'element'}
   <!-- Click for what was sent with the message, in a card (the native tooltip ran off the window with the long selector). -->
-  <button type="button" bind:this={chip} class="block-in inline-flex max-w-full cursor-pointer items-center gap-1.5 self-start rounded-md border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground outline-none hover:bg-muted {cardOpen ? 'bg-muted' : ''}" aria-label="Details of {block.selector}" aria-expanded={cardOpen} onclick={() => (cardOpen = !cardOpen)}>
+  <button type="button" bind:this={chip} class="block-in inline-flex max-w-full cursor-pointer items-center gap-1.5 self-start rounded-md border px-2 py-1 font-mono text-[11px] outline-none {cardOpen ? `${TRIGGER_ON} border-primary/60 ring-1 ring-primary/60` : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted'}" aria-label="Details of {block.selector}" aria-expanded={cardOpen} onclick={() => (cardOpen = !cardOpen)}>
     <ZIcon zType="lucideMousePointerClick" class="size-3 shrink-0 text-primary" />
     {#if block.picture}<img src={block.picture} alt="" class="size-5 shrink-0 rounded-sm border border-border object-cover" />{/if}
     <span class="truncate">&lt;{block.tag} /&gt; {block.text}</span>

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-skill-assign"
+description = "Enables the store_skill_assign command without any pre-configured scope."
+commands.allow = ["store_skill_assign"]
+
+[[permission]]
+identifier = "deny-store-skill-assign"
+description = "Denies the store_skill_assign command without any pre-configured scope."
+commands.deny = ["store_skill_assign"]

@@ -245,6 +245,90 @@ fn cut(text: &str) -> String {
     }
 }
 
+/// Past this many cells the exact comparison is skipped: the middle part is then counted as all changed.
+const LCS_CELLS_MAX: usize = 25_000_000;
+
+/// The lines a file change adds and removes, counted the way a diff counts them: a line that stays is neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineDiff {
+    pub added: usize,
+    pub removed: usize,
+    /// The changed middle of the old text, cut like the other diff texts.
+    pub before: String,
+    /// The changed middle of the new text.
+    pub after: String,
+}
+
+/// Length of the longest common run of lines (the lines a diff keeps).
+fn kept_lines(old: &[&str], new: &[&str]) -> usize {
+    if old.is_empty() || new.is_empty() || old.len().saturating_mul(new.len()) > LCS_CELLS_MAX {
+        return 0;
+    }
+    let mut previous = vec![0usize; new.len() + 1];
+    let mut current = vec![0usize; new.len() + 1];
+    for line in old {
+        for (index, other) in new.iter().enumerate() {
+            current[index + 1] = if line == other {
+                previous[index] + 1
+            } else {
+                previous[index + 1].max(current[index])
+            };
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[new.len()]
+}
+
+/// Compares the whole text before and after a change. Only the lines between the first and last difference are
+/// compared, so a one-line edit in a long file counts as one line, not as the whole file.
+pub fn line_diff(before: &str, after: &str) -> LineDiff {
+    let old: Vec<&str> = before.lines().collect();
+    let new: Vec<&str> = after.lines().collect();
+    let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let old_middle = &old[prefix..old.len() - suffix];
+    let new_middle = &new[prefix..new.len() - suffix];
+    let kept = kept_lines(old_middle, new_middle);
+    LineDiff {
+        added: new_middle.len() - kept,
+        removed: old_middle.len() - kept,
+        before: cut(&old_middle.join("\n")),
+        after: cut(&new_middle.join("\n")),
+    }
+}
+
+#[cfg(test)]
+mod line_diff_tests {
+    use super::line_diff;
+
+    #[test]
+    fn a_one_line_edit_in_a_long_file_counts_one_line() {
+        let before: String = (0..400).map(|n| format!("line {n}\n")).collect();
+        let after = before.replace("line 200\n", "changed\n");
+        let diff = line_diff(&before, &after);
+        assert_eq!((diff.added, diff.removed), (1, 1));
+        assert_eq!(diff.before, "line 200");
+        assert_eq!(diff.after, "changed");
+    }
+
+    #[test]
+    fn scattered_edits_count_only_the_changed_lines() {
+        let diff = line_diff("a\nb\nc\nd\ne\n", "a\nB\nc\nD\ne\n");
+        assert_eq!((diff.added, diff.removed), (2, 2));
+    }
+
+    #[test]
+    fn a_new_file_counts_every_line_as_added() {
+        let diff = line_diff("", "x\ny\n");
+        assert_eq!((diff.added, diff.removed), (2, 0));
+    }
+}
+
 /// The first picture in a tool result's content, as a `data:` URL. Claude nests it under `source`; an MCP
 /// result (Codex) has `data` and `mimeType` on the part itself.
 pub fn result_image(content: &serde_json::Value) -> Option<String> {

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-installed"
+description = "Enables the store_installed command without any pre-configured scope."
+commands.allow = ["store_installed"]
+
+[[permission]]
+identifier = "deny-store-installed"
+description = "Denies the store_installed command without any pre-configured scope."
+commands.deny = ["store_installed"]

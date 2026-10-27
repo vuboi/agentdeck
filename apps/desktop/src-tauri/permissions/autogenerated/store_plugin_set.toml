@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-plugin-set"
+description = "Enables the store_plugin_set command without any pre-configured scope."
+commands.allow = ["store_plugin_set"]
+
+[[permission]]
+identifier = "deny-store-plugin-set"
+description = "Denies the store_plugin_set command without any pre-configured scope."
+commands.deny = ["store_plugin_set"]

@@ -114,7 +114,7 @@ fn commands_in(
 }
 
 /// The skills of a folder: every sub-folder that holds a `SKILL.md`.
-fn skills_in(dir: &Path, origin: &str, prefix: &str, out: &mut Vec<ProviderCommand>) {
+pub(crate) fn skills_in(dir: &Path, origin: &str, prefix: &str, out: &mut Vec<ProviderCommand>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

@@ -6,6 +6,7 @@
   import FileViewer from './FileViewer.svelte';
   import TasksView from './TasksView.svelte';
   import McpView from './McpView.svelte';
+  import StoreView from './StoreView.svelte';
   import WorkflowView from './WorkflowView.svelte';
   import UsageView from './UsageView.svelte';
   import ImageGenerator from './ImageGenerator.svelte';
@@ -29,6 +30,8 @@
   <DevTools embedded />
 {:else if tool === 'MCP'}
   <McpView />
+{:else if tool === 'Store'}
+  <StoreView />
 {:else if tool === 'Usage'}
   <UsageView />
 {:else}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-scan-path"
+description = "Enables the store_scan_path command without any pre-configured scope."
+commands.allow = ["store_scan_path"]
+
+[[permission]]
+identifier = "deny-store-scan-path"
+description = "Denies the store_scan_path command without any pre-configured scope."
+commands.deny = ["store_scan_path"]

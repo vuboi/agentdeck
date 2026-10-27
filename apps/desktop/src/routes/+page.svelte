@@ -193,7 +193,7 @@
       <Splitter axis="x" label="Resize left zone" onDelta={grow('left', 1, MIN.left, maxW)} />
     {/if}
 
-    <div class="flex h-full min-w-0 flex-1 flex-col">
+    <div class="flex h-full min-w-[400px] flex-1 flex-col">
       {#if showZones && shows('top')}
         <div transition:slide={{ duration: 240 }} class="flex flex-col {SIDE} w-full [&>*]:w-full [&>*]:min-h-0 [&>*]:flex-1" style:height="{layout.sizes.top}px">
           <DockZone zone="top" />

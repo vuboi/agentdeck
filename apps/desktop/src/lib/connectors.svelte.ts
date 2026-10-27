@@ -1,6 +1,7 @@
 import { inTauri } from './history';
 import { getPref, setPref } from './prefs';
 import { toast } from './toast';
+import { accountSwitched } from './account-epoch.svelte';
 import { requestSystemNotificationPermission, sendSystemNotification } from './system-notifications';
 
 // Settings → Connectors. State and actions for: the agent CLIs (installed? signed in?), the accounts each one can
@@ -230,6 +231,7 @@ export async function retrySaveAgyAccount(): Promise<boolean> {
 export async function switchAgyAccount(account: AgyAccount): Promise<boolean> {
   const ok = await task('switch:agy', `Switching to ${account.email}`, () => call('antigravity_account_switch', { id: account.id }));
   if (ok) {
+    accountSwitched('antigravity');
     toast.success(`Now using ${account.email}`);
     await Promise.all([refreshAgyAccounts(), refreshDetect(), refreshAgyQuota()]);
   }
@@ -323,6 +325,7 @@ export async function cancelAccountAdd(provider: AccountProvider): Promise<void>
 export async function switchAccount(provider: AccountProvider, account: Account): Promise<boolean> {
   const ok = await task(`switch:${provider}`, `Switching to ${account.email}`, () => call('account_switch', { provider, id: account.id }));
   if (ok) {
+    accountSwitched(provider);
     toast.success(`Now using ${account.email}`);
     await refreshAll();
   }

@@ -78,15 +78,43 @@ export function plainOf(clip: MessageClip): string {
   return lines.filter(Boolean).join('\n');
 }
 
-/** Puts the clip on the clipboard: plain text (what any other app gets) plus an HTML carrier the message box understands. */
+/** The first picture as PNG, the one image type the clipboard takes; null when there is none or it cannot be read. */
+async function firstPicturePng(images: Attachment[]): Promise<Blob | null> {
+  const first = images[0];
+  if (!first) return null;
+  try {
+    const blob = await (await fetch(first.src)).blob();
+    if (blob.type === 'image/png') return blob;
+    const bitmap = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return await canvas.convertToBlob({ type: 'image/png' });
+  } catch {
+    return null;
+  }
+}
+
+/** Puts the clip on the clipboard: plain text (what any other app gets), an HTML carrier the message box understands
+ *  (all pictures, notes and files come back from it), and the first picture, so another app can paste it as an image. */
 export async function copyMessage(clip: MessageClip): Promise<void> {
   const plain = plainOf(clip);
   last = { plain, clip };
   const carrier = `<div ${MARK}="${toBase64(JSON.stringify(clip))}"></div>${plain.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[char]!).replace(/\n/g, '<br>')}`;
+  const picture = await firstPicturePng(clip.images);
+  const parts: Record<string, Blob> = {
+    'text/plain': new Blob([plain], { type: 'text/plain' }),
+    'text/html': new Blob([carrier], { type: 'text/html' }),
+  };
   try {
-    await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([plain], { type: 'text/plain' }), 'text/html': new Blob([carrier], { type: 'text/html' }) })]);
+    await navigator.clipboard.write([new ClipboardItem(picture ? { ...parts, 'image/png': picture } : parts)]);
   } catch {
-    await navigator.clipboard.writeText(plain);
+    try {
+      // Some clipboards refuse an image beside text: the text and the carrier still go.
+      await navigator.clipboard.write([new ClipboardItem(parts)]);
+    } catch {
+      await navigator.clipboard.writeText(plain);
+    }
   }
 }
 

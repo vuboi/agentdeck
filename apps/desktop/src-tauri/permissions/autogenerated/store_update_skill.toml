@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-update-skill"
+description = "Enables the store_update_skill command without any pre-configured scope."
+commands.allow = ["store_update_skill"]
+
+[[permission]]
+identifier = "deny-store-update-skill"
+description = "Denies the store_update_skill command without any pre-configured scope."
+commands.deny = ["store_update_skill"]

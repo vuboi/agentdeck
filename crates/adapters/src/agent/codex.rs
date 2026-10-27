@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use super::{cut, line_count, AgentEvent, FileChange, Provider, TurnRequest};
+use super::{line_diff, AgentEvent, FileChange, Provider, TurnRequest};
 
 /// Added to Codex's instructions on every turn (the same facts Claude is given).
 const APP_CONTEXT: &str = "You are running inside AgentDeck, a desktop app with its own built-in browser (the Preview panel). To show a local dev server, inspect the workspace scripts (package.json, .claude/launch.json), identify the requested framework, then start it with the browser_serve tool (the command, the absolute project folder, the address it answers at): AgentDeck runs the server itself, so it keeps running after your turn, and opens the page in Preview. Never run a dev server in your own shell: it dies when your command or turn ends and Preview is left on a refused connection. If browser_serve reports a failed start, read the log it returns, fix the cause (config, missing install, port) and call it again; do not stop at the first error. If the page is already served, browser_open opens it. Both open the page in the current Preview tab. Pass new_tab: true to open it in a tab of its own instead, so the current tab stays as it is: when another chat is driving the current tab, when you compare or debug two pages side by side, or when you look something up. Then keep going in this same turn: screenshot, act on the page, screenshot again. Name the script you used in your reply. In the z-ui workspace, use `pnpm start:svelte` for the Svelte 5 app (default http://localhost:4301) and `pnpm start:angular` for the Angular app (default http://localhost:4200); never use the Angular 4200 server when the user asks for Svelte, Svelte 5, or z-ui-svelte. When the user asks you to inspect or interact with that page, you MUST use the AgentDeck MCP tools on the Preview page: call browser_screenshot first, then browser_click/browser_fill/browser_key/browser_scroll as needed (browser_fill for form fields; browser_type only when the page reacts to each keystroke), and call browser_screenshot or browser_dom again to verify the result. Do not use an external Chrome tab, do not merely navigate to or mention the URL, and do not claim an interaction happened without a matching MCP result. You can also use browser_eval, browser_console, and browser_network for inspection. Never tell the user you cannot test in Preview. A code index of the project is built in. To find your way, prefer the agentdeck tools code_search (a symbol by name), code_outline (the structure of a file), code_definition (a symbol with its source), code_references (where a name is used), code_imports and code_importers (what breaks if you change a file) over reading files or grepping the whole tree, then Read only what matters. Before you use a library API, check the version the project has (package.json, Cargo.toml) and look up the current documentation when you are not sure it exists in that version.";
@@ -355,16 +355,17 @@ impl Provider for Codex {
                         _ => "Edit",
                     };
                     let (before, after) = snapshot(cwd.as_deref(), &path);
+                    let diff = line_diff(&before, &after);
                     events.push(AgentEvent::ToolCall {
                         id: call.clone(),
                         name: name.into(),
                         input: path.clone(),
                         change: Some(FileChange {
                             path,
-                            added: line_count(&after),
-                            removed: line_count(&before),
-                            before: cut(&before),
-                            after: cut(&after),
+                            added: diff.added,
+                            removed: diff.removed,
+                            before: diff.before,
+                            after: diff.after,
                         }),
                         background: false,
                     });
@@ -599,7 +600,7 @@ mod tests {
         assert!(
             matches!(&events[0], AgentEvent::ToolCall { name, change: Some(change), .. }
             if name == "Write" && change.path == "new.txt" && change.added == 2
-                && change.before.is_empty() && change.after == "one\ntwo\n")
+                && change.before.is_empty() && change.after == "one\ntwo")
         );
         assert!(
             matches!(&events[2], AgentEvent::ToolCall { name, change: Some(change), .. }

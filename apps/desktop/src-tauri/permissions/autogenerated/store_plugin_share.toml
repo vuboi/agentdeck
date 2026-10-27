@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-plugin-share"
+description = "Enables the store_plugin_share command without any pre-configured scope."
+commands.allow = ["store_plugin_share"]
+
+[[permission]]
+identifier = "deny-store-plugin-share"
+description = "Denies the store_plugin_share command without any pre-configured scope."
+commands.deny = ["store_plugin_share"]

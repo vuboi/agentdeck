@@ -29,6 +29,7 @@ mod privacy;
 mod pty;
 mod servers;
 mod slash_commands;
+mod store;
 
 use ag_adapters::agent::antigravity::Antigravity;
 use ag_adapters::agent::opencode::OpenCode;
@@ -1993,6 +1994,27 @@ pub fn run() {
             mcp_manage::mcp_list,
             slash_commands::commands_list,
             slash_commands::command_read,
+            store::store_installed,
+            store::store_scan_path,
+            store::store_stage,
+            store::store_review,
+            store::store_install_staged,
+            store::store_discard_staged,
+            store::store_pick_folder,
+            store::store_catalog,
+            store::store_catalog_install,
+            store::store_sources_list,
+            store::store_source_add,
+            store::store_source_remove,
+            store::store_updates_check,
+            store::store_update_skill,
+            store::store_plugin_share,
+            store::store_mcp_login,
+            store::store_skill_import,
+            store::store_skill_assign,
+            store::store_skill_remove,
+            store::store_plugin_set,
+            store::store_plugin_uninstall,
             mcp_manage::mcp_test,
             mcp_manage::mcp_add,
             mcp_manage::mcp_remove,

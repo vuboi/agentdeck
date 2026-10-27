@@ -86,6 +86,7 @@ import { classifyFailure, continuePrompt, planRecovery, recoveryNote, type Failu
 import { parseResetAt } from './limit-reset';
 import { requestSystemNotificationPermission, sendSystemNotification } from './system-notifications';
 import { dequeue, enqueue } from './queue';
+import { accountEpoch } from './account-epoch.svelte';
 import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from './handback';
 import { joinContinuations } from './continuations';
 import {
@@ -137,13 +138,15 @@ export type SessionItem = {
   agentSession?: string;
   /** The CLI already has this conversation (first turn sent): later turns resume it. */
   agentStarted?: boolean;
+  /** How many times this agent's account had been switched when the conversation began (see account-epoch.svelte.ts). */
+  agentEpoch?: number;
   /** Model used by the current CLI conversation; changing it starts a fresh conversation. */
   conversationModel?: string;
   /** Model used by each additional agent conversation in a mixed chat. */
   agentModels?: Partial<Record<Agent, string>>;
   /** Per agent: its own conversation id and whether it has one yet. `agentSession` / `agentStarted` belong to
    *  the chat's first agent; an agent the chat moved to later keeps its ids here. */
-  agentIds?: Partial<Record<Agent, { id: string; started: boolean }>>;
+  agentIds?: Partial<Record<Agent, { id: string; started: boolean; epoch?: number }>>;
 };
 
 /**
@@ -1181,29 +1184,49 @@ function startTurn(
       cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
       session.agentStarted = false;
     }
+    // A conversation begun under another account starts a new session: resuming the old one stalls. What was said
+    // so far goes with the first message, so the agent does not lose the work in progress.
+    const epoch = accountEpoch[session.agent] ?? 0;
+    const accountChanged = session.agentEpoch !== undefined && session.agentEpoch !== epoch;
+    if (accountChanged) {
+      cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
+      session.agentStarted = false;
+      session.agentSession = undefined;
+      session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id));
+    }
+    session.agentEpoch = epoch;
     if (cliId) session.agentSession = cliId;
     resume =
       cliId !== null &&
       !modelChanged &&
+      !accountChanged &&
       (session.agentStarted ?? !!session.path);
     session.conversationModel = selectedModel ?? undefined;
   } else {
-    // Another agent in this chat: its own conversation, started the first time it is used here.
-    const own = session.agentIds?.[session.agent];
-    cliId =
-      own?.id ?? (session.agent === 'claude' ? crypto.randomUUID() : null);
-    if (cliId && !own)
-      (session.agentIds ??= {})[session.agent] = {
-        id: cliId,
-        started: false,
-      };
+    // Another agent in this chat: its own conversation, started the first time it is used here. The entry is made on
+    // that first turn even before the agent has an id (Codex names its thread later), so the account it began under
+    // is known from the start.
+    const epoch = accountEpoch[session.agent] ?? 0;
+    const known = session.agentIds?.[session.agent];
+    const own = known ?? ((session.agentIds ??= {})[session.agent] = { id: '', started: false, epoch });
+    cliId = own.id || (session.agent === 'claude' ? crypto.randomUUID() : null);
+    if (cliId && !own.id) own.id = cliId;
     const modelChanged = Boolean(
       session.agentModels?.[session.agent] &&
       session.agentModels[session.agent] !== selectedModel,
     );
     if (modelChanged)
       cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
-    resume = cliId !== null && !modelChanged && Boolean(own?.started);
+    // The same account rule as the chat's first agent: a new session, with the conversation so far.
+    const accountChanged = own.epoch !== undefined && own.epoch !== epoch;
+    if (accountChanged) {
+      cliId = session.agent === 'claude' ? crypto.randomUUID() : null;
+      own.started = false;
+      if (cliId) own.id = cliId;
+      session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id));
+    }
+    own.epoch = epoch;
+    resume = cliId !== null && !modelChanged && !accountChanged && own.started;
     (session.agentModels ??= {})[session.agent] = selectedModel ?? '';
   }
   // A turn still marked live is replaced by this one: its events are ignored from now on (see `turns`), so it would
@@ -1521,6 +1544,21 @@ export function needsUserInput(sessionId: string): boolean {
   return false;
 }
 
+/** Codex cannot take a second turn beside its reply, so everything waiting goes out together as one message. */
+function takeAllQueued(sessionId: string): Queued | undefined {
+  const waiting = queued[sessionId];
+  if (!waiting?.length) return undefined;
+  delete queued[sessionId];
+  if (waiting.length === 1) return waiting[0];
+  return {
+    text: waiting.map((item) => item.text.trim()).filter(Boolean).join('\n\n'),
+    images: waiting.flatMap((item) => item.images),
+    elements: waiting.flatMap((item) => item.elements),
+    mentions: waiting.flatMap((item) => item.mentions ?? []),
+    files: waiting.flatMap((item) => item.files ?? []),
+  };
+}
+
 /** Dispatches one queued message only after the active turn and all user decisions are complete. */
 function sendNextQueued(sessionId: string) {
   if (hasOutstandingSessionWork(sessionId)) return;
@@ -1529,7 +1567,8 @@ function sendNextQueued(sessionId: string) {
   // remove it from the queue, then `send` would reject it because the priority turn is now running.
   setTimeout(() => {
     if (hasOutstandingSessionWork(sessionId)) return;
-    const next = dequeue(queued, sessionId);
+    const agent = workspace.sessions.find((entry) => entry.id === sessionId)?.agent;
+    const next = agent === 'codex' ? takeAllQueued(sessionId) : dequeue(queued, sessionId);
     if (next) {
       send(sessionId, next.text, next.images, next.elements, next.mentions, {
         files: next.files,
@@ -1859,7 +1898,8 @@ export function handleAgentEvent(
     (update.agentSession || session.agentIds?.[agent])
   ) {
     const id = update.agentSession ?? session.agentIds?.[agent]?.id;
-    if (id) (session.agentIds ??= {})[agent] = { id, started: true };
+    // The rest of the entry (the account epoch) stays: only the id and its start change here.
+    if (id) (session.agentIds ??= {})[agent] = { ...session.agentIds?.[agent], id, started: true };
   }
   // A failed turn that can be carried on (retry, another account, the next agent) does not end the work: the chat
   // gets a line saying what happens, and the steps below that close the work (failure, reports) are skipped.
@@ -3988,13 +4028,15 @@ function filesInUse(sessionId: string): string[] {
   return [...new Set(files.filter(Boolean))].slice(0, 20);
 }
 
-/** Whether a message can be answered beside the busy turn now (else it waits in the queue). */
+/** Whether a message can be answered beside the busy turn now (else it waits in the queue). Codex never does it:
+ * a side answer would land in the middle of its reply, so its messages wait and go out together after it. */
 export function canRunBeside(sessionId: string, item: Pick<Queued, 'images' | 'mentions'>): boolean {
   const session = workspace.sessions.find((entry) => entry.id === sessionId);
   return (
     inTauri() &&
     !!session &&
     session.agent !== 'custom' &&
+    session.agent !== 'codex' &&
     Boolean(replies[sessionId]) &&
     !needsUserInput(sessionId) &&
     !presetOf(sessionId) &&
@@ -4479,8 +4521,18 @@ if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', () => persistLocal());
 }
 
+/** What an agent is told after an account switch: the conversation so far, without the message it is about to get.
+ *  The new session has no history of its own, so this is how the work in progress carries over. */
+function handoffDigest(list: Message[]): string {
+  const before = list.at(-1)?.role === 'user' ? list.slice(0, -1) : list;
+  return forkDigest(
+    before,
+    'The account was switched, so this is a new session of the same conversation. Continue the work in progress; do not redo what is already done.',
+  );
+}
+
 /** What a fork is told of the conversation it came from: the turns so far, newest kept when it is long. */
-function forkDigest(list: Message[]): string {
+function forkDigest(list: Message[], lead = 'This chat is a fork of an earlier conversation.'): string {
   const lines = list
     .filter((message) => !hiddenPrompt(message))
     .map((message) => {
@@ -4502,7 +4554,7 @@ function forkDigest(list: Message[]): string {
   if (!lines.length) return '';
   let digest = lines.join('\n\n');
   if (digest.length > 16000) digest = `…${digest.slice(-16000)}`;
-  return `This chat is a fork of an earlier conversation. What was said so far:\n\n${digest}\n\n---\nNow the user says:\n`;
+  return `${lead} What was said so far:\n\n${digest}\n\n---\nNow the user says:\n`;
 }
 
 /**

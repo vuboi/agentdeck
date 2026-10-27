@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-plugin-uninstall"
+description = "Enables the store_plugin_uninstall command without any pre-configured scope."
+commands.allow = ["store_plugin_uninstall"]
+
+[[permission]]
+identifier = "deny-store-plugin-uninstall"
+description = "Denies the store_plugin_uninstall command without any pre-configured scope."
+commands.deny = ["store_plugin_uninstall"]

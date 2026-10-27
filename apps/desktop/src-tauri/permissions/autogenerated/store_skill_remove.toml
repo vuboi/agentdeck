@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-skill-remove"
+description = "Enables the store_skill_remove command without any pre-configured scope."
+commands.allow = ["store_skill_remove"]
+
+[[permission]]
+identifier = "deny-store-skill-remove"
+description = "Denies the store_skill_remove command without any pre-configured scope."
+commands.deny = ["store_skill_remove"]

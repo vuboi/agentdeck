@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-discard-staged"
+description = "Enables the store_discard_staged command without any pre-configured scope."
+commands.allow = ["store_discard_staged"]
+
+[[permission]]
+identifier = "deny-store-discard-staged"
+description = "Denies the store_discard_staged command without any pre-configured scope."
+commands.deny = ["store_discard_staged"]

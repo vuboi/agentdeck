@@ -1,8 +1,33 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { codeToTokens, type ThemedToken } from 'shiki';
+  import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
   import { type DiffRow } from '../diff';
+  import { activeSession, drafts } from '../sessions.svelte';
   import { theme } from '../theme.svelte';
+  import { toast } from '../toast';
+  import Menu from './Menu.svelte';
+
+  // Right-click: copy the selected lines or the whole change, or put them in the message box as a code block.
+  let menu = $state<{ x: number; y: number } | null>(null);
+  let menuOpen = $state(false);
+  let picked = '';
+  const signOf = { add: '+', del: '-', ctx: ' ', hunk: '' } as const;
+  const asText = (list: DiffRow[]) => list.map((row) => (row.kind === 'hunk' ? row.text : `${signOf[row.kind]}${row.text}`)).join('\n');
+  const copy = (text: string) => void navigator.clipboard.writeText(text).then(() => toast.success('Copied'));
+  function addToChat(text: string, title: string) {
+    const session = activeSession();
+    if (!session) return toast.error('Open a chat first');
+    const block = `${title}\n\`\`\`diff\n${text}\n\`\`\``;
+    drafts[session.id] = [drafts[session.id]?.trimEnd(), block].filter(Boolean).join('\n\n');
+    toast.success('Added to chat');
+  }
+  const items = $derived<ZDropdownMenuItem[]>([
+    { label: 'Copy selection', icon: 'lucideCopy', iconSize: 12, class: 'text-xs! py-1', onClick: () => copy(picked || asText(rows)) },
+    { label: 'Copy all changes', icon: 'lucideCopy', iconSize: 12, class: 'text-xs! py-1', onClick: () => copy(asText(rows)) },
+    { label: 'Add selection to chat', icon: 'lucideMessageSquarePlus', iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => addToChat(picked || asText(rows), 'Selected changes:') },
+    { label: 'Add all changes to chat', icon: 'lucideMessageSquarePlus', iconSize: 12, class: 'text-xs! py-1', onClick: () => addToChat(asText(rows), 'Changes:') },
+  ]);
 
   // The change of one file, line by line: removed lines in red, added lines in green, a hunk heading between the
   // groups, and the line numbers of the old and the new file. Only the rows on screen are drawn, and the code is
@@ -75,7 +100,7 @@
   });
 </script>
 
-<div bind:this={scroller} bind:clientHeight={viewHeight} onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)} class="h-full min-h-0 overflow-auto bg-background font-mono text-xs leading-5" role="document" aria-label="Changes of the file">
+<div bind:this={scroller} bind:clientHeight={viewHeight} onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)} oncontextmenu={(event) => { event.preventDefault(); picked = window.getSelection()?.toString() ?? ''; menu = { x: event.clientX, y: event.clientY }; menuOpen = true; }} class="h-full min-h-0 select-text overflow-auto bg-background font-mono text-xs leading-5" role="document" aria-label="Changes of the file">
   <div class="w-max min-w-full" style:height="{rows.length * ROW}px" style:padding-top="{first * ROW}px" style:box-sizing="border-box">
     {#each slice as row, index (first + index)}
       {@const line = version >= 0 && row.kind !== 'hunk' ? tokens.get(first + index) : undefined}
@@ -100,3 +125,6 @@
     {/each}
   </div>
 </div>
+{#if menu}
+  <Menu {items} bind:open={menuOpen} at={menu} position="bottom-left" width={220} />
+{/if}

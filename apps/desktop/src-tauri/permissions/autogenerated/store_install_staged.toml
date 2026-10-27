@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-install-staged"
+description = "Enables the store_install_staged command without any pre-configured scope."
+commands.allow = ["store_install_staged"]
+
+[[permission]]
+identifier = "deny-store-install-staged"
+description = "Denies the store_install_staged command without any pre-configured scope."
+commands.deny = ["store_install_staged"]

@@ -1,0 +1,8 @@
+{
+  "identifier": "dev.agentdeck.desktop.dev",
+  "productName": "AgentDeck Dev",
+  "build": {
+    "devUrl": "http://127.0.0.1:1431",
+    "beforeDevCommand": "pnpm dev:web"
+  }
+}

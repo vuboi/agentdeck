@@ -18,6 +18,7 @@
   import { loadSlash, slash, type SlashItem } from '../slash.svelte';
   import { prepare, search } from '../palette';
   import ElementCard from './ElementCard.svelte';
+  import { TRIGGER_ON } from '../popover';
   import { agyBlocks, agyModes, loadAgyModes } from '../agy-modes.svelte';
   import {
     activeSession,
@@ -1084,8 +1085,9 @@
         <div class="group/chip relative" bind:this={chipAnchors[item.id]}>
           <button
             type="button"
-            class="flex h-8 max-w-60 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 font-mono text-[11px] text-muted-foreground outline-none hover:bg-muted"
+            class="flex h-8 max-w-60 cursor-pointer items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] outline-none {detail === item.id ? `${TRIGGER_ON} border-primary/60 ring-1 ring-primary/60` : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted'}"
             aria-label="Details of {item.selector}"
+            aria-expanded={detail === item.id}
             onclick={() => (detail = detail === item.id ? null : item.id)}
           >
             <ZIcon

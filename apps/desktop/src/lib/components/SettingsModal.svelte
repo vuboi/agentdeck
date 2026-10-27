@@ -870,7 +870,6 @@
                 <h3 class="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Cloud providers</h3>
                 <p class="mb-2 text-xs text-muted-foreground">Claude Console API credit, and official APIs with a free tier for small jobs (an email, a summary, a quick search). The key button opens the page where you create a key; then press + , paste it and Save. Free limits change often.</p>
                 <ul class="grid gap-2 sm:grid-cols-2">
-                  <ClaudeCreditCard />
                   {#each FREE_CLOUD as preset (preset.name)}
                     <li class="flex min-w-0 items-center gap-2.5 rounded-lg border border-border px-3 py-2 text-xs">
                       <img src={brandLogoFor(preset.base)} alt="" class="size-5 shrink-0 rounded-sm object-contain" />
@@ -890,6 +889,9 @@
                       {/if}
                     </li>
                   {/each}
+                </ul>
+                <ul class="mt-2 flex flex-col gap-2">
+                  <ClaudeCreditCard />
                 </ul>
               </section>
 

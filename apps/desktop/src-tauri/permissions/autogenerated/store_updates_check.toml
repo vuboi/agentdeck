@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-updates-check"
+description = "Enables the store_updates_check command without any pre-configured scope."
+commands.allow = ["store_updates_check"]
+
+[[permission]]
+identifier = "deny-store-updates-check"
+description = "Denies the store_updates_check command without any pre-configured scope."
+commands.deny = ["store_updates_check"]
