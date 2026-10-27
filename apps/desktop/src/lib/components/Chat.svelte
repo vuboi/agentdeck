@@ -734,7 +734,7 @@
 
   {#if tabMenu}
     {#key tabMenuKey}
-      <Menu items={tabContextItems} bind:open={tabMenuOpen} at={{ x: tabMenu.x, y: tabMenu.y }} position="bottom-left" width={220} />
+      <Menu items={tabContextItems} bind:open={tabMenuOpen} at={{ x: tabMenu.x, y: tabMenu.y }} position="bottom-left" width={260} />
     {/key}
   {/if}
 
