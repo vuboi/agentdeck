@@ -2540,8 +2540,20 @@ export type DelegateRun = {
 };
 const RUN_LIMIT = 100;
 export const delegateRuns = $state<DelegateRun[]>([]);
-// The browser mock has no flows to show: made-up finished runs fill the Workflow history (never in the desktop app).
-if (!inTauri()) delegateRuns.push(...demoRuns());
+/** Made-up runs (demo-runs.ts) are told by this start of their id: they are never saved with the real history. */
+const DEMO_RUN = 'demo-run-';
+/** Puts made-up finished runs in the Workflow history, to look at how the flows are judged. */
+export function loadDemoRuns() {
+  clearDemoRuns();
+  delegateRuns.push(...demoRuns());
+}
+/** Takes the made-up runs out again. */
+export function clearDemoRuns() {
+  for (let index = delegateRuns.length - 1; index >= 0; index--) if (delegateRuns[index].id.startsWith(DEMO_RUN)) delegateRuns.splice(index, 1);
+}
+export const hasDemoRuns = () => delegateRuns.some((run) => run.id.startsWith(DEMO_RUN));
+// The browser mock has no flows to show, so it starts with the made-up ones (the desktop app does not).
+if (!inTauri()) loadDemoRuns();
 
 // Finished runs are kept (IndexedDB), so the Workflow tab has a history to judge the flows by after a restart. What a
 // step was handed and answered is cut short: the numbers and the outcome are what the history is for.
@@ -2555,7 +2567,7 @@ void getPref<DelegateRun[]>(RUNS_KEY).then((saved) => {
 });
 $effect.root(() => {
   $effect(() => {
-    const ended = delegateRuns.filter((run) => run.endedAt);
+    const ended = delegateRuns.filter((run) => run.endedAt && !run.id.startsWith(DEMO_RUN));
     const snapshot = JSON.parse(JSON.stringify(ended)) as DelegateRun[];
     for (const run of snapshot)
       for (const node of run.nodes)

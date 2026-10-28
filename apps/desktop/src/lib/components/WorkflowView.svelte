@@ -6,7 +6,7 @@
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { modelLabel } from '../models.svelte';
-  import { AGENTS, delegateRuns, liveStats, workspace, type DelegateRun, type RunNode, type RunStats } from '../sessions.svelte';
+  import { AGENTS, clearDemoRuns, delegateRuns, hasDemoRuns, liveStats, loadDemoRuns, workspace, type DelegateRun, type RunNode, type RunStats } from '../sessions.svelte';
   import FlowCanvas from './flow/FlowCanvas.svelte';
   import ProjectSelect from './ProjectSelect.svelte';
   import FlowTemplates from './flow/FlowTemplates.svelte';
@@ -250,10 +250,20 @@
         A run appears here when several agents work together. Pick a flow for this chat (the Flow row in the model menu) and send a message, or type
         <code class="rounded bg-muted px-1 py-0.5 font-mono text-foreground">@</code> in any chat, choose an agent or provider and write the task.
       </p>
+      {#if import.meta.env.DEV}
+        <!-- Only in the dev build: made-up runs to look at the history with, never saved. -->
+        <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-3 text-xs" onclick={loadDemoRuns}>Load demo runs</ZButton>
+      {/if}
     </div>
   {:else}
     <div class="min-h-0 flex-1 overflow-y-auto p-1.5">
       <div class="flex flex-col gap-3">
+        {#if import.meta.env.DEV && hasDemoRuns()}
+          <div class="flex items-center gap-2 rounded-lg border border-dashed border-border px-2.5 py-1.5 text-[11px] text-muted-foreground">
+            Demo runs are loaded: made up, not saved.
+            <button type="button" class="ml-auto cursor-pointer rounded px-1.5 py-0.5 text-foreground outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring" onclick={clearDemoRuns}>Remove</button>
+          </div>
+        {/if}
         <FlowHistory runs={filtered} />
         {#each runs as run, index (run.id)}
           {@const total = totals(run)}
