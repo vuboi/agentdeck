@@ -15,6 +15,7 @@ export type McpEntry = {
   target: string;
   env_keys: string[];
   agents: string[];
+  enabled_agents: string[];
   scope: string;
   source: string;
   builtin: boolean;
@@ -101,7 +102,7 @@ export async function addMcp(spec: AddSpec): Promise<boolean> {
 export async function removeMcp(entry: McpEntry) {
   mcp.busy = `remove:${entry.id}`;
   try {
-    report(await call<AgentResult[]>('mcp_remove', { name: entry.name, agents: entry.agents }), `${entry.name} removed`);
+    report(await call<AgentResult[]>('mcp_remove', { name: entry.name, agents: entry.agents, scope: entry.scope }), `${entry.name} removed`);
     delete mcp.tests[entry.id];
     await loadMcp();
   } catch (error) {
@@ -193,3 +194,29 @@ $effect.root(() => {
     if (hydrated) setPref('mcp.tests', snapshot);
   });
 });
+
+/** Apply a draft selection and reload once after all changed providers have been saved. */
+export async function setMcpProviders(entry: McpEntry, next: string[], initial: string[]): Promise<boolean> {
+  if (mcp.busy) { toast.error('Another MCP operation is still running'); return false; }
+  const changes = [...new Set([...next, ...initial])].filter((agent) => next.includes(agent) !== initial.includes(agent));
+  mcp.busy = `provider:${entry.id}`;
+  const failed: string[] = [];
+  try {
+    for (const agent of changes) {
+      try {
+        if (entry.builtin) {
+          if (agent !== 'antigravity') continue;
+          const result = await call<AgentResult>('mcp_agy_link', { enable: next.includes(agent) });
+          if (!result.ok) failed.push(`${agent}: ${result.message}`);
+        } else {
+          await call('mcp_provider_set', { id: entry.id, agent, enabled: next.includes(agent) });
+        }
+      } catch (error) { failed.push(`${agent}: ${message(error)}`); }
+    }
+    delete mcp.tests[entry.id];
+    await loadMcp();
+    if (failed.length) { toast.error(failed.join(' · ')); return false; }
+    toast.success(`${entry.name}: providers updated · applies to new sessions`);
+    return true;
+  } finally { mcp.busy = ''; }
+}

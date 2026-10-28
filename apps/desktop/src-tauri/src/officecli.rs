@@ -177,7 +177,7 @@ async fn install(app: &AppHandle) -> Result<Setup, String> {
     // MCP: replace an earlier entry, then add it for each agent with its own command (mcp_manage keeps those per agent).
     let path = binary.to_string_lossy().into_owned();
     let agents: Vec<String> = AGENTS.iter().map(|agent| (*agent).to_owned()).collect();
-    let _ = crate::mcp_manage::mcp_remove(SERVER.to_owned(), agents.clone()).await;
+    let _ = crate::mcp_manage::mcp_remove(SERVER.to_owned(), agents.clone(), None).await;
     let spec = serde_json::from_value::<crate::mcp_manage::AddSpec>(serde_json::json!({
         "name": SERVER,
         "transport": "stdio",
@@ -199,7 +199,7 @@ async fn install(app: &AppHandle) -> Result<Setup, String> {
 #[tauri::command]
 pub async fn officecli_remove(app: AppHandle) -> Result<(), String> {
     let agents: Vec<String> = AGENTS.iter().map(|agent| (*agent).to_owned()).collect();
-    let _ = crate::mcp_manage::mcp_remove(SERVER.to_owned(), agents).await;
+    let _ = crate::mcp_manage::mcp_remove(SERVER.to_owned(), agents, None).await;
     let root = root(&app)?;
     if root.exists() {
         std::fs::remove_dir_all(&root).map_err(|error| error.to_string())?;

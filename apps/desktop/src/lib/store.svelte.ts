@@ -207,7 +207,7 @@ export type CatalogItem = {
   install: { how: 'plugin' | 'mcp' | 'skill'; [field: string]: unknown };
 };
 /** What the Discover tab narrows the catalog by; Rust filters and cuts the list, so only scrolled-to pages are held here. */
-export type CatalogFilter = { query: string; kind: string; agent: string };
+export type CatalogFilter = { category?: string; query: string; kind: string; agent: string };
 type CatalogPage = { items: CatalogItem[]; total: number; fetched_at: number; errors: string[] };
 
 const PAGE_SIZE = 40;
@@ -288,8 +288,8 @@ export async function refreshCatalog() {
   await loadCatalog();
 }
 
-export function installCatalogItem(item: CatalogItem, acknowledged: boolean) {
-  return attempt(`catalog:${item.key}`, 'store_catalog_install', { item, acknowledged }, () => `${item.name} installed`);
+export function installCatalogItem(item: CatalogItem, acknowledged: boolean, project: string | null = null) {
+  return attempt(`catalog:${item.key}`, 'store_catalog_install', { item, acknowledged, project }, () => `${item.name} installed`);
 }
 
 export async function loadSources() {

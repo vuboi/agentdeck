@@ -35,7 +35,7 @@ pub(crate) struct Raw {
 }
 
 impl Raw {
-    fn target(&self) -> String {
+    pub(crate) fn target(&self) -> String {
         match &self.url {
             Some(url) => url.clone(),
             None => std::iter::once(self.command.clone().unwrap_or_default())
@@ -58,6 +58,7 @@ pub struct McpEntry {
     /// Names only: the values stay in the config file.
     env_keys: Vec<String>,
     agents: Vec<String>,
+    enabled_agents: Vec<String>,
     scope: String,
     source: String,
     /// AgentDeck's own browser server.
@@ -107,7 +108,7 @@ fn pairs(value: &Value) -> BTreeMap<String, String> {
 }
 
 /// `{ "mcpServers": { name: {...} } }` style maps (Claude's `.claude.json`, agy's `mcp_config.json`, Codex's TOML).
-fn servers_in(map: &Value, agent: &'static str, scope: &str, source: &str) -> Vec<Raw> {
+pub(crate) fn servers_in(map: &Value, agent: &'static str, scope: &str, source: &str) -> Vec<Raw> {
     let Some(object) = map.as_object() else {
         return Vec::new();
     };
@@ -130,7 +131,7 @@ fn servers_in(map: &Value, agent: &'static str, scope: &str, source: &str) -> Ve
                 args: strings(&item["args"]),
                 env: pairs(&item["env"]),
                 url,
-                headers: pairs(&item["headers"]),
+                headers: pairs(item.get("headers").or_else(|| item.get("http_headers")).unwrap_or(&Value::Null)),
                 agent,
                 scope: scope.to_owned(),
                 source: source.to_owned(),
@@ -201,6 +202,10 @@ pub(crate) fn read_all() -> Vec<Raw> {
             ));
         }
     }
+    if let Ok(home) = crate::home_folder() {
+        for project in crate::store::sync::known_projects(&home) { found.extend(read_project(&project)); }
+    }
+    crate::mcp_providers::append_disabled(&mut found);
     found
 }
 
@@ -223,9 +228,11 @@ fn merge(raws: &[Raw]) -> Vec<McpEntry> {
     let mut entries: Vec<McpEntry> = Vec::new();
     for raw in raws.iter().filter(|raw| !is_own(raw)) {
         let target = raw.target();
-        let id = format!("{}|{target}", raw.name);
+        let id = raw_id(raw);
         match entries.iter_mut().find(|entry| entry.id == id) {
             Some(entry) => {
+                if !raw.disabled && !entry.enabled_agents.contains(&raw.agent.to_owned()) { entry.enabled_agents.push(raw.agent.to_owned()); }
+                entry.disabled = entry.disabled && raw.disabled;
                 if !entry.agents.iter().any(|agent| agent == raw.agent) {
                     entry.agents.push(raw.agent.to_owned());
                 }
@@ -242,6 +249,7 @@ fn merge(raws: &[Raw]) -> Vec<McpEntry> {
                 target,
                 env_keys: raw.env.keys().cloned().collect(),
                 agents: vec![raw.agent.to_owned()],
+                enabled_agents: if raw.disabled { vec![] } else { vec![raw.agent.to_owned()] },
                 scope: raw.scope.clone(),
                 source: raw.source.clone(),
                 builtin: false,
@@ -283,6 +291,7 @@ pub async fn mcp_list() -> McpOverview {
                     transport: "http".to_owned(),
                     target: url,
                     env_keys: Vec::new(),
+                    enabled_agents: agents.clone(),
                     agents,
                     scope: "built in".to_owned(),
                     source: "AgentDeck browser".to_owned(),
@@ -509,7 +518,7 @@ pub async fn mcp_test(id: String) -> TestResult {
             .await
             .unwrap_or_default()
             .into_iter()
-            .find(|raw| format!("{}|{}", raw.name, raw.target()) == id)
+            .find(|raw| raw_id(raw) == id)
     };
     let outcome = match found {
         None => Err("this server is no longer in any config".to_string()),
@@ -749,11 +758,26 @@ pub async fn mcp_add(spec: AddSpec) -> Result<Vec<AgentResult>, String> {
 
 /// Removes a server by name from the chosen agents.
 #[tauri::command]
-pub async fn mcp_remove(name: String, agents: Vec<String>) -> Result<Vec<AgentResult>, String> {
+pub async fn mcp_remove(name: String, mut agents: Vec<String>, scope: Option<String>) -> Result<Vec<AgentResult>, String> {
     if !valid_name(&name) || name == "agentdeck" {
         return Err("that server cannot be removed here".to_string());
     }
-    let mut results = Vec::new();
+    let removed = crate::mcp_providers::forget_disabled(&name, scope.as_deref().unwrap_or("user"), &agents)?;
+    agents.retain(|a| !removed.contains(a));
+    let removed_results = removed.into_iter().map(|agent| AgentResult { agent, ok: true, message: "Removed disabled assignment".into() }).collect::<Vec<_>>();
+    if agents.is_empty() { return Ok(removed_results); }
+    if let Some(project) = scope.as_deref().and_then(|s| s.strip_prefix("project: ")) {
+        let project = PathBuf::from(project);
+        if !crate::store::sync::known_projects(&crate::home_folder()?).contains(&project) { return Err("Unknown project scope".into()); }
+        let mut results = removed_results;
+        for agent in &agents {
+            let file = match agent.as_str() { "claude" => ".mcp.json", "codex" => ".codex/config.toml", "copilot" => ".copilot/mcp-config.json", _ => continue };
+            let result = crate::store::sync::remove_project_mcp(&project.join(file), &name, agent == "codex");
+            results.push(AgentResult { agent: agent.clone(), ok: result.is_ok(), message: result.err().unwrap_or_else(|| "Removed from project".into()) });
+        }
+        return Ok(results);
+    }
+    let mut results = removed_results;
     for agent in agents
         .iter()
         .filter(|agent| AGENTS.contains(&agent.as_str()))
@@ -932,6 +956,15 @@ const AGY_LINK_TTL: Duration = Duration::from_secs(60);
 /// The MCP servers a custom provider may use in a chat: the ones in the user's Claude, Codex and Antigravity
 /// configs (each name once), minus the disabled ones, AgentDeck's own browser, and other projects' servers.
 pub(crate) fn servers_for(project: Option<&std::path::Path>) -> Vec<Raw> {
+    servers_for_inner(project, None)
+}
+
+/// Native SDK providers must receive only their own explicitly enabled MCP assignments.
+pub(crate) fn servers_for_agent(project: Option<&std::path::Path>, agent: &str) -> Vec<Raw> {
+    servers_for_inner(project, Some(agent))
+}
+
+fn servers_for_inner(project: Option<&std::path::Path>, agent: Option<&str>) -> Vec<Raw> {
     let here = project.map(|dir| {
         dir.to_string_lossy()
             .replace('\\', "/")
@@ -939,9 +972,10 @@ pub(crate) fn servers_for(project: Option<&std::path::Path>) -> Vec<Raw> {
             .to_lowercase()
     });
     let mut seen = std::collections::HashSet::new();
-    read_all()
-        .into_iter()
-        .filter(|raw| !raw.disabled && !is_own(raw))
+    let mut rows: Vec<_> = project.into_iter().flat_map(read_project).chain(read_all()).collect();
+    rows.sort_by_key(|r| !r.scope.starts_with("project: "));
+    rows.into_iter()
+        .filter(|raw| !is_own(raw) && agent.is_none_or(|a| raw.agent == a))
         .filter(|raw| match raw.scope.strip_prefix("project: ") {
             Some(path) => {
                 here.as_deref()
@@ -954,7 +988,9 @@ pub(crate) fn servers_for(project: Option<&std::path::Path>) -> Vec<Raw> {
             }
             None => true,
         })
+        .filter(|raw| agent.is_some() || !raw.disabled)
         .filter(|raw| seen.insert(raw.name.clone()))
+        .filter(|raw| !raw.disabled)
         .collect()
 }
 
@@ -1126,4 +1162,57 @@ mod tests {
         bad.agents = vec!["rm".into()];
         assert!(check(&bad).is_err());
     }
+}
+
+/// Reads project MCP config before global entries so a local override wins in SDK sessions.
+fn read_project(project: &std::path::Path) -> Vec<Raw> {
+    let mut found = Vec::new();
+    for (file, agent, key, is_toml) in [(".mcp.json", "claude", "mcpServers", false), (".codex/config.toml", "codex", "mcp_servers", true), (".copilot/mcp-config.json", "copilot", "mcpServers", false)] {
+        let path = project.join(file);
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let value: Option<Value> = if is_toml { toml::from_str::<toml::Value>(&text).ok().and_then(|v| serde_json::to_value(v).ok()) } else { serde_json::from_str(&text).ok() };
+        if let Some(value) = value { found.extend(servers_in(&value[key], agent, &format!("project: {}", project.display()), &path.to_string_lossy())); }
+    }
+    found
+}
+
+/// Shares user MCP entries across providers or explicitly selected projects, preserving conflicts.
+pub(crate) async fn sync_store(projects: &[PathBuf], name: Option<&str>) -> Vec<crate::store::sync::SyncResult> {
+    use crate::store::sync::{merge_mcp, SyncResult};
+    let all = read_all();
+    let mut results = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for raw in all.iter().filter(|r| !is_own(r) && !r.disabled && (r.scope == "user" || projects.iter().any(|p| r.scope == format!("project: {}", p.display()))) && name.is_none_or(|n| n == r.name)) {
+        if !seen.insert((raw.name.clone(), raw.scope.clone())) { continue; }
+        if all.iter().any(|other| other.name == raw.name && other.scope == raw.scope && (other.command != raw.command || other.args != raw.args || other.url != raw.url || other.env != raw.env || other.headers != raw.headers || other.disabled)) {
+            results.push(SyncResult { target: "global".into(), item: raw.name.clone(), ok: false, message: "Provider configurations differ; resolve the conflict before sync".into() });
+            continue;
+        }
+        if projects.is_empty() {
+            let agents = ["claude", "codex", "copilot"].into_iter().filter(|a| !all.iter().any(|r| r.name == raw.name && r.agent == *a && r.scope == "user")).map(str::to_owned).collect::<Vec<_>>();
+            if agents.is_empty() { continue; }
+            let spec = AddSpec { name: raw.name.clone(), transport: raw.transport.clone(), target: raw.url.clone().or_else(|| raw.command.clone()).unwrap_or_default(), args: raw.args.clone(), env: raw.env.iter().map(|(k,v)| format!("{k}={v}")).collect(), headers: raw.headers.iter().map(|(k,v)| format!("{k}: {v}")).collect(), agents };
+            match mcp_add(spec).await {
+                Ok(rows) => results.extend(rows.into_iter().map(|r| SyncResult { target: format!("global / {}", r.agent), item: raw.name.clone(), ok: r.ok, message: r.message })),
+                Err(error) => results.push(SyncResult { target: "global".into(), item: raw.name.clone(), ok: false, message: error }),
+            }
+        } else {
+            for project in projects.iter().filter(|p| raw.scope == "user" || raw.scope == format!("project: {}", p.display())) {
+                for (file, key, is_toml) in [(".mcp.json", "mcpServers", false), (".codex/config.toml", "mcp_servers", true), (".copilot/mcp-config.json", "mcpServers", false)] {
+                    let mut server = if let Some(url) = &raw.url { json!({"url":url}) } else { json!({"command":raw.command, "args":raw.args}) };
+                    if !raw.env.is_empty() { server["env"] = json!(raw.env); }
+                    if !raw.headers.is_empty() { server[if is_toml {"http_headers"} else {"headers"}] = json!(raw.headers); }
+                    if !is_toml { server["type"] = json!(raw.transport); }
+                    let result = if project.is_absolute() && project.is_dir() { merge_mcp(&project.join(file), key, &raw.name, server, is_toml) } else { Err("Project must be an existing absolute folder".into()) };
+                    results.push(SyncResult { target: format!("{} / {file}", project.display()), item: raw.name.clone(), ok: result.is_ok(), message: result.err().unwrap_or_else(|| "Synchronized".into()) });
+                }
+            }
+        }
+    }
+    results
+}
+
+pub(crate) fn raw_id(raw: &Raw) -> String {
+    if raw.scope.starts_with("project: ") { format!("{}|{}|{}", raw.name, raw.target(), raw.scope) }
+    else { format!("{}|{}", raw.name, raw.target()) }
 }

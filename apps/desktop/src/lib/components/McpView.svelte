@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { matchesStoreCategory } from '../store-categories.svelte';
+  import McpProviders from './McpProviders.svelte';
   import { onMount } from 'svelte';
   import { fade, slide } from 'svelte/transition';
   import { ZButton, ZDivider, ZIcon, ZInput, ZModal, ZSwitch, ZTabs } from '@shival99/z-ui-svelte';
@@ -25,12 +27,12 @@
   import AgentLogo from './AgentLogo.svelte';
 
   // The Store's bar above holds the search, the test-all and reload buttons and the plus that opens the add form.
-  let { query = '', adding = $bindable(false) }: { query?: string; adding?: boolean } = $props();
+  let { query = '', category = 'all', adding = $bindable(false) }: { query?: string; category?: string; adding?: boolean } = $props();
 
   const icon = (name: string) => name as ZIconName;
 
   const all = $derived(mcp.overview?.entries ?? []);
-  const entries = $derived(all.filter((entry) => `${entry.name} ${entry.target} ${entry.agents.join(' ')}`.toLowerCase().includes(query.trim().toLowerCase())));
+  const entries = $derived(all.filter((entry) => `${entry.name} ${entry.target} ${entry.agents.join(' ')}`.toLowerCase().includes(query.trim().toLowerCase()) && matchesStoreCategory(`${entry.name} ${entry.target}`, category)));
   const usage = $derived(usageByServer(new Set(all.map((entry) => entry.name))));
   const totals = $derived.by(() => {
     let calls = 0;
@@ -179,7 +181,7 @@
                     <span class="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground" title={entry.target}>{entry.target}</span>
                     <span class="mt-1 flex flex-wrap items-center gap-x-2 text-[10px]">
                       <span class="rounded border border-border px-1 uppercase text-muted-foreground">{entry.transport}</span>
-                      {#each entry.agents as agent (agent)}<span class="inline-flex items-center gap-1 font-medium {AGENT[agent]?.tone ?? ''}"><AgentLogo {agent} class="size-3" />{AGENT[agent]?.label ?? agent}</span>{/each}
+
                       {#if stats}<span class="text-muted-foreground tabular-nums">· {stats.calls} calls{stats.failed ? `, ${stats.failed} failed` : ''}</span>{/if}
                     </span>
                   </span>
@@ -199,6 +201,8 @@
                   </ZButton>
                 {/if}
               </div>
+
+              <div class="border-t border-border/50 px-3 py-1.5"><McpProviders {entry} /></div>
 
               {#if open[entry.id]}
                 <div class="overflow-hidden" transition:slide={{ duration: 200 }}>

@@ -53,6 +53,23 @@ fn skill_folders(home: &Path, agent: &str) -> Vec<PathBuf> {
     }
 }
 
+/// Project destinations per provider. Keep this in sync with native discovery and the provider checklist.
+pub fn project_skill_folders(agent: &str) -> &'static [&'static str] {
+    match agent {
+        "claude" => &[".claude/skills"],
+        "codex" => &[".codex/skills", ".agents/skills"],
+        "copilot" => &[".github/skills"],
+        "opencode" => &[".opencode/skills"],
+        "antigravity" => &[".agents/skills"],
+        _ => &[],
+    }
+}
+
+/// Every supported project destination, deduplicating folders shared by providers.
+pub fn project_folders() -> std::collections::BTreeSet<&'static str> {
+    SKILL_AGENTS.iter().flat_map(|agent| project_skill_folders(agent).iter().copied()).collect()
+}
+
 /// A skill name is one folder name: no separators, no `.` or `..`.
 pub fn checked_name(name: &str) -> Result<&str, String> {
     let bad = name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':']);
@@ -86,7 +103,7 @@ fn push_unique(list: &mut Vec<String>, value: &str) {
 }
 
 /// Makes `link` a directory junction to `target`. Windows junctions need no admin rights.
-fn link_dir(link: &Path, target: &Path) -> Result<(), String> {
+pub(super) fn link_dir(link: &Path, target: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -281,6 +298,12 @@ pub fn remove(home: &Path, name: &str) -> Result<(), String> {
             }
         }
     }
+    for project in super::sync::known_projects(home) {
+        for folder in project_folders() {
+            let link = project.join(folder).join(name);
+            if points_into(&link, &library) { unlink(&link).map_err(|e| e.to_string())?; }
+        }
+    }
     let source = library.join(name);
     if source.exists() {
         std::fs::remove_dir_all(&source).map_err(|error| error.to_string())?;
@@ -307,6 +330,21 @@ mod tests {
             format!("---\nname: {name}\ndescription: {description}\n---\nBody\n"),
         )
         .expect("writes SKILL.md");
+    }
+
+    #[test]
+    fn each_provider_has_explicit_global_and_project_skill_destinations() {
+        for agent in SKILL_AGENTS {
+            assert!(!skill_folders(Path::new("user"), agent).is_empty(), "global: {agent}");
+            assert!(!project_skill_folders(agent).is_empty(), "project: {agent}");
+        }
+        let folders = project_folders();
+        assert!(folders.contains(".codex/skills"));
+        assert!(folders.contains(".claude/skills"));
+        assert!(folders.contains(".github/skills"));
+        assert!(folders.contains(".opencode/skills"));
+        assert_eq!(folders.len(), 5);
+        assert!(project_skill_folders("unknown").is_empty());
     }
 
     #[test]

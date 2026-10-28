@@ -1,93 +1,93 @@
-# Quy trình thêm agent/provider mới
+# Adding a new agent/provider
 
-Tài liệu checklist cho agent code tiếp theo. Đọc `AGENTS.md` và `PLAN.md` trước khi sửa. Dùng GitHub Copilot hiện tại làm ví dụ về provider SDK có đăng nhập qua một CLI khác; đừng sao chép nguyên cách auth/MCP của nó nếu provider mới có SDK hoặc CLI riêng.
+Checklist for the next coding agent. Read `AGENTS.md` and `PLAN.md` before editing. Use the current GitHub Copilot integration as an example of a provider SDK authenticated through another CLI; do not copy its auth/MCP approach when the new provider has its own SDK or CLI.
 
-## Nguyên tắc
+## Principles
 
-- Chốt một provider ID ổn định, viết thường, ví dụ `copilot`. Dùng cùng ID xuyên suốt Rust, Svelte, lưu session, workflow, MCP và skills.
-- Tìm và mở rộng registry/type/list đang có; không tạo picker, logo, model cache, connector hay skill manager thứ hai.
-- Mỗi provider có thể cần nhiều lớp riêng: đăng nhập, account switch, runtime, model discovery. Đừng coi việc thêm card Settings là tích hợp xong.
-- Provider chat không tự động là provider tạo ảnh. Phân biệt model dùng để soạn prompt với backend thực sự tạo ảnh.
-- Giữ thay đổi của người dùng đang có trong workspace; không reset hoặc format đệ quy các file ngoài phạm vi.
-- Mỗi bề mặt dưới đây thường có một chuỗi `if agent === ...` hoặc danh sách agent viết tay riêng. Tìm theo ID mới (`grep -rn "'claude'" apps/desktop/src`) để không sót chỗ nào.
-- Trước khi viết code gọi API, tra cách client chính thức của provider làm (repo mã nguồn mở của vendor trên GitHub). Dùng đúng endpoint và header mà client đó dùng; không giả header của client khác.
+- Choose a stable, lowercase provider ID, for example `copilot`. Use the same ID across Rust, Svelte, session storage, workflows, MCP, and skills.
+- Find and extend the existing registries, types, and lists; do not create a second picker, logo registry, model cache, connector, or skill manager.
+- A provider may need several layers: login, account switching, runtime, and model discovery. Adding a Settings card alone is not a complete integration.
+- A chat provider is not automatically an image-generation provider. Distinguish the model used to compose a prompt from the backend that actually generates the image.
+- Preserve the user's existing workspace changes; do not reset or recursively format files outside the scope.
+- Each surface below often has its own `if agent === ...` branch or handwritten agent list. Search for the new ID (`grep -rn "'claude'" apps/desktop/src`) so no surface is missed.
+- Before writing API calls, check how the provider's official client works (the vendor's open-source repository on GitHub). Use the same endpoint and headers; do not invent headers based on another client.
 
-## Bẫy đã gặp (Copilot)
+## Known Copilot pitfalls
 
-- **Gửi chat bị chặn:** `sessions.svelte.ts` có danh sách agent được gọi `startTurn`. Provider không có trong danh sách sẽ rơi vào nhánh "`<agent> chats are not connected yet`" dù backend đã có `agent_send`. Thêm ID mới vào đúng danh sách này.
-- **Quota bar không hiện:** `Composer.svelte` (`const quota = $derived.by`) chỉ tính cho agent có nhánh riêng. Thêm nhánh đọc `connectors.accounts[<id>]` (cửa sổ `usage`, `observed_at`) và để `accounts_list` của provider đó điền `usage` cho account active.
-- **Quota không tự làm mới:** vòng kiểm tra 5 phút trong `connectors.svelte.ts` (`setInterval(check, 5 * 60_000)`) chỉ refresh provider được liệt kê. Thêm provider nếu cần cảnh báo ngưỡng.
-- **Đơn vị cửa sổ:** `UsageWindow.pct` là phần đã dùng (%), còn quota bar hiển thị phần còn lại (`100 - pct`). Nhãn cửa sổ phải khớp regex `^\d+(m|h|d)$` (ví dụ `30d`) để tính cửa sổ "gần hết nhất".
-- **Lệnh CLI bị chặn:** `account_tool_allows` (`connectors.rs`) chỉ cho phép một số lệnh của `codex-auth`/`cswap`. Gọi CLI khác (ví dụ `gh api`) không bị chặn, nhưng cần xác nhận khi thêm công cụ mới.
+- **Chat is blocked:** `sessions.svelte.ts` has an agent list used by `startTurn`. A provider missing from that list falls into the `"<agent> chats are not connected yet"` branch even when the backend already has `agent_send`. Add the new ID to the correct list.
+- **Quota bar is missing:** `Composer.svelte` (`const quota = $derived.by`) only handles agents with an explicit branch. Add a branch that reads `connectors.accounts[<id>]` (`usage`, `observed_at`) and ensure that provider's `accounts_list` fills `usage` for the active account.
+- **Quota does not refresh:** the five-minute check in `connectors.svelte.ts` (`setInterval(check, 5 * 60_000)`) refreshes only listed providers. Add the provider if threshold warnings need it.
+- **Window units:** `UsageWindow.pct` is the percentage used, while the quota bar shows the remaining percentage (`100 - pct`). Window labels must match `^\d+(m|h|d)$` (for example `30d`) so the nearest-to-limit window can be calculated.
+- **CLI commands are blocked:** `account_tool_allows` (`connectors.rs`) permits only selected `codex-auth`/`cswap` commands. Other CLIs (for example `gh api`) are not blocked, but new tools still require explicit review.
 
-## Checklist theo bề mặt
+## Surface checklist
 
-### 1. ID, logo và thông tin agent
+### 1. ID, logo, and agent information
 
-- Thêm profile vào `apps/desktop/src/lib/provider-registry.ts` (`BuiltInAgent`, `BUILT_IN_AGENTS`). Đây là nguồn chung cho logo, tên, icon và màu trên chat, workflow và picker.
-- Thêm agent vào các union/type còn độc lập: `sessions.svelte.ts`, `mock.ts`, slash-command types và connector types khi cần.
-- Rà các bảng màu viết tay ở `Chat.svelte`, `Sidebar.svelte`, `SettingsModal.svelte` và MCP view. Ưu tiên `AgentLogo`/registry thay vì thêm icon chung.
-- Session của AgentDeck lưu provider trên từng chat; kiểm tra nhãn và logo trong danh sách chat gần đây, header, tab và task card. Không nhầm session mới của AgentDeck với history import của CLI.
+- Add the profile to `apps/desktop/src/lib/provider-registry.ts` (`BuiltInAgent`, `BUILT_IN_AGENTS`). This is the shared source for logos, names, icons, and colors in chat, workflows, and pickers.
+- Add the agent to any independent unions/types: `sessions.svelte.ts`, `mock.ts`, slash-command types, and connector types as needed.
+- Review handwritten color maps in `Chat.svelte`, `Sidebar.svelte`, `SettingsModal.svelte`, and the MCP view. Prefer `AgentLogo`/the registry over adding generic icons.
+- AgentDeck stores the provider on each chat session; check labels and logos in recent chats, the header, tabs, and task cards. Do not confuse new AgentDeck sessions with CLI history imports.
 
-### 2. Đăng nhập, account và Settings
+### 2. Login, accounts, and Settings
 
-- Backend connector ở `apps/desktop/src-tauri/src/connectors.rs`: phát hiện binary, `Login`, trạng thái đăng nhập, login/cancel, account list/add/switch và thông báo lỗi dễ hiểu.
-- Frontend ở `apps/desktop/src/lib/connectors.svelte.ts`: cập nhật `ConnectorId`, `AccountProvider`, `Detected`, state, refresh và thao tác switch. Không đưa token hoặc output có token vào UI/log.
-- Thêm connector card trong `components/SettingsModal.svelte`, gồm binary, logo, mô tả, login và account manager nếu provider hỗ trợ nhiều account.
-- Khi account đổi, gọi `accountSwitched(providerId)` để chat không resume bằng credential cũ; tải lại model list nếu catalog phụ thuộc account.
-- Nếu CLI là cách đăng nhập được chọn, chỉ đọc credential từ CLI tại thời điểm cần, truyền thẳng vào SDK và không lưu token vào preferences, source hoặc log.
+- Backend connector in `apps/desktop/src-tauri/src/connectors.rs`: binary detection, `Login`, login status, login/cancel, account list/add/switch, and clear error messages.
+- Frontend in `apps/desktop/src/lib/connectors.svelte.ts`: update `ConnectorId`, `AccountProvider`, `Detected`, state, refresh, and switching actions. Never put tokens or token-bearing output in the UI/log.
+- Add a connector card in `components/SettingsModal.svelte` with binary, logo, description, login, and an account manager when the provider supports multiple accounts.
+- When the account changes, call `accountSwitched(providerId)` so chat does not resume with stale credentials; reload the model list if the catalog depends on the account.
+- If the CLI is the chosen login method, read credentials from the CLI only when needed, pass them directly to the SDK, and never store tokens in preferences, source, or logs.
 
-### 3. Runtime chat, session và model discovery
+### 3. Chat runtime, sessions, and model discovery
 
-- Runtime SDK không đi qua `Provider` CLI/stdout nếu giao thức khác. Thêm nhánh riêng tại `apps/desktop/src-tauri/src/agent_runs.rs` trước `provider_for`, dùng cùng `TurnRequest`, stop tracking và event envelope của AgentDeck.
-- Dịch event SDK thành `AgentEvent` hiện có: delta, thinking, tool call/result, usage, permission, done/error. Dọn session/client khi kết thúc, lỗi hoặc cancel.
-- Nếu SDK/provider có diff trong arguments, map vào `AgentEvent::ToolCall.change` (`FileChange`: path, +/- counts, before/after) để wrapper hiện ngay khi tool bắt đầu.
-- Nếu provider chỉ gửi đường dẫn, adapter có thể chụp file trước tool và gửi diff ở `AgentEvent::ToolResult.change` sau khi hoàn tất. Dùng chung `begin_file_snapshot` / `finish_file_snapshot`: chỉ đọc file text nhỏ nằm trong project root; file binary, file lớn hoặc ngoài root thì bỏ qua. Không lấy Git workspace snapshot làm fallback vì sẽ trộn thay đổi có trước lượt chat.
-- Chat tự gom `FileChange` trong message thành wrapper `Edited N files, +X −Y` và preview. Giữ các block cùng message để AgentDeck lưu được cùng lịch sử chat; không tạo panel hay kho lưu riêng cho provider.
-- Dùng ID session riêng của provider cho resume; không tạo lại session mỗi lượt. Kiểm tra account switch có bắt đầu session mới.
-- Nối `models_list` trong `src-tauri/src/lib.rs` tới model discovery của provider. Trong `models.svelte.ts`, cập nhật `ProviderId`, catalog, source, `modelsReady` và `loadModels`.
-- Tải lại model sau login/switch. Nếu provider chưa đăng nhập hoặc không lấy được catalog, trả lỗi/danh sách rỗng có kiểm soát, không làm hỏng picker của provider khác.
-- Workflow lấy model từ `modelSources()` (`components/flow/FlowEditor.svelte`); kiểm tra workflow có thể chọn, lưu và chạy provider mới.
+- If the SDK runtime does not use the `Provider` CLI/stdout protocol, add a separate branch in `apps/desktop/src-tauri/src/agent_runs.rs` before `provider_for`, using the existing `TurnRequest`, stop tracking, and AgentDeck event envelope.
+- Translate SDK events into the existing `AgentEvent`: delta, thinking, tool call/result, usage, permission, done/error. Clean up the session/client after completion, error, or cancellation.
+- If the SDK/provider includes diffs in arguments, map them to `AgentEvent::ToolCall.change` (`FileChange`: path, +/- counts, before/after) so the wrapper can show them as soon as the tool starts.
+- If the provider sends only a path, the adapter may snapshot the file before the tool and send a diff in `AgentEvent::ToolResult.change` after completion. Reuse `begin_file_snapshot` / `finish_file_snapshot`: read only small text files inside the project root; skip binaries, large files, and paths outside the root. Do not use a Git workspace snapshot as a fallback because it would mix in changes from before the chat turn.
+- The chat aggregates `FileChange` blocks in a message into the `Edited N files, +X −Y` wrapper and preview. Keep the blocks in the same message so AgentDeck stores them in the existing history; do not create a provider-specific panel or store.
+- Use the provider's own session ID for resume; do not create a new session on every turn. Verify that switching accounts starts a new session.
+- Connect `models_list` in `src-tauri/src/lib.rs` to the provider's model discovery. In `models.svelte.ts`, update `ProviderId`, catalog, source, `modelsReady`, and `loadModels`.
+- Reload models after login/switch. If the provider is not signed in or its catalog cannot be loaded, return a controlled error/empty list without breaking another provider's picker.
+- Workflows use models from `modelSources()` (`components/flow/FlowEditor.svelte`); verify that the new provider can be selected, saved, and run in a workflow.
 
-### 4. Chat input, file/ảnh và Image Generator
+### 4. Chat input, files/images, and Image Generator
 
-- Chat input gọi `agent_send`; kiểm tra model, effort, permission mode, allowed approvals, stop/cancel, file context và session resume đều tới đúng runtime.
-- Nếu composer đang encode ảnh/tệp trong prompt bằng đường dẫn, chuyển các đường dẫn đó thành attachment native của SDK khi có API hỗ trợ; giữ nguyên text/context hiển thị cho lịch sử.
-- `ModelPicker.svelte` dùng `modelSources()`; kiểm tra provider xuất hiện ở composer và `@AI` routing.
-- `ImageGenerator.svelte` có model để **soạn prompt** và một backend riêng để **tạo ảnh**. Provider chat mới có thể là prompt model nếu tương thích; chỉ thêm thành image-generation backend khi đã xác minh API tạo ảnh thật.
-- Nếu thay cấu trúc hoặc UI picker model, đồng bộ `ModelPicker.svelte` và `ImageGenerator.svelte` theo quy ước trong `AGENTS.md`.
+- Chat input calls `agent_send`; verify that model, effort, permission mode, allowed approvals, stop/cancel, file context, and session resume reach the correct runtime.
+- If the composer encodes images/files as paths in the prompt, convert those paths to native SDK attachments when supported; keep the displayed text/context unchanged for history.
+- `ModelPicker.svelte` uses `modelSources()`; verify that the provider appears in the composer and `@AI` routing.
+- `ImageGenerator.svelte` has a model for **composing the prompt** and a separate backend for **generating the image**. A new chat provider may be a prompt model when compatible; add it as an image-generation backend only after verifying a real image-generation API.
+- If the model picker structure or UI changes, update `ModelPicker.svelte` and `ImageGenerator.svelte` together according to `AGENTS.md`.
 
-### 5. MCP và Store
+### 5. MCP and Store
 
-- Cập nhật `McpAgent` trong `src/lib/mcp.svelte.ts`, danh sách provider trong `components/McpView.svelte`, và whitelist `AGENTS` trong `src-tauri/src/mcp_manage.rs`.
-- Nếu provider dùng SDK, chuyển MCP chung vào cấu hình session SDK; thêm đọc/ghi config riêng khi Store cần bật/tắt server theo provider. Bảo toàn các entry khác khi cập nhật config và không ghi đè file lỗi định dạng.
-- Xác nhận `servers_for(project)` chỉ trả MCP phù hợp với project/provider và SDK nhận đúng schema stdio/http, env, headers.
-- Rà MCP browser nội bộ của AgentDeck: nếu provider cần dùng browser tools thì truyền bridge vào session và cập nhật danh sách agent tương ứng; đừng giả định MCP user config tự có bridge.
-- Kiểm tra add, list/merge, test, remove và trạng thái disabled. Cập nhật mô tả UI nếu provider lưu config theo cách khác CLI `mcp add`.
+- Update `McpAgent` in `src/lib/mcp.svelte.ts`, the provider list in `components/McpView.svelte`, and the `AGENTS` allowlist in `src-tauri/src/mcp_manage.rs`.
+- If the provider uses an SDK, pass shared MCP through the SDK session configuration; add separate config read/write when Store needs to enable/disable servers for that provider. Preserve other entries and never overwrite a malformed config file.
+- Confirm that `servers_for(project)` returns only MCP servers matching the project/provider and that the SDK receives the correct stdio/http, env, and header schema.
+- Review AgentDeck's internal browser MCP: if the provider needs browser tools, pass the bridge into the session and update the corresponding agent list; do not assume the user's MCP config already contains the bridge.
+- Check add, list/merge, test, remove, and disabled state. Update the UI description if the provider stores configuration differently from the CLI's `mcp add`.
 
-### 6. Skills và Store
+### 6. Skills and Store
 
-- Thêm provider vào `store/library.rs::SKILL_AGENTS` và `skill_folders`; đây là chỗ Store gán/bỏ gán skill vào folder agent.
-- Đồng bộ danh sách ở `components/StoreView.svelte`.
-- Thêm đọc skills vào `slash_commands.rs` và allowed roots của `slash_commands::read`, để `/skill` nhìn thấy đúng skill và không mở file ngoài thư mục cho phép.
-- Bật skill discovery của SDK/runtime và truyền folder nếu provider cần cấu hình tường minh. Kiểm tra folder user, folder project và đường dẫn junction do Store tạo.
-- Cập nhật bộ lọc provider trong Store Discover nếu catalog có nội dung dành riêng cho provider.
+- Read the [skill location conventions](store-skill-locations.md). Add the provider to `store/library.rs::SKILL_AGENTS`, `skill_folders` (global), and `project_skill_folders` (project); install/sync/remove must use the shared mapping.
+- Update the Store registry and provider picker (`provider-registry.ts`, `SkillProviders.svelte`); check both global and project scope, and update the path table in the skill-location document.
+- Add skill reads to `slash_commands.rs` and the allowed roots of `slash_commands::read`, so `/skill` sees the correct skills without opening files outside permitted directories.
+- Enable SDK/runtime skill discovery and pass the folder when the provider requires explicit configuration. Check the user folder, project folder, and junction paths created by Store.
+- Update the provider filter in Store Discover when the catalog contains provider-specific content.
 
-## Copilot hiện tại — ví dụ tích hợp SDK
+## Current Copilot integration — SDK example
 
-- Profile/logo: `provider-registry.ts`, thương hiệu `GITHUB_SVG` trong `brand-icons.ts`.
-- Auth/account: Settings gọi GitHub CLI; token active lấy bằng `gh auth token`, switch bằng `gh auth switch`. SDK nhận token trong bộ nhớ.
-- Runtime/model/chat: `src-tauri/src/copilot.rs`; nhánh runtime tại `agent_runs.rs`; model listing tại `lib.rs`.
-- Attachments: các dòng `Attached image(s)` và `Attached file(s)` từ composer được đổi thành SDK file attachments. Đây là ảnh đầu vào cho chat, không phải API tạo ảnh.
-- MCP: Store lưu cấu hình Copilot tại `~/.copilot/mcp-config.json`; Rust chuyển cấu hình chung vào SDK session.
-- Skills: Store gán vào `~/.copilot/skills`; slash palette đọc skills provider và `.github/skills` của project.
-- Không thêm Copilot vào cảnh báo quota Claude/Codex hoặc image backend khi Copilot không cung cấp dữ liệu/tính năng tương ứng.
+- Profile/logo: `provider-registry.ts`, with the `GITHUB_SVG` brand icon in `brand-icons.ts`.
+- Auth/account: Settings calls the GitHub CLI; the active token comes from `gh auth token`, and switching uses `gh auth switch`. The SDK receives the token in memory.
+- Runtime/model/chat: `src-tauri/src/copilot.rs`; runtime branch in `agent_runs.rs`; model listing in `lib.rs`.
+- Attachments: composer lines such as `Attached image(s)` and `Attached file(s)` become SDK file attachments. These are chat input images, not an image-generation API.
+- MCP: Store saves Copilot configuration at `~/.copilot/mcp-config.json`; Rust passes the shared configuration into the SDK session.
+- Skills: Store assigns them to `~/.copilot/skills`; the slash palette reads provider skills and the project's `.github/skills`.
+- Do not add Copilot to Claude/Codex quota warnings or the image backend when Copilot does not provide the corresponding data/capability.
 
-## Kiểm tra trước khi bàn giao
+## Handoff checks
 
 - `cargo check -p agentdeck-desktop`
 - `cargo clippy -p agentdeck-desktop -- -D warnings`
 - `pnpm --filter desktop check`
-- Chạy app thật (`pnpm dev` hoặc tải lại cửa sổ sau khi HMR không nạp hết): đăng nhập, mở model picker, gửi một tin nhắn ngắn, kiểm tra trả lời và quota bar. Build xanh không chứng minh chat chạy được.
-- Nếu người dùng yêu cầu kiểm thử, thêm/chạy kiểm tra phù hợp; không gọi network trong test. Runtime đăng nhập/chat thật cần xác minh riêng với tài khoản có quyền dùng provider.
-- Báo rõ bề mặt nào đã nối, lệnh kiểm tra thực sự chạy, và giới hạn runtime chưa thể xác minh. Không tuyên bố login/chat thành công nếu chưa chạy lượt thật.
+- Run the real app (`pnpm dev`, or reload the window if HMR did not fully apply): sign in, open the model picker, send a short message, and check the response and quota bar. A green build does not prove that chat works.
+- If the user requests testing, add/run suitable checks; do not call the network from tests. Authenticated runtime login/chat must be verified separately with an account that can use the provider.
+- Report which surfaces were connected, which checks actually ran, and which runtime limits could not be verified. Do not claim login/chat success without a real turn.

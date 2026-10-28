@@ -37,8 +37,13 @@ fn write(home: &Path, lock: &Lock) -> Result<(), String> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    std::fs::write(&file, serde_json::to_string_pretty(lock).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())
+    let temporary = file.with_extension(format!("{}.tmp", super::stage::new_job_id()));
+    let result = (|| {
+        std::fs::write(&temporary, serde_json::to_string_pretty(lock).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+        std::fs::rename(&temporary, &file).map_err(|error| error.to_string())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result
 }
 
 /// Records one installed skill. `folder` is the skill's folder as it was installed (its files are hashed now).

@@ -123,7 +123,13 @@ static MEMORY: Mutex<Option<Arc<Cache>>> = Mutex::new(None);
 /// The catalog, read from its file the first time. Empty (`fetched_at` 0) until a refresh has run.
 pub fn cached(home: &Path) -> Arc<Cache> {
     let mut slot = MEMORY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    slot.get_or_insert_with(|| Arc::new(read_cache(home).unwrap_or_default())).clone()
+    slot.get_or_insert_with(|| {
+        let mut cache = read_cache(home).unwrap_or_default();
+        for item in builtins() {
+            if !cache.items.iter().any(|old| old.key == item.key) { cache.items.push(item); }
+        }
+        Arc::new(cache)
+    }).clone()
 }
 
 fn remember(cache: Cache) -> Arc<Cache> {
@@ -137,6 +143,7 @@ fn remember(cache: Cache) -> Arc<Cache> {
 #[serde(default)]
 pub struct Filter {
     pub query: String,
+    pub category: String,
     pub kind: String,
     pub agent: String,
 }
@@ -161,6 +168,7 @@ pub fn page(cache: &Cache, filter: &Filter, offset: usize, limit: usize) -> Page
     let matching = cache.items.iter().filter(|item| {
         (any(&filter.kind) || item.kind == filter.kind)
             && (any(&filter.agent) || item.agents.contains(&filter.agent))
+            && super::categories::matches(&format!("{} {}", item.name, item.summary), &filter.category)
             && (words.is_empty() || {
                 let text = format!("{} {} {}", item.name, item.summary, item.publisher).to_lowercase();
                 words.iter().all(|word| text.contains(word.as_str()))
@@ -208,7 +216,7 @@ pub async fn refresh(home: &Path) -> Result<Arc<Cache>, String> {
         registry_items(),
         skill_lists,
     );
-    let mut items = Vec::new();
+    let mut items = builtins();
     let mut errors = Vec::new();
     items.extend(claude);
     items.extend(codex);
@@ -519,4 +527,13 @@ mod page_tests {
         let by_agent = Filter { agent: "codex".to_owned(), ..Filter::default() };
         assert_eq!(page(&cache, &by_agent, 0, 50).items[0].name, "other");
     }
+}
+
+/// Curated entries remain available before the first online catalog refresh.
+fn builtins() -> Vec<CatalogItem> {
+    let agents: Vec<String> = ["claude", "codex", "copilot"].iter().map(|a| (*a).to_owned()).collect();
+    vec![
+        CatalogItem { key: "builtin:security-audit".into(), kind: "skill".into(), name: "security-audit".into(), summary: "Cloudflare multi-phase security audit. Install when needed.".into(), version: String::new(), publisher: "Cloudflare".into(), agents: agents.clone(), install: Install::Skill { url: "https://github.com/cloudflare/security-audit-skill".into(), subpath: "skills/security-audit".into() } },
+        CatalogItem { key: "builtin:chrome-devtools".into(), kind: "mcp".into(), name: "Chrome DevTools".into(), summary: "Control your running Chrome (144+). Enable remote debugging at chrome://inspect/#remote-debugging and allow Chrome's connection prompt. Not enabled until installed.".into(), version: "latest".into(), publisher: "ChromeDevTools".into(), agents: agents.clone(), install: Install::Mcp { spec: json!({"name":"chrome-devtools", "transport":"stdio", "target":"pnpm", "args":["dlx","chrome-devtools-mcp@latest","--autoConnect","--no-usage-statistics"], "agents":agents}) } },
+    ]
 }

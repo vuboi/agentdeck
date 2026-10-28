@@ -1,56 +1,52 @@
-# AGENTS.md — quy ước cho mọi coding agent
+# AGENTS.md — conventions for all coding agents
 
-Đọc `PLAN.md` trước. Chỉ làm đúng module được giao, không làm trước module sau.
-Khi thêm agent/provider, đọc checklist `docs/development/adding-agent-provider.md` và nối đủ các bề mặt liên quan.
+Read `PLAN.md` first. Work only on the assigned module; do not start a later module early.
+When adding an agent/provider, read the checklist in `docs/development/adding-agent-provider.md` and connect every relevant surface.
 
-## Môi trường (Windows)
-- Rust: dùng `~/.cargo/bin` (shim mise cho cargo bị lỗi). Trong bash: `export PATH="$HOME/.cargo/bin:$PATH"`.
-- Node 24, pnpm 10. Không dùng npm/yarn để cài.
+When changing Store skill installation/sync/update, read `docs/development/store-skill-locations.md`; connect the provider's global and project folders instead of updating only AgentDeck's cache.
+
+## Environment (Windows)
+- Rust uses `~/.cargo/bin` (the mise cargo shim is broken). In bash: `export PATH="$HOME/.cargo/bin:$PATH"`.
+- Node 24, pnpm 10. Do not use npm/yarn to install packages.
 
 ## Rust
-- Edition 2021, workspace dependencies khai báo ở root `Cargo.toml` (`[workspace.dependencies]`).
-- Lỗi: `thiserror` trong lib, `anyhow` trong bin. Không `unwrap()` ngoài test.
-- Async: `tokio`. Log: `tracing`.
-- `cargo clippy --workspace -- -D warnings` phải sạch.
+- Edition 2021; workspace dependencies are declared in the root `Cargo.toml` (`[workspace.dependencies]`).
+- Errors: use `thiserror` in libraries and `anyhow` in binaries. Do not use `unwrap()` outside tests.
+- Async: `tokio`. Logging: `tracing`.
+- `cargo clippy --workspace -- -D warnings` must pass cleanly.
 
 ## Frontend
-- Svelte 5 runes (`$state`, `$derived`, `$effect`, `$props`). Không dùng store API cũ cho code mới.
-- TypeScript strict. `svelte-check` không lỗi.
-- Không thêm thư viện UI lớn; `packages/ui` sẽ được thay bằng bộ UI của user.
+- Svelte 5 runes (`$state`, `$derived`, `$effect`, `$props`). Do not use the legacy store API in new code.
+- TypeScript strict mode. `svelte-check` must report no errors.
+- Do not add a large UI library; `packages/ui` will be replaced with the user's UI kit.
 
-## Chung
-- Không commit secret. Không gọi network trong test.
-- Giữ thay đổi tối thiểu, đúng phạm vi module.
-- Kết thúc: chạy toàn bộ lệnh DoD của module và báo kết quả thật.
+## General
+- Do not commit secrets. Do not call the network from tests.
+- Keep changes minimal and within the assigned module.
+- At the end, run all DoD commands for the module and report the actual results.
 
-## Popover và danh sách chọn (UI)
-- Mọi popover/menu chọn dùng `ZPopover` (hoặc `PickerPopover` / `ProjectSelect` đã dựng sẵn), không tự đặt `position: absolute` ở một góc riêng.
-  Popover neo đúng element mở nó (`anchor`), đặt `zPosition` theo chỗ trống, và độ rộng theo nội dung (một danh sách ngắn thì hẹp, không rộng cả panel).
-- Element trigger luôn sáng màu khi popover đang mở: dùng `TRIGGER_ON` / `TRIGGER_ON_PLAIN` trong `src/lib/popover.ts` (giống nút chọn model của ô chat).
-- Danh sách trong popover hover bằng `zHoverGlide`: `{@attach glide()}` trên danh sách, `data-glide-item` trên từng dòng (`glide` ở `src/lib/popover.ts`).
-  Dòng đang chọn / đang active có nền riêng `ROW_ON` (`bg-primary/15 text-primary`) và đặt `aria-selected="true"` để không nhận hover box.
-- Popover có ô tìm kiếm tự focus vào ô đó khi mở. Danh sách dài dùng virtual scroll và mờ hai đầu (xem `PickerPopover`).
-- Mỗi hàng có icon: agent dùng logo thương hiệu (`AgentLogo`, truyền `agent`), không dùng icon chung.
-- `ZCommand` chỉ còn cho palette tìm chat (`SearchPalette`); chỗ khác dùng popover.
-- Hover không được ghi đè trạng thái active: tab đang mở, nút đang bật, tool đang chọn giữ màu `bg-primary/15 text-primary` khi rê chuột
-  (dùng `ACTIVE_ON` / `TRIGGER_ON` trong `src/lib/popover.ts`, có `!` để thắng hover riêng của button).
+## Popovers and pick lists (UI)
+- Every popover/select menu uses `ZPopover` (or an existing `PickerPopover` / `ProjectSelect`); do not position a separate menu with `position: absolute`.
+  Anchor the popover to the element that opens it (`anchor`), choose `zPosition` based on available space, and size it to its content (a short list should stay narrow rather than filling the panel).
+- The trigger must remain highlighted while its popover is open: use `TRIGGER_ON` / `TRIGGER_ON_PLAIN` from `src/lib/popover.ts`, as with the chat cell's model picker.
+- Popover lists use `zHoverGlide`: attach `glide()` to the list and add `data-glide-item` to each row (`glide` is in `src/lib/popover.ts`).
+  The selected/active row has its own `ROW_ON` background (`bg-primary/15 text-primary`) and `aria-selected="true"` so it does not receive the hover box.
+- A popover search field auto-focuses when it opens. Long lists use virtual scrolling and fade at both ends (see `PickerPopover`).
+- Every row has an icon: agents use their brand logo (`AgentLogo`, passing `agent`), not a generic icon.
+- `ZCommand` is reserved for the chat search palette (`SearchPalette`); use popovers elsewhere.
+- Hover must not override active state: an open tab, enabled button, or selected tool keeps `bg-primary/15 text-primary` on hover (use `ACTIVE_ON` / `TRIGGER_ON` from `src/lib/popover.ts`, with `!` to win against the button's own hover style).
 
-## Component dùng chung (không tự dựng lại từng chỗ)
-- Danh sách chọn, ô tìm kiếm, danh sách tab: `PickerPopover` (cỡ `sm`/`md`, `search`, `local`, `headings`).
-- Menu chuột phải / menu của nút: `Menu` (mở tại điểm bằng `at`, hoặc trên `anchor`) và `MenuButton` (nút icon có menu). Truyền mảng item
-  như `ZDropdownMenuItem`; không dùng `ZDropdownMenu` nữa.
-- Select lọc theo project: `ProjectSelect`. Danh sách tab có tìm kiếm: `TabListButton`.
-- Mở file từ đường dẫn bất kỳ: `openProjectFile` (`file-viewer.svelte.ts`) với các hàm trong `src/lib/paths.ts`; không tự cắt/ghép đường dẫn.
+## Shared components (do not rebuild them per location)
+- Pick lists, search fields, and tab lists: `PickerPopover` (`sm`/`md`, `search`, `local`, `headings`).
+- Context menus and button menus: `Menu` (open at a point with `at`, or on an `anchor`) and `MenuButton` (icon button with a menu). Pass items as `ZDropdownMenuItem`; do not use `ZDropdownMenu` anymore.
+- Project filter select: `ProjectSelect`. Searchable tab list: `TabListButton`.
+- Open a file from any path with `openProjectFile` (`file-viewer.svelte.ts`) and the helpers in `src/lib/paths.ts`; do not slice or join paths manually.
 
-## Hai popover model (chat input và ô tạo ảnh AI): luôn sửa đồng bộ
-- `ModelPicker.svelte` (chat) và `ImageGenerator.svelte` (gen ảnh) dựng cùng kiểu popover: danh sách nested, Fast mode, effort, divider
-  Free / Hide / Paid. Sửa giao diện hay thứ tự ở một bên thì sửa luôn bên kia trong cùng lượt (cỡ công tắc `zSize="sm"`, divider,
-  scrollbar, thứ tự model). Thứ tự và divider model dùng chung `freeFirst` trong `src/lib/models.svelte.ts`: đừng tự xếp lại ở từng chỗ.
+## Two model popovers (chat input and AI image generation): always update both
+- `ModelPicker.svelte` (chat) and `ImageGenerator.svelte` (image generation) use the same popover structure: nested list, Fast mode, effort, divider, and Free / Hide / Paid sections. If you change the UI or ordering in one, change the other in the same turn (including `zSize="sm"`, divider, scrollbar, and model order). The model order and divider use the shared `freeFirst` in `src/lib/models.svelte.ts`; do not reorder models independently in each component.
 
-## File rác (file thử, file tạm)
-- File tạo ra chỉ để thử (Word, Excel, ảnh chụp, log) phải xoá trước khi kết thúc; không để ở root hay trong repo.
-- `pnpm clean:junk` liệt kê file rác chưa commit (chỉ xem), `pnpm clean:junk:delete` xoá chúng. Chỉ file chưa được git biết mới bị đụng tới;
-  file đã commit không bao giờ bị xoá. File chưa commit khác được liệt kê riêng để tự xem.
-- `pnpm hooks:install` bật hook pre-commit (`.githooks/pre-commit`): chặn commit khi có file rác trong phần staged.
-- Quy tắc nhận diện nằm ở đầu `scripts/clean-junk.mjs` (đuôi `.docx .xlsx .pptx .pdf .zip .log .tmp .part`, thư mục tạm, kết quả kiểm
-  `demo-media`); thêm vào đó khi gặp loại mới.
+## Junk files (test and temporary files)
+- Delete files created only for testing (Word, Excel, screenshots, logs) before finishing; do not leave them at the repository root or elsewhere in the repo.
+- `pnpm clean:junk` lists uncommitted junk (read-only); `pnpm clean:junk:delete` removes it. Only files unknown to Git are affected; tracked files are never deleted. Other uncommitted files are listed separately for manual review.
+- `pnpm hooks:install` enables the pre-commit hook (`.githooks/pre-commit`), which blocks commits when staged junk files are present.
+- Detection rules are at the top of `scripts/clean-junk.mjs` (extensions `.docx .xlsx .pptx .pdf .zip .log .tmp .part`, temporary directories, and `demo-media` outputs); add new junk types there when needed.

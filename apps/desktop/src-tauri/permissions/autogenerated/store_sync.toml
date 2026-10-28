@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-sync"
+description = "Enables the store_sync command without any pre-configured scope."
+commands.allow = ["store_sync"]
+
+[[permission]]
+identifier = "deny-store-sync"
+description = "Denies the store_sync command without any pre-configured scope."
+commands.deny = ["store_sync"]

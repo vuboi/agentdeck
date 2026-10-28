@@ -1886,7 +1886,7 @@ pub fn antigravity_quota_cached() -> Option<AgyQuota> {
 
 /// What a secret of the system store holds (Windows Credential Manager), as text.
 #[cfg(windows)]
-fn stored_secret(target: &str) -> Option<String> {
+pub(crate) fn stored_secret(target: &str) -> Option<String> {
     use windows::core::PCWSTR;
     use windows::Win32::Security::Credentials::{
         CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
@@ -1925,7 +1925,7 @@ fn stored_secret(target: &str) -> Option<String> {
 
 /// Writes a JSON credential into Windows Credential Manager; tokens never enter the account index file.
 #[cfg(windows)]
-fn write_secret(target: &str, secret: &str) -> Result<(), String> {
+pub(crate) fn write_secret(target: &str, secret: &str) -> Result<(), String> {
     use windows::core::PWSTR;
     use windows::Win32::Security::Credentials::{
         CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
@@ -1947,7 +1947,7 @@ fn write_secret(target: &str, secret: &str) -> Result<(), String> {
 
 /// Removes a credential from Windows Credential Manager after its account-specific copy has been saved.
 #[cfg(windows)]
-fn delete_secret(target: &str) -> Result<(), String> {
+pub(crate) fn delete_secret(target: &str) -> Result<(), String> {
     use windows::core::PCWSTR;
     use windows::Win32::Security::Credentials::{CredDeleteW, CRED_TYPE_GENERIC};
 

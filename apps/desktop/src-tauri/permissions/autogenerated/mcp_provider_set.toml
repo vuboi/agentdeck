@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mcp-provider-set"
+description = "Enables the mcp_provider_set command without any pre-configured scope."
+commands.allow = ["mcp_provider_set"]
+
+[[permission]]
+identifier = "deny-mcp-provider-set"
+description = "Denies the mcp_provider_set command without any pre-configured scope."
+commands.deny = ["mcp_provider_set"]

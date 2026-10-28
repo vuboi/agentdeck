@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { windowDrag } from '../window-drag';
   import Menu from './Menu.svelte';
   import { closeOnScroll } from '../close-on-scroll';
   import { revealTab } from '../tab-strip';
@@ -684,7 +685,7 @@
 <main class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden" aria-label="Conversation">
   <!-- With tools open, the window controls sit over the tools header, so this row only needs a small inset. -->
   <!-- Above the conversation body: its turn ruler (ZChatNavigator) is taller than the body and must not paint over the tabs. -->
-  <header class="relative z-40 flex h-10 shrink-0 items-center border-b border-border bg-background {layout.toolsVisible ? 'pr-[7px]' : 'pr-[106px]'}" data-tauri-drag-region="deep">
+  <header class="relative z-40 flex h-10 shrink-0 items-center border-b border-border bg-background {layout.toolsVisible ? 'pr-[7px]' : 'pr-[106px]'}" {@attach windowDrag}>
     <!-- Browser-style tabs: chats and files side by side, each with a close button; + starts a new chat.
          No scrollbar: when the tabs overflow, an arrow opens the full list. -->
     {#if layout.sidebarHidden || layout.sidebarCollapsed}
@@ -704,7 +705,7 @@
     {/if}
     <div class="flex min-w-0 flex-1 items-center gap-1 pl-2">
       <div class="relative flex min-w-0 shrink items-center">
-        <div bind:this={tabStrip} bind:clientWidth={tabStripWidth} onscroll={() => (tabScrolled = (tabStrip?.scrollLeft ?? 0) > 1)} class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden" role="tablist" aria-label="Open tabs" data-tauri-drag-region>
+        <div bind:this={tabStrip} bind:clientWidth={tabStripWidth} onscroll={() => (tabScrolled = (tabStrip?.scrollLeft ?? 0) > 1)} class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden" role="tablist" aria-label="Open tabs">
           {#each contentTabs.tabs as tab (tab.id)}
             {@const active = contentTabs.active === tab.id}
             {@const label = tabLabel(tab)}

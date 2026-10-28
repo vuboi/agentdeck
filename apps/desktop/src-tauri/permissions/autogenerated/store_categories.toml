@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-categories"
+description = "Enables the store_categories command without any pre-configured scope."
+commands.allow = ["store_categories"]
+
+[[permission]]
+identifier = "deny-store-categories"
+description = "Denies the store_categories command without any pre-configured scope."
+commands.deny = ["store_categories"]

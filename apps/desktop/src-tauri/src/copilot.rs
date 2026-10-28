@@ -329,7 +329,7 @@ async fn start_client(token: String, cwd: Option<&Path>) -> Result<Client, Strin
 fn mcp_servers(
     cwd: Option<&Path>,
 ) -> indexmap::IndexMap<String, github_copilot_sdk::types::McpServerConfig> {
-    crate::mcp_manage::servers_for(cwd)
+    crate::mcp_manage::servers_for_agent(cwd, "copilot")
         .into_iter()
         .filter(|server| server.agent == "claude" || server.agent == "codex" || server.agent == "antigravity" || server.agent == "copilot")
         .filter_map(|server| {

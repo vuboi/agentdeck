@@ -8,7 +8,6 @@
   import { debounced } from '../debounce.svelte';
   import { clearTopActions, setTopActions, topActions } from '../store-actions.svelte';
   import {
-    assignSkill,
     importSkill,
     loadStore,
     removeSkill,
@@ -22,6 +21,7 @@
   } from '../store.svelte';
   import AgentLogo from './AgentLogo.svelte';
   import McpView from './McpView.svelte';
+  import StoreHeader from './StoreHeader.svelte';
   import StoreBar from './StoreBar.svelte';
   import StoreAddDialog from './StoreAddDialog.svelte';
   import StoreDiscover from './StoreDiscover.svelte';
@@ -30,18 +30,25 @@
   import StoreSources from './StoreSources.svelte';
   import StoreUpdates from './StoreUpdates.svelte';
 
-  type Tab = 'installed' | 'discover' | 'updates' | 'sources';
+  import { BUILT_IN_AGENTS } from '../provider-registry';
+  import SkillProviders from './SkillProviders.svelte';
+  import StoreCategoryFilter from './StoreCategoryFilter.svelte';
+  import { matchesStoreCategory } from '../store-categories.svelte';
+  import StoreSync from './StoreSync.svelte';
+
+  type Tab = 'sync' | 'installed' | 'discover' | 'updates' | 'sources';
   let tab = $state<Tab>('installed');
   let addOpen = $state(false);
   let mcpAdding = $state(false);
   let query = $state('');
+  let category = $state('all');
   const searched = debounced(() => query);
 
   const icon = (name: string) => name as ZIconName;
 
   // Skills go to the agents that read a skill folder; MCP and plugins are handled by their own commands.
-  // The same list as SKILL_AGENTS in src-tauri/src/store/library.rs.
-  const SKILL_AGENTS = ['claude', 'codex', 'opencode', 'antigravity', 'copilot'];
+  // Provider metadata comes from the shared registry.
+
   const ORIGIN_LABEL: Record<string, string> = { library: 'Library', user: 'Own folder' };
   const originLabel = (origin: string) => ORIGIN_LABEL[origin] ?? `Plugin · ${origin}`;
 
@@ -72,7 +79,7 @@
     return () => clearTopActions(owner);
   });
   const has = (text: string) => text.toLowerCase().includes(searched.value.trim().toLowerCase());
-  const skills = $derived(store.skills.filter((skill) => has(`${skill.name} ${skill.description ?? ''}`)));
+  const skills = $derived(store.skills.filter((skill) => has(`${skill.name} ${skill.description ?? ''}`) && matchesStoreCategory(`${skill.name} ${skill.description ?? ''}`, category)));
   const plugins = $derived(store.plugins.filter((plugin) => has(`${plugin.name} ${plugin.marketplace}`)));
 
 
@@ -80,11 +87,6 @@
     void loadStore();
     void loadMcp();
   });
-
-  function toggleAgent(skill: SkillItem, agent: string, on: boolean) {
-    const next = on ? [...new Set([...skill.linked, agent])] : skill.linked.filter((item) => item !== agent);
-    void assignSkill(skill.name, next);
-  }
 
   // Destructive actions ask first, in the same confirm dialog as the rest of the app (Revert, Clear, …).
   function dropSkill(skill: SkillItem) {
@@ -114,7 +116,7 @@
   }
 
   // Sharing a plugin copies its skills into the library and adds its MCP servers; a caution asks first.
-  const share = (plugin: PluginItem) => withAck((acknowledged) => sharePlugin(plugin, SKILL_AGENTS, acknowledged), plugin.name);
+  const share = (plugin: PluginItem) => withAck((acknowledged) => sharePlugin(plugin, BUILT_IN_AGENTS.map((a) => a.id), acknowledged), plugin.name);
 
   const refreshing = $derived(store.loading || mcp.loading);
 
@@ -122,6 +124,7 @@
     { value: 'installed', label: 'Installed' },
     { value: 'discover', label: 'Discover' },
     { value: 'updates', label: 'Updates' },
+    { value: 'sync', label: 'Sync' },
     { value: 'sources', label: 'Sources' },
   ];
 </script>
@@ -145,22 +148,26 @@
     <StoreEmpty icon="lucidePuzzle" text="Desktop app only" hint="The Store is read from your computer. Open the desktop app to use it." />
   {:else if tab === 'discover'}
     <StoreDiscover />
+  {:else if tab === 'sync'}
+    <StoreSync />
   {:else if tab === 'updates'}
     <StoreUpdates />
   {:else if tab === 'sources'}
     <StoreSources />
   {:else}
     <!-- Header 2: what kind of thing; header 3: the search box. -->
-    <div class="flex shrink-0 items-center border-b border-border px-1.5 py-1.5">
+    <StoreHeader>
       <div class="store-kinds min-w-0"><ZTabs zTabs={KIND_TABS} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={section} onTabChange={(next) => (section = next as Section)} /></div>
-    </div>
+    </StoreHeader>
+    {#snippet categoryFilter()}<StoreCategoryFilter class="w-full" bind:value={category} />{/snippet}
     <StoreBar
+      filters={section === 'plugins' ? undefined : categoryFilter}
       bind:query
       placeholder={section === 'mcp' ? 'Search MCP servers' : section === 'plugins' ? 'Search plugins' : 'Search skills'}
     />
 
     {#if section === 'mcp'}
-      <div class="flex min-h-0 flex-1 flex-col"><McpView query={searched.value} bind:adding={mcpAdding} /></div>
+      <div class="flex min-h-0 flex-1 flex-col"><McpView {category} query={searched.value} bind:adding={mcpAdding} /></div>
     {:else}
       <div class="flex min-h-0 flex-1 flex-col overflow-y-auto text-xs {GUTTER}">
         {#if store.error}
@@ -200,24 +207,7 @@
                   </div>
 
                   {#if skill.origin === 'library' || skill.origin === 'user'}
-                    <div class="mt-2 flex flex-wrap gap-3 border-t border-border pt-2">
-                      {#each SKILL_AGENTS as agent (agent)}
-                        {@const has = skill.agents.includes(agent)}
-                        {@const linked = skill.linked.includes(agent)}
-                        <label class="flex items-center gap-1.5 {has && !linked ? 'opacity-60' : ''}" title={has && !linked ? `${agent} has its own copy` : ''}>
-                          <AgentLogo {agent} class="size-3.5" />
-                          <span class="capitalize">{agent}</span>
-                          <ZSwitch
-                            zVariant="dot"
-                            zSize="sm"
-                            checked={linked}
-                            zLoading={busy(`assign:${skill.name}`)}
-                            zDisabled={skill.origin !== 'library' || (has && !linked) || busy(`assign:${skill.name}`)}
-                            onChange={(value) => toggleAgent(skill, agent, value)}
-                          />
-                        </label>
-                      {/each}
-                    </div>
+                    <div class="mt-2 flex items-center border-t border-border pt-1.5"><SkillProviders {skill} /></div>
                   {:else}
                     <div class="mt-2 flex items-center gap-1.5 border-t border-border pt-2 text-muted-foreground">
                       <AgentLogo agent={skill.agents[0]} class="size-3.5" />

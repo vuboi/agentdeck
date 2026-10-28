@@ -63,6 +63,7 @@
         items: all,
         query = $bindable(''),
         local = false,
+        multiple = false,
         search = false,
         headings = true,
         tall = false,
@@ -93,6 +94,8 @@
         items: PickerItem<T>[];
         /** The picker narrows `items` by what is typed, itself (a short fixed list); else the owner does. */
         local?: boolean;
+        /** This list permits multiple selected provider rows. */
+        multiple?: boolean;
         query?: string;
         search?: boolean;
         /** Group names are written above their rows; else a line is drawn between groups (a menu). */
@@ -426,6 +429,7 @@
         <div
             class="flex w-full flex-col {look.text}"
             role="listbox"
+            aria-multiselectable={multiple || undefined}
             aria-label={label}
             tabindex="-1"
             onpointerenter={onenter}

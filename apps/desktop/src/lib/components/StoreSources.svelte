@@ -50,7 +50,7 @@
         {#each shown as url (url)}
           <li class="flex items-center gap-2 rounded-md border border-border bg-card p-2.5">
             <span class="min-w-0 flex-1 truncate font-mono text-[11px]">{url}</span>
-            <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! p-0 text-destructive hover:!bg-destructive/10" title="Remove source" aria-label="Remove source" onclick={() => void removeSource(url)}>
+            <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! p-0 text-destructive hover:!bg-destructive/10" title="Remove source" aria-label="Remove source" onclick={() => void removeSource(url)}>
               <ZIcon zType={icon('lucideTrash2')} class="size-3.5" />
             </ZButton>
           </li>

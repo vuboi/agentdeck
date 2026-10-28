@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 pub mod catalog;
+pub mod categories;
 pub mod install;
 pub mod library;
 pub mod lock;
@@ -23,6 +24,7 @@ pub mod scan;
 pub mod share;
 pub mod stage;
 pub mod updates;
+pub mod sync;
 
 use install::{checked_job, discard};
 use library::{checked_name, SKILL_AGENTS};
@@ -58,7 +60,7 @@ pub async fn store_installed() -> Result<StoreInstalled, String> {
         skills,
         ..StoreInstalled::default()
     };
-    for agent in SKILL_AGENTS {
+    for agent in ["claude", "codex"] {
         match plugins::installed(agent).await {
             Ok(list) => installed.plugins.extend(list),
             Err(error) => installed.plugin_errors.push(format!("{agent}: {error}")),
@@ -250,10 +252,12 @@ pub async fn store_catalog_refresh() -> Result<catalog::Page, String> {
 /// A plugin is scanned at its pinned source first, a skill after its clone. An MCP server runs a command, so it needs
 /// `acknowledged` after the user has read the command.
 #[tauri::command]
-pub async fn store_catalog_install(item: catalog::CatalogItem, acknowledged: bool) -> Result<Vec<String>, String> {
+pub async fn store_catalog_install(item: catalog::CatalogItem, acknowledged: bool, project: Option<PathBuf>) -> Result<Vec<String>, String> {
     let home = home()?;
+    if project.as_ref().is_some_and(|p| !p.is_absolute() || !p.is_dir()) { return Err("Select an existing project folder".into()); }
     match item.install {
         catalog::Install::Plugin { agent, plugin_id, source } => {
+            if project.is_some() { return Err("Plugin install scope is controlled by its provider; choose Global".into()); }
             check_plugin_id(&plugin_id)?;
             let job = stage::new_job_id();
             let scanned = catalog::plugin_folder(&home, &job, &source).await;
@@ -268,18 +272,19 @@ pub async fn store_catalog_install(item: catalog::CatalogItem, acknowledged: boo
         }
         catalog::Install::Mcp { spec } => {
             scan::gate(scan::Verdict::Caution, acknowledged, &item.name)?;
+            if let Some(project) = project { return sync::install_project_mcp(&project, spec); }
             install::add_mcp(spec).await
         }
         catalog::Install::Skill { url, subpath } => {
             let job = stage::new_job_id();
-            let result = install_catalog_skill(&home, &job, &url, &subpath, acknowledged).await;
+            let result = install_catalog_skill(&home, &job, &url, &subpath, acknowledged, project.as_deref()).await;
             discard(&home, &job);
             result
         }
     }
 }
 
-async fn install_catalog_skill(home: &std::path::Path, job: &str, url: &str, subpath: &str, acknowledged: bool) -> Result<Vec<String>, String> {
+async fn install_catalog_skill(home: &std::path::Path, job: &str, url: &str, subpath: &str, acknowledged: bool, project: Option<&std::path::Path>) -> Result<Vec<String>, String> {
     let root = stage::stage(home, job, stage::Source::Git { url: url.to_owned() }).await?;
     let folder = root.join(subpath);
     if !folder.join("SKILL.md").is_file() {
@@ -290,7 +295,13 @@ async fn install_catalog_skill(home: &std::path::Path, job: &str, url: &str, sub
     let verdict = blocking(move || Ok(scan::scan_folder(&scanned).verdict)).await?;
     scan::gate(verdict, acknowledged, &name)?;
     let agents: Vec<String> = SKILL_AGENTS.iter().map(|agent| (*agent).to_owned()).collect();
-    library::add(home, &name, &folder, url, subpath, &agents)?;
+    library::add(home, &name, &folder, url, subpath, if project.is_some() { &[] } else { &agents })?;
+    if let Some(project) = project {
+        sync::remember_projects(home, &[project.to_path_buf()])?;
+        for target in library::project_folders() {
+            sync::link_skill(project, target, &name, &library::library_root(home).join(&name))?;
+        }
+    }
     Ok(vec![format!("{name} installed")])
 }
 
@@ -299,7 +310,7 @@ async fn install_catalog_skill(home: &std::path::Path, job: &str, url: &str, sub
 pub(crate) async fn add_skill_from_git(url: &str, subpath: &str) -> Result<Vec<String>, String> {
     let home = home()?;
     let job = stage::new_job_id();
-    let result = install_catalog_skill(&home, &job, url, subpath, false).await;
+    let result = install_catalog_skill(&home, &job, url, subpath, false, None).await;
     discard(&home, &job);
     result
 }

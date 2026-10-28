@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::library::{copy_tree, library_root};
+use super::library::{checked_name, copy_tree, library_root};
 use super::lock::{self, LockEntry};
 use super::scan;
 use super::stage::{self, Source};
@@ -52,6 +52,7 @@ pub async fn check(home: &Path) -> Vec<UpdateItem> {
 
 /// Updates one skill from its source. Refused on a block; a caution needs `acknowledged`.
 pub async fn apply(home: &Path, name: &str, acknowledged: bool) -> Result<(), String> {
+    checked_name(name)?;
     let entry = lock::read(home)
         .remove(name)
         .filter(from_git)
@@ -61,12 +62,60 @@ pub async fn apply(home: &Path, name: &str, acknowledged: bool) -> Result<(), St
             return Err(format!("the source no longer has {name}'s SKILL.md where it was"));
         }
         scan::gate(scan::scan_folder(folder).verdict, acknowledged, &format!("the new version of {name}"))?;
-        let target = library_root(home).join(name);
-        if target.exists() {
-            std::fs::remove_dir_all(&target).map_err(|error| error.to_string())?;
-        }
-        copy_tree(folder, &target)?;
-        lock::record(home, name, &entry.source, &entry.subpath, &target)
+        replace(home, name, folder, &entry)
     })
     .await
+}
+
+/// Prepare a complete replacement first. Swap folders so deleted upstream files cannot survive an update.
+fn replace(home: &Path, name: &str, folder: &Path, entry: &LockEntry) -> Result<(), String> {
+    checked_name(name)?;
+    let target = library_root(home).join(name);
+    let work = home.join(".agentdeck/library/.updates").join(stage::new_job_id());
+    let prepared = work.join("new");
+    let backup = work.join("old");
+    let result = (|| {
+        copy_tree(folder, &prepared)?;
+        if !prepared.join("SKILL.md").is_file() { return Err("Replacement has no SKILL.md".into()); }
+        let had_old = target.exists();
+        if had_old { std::fs::rename(&target, &backup).map_err(|e| e.to_string())?; }
+        if let Err(error) = std::fs::rename(&prepared, &target) {
+            if had_old { std::fs::rename(&backup, &target).map_err(|e| format!("Replacement failed: {error}; recovery failed: {e}. Old skill retained at {}", backup.display()))?; }
+            return Err(error.to_string());
+        }
+        if let Err(error) = lock::record(home, name, &entry.source, &entry.subpath, &target) {
+            std::fs::remove_dir_all(&target).map_err(|e| format!("{error}; could not remove incomplete replacement: {e}"))?;
+            if had_old { std::fs::rename(&backup, &target).map_err(|e| format!("{error}; recovery failed: {e}. Old skill retained at {}", backup.display()))?; }
+            return Err(error);
+        }
+        Ok(())
+    })();
+    // A failed rollback leaves the backup available for recovery instead of deleting it.
+    if result.is_ok() || !backup.exists() { let _ = std::fs::remove_dir_all(&work); }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replacement_removes_obsolete_files_and_preparation_failure_preserves_old_skill() {
+        let home = std::env::temp_dir().join(format!("agentdeck-replace-{}", stage::new_job_id()));
+        let old = library_root(&home).join("example");
+        let source = home.join("incoming");
+        std::fs::create_dir_all(&old).expect("old folder");
+        std::fs::create_dir_all(&source).expect("new folder");
+        std::fs::write(old.join("SKILL.md"), "old").expect("old skill");
+        std::fs::write(old.join("obsolete.txt"), "obsolete").expect("old extra file");
+        let entry = LockEntry { source: "https://example.org/skill".into(), subpath: String::new(), hash: String::new(), installed_at: 0 };
+        assert!(replace(&home, "example", &source, &entry).is_err());
+        assert_eq!(std::fs::read_to_string(old.join("SKILL.md")).expect("preserved"), "old");
+        std::fs::write(source.join("SKILL.md"), "new").expect("new skill");
+        replace(&home, "example", &source, &entry).expect("replace");
+        assert_eq!(std::fs::read_to_string(old.join("SKILL.md")).expect("updated"), "new");
+        assert!(!old.join("obsolete.txt").exists());
+        assert_eq!(lock::read(&home)["example"].hash, lock::content_hash(&old).expect("hash"));
+        std::fs::remove_dir_all(home).expect("cleanup");
+    }
 }

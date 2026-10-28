@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { windowDrag } from '../window-drag';
   import Menu from './Menu.svelte';
   import { closeOnScroll } from '../close-on-scroll';
   import { customProviderName } from '../models.svelte';
@@ -670,9 +671,9 @@
 
 <aside class="flex h-full min-w-0 flex-col bg-sidebar" aria-label="Sessions">
   <!-- Header row shared with the other panes: same height, one continuous bottom line. -->
-  <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 pl-3" data-tauri-drag-region>
+  <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 pl-3" {@attach windowDrag}>
     <Logo class="size-5" />
-    <span class="text-xs font-semibold" data-tauri-drag-region>AgentDeck</span>
+    <span class="text-xs font-semibold">AgentDeck</span>
     <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-8! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : layout.sidebarCollapsed && layout.sidebarDrawer ? pinSidebar() : setSidebarCollapsed(true))}>
       <ZIcon zType={'lucidePanelLeft' as ZIconName} class="size-3.5" />
     </ZButton>

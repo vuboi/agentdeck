@@ -242,6 +242,16 @@ pub fn list(agent: &str, home: &Path, project: Option<&Path>) -> Vec<ProviderCom
             skills_in(&home.join(".codex").join("skills"), "user", "", &mut found);
             skills_in(&home.join(".agents").join("skills"), "user", "", &mut found);
         }
+        "opencode" => {
+            if let Some(project) = project {
+                for folder in [".opencode/skills", ".claude/skills", ".agents/skills"] {
+                    skills_in(&project.join(folder), "project", "", &mut found);
+                }
+            }
+            for folder in [".config/opencode/skills", ".config/opencode/skill", ".claude/skills", ".agents/skills"] {
+                skills_in(&home.join(folder), "user", "", &mut found);
+            }
+        }
         "antigravity" => {
             if let Some(project) = project {
                 skills_in(
@@ -278,9 +288,12 @@ fn allowed_roots(home: &Path, project: Option<&Path>) -> Vec<PathBuf> {
         .iter()
         .map(|name| home.join(name))
         .collect();
+    roots.push(home.join(".config/opencode"));
+    // Provider junctions canonicalize into the managed library, rather than staying under the provider root.
+    roots.push(crate::store::library::library_root(home));
     if let Some(project) = project {
         roots.extend(
-            [".claude", ".codex", ".agents", ".github"]
+            [".claude", ".codex", ".agents", ".github", ".opencode"]
                 .iter()
                 .map(|name| project.join(name)),
         );

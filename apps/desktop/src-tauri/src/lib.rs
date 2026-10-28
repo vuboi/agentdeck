@@ -27,6 +27,7 @@ mod index;
 mod mcp;
 mod mcp_client;
 mod mcp_manage;
+mod mcp_providers;
 mod notify;
 mod page_memory;
 mod path_links;
@@ -2028,6 +2029,8 @@ pub fn run() {
             store::store_source_remove,
             store::store_updates_check,
             store::store_update_skill,
+            store::sync::store_sync,
+            store::categories::store_categories,
             store::store_plugin_share,
             store::store_mcp_login,
             store::store_skill_import,
@@ -2037,6 +2040,7 @@ pub fn run() {
             store::store_plugin_uninstall,
             mcp_manage::mcp_test,
             mcp_manage::mcp_add,
+            mcp_providers::mcp_provider_set,
             mcp_manage::mcp_remove,
             mcp_manage::mcp_agy_link,
             connectors::antigravity_quota,

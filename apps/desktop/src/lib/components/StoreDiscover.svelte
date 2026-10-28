@@ -1,18 +1,17 @@
 <script lang="ts">
+  import StoreHeader from './StoreHeader.svelte';
+  import StoreCategoryFilter from './StoreCategoryFilter.svelte';
+  import { workspace } from '../sessions.svelte';
   import { onMount } from 'svelte';
-  import { ZButton, ZIcon, zModalService } from '@shival99/z-ui-svelte';
-  import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { TRIGGER_ON } from '../popover';
+  import { ZButton, ZIcon, ZSelect, zModalService } from '@shival99/z-ui-svelte';
   import { catalog, installCatalogItem, loadCatalog, loadMoreCatalog, refreshCatalog, store, withAck, type CatalogFilter, type CatalogItem } from '../store.svelte';
   import AgentLogo from './AgentLogo.svelte';
-  import PickerPopover, { type PickerItem } from './PickerPopover.svelte';
   import StoreEmpty from './StoreEmpty.svelte';
   import StoreBar from './StoreBar.svelte';
   import { clearTopActions, setTopActions } from '../store-actions.svelte';
   import { debounced } from '../debounce.svelte';
   import StoreSkeleton, { GUTTER, ROW } from './StoreSkeleton.svelte';
 
-  const icon = (name: string) => name as ZIconName;
 
   // The catalog of plugins, MCP servers and skills. Rust filters it and hands over a page at a time: the next page loads
   // when the list is scrolled near its end, so the first view never waits for thousands of items.
@@ -34,35 +33,20 @@
     { value: 'copilot', label: 'GitHub Copilot' },
   ];
 
+  let project = $state<string | null>(null);
+  const projects = $derived(workspace.projects.filter((p) => p.path).map((p) => p.path!));
   let query = $state('');
   let kind = $state<Kind>('all');
+  let category = $state('all');
   let agent = $state<AgentFilter>('all');
   let scroller = $state<HTMLElement | null>(null);
-  let kindButton = $state<HTMLElement | null>(null);
-  let agentButton = $state<HTMLElement | null>(null);
-  let kindOpen = $state(false);
-  let agentOpen = $state(false);
-
-  const kindItems = $derived<PickerItem<Kind>[]>(
-    KINDS.map((option) => ({ id: option.value, label: option.label, icon: icon(option.icon), selected: option.value === kind, data: option.value })),
-  );
-  const agentItems = $derived<PickerItem<AgentFilter>[]>(
-    AGENTS.map((option) => ({
-      id: option.value,
-      label: option.label,
-      ...(option.value === 'all' ? { icon: icon('lucideUsers') } : { agent: option.value }),
-      selected: option.value === agent,
-      data: option.value,
-    })),
-  );
-
   const searched = debounced(() => query);
   const owner = Symbol('discover');
   $effect(() => {
     setTopActions(owner, [{ id: 'refresh', label: 'Refresh the catalog', icon: 'lucideRefreshCw', onclick: () => void refreshCatalog(), busy: catalog.refreshing }]);
     return () => clearTopActions(owner);
   });
-  const filter = $derived<CatalogFilter>({ query: searched.value, kind, agent });
+  const filter = $derived<CatalogFilter>({ query: searched.value, kind, agent, category });
 
   // A new filter reads its first page; the search waits for typing to stop (`debounced`), so each key does not ask Rust. The
   // placeholder rows stay at least `SETTLE` ms, so a fast answer does not flash: the rows then rise in.
@@ -121,35 +105,38 @@
         zOkIcon: 'lucideDownload',
         zCancelText: 'Cancel',
         zWidth: '400px',
-        onOk: () => void installCatalogItem(item, true),
+        onOk: () => void installCatalogItem(item, true, project),
       });
       return;
     }
-    await withAck((acknowledged) => installCatalogItem(item, acknowledged), item.name);
+    await withAck((acknowledged) => installCatalogItem(item, acknowledged, project), item.name);
   }
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col">
-  <StoreBar bind:query placeholder="Search plugins, MCP servers, skills" >
+  <StoreBar bind:query placeholder="Search plugins, MCP servers, skills">
     {#snippet filters()}
-      <span bind:this={kindButton}>
-        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs {kindOpen ? TRIGGER_ON : ''}" aria-expanded={kindOpen} onclick={() => (kindOpen = !kindOpen)}>
-          {KINDS.find((option) => option.value === kind)?.label}
-          <ZIcon zType={icon('lucideChevronDown')} class="size-3" />
-        </ZButton>
-      </span>
-      <span bind:this={agentButton}>
-        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs {agentOpen ? TRIGGER_ON : ''}" aria-expanded={agentOpen} onclick={() => (agentOpen = !agentOpen)}>
-          {#if agent !== 'all'}<AgentLogo {agent} class="size-3.5" />{/if}
-          {AGENTS.find((option) => option.value === agent)?.label}
-          <ZIcon zType={icon('lucideChevronDown')} class="size-3" />
-        </ZButton>
-      </span>
+      <ZSelect zSize="sm" class="h-8 min-w-0 text-xs" zOptions={[{ label: 'Global · all projects', value: '' }, ...projects.map((path) => ({ label: workspace.projects.find((p) => p.path === path)?.name ?? path, value: path }))]} value={project ?? ''} onValueChange={(value) => (project = String(value ?? '') || null)} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
     {/snippet}
   </StoreBar>
-
-  <PickerPopover anchor={kindButton} bind:open={kindOpen} items={kindItems} size="sm" fitContent width={170} label="Kind" onpick={(item) => { kind = item.data; kindOpen = false; }} />
-  <PickerPopover anchor={agentButton} bind:open={agentOpen} items={agentItems} size="sm" fitContent width={160} label="Agent" onpick={(item) => { agent = item.data; agentOpen = false; }} />
+  <StoreHeader>
+    <div class="flex min-w-0 items-center gap-1">
+      <StoreCategoryFilter bind:value={category} />
+      <div class="w-28 min-w-0 max-w-32">
+        <ZSelect zSize="sm" class="h-8 min-w-0 text-xs" zOptions={KINDS.map((option) => ({ label: option.label, value: option.value }))} value={kind} onValueChange={(value) => (kind = String(value ?? 'all') as Kind)} zShowSearch={false} zDropdownWidth={170} />
+      </div>
+      <div class="w-28 min-w-0 max-w-32">
+        <ZSelect zSize="sm" class="h-8 min-w-0 text-xs" zOptions={AGENTS.map((option) => ({ label: option.label, value: option.value }))} value={agent} onValueChange={(value) => (agent = String(value ?? 'all') as AgentFilter)} zShowSearch zPlaceholderSearch="Find provider…" zDropdownWidth={210}>
+          {#snippet option(item)}
+            <span class="flex min-w-0 items-center gap-2">{#if item.value !== 'all'}<AgentLogo agent={item.value} class="size-3.5 shrink-0" />{/if}<span class="truncate">{item.label}</span></span>
+          {/snippet}
+          {#snippet selection(item)}
+            <span class="flex min-w-0 items-center gap-1.5">{#if item.value !== 'all'}<AgentLogo agent={item.value} class="size-3.5 shrink-0" />{/if}<span class="truncate">{item.label}</span></span>
+          {/snippet}
+        </ZSelect>
+      </div>
+    </div>
+  </StoreHeader>
 
   {#if catalog.error}
     <p class="m-0 mx-1.5 mt-1.5 rounded-md border border-destructive/30 bg-destructive/10 p-2 text-destructive">{catalog.error}</p>
@@ -164,7 +151,7 @@
     {#if catalog.items.length === 0 && (catalog.refreshing || filtering || catalog.loading)}
       <StoreSkeleton />
     {:else if catalog.items.length === 0}
-      <StoreEmpty icon="lucideSearch" text={catalog.fetchedAt && (query || kind !== 'all' || agent !== 'all') ? 'Nothing matches this search.' : 'The catalog is empty.'} hint={catalog.fetchedAt ? '' : 'Press refresh to read the agents\' plugin lists, the MCP registry and your skill sources.'} />
+      <StoreEmpty icon="lucideSearch" text={catalog.fetchedAt && (query || kind !== 'all' || agent !== 'all' || category !== 'all') ? 'Nothing matches this search.' : 'The catalog is empty.'} hint={catalog.fetchedAt ? '' : 'Press refresh to read the agents\' plugin lists, the MCP registry and your skill sources.'} />
     {:else}
       <ul class="m-0 flex list-none flex-col gap-2 p-1.5">
         {#each catalog.items as item (item.key)}
@@ -177,7 +164,7 @@
               </div>
               {#if item.summary}<p class="m-0 mt-0.5 line-clamp-2 leading-snug text-muted-foreground">{item.summary}</p>{/if}
               <div class="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                {#each item.agents as agentName (agentName)}<AgentLogo agent={agentName} class="size-3" />{/each}
+                {#each item.agents as agentName (agentName)}<AgentLogo agent={agentName} class="size-3 shrink-0" />{/each}
                 <span class="truncate">{item.publisher}</span>
               </div>
             </div>

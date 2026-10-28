@@ -11,8 +11,9 @@
     value = $bindable(null),
     options,
     label,
+    allLabel = 'All projects',
     class: className = '',
-  }: { value?: string | null; options: string[]; label: (option: string) => string; class?: string } = $props();
+  }: { value?: string | null; options: string[]; label: (option: string) => string; allLabel?: string; class?: string } = $props();
 
   let trigger = $state<HTMLElement | null>(null);
   let open = $state(false);
@@ -21,7 +22,7 @@
   // A project that left the list (nothing of it in the range any more) reads as "All projects", as the views filter.
   const current = $derived(value !== null && options.includes(value) ? value : null);
   const items = $derived<PickerItem<string | null>[]>([
-    { id: '::all', label: 'All projects', icon: 'lucideFolders' as ZIconName, selected: current === null, data: null },
+    { id: '::all', label: allLabel, icon: 'lucideFolders' as ZIconName, selected: current === null, data: null },
     ...options.map((option) => ({ id: `project:${option}`, label: label(option), icon: 'lucideFolder' as ZIconName, selected: current === option, data: option })),
   ]);
 
@@ -41,7 +42,7 @@
   aria-expanded={open}
   onclick={() => (open = !open)}
 >
-  <span class="truncate">{current === null ? 'All projects' : label(current)}</span>
+  <span class="truncate">{current === null ? allLabel : label(current)}</span>
   <ZIcon zType={'lucideChevronDown' as ZIconName} class="size-3.5 shrink-0 text-muted-foreground" />
 </button>
 
