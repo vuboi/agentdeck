@@ -11,6 +11,12 @@
 /apps/desktop/src-tauri/gen/
 /.tauri/
 
+# files an agent makes at the root to try something (clean what is left with `pnpm clean:junk`)
+/*.docx
+/*.xlsx
+/*.pptx
+/*.pdf
+
 # local agent credentials
 .codex/auth.json
 **/auth.json

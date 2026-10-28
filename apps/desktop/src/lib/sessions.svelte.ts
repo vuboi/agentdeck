@@ -19,6 +19,7 @@ import { logRequest, trackActivity } from './activity.svelte';
 import { logTalk } from './activity.svelte';
 import { guide } from './guide.svelte';
 import { parseQuestions, QUESTION_RULE, type Question } from './questions';
+import { demoRuns } from './demo-runs';
 import { attachmentBlocks, splitAttachments } from './attachments';
 import {
   deleteCommandImages,
@@ -2539,6 +2540,8 @@ export type DelegateRun = {
 };
 const RUN_LIMIT = 100;
 export const delegateRuns = $state<DelegateRun[]>([]);
+// The browser mock has no flows to show: made-up finished runs fill the Workflow history (never in the desktop app).
+if (!inTauri()) delegateRuns.push(...demoRuns());
 
 // Finished runs are kept (IndexedDB), so the Workflow tab has a history to judge the flows by after a restart. What a
 // step was handed and answered is cut short: the numbers and the outcome are what the history is for.

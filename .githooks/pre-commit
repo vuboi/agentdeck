@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stops a commit that adds a leftover file (a Word or Excel file made to try something, a log, a screenshot of a check).
+# Turned on with `pnpm hooks:install`.
+node scripts/clean-junk.mjs --staged

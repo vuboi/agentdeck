@@ -10,6 +10,7 @@
   import FlowCanvas from './flow/FlowCanvas.svelte';
   import ProjectSelect from './ProjectSelect.svelte';
   import FlowTemplates from './flow/FlowTemplates.svelte';
+  import FlowHistory from './flow/FlowHistory.svelte';
   import { shortCount, totalTokens, usd } from '../usage';
 
   const icon = (name: string) => name as ZIconName;
@@ -97,26 +98,6 @@
       time: span((run.endedAt ?? ticker.sec) - run.startedAt),
     };
   }
-
-  // How each flow has done over the kept history: how often it ran, how often every step and the main agent finished,
-  // and what a run costs in time and money on average. `@agent` hand-offs count together.
-  const flowStats = $derived.by(() => {
-    const groups = new Map<string, DelegateRun[]>();
-    for (const run of filtered) {
-      if (!run.endedAt || run.cancelled) continue;
-      const key = run.preset ?? '@agent';
-      groups.set(key, [...(groups.get(key) ?? []), run]);
-    }
-    return [...groups.entries()]
-      .map(([name, list]) => {
-        const ok = list.filter((run) => run.handback === 'done' && run.nodes.every((node) => node.state === 'done')).length;
-        const cost = list.reduce((sum, run) => sum + [...run.nodes.map((node) => node.stats), run.handbackStats].reduce((part, item) => part + (item?.cost ?? 0), 0), 0);
-        const ms = list.reduce((sum, run) => sum + ((run.endedAt ?? run.startedAt) - run.startedAt), 0);
-        return { name, runs: list.length, rate: Math.round((ok / list.length) * 100), time: span(ms / list.length), cost: cost / list.length, last: Math.max(...list.map((run) => run.endedAt ?? 0)) };
-      })
-      .sort((a, b) => b.last - a.last);
-  });
-  let historyOpen = $state(true);
 
   function runState(run: DelegateRun): { label: string; tone: string } {
     if (run.handback === 'done') return { label: run.nodes.some((node) => node.state === 'failed') ? 'Done, some failed' : 'Done', tone: 'text-emerald-600 dark:text-emerald-400' };
@@ -273,33 +254,7 @@
   {:else}
     <div class="min-h-0 flex-1 overflow-y-auto p-1.5">
       <div class="flex flex-col gap-3">
-        {#if flowStats.length}
-          <section class="rounded-xl border border-border bg-background" aria-label="Flow history">
-            <button type="button" class="flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs font-medium text-foreground hover:bg-accent/40 focus-visible:outline-none" aria-expanded={historyOpen} onclick={() => (historyOpen = !historyOpen)}>
-              <ZIcon zType={icon('lucideChevronRight')} class="size-3.5 shrink-0 text-muted-foreground transition-transform {historyOpen ? 'rotate-90' : ''}" />
-              History
-              <span class="ml-auto text-[11px] font-normal text-muted-foreground">{flowStats.reduce((sum, item) => sum + item.runs, 0)} runs</span>
-            </button>
-            {#if historyOpen}
-              <table class="w-full border-t border-border/60 text-[11px] tabular-nums">
-                <thead class="text-muted-foreground">
-                  <tr><th class="px-2.5 py-1 text-left font-normal">Flow</th><th class="px-1 py-1 text-right font-normal">Runs</th><th class="px-1 py-1 text-right font-normal">Success</th><th class="px-1 py-1 text-right font-normal">Avg time</th><th class="px-2.5 py-1 text-right font-normal">Avg cost</th></tr>
-                </thead>
-                <tbody>
-                  {#each flowStats as item (item.name)}
-                    <tr class="border-t border-border/40">
-                      <td class="max-w-0 truncate px-2.5 py-1 text-foreground" title={item.name}>{item.name}</td>
-                      <td class="px-1 py-1 text-right">{item.runs}</td>
-                      <td class="px-1 py-1 text-right {item.rate >= 80 ? 'text-emerald-500' : item.rate >= 50 ? 'text-warning' : 'text-destructive'}">{item.rate}%</td>
-                      <td class="px-1 py-1 text-right">{item.time}</td>
-                      <td class="px-2.5 py-1 text-right">{usd(item.cost)}</td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            {/if}
-          </section>
-        {/if}
+        <FlowHistory runs={filtered} />
         {#each runs as run, index (run.id)}
           {@const total = totals(run)}
           {@const state = runState(run)}

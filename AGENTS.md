@@ -46,3 +46,11 @@ Khi thêm agent/provider, đọc checklist `docs/development/adding-agent-provid
 - `ModelPicker.svelte` (chat) và `ImageGenerator.svelte` (gen ảnh) dựng cùng kiểu popover: danh sách nested, Fast mode, effort, divider
   Free / Hide / Paid. Sửa giao diện hay thứ tự ở một bên thì sửa luôn bên kia trong cùng lượt (cỡ công tắc `zSize="sm"`, divider,
   scrollbar, thứ tự model). Thứ tự và divider model dùng chung `freeFirst` trong `src/lib/models.svelte.ts`: đừng tự xếp lại ở từng chỗ.
+
+## File rác (file thử, file tạm)
+- File tạo ra chỉ để thử (Word, Excel, ảnh chụp, log) phải xoá trước khi kết thúc; không để ở root hay trong repo.
+- `pnpm clean:junk` liệt kê file rác chưa commit (chỉ xem), `pnpm clean:junk:delete` xoá chúng. Chỉ file chưa được git biết mới bị đụng tới;
+  file đã commit không bao giờ bị xoá. File chưa commit khác được liệt kê riêng để tự xem.
+- `pnpm hooks:install` bật hook pre-commit (`.githooks/pre-commit`): chặn commit khi có file rác trong phần staged.
+- Quy tắc nhận diện nằm ở đầu `scripts/clean-junk.mjs` (đuôi `.docx .xlsx .pptx .pdf .zip .log .tmp .part`, thư mục tạm, kết quả kiểm
+  `demo-media`); thêm vào đó khi gặp loại mới.
