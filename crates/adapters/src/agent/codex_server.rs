@@ -25,12 +25,14 @@ const HANDSHAKE: Duration = Duration::from_secs(60);
 /// The thread's settings, as `thread/start` takes them. The model and the effort are not here: each turn names them
 /// (`turn/start`), so changing either keeps the server and the conversation.
 fn thread_params(req: &TurnRequest) -> Value {
-    let (sandbox, approval) = match req.permission_mode.as_deref() {
-        Some("acceptEdits") => ("workspace-write", "never"),
+    use super::permission::Mode;
+    let mode = Mode::parse(req.permission_mode.as_deref());
+    let (sandbox, approval) = match mode {
+        Mode::Edits => ("workspace-write", "never"),
         // Approvals go to Codex's own reviewer, as `codex exec --approve-for-me` does.
-        Some("auto") => ("workspace-write", "on-request"),
-        Some("bypassPermissions") => ("danger-full-access", "never"),
-        _ => ("read-only", "never"),
+        Mode::Auto => ("workspace-write", "on-request"),
+        Mode::Yolo => ("danger-full-access", "never"),
+        Mode::Ask | Mode::Plan => ("read-only", "never"),
     };
     let mut config = json!({});
     if let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") {
@@ -46,7 +48,7 @@ fn thread_params(req: &TurnRequest) -> Value {
         "config": config,
         "developerInstructions": format!("{APP_CONTEXT}{}", super::claude::ASK_CONTEXT),
     });
-    if req.permission_mode.as_deref() == Some("auto") {
+    if mode == Mode::Auto {
         params["approvalsReviewer"] = json!("auto_review");
     }
     if let Some(dir) = req.cwd.as_deref().filter(|dir| dir.is_dir()) {

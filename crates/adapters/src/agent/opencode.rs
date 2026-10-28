@@ -140,10 +140,7 @@ impl Provider for OpenCode {
         }
         // Only approving what the CLI's own rules allow maps to `--auto`; in every other mode OpenCode asks, and a
         // headless run that is asked stops at the call instead of hanging the turn.
-        if matches!(
-            req.permission_mode.as_deref(),
-            Some("auto") | Some("bypassPermissions")
-        ) {
+        if super::permission::Mode::parse(req.permission_mode.as_deref()).opencode_auto() {
             args.push("--auto".into());
         }
         // Effort is not a flag here: OpenCode takes a model variant (`provider/model#variant`) and publishes no list

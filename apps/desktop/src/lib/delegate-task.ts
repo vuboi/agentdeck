@@ -3,6 +3,9 @@
 // The tool is named by each agent CLI its own way: `mcp__agentdeck__delegate_task` (Claude, Antigravity),
 // `agentdeck.delegate_task` (Codex), bare `delegate_task` (a local model); `toolKindOf` reads all of them.
 
+/** How many delegated workers run at once. The same number as `MAX_PARALLEL_WORKERS` in delegate.rs, which enforces it. */
+export const MAX_WORKERS = 4;
+
 export type ToolKind = 'delegate_task' | 'list_agents' | 'task_status' | 'task_stop';
 
 /** Which of the delegation tools a tool-call name is, whatever the CLI calls it; null for any other tool. */
@@ -238,7 +241,7 @@ export function parseTaskResult(output: string): { taskId: string; childId: stri
 
 /** The immediate answer of a task started in the background. */
 export function startedText(head: Omit<TaskHeader, 'verdict' | 'took'>, queued = false): string {
-  if (queued) return formatTaskResult({ ...head, verdict: 'running' }, 'Queued: at most 3 workers run at once, so it starts as soon as one finishes. Its short report is delivered to you as a new message when it is done, so do not poll or wait for it; task_status and task_stop are there if you need them.');
+  if (queued) return formatTaskResult({ ...head, verdict: 'running' }, `Queued: at most ${MAX_WORKERS} workers run at once, so it starts as soon as one finishes. Its short report is delivered to you as a new message when it is done, so do not poll or wait for it; task_status and task_stop are there if you need them.`);
   return formatTaskResult({ ...head, verdict: 'running' }, 'Started in the background: it keeps working while you carry on with other things. When it finishes its short report is delivered to you as a new message, so do not poll or wait for it; task_status and task_stop are there if you need them.');
 }
 
@@ -347,7 +350,7 @@ export function cardOf(call: { command: string; output: string; status: 'running
  * tool descriptions say the same (src-tauri/src/delegate.rs). Kept short: it is sent with the first turn of every chat.
  */
 export const DELEGATE_HINT =
-  'Delegation (delegate_task, list_agents): choose the lightest useful shape for the request. Keep ordinary Q&A, a small edit, a quick command, and a simple artifact action in this chat; do them yourself and do not invent a plan for them. Delegate only when work is BIG or clearly separable; split by capability (investigator, implementer, verifier, artifact/browser specialist) only when the parts are genuinely independent. Give each worker a self-contained goal, paths/resources, constraints, and a compact evidence-first handoff. Independent tasks: wait:false, in parallel, and side by side; dependent tasks: wait (the default). Reuse the worker conversation for follow-up or correction, and replan only when a check or handoff shows a real gap. Never delegate just to relay the user\'s message or the final answer. Prefer 1-3 workers. One exception to "only big work": light public work (search, reading public info, chat, emails, prompts, scripts, small text edits) may go to an agent marked FREE TIER in list_agents, to save the paid agents\' usage. A free tier may train on what it is sent, so check the task yourself first: no source code of the project, no private or personal data, no keys, passwords, tokens, environment variables, internal IPs or host names, and no secret files (.env, keys, credentials). AgentDeck refuses such a task. Work that needs any of that goes to another agent or stays with you.';
+  'Delegation (delegate_task, list_agents): choose the lightest useful shape for the request. Keep ordinary Q&A, a small edit, a quick command, and a simple artifact action in this chat; do them yourself and do not invent a plan for them. Delegate only when work is BIG or clearly separable; split by capability (investigator, implementer, verifier, artifact/browser specialist) only when the parts are genuinely independent. Give each worker a self-contained goal, paths/resources, constraints, and a compact evidence-first handoff. Independent tasks: wait:false, in parallel, and side by side; dependent tasks: wait (the default). Reuse the worker conversation for follow-up or correction, and replan only when a check or handoff shows a real gap. Never delegate just to relay the user\'s message or the final answer. Prefer 1-4 workers. One exception to "only big work": light public work (search, reading public info, chat, emails, prompts, scripts, small text edits) may go to an agent marked FREE TIER in list_agents, to save the paid agents\' usage. A free tier may train on what it is sent, so check the task yourself first: no source code of the project, no private or personal data, no keys, passwords, tokens, environment variables, internal IPs or host names, and no secret files (.env, keys, credentials). AgentDeck refuses such a task. Work that needs any of that goes to another agent or stays with you.';
 
 /** The line the app puts before a prompt: its parts joined into one paragraph that starts with `[AgentDeck] `. */
 export function agentdeckLead(...parts: string[]): string {

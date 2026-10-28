@@ -37,7 +37,7 @@ pub fn tool_defs() -> Vec<Value> {
     vec![
         json!({
             "name": DELEGATE_TOOL,
-            "description": "Hands a task to another AI agent running in AgentDeck (Claude, Codex, Antigravity or a local model) and returns its short report. Keep ordinary Q&A, a small edit, a quick command or a simple artifact action in the current chat; do not invent a plan for those. Delegate only when work is BIG or clearly separable, using genuinely independent capabilities such as investigation, implementation, verification, browser or artifact work. Do NOT delegate small things. Give each worker a self-contained goal, paths/resources, constraints and evidence-first handoff: it sees nothing of this conversation. Never delegate just to relay the user's message; never delegate the final answer. Keep tasks few: 1-3 workers, not a swarm. Independent tasks go out together in ONE turn (several delegate_task calls at once, wait=false, or wait=true in parallel): they run side by side, at most 3 at a time; more wait in line (state queued) and start as others finish. wait=true (the default): this call blocks until the worker is done and returns its report when the next step depends on it. wait=false: returns a task_id and runs in the background for independent work; its report is delivered when it finishes. Reuse the worker conversation for corrections and replan only after a real gap appears. Call list_agents first when unsure which agent or model to use. A FREE TIER agent sees no file or project and may train on the task: send it only public, non-sensitive text.",
+            "description": format!("Hands a task to another AI agent running in AgentDeck (Claude, Codex, Antigravity or a local model) and returns its short report. Keep ordinary Q&A, a small edit, a quick command or a simple artifact action in the current chat; do not invent a plan for those. Delegate only when work is BIG or clearly separable, using genuinely independent capabilities such as investigation, implementation, verification, browser or artifact work. Do NOT delegate small things. Give each worker a self-contained goal, paths/resources, constraints and evidence-first handoff: it sees nothing of this conversation. Never delegate just to relay the user's message; never delegate the final answer. Keep tasks few: 1-4 workers, not a swarm. Independent tasks go out together in ONE turn (several delegate_task calls at once, wait=false, or wait=true in parallel): they run side by side, at most {MAX_PARALLEL_WORKERS} at a time; more wait in line (state queued) and start as others finish. wait=true (the default): this call blocks until the worker is done and returns its report when the next step depends on it. wait=false: returns a task_id and runs in the background for independent work; its report is delivered when it finishes. Reuse the worker conversation for corrections and replan only after a real gap appears. Call list_agents first when unsure which agent or model to use. A FREE TIER agent sees no file or project and may train on the task: send it only public, non-sensitive text."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -564,7 +564,7 @@ mod tests {
             "wait=false",
             "Do NOT delegate small things",
             "never delegate the final answer",
-            "1-3 workers",
+            "1-4 workers",
         ] {
             assert!(text.contains(phrase), "the description lacks: {phrase}");
         }

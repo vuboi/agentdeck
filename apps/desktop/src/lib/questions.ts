@@ -12,7 +12,10 @@
 // and stops there. The chat shows the questions as cards, one at a time, and sends the answers back as the next message.
 
 export type QuestionOption = { label: string; description?: string };
-export type Question = { header?: string; question: string; options: QuestionOption[]; multiSelect?: boolean };
+export type Question = { header?: string; question: string; options: QuestionOption[]; multiSelect?: boolean; /** The agent cannot go on without the answer: skipping it does not let the agent decide for itself. */ required?: boolean };
+/** One question with one choice among two or three options (or one): the chat shows it as a quick card, a click answers. */
+export const isQuick = (questions: Question[]) =>
+  questions.length === 1 && !questions[0].multiSelect && questions[0].options.length > 0 && questions[0].options.length <= 3;
 /** What the user chose for one question: labels of options, and text of their own. */
 export type Answer = { picked: string[]; text: string };
 
@@ -32,6 +35,7 @@ export function parseQuestions(text: string): { questions: Question[]; rest: str
         header: typeof item.header === 'string' ? item.header : undefined,
         question: item.question!.trim(),
         multiSelect: item.multiSelect === true || item.multi === true,
+        required: item.required === true,
         options: (Array.isArray(item.options) ? item.options : [])
           .map((option) => (typeof option === 'string' ? { label: option } : (option as QuestionOption)))
           .filter((option) => option && typeof option.label === 'string' && option.label.trim())
@@ -46,18 +50,44 @@ export function parseQuestions(text: string): { questions: Question[]; rest: str
   }
 }
 
+/** The questions of an answer as one finished step, for the list of steps under the reply: its command line is the first
+ *  question, its output all of them with their options. Null when the answer asks nothing. */
+export function askAsStep(text: string): { id: string; command: string; output: string } | null {
+  const { questions } = parseQuestions(text);
+  if (!questions.length) return null;
+  const output = questions
+    .map((question, index) => {
+      const options = question.options.map((option, at) => `   ${at + 1}. ${option.label}${option.description ? `: ${option.description}` : ''}`);
+      const mark = [question.multiSelect ? 'pick any' : '', question.required ? 'required' : ''].filter(Boolean).join(', ');
+      return [`${index + 1}. ${question.question}${mark ? ` (${mark})` : ''}`, ...options].join('\n');
+    })
+    .join('\n\n');
+  let hash = 0;
+  for (const char of output) hash = (hash * 31 + char.charCodeAt(0)) | 0;
+  return { id: `ask-${(hash >>> 0).toString(36)}`, command: `AskUser  ${questions[0].question}`, output };
+}
+
 /** While the answer streams, a block not closed yet is hidden instead of showing half a JSON. */
 export const withoutOpenBlock = (text: string) => {
   const at = text.search(/```(?:questions|agentdeck-questions|agentdeck-ask)/);
   return at >= 0 && !FENCE.test(text) ? text.slice(0, at).trimEnd() : text;
 };
 
+/** An answer as it is read in the chat: the questions block never shows as text, whether it is still being written (not
+ *  closed yet), complete but with more text after it, or finished. The questions have their own card and step. */
+export function withoutQuestions(text: string): string {
+  const { questions, rest } = parseQuestions(text);
+  return withoutOpenBlock(questions.length ? rest.replace(/\n{3,}/g, '\n\n') : text);
+}
+
 /** The answers as the message sent back: short, one line per question, so any agent reads them at a glance. */
 export function formatAnswers(questions: Question[], answers: Answer[]): string {
   const lines = questions.map((question, index) => {
     const answer = answers[index] ?? { picked: [], text: '' };
     const parts = [...answer.picked, ...(answer.text.trim() ? [answer.text.trim()] : [])];
-    return `${index + 1}. ${question.question}\n   → ${parts.length ? parts.join('; ') : '(no preference, decide yourself)'}`;
+    // An ordinary question left open is a preference the agent may settle; a required one is not.
+    const none = question.required ? '(not answered: this one is required, do not guess it)' : '(no preference, decide yourself)';
+    return `${index + 1}. ${question.question}\n   → ${parts.length ? parts.join('; ') : none}`;
   });
   return `My answers:\n${lines.join('\n')}`;
 }

@@ -18,7 +18,7 @@ import { openInPreview } from './browser.svelte';
 import { logRequest, trackActivity } from './activity.svelte';
 import { logTalk } from './activity.svelte';
 import { guide } from './guide.svelte';
-import { parseQuestions, QUESTION_RULE } from './questions';
+import { parseQuestions, QUESTION_RULE, type Question } from './questions';
 import { attachmentBlocks, splitAttachments } from './attachments';
 import {
   deleteCommandImages,
@@ -35,6 +35,7 @@ import {
   releaseWorkerSlot,
   listenWorkerSlots,
   listenAgentEvents,
+  answerCopilotPermission,
   replyDelegateCall,
   prewarmAgent,
   saveAttachment,
@@ -61,6 +62,7 @@ import {
   handoffOf,
   isTaskId,
   kindOfCommand,
+  MAX_WORKERS,
   newTaskId,
   parseDelegateArgs,
   pickTask,
@@ -466,7 +468,13 @@ const localReady = getPref<{
           ...(message.live && message.role === 'assistant'
             ? [{ kind: 'response' as const, text: '> ↻ The app closed while this reply was being written. Send "continue" to pick it up.' }]
             : []),
-        ],
+        ].map((block) => {
+          // A card still waiting when the app reloaded has nobody to answer it: it is closed, not Allow-able again.
+          if (block.kind !== 'permission' || block.state !== 'pending') return block;
+          // A Copilot turn holds its request open until it is answered: refuse it so the turn ends.
+          if (message.agent === 'copilot') for (const request of block.requests) void answerCopilotPermission(request.id, false).catch(() => {});
+          return { ...block, state: 'expired' as const };
+        }),
       }));
     for (const savedItem of saved.sessions ?? []) {
       const item = { ...renamedSession(savedItem), status: 'idle' as const };
@@ -945,12 +953,13 @@ function rememberLastChat(agent: Agent, model: string | null, effort: Effort) {
   setPref('composer.lastChat', saved);
 }
 
-const PERMISSION_MODE: Record<Permission, string | null> = {
-  ask: null,
-  edits: 'acceptEdits',
+// The app's own names: each agent's adapter maps them onto its CLI (crates/adapters/src/agent/permission.rs).
+const PERMISSION_MODE: Record<Permission, string> = {
+  ask: 'ask',
+  edits: 'edits',
   plan: 'plan',
   auto: 'auto',
-  yolo: 'bypassPermissions',
+  yolo: 'yolo',
 };
 /** The permission setting of the Composer, read when a turn starts. */
 export const turnOptions = $state<{ permission: Permission; effort: Effort }>({
@@ -1615,8 +1624,6 @@ function startTurn(
       agentLabel(session.agent, selectedModel ?? undefined),
       selectedModel,
       [
-        `Agent: ${session.agent}`,
-        `Model: ${selectedModel ?? 'default'}`,
         `Effort: ${session.stepEffort ?? turnOptions.effort}`,
         `Permission: ${turnOptions.permission}`,
         `Conversation: ${resume ? `continues ${cliId}` : cliId ? `new (${cliId})` : 'new'}`,
@@ -1661,21 +1668,16 @@ export function answerPermission(
   const session = activeSession();
   const block = chat.messages.find((message) => message.id === messageId)
     ?.blocks[blockIndex];
+  // A Copilot turn is still running while its card waits: the answer goes to the SDK request, not to a new turn.
+  const waiting = session?.agent === 'copilot';
   if (
     !session ||
     block?.kind !== 'permission' ||
     block.state !== 'pending' ||
-    replies[session.id]
+    (!waiting && replies[session.id])
   )
     return;
   for (let index = 0; index < block.requests.length; index++) advanceRun(session.id, { type: 'waitEnd', kind: 'approval' });
-  if (answer === 'deny') {
-    block.state = 'denied';
-    persistLocal();
-    sendNextQueued(session.id);
-    return;
-  }
-  block.state = 'allowed';
   const entries = block.requests.map((request) => request.allow);
   if (answer === 'always') {
     approved[session.id] = [
@@ -1683,6 +1685,25 @@ export function answerPermission(
     ];
     setPref('permissions.allowed', JSON.parse(JSON.stringify(approved)));
   }
+  if (waiting) {
+    // The card shows the answer at once; if the SDK no longer waits for it (the turn was gone), it says so instead.
+    block.state = answer === 'deny' ? 'denied' : 'allowed';
+    persistLocal();
+    void Promise.all(block.requests.map((request) => answerCopilotPermission(request.id, answer !== 'deny')))
+      .catch(() => {
+        block.state = 'expired';
+        persistLocal();
+      });
+    if (answer === 'deny') sendNextQueued(session.id);
+    return;
+  }
+  if (answer === 'deny') {
+    block.state = 'denied';
+    persistLocal();
+    sendNextQueued(session.id);
+    return;
+  }
+  block.state = 'allowed';
   persistLocal();
   startTurn(
     session,
@@ -1697,8 +1718,8 @@ export function answerPermission(
 const replies: Record<string, string> = {};
 /** The reply object of each running turn. */
 const liveReplies: Record<string, Message> = {};
-/** The message that started each running turn. */
-const liveAsks: Record<string, Message> = {};
+/** The message that started each running turn. Reactive, so the Tasks panel can show the prompt while the reply runs. */
+export const liveAsks = $state<Record<string, Message>>({});
 /** For a running hand-back turn (it has no message of its own): the message whose delegate cards it answers. */
 const liveHandouts: Record<string, Message> = {};
 /** For a hand-back that answers no message (a background task's report): its reply just follows the chat's last message. */
@@ -1760,8 +1781,8 @@ function messagesOf(sessionId: string): Message[] {
   return (localMessages[sessionId] ??= []);
 }
 
-/** A queued task must wait while the latest user turn still has a question or permission request to resolve. */
-export function needsUserInput(sessionId: string): boolean {
+/** What the latest user turn still waits for: a permission request, or questions the agent asked. */
+export function pendingInput(sessionId: string): 'permission' | 'question' | null {
   const list = messagesOf(sessionId);
   const messages =
     liveReplies[sessionId] && !list.includes(liveReplies[sessionId])
@@ -1769,13 +1790,15 @@ export function needsUserInput(sessionId: string): boolean {
       : list;
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    if (message.role === 'user') return false;
+    if (message.role === 'user') return null;
+    // The user cancelled what this reply ended with: nothing waits on it.
+    if (message.cancelled) return null;
     if (
       message.blocks.some(
         (block) => block.kind === 'permission' && block.state === 'pending',
       )
     )
-      return true;
+      return 'permission';
     if (
       message.blocks.some(
         (block) =>
@@ -1783,9 +1806,96 @@ export function needsUserInput(sessionId: string): boolean {
           parseQuestions(block.text).questions.length > 0,
       )
     )
-      return true;
+      return 'question';
   }
-  return false;
+  return null;
+}
+
+/** A queued task must wait while the latest user turn still has a question or permission request to resolve. */
+export const needsUserInput = (sessionId: string): boolean => pendingInput(sessionId) !== null;
+
+/** Told to the agent with a message that was written instead of answering its questions. What a skipped question means
+ *  depends on its kind: an ordinary one is a preference the agent may settle itself; one marked `required` is not. */
+const SKIPPED_QUESTIONS =
+  'The user did not answer your questions and wrote this instead. Treat it as their answer; for anything it leaves open, use your best judgement and say what you assumed. Do not ask the same questions again unless you still cannot go on without them.';
+const SKIPPED_REQUIRED =
+  'The user did not answer the questions you marked required and wrote this instead. Do not guess those answers and do not do the work that depends on them: answer what they wrote, then ask again only what is still missing.';
+
+/** The questions the latest user turn left open (the ones of the newest reply that has any). */
+function openQuestions(sessionId: string): Question[] {
+  const list = messagesOf(sessionId);
+  for (let index = list.length - 1; index >= 0; index--) {
+    const message = list[index];
+    if (message.role === 'user') return [];
+    for (const block of message.blocks) {
+      if (block.kind !== 'response') continue;
+      const questions = parseQuestions(block.text).questions;
+      if (questions.length) return questions;
+    }
+  }
+  return [];
+}
+/** Told to the agent with a message that was written instead of answering its permission request. */
+const SKIPPED_PERMISSION =
+  'The user did not answer your permission request and wrote this instead. The request was cancelled: the command or tool call was NOT run and nothing it would have changed was changed. Do not assume it ran; ask again only if it is still needed.';
+
+/** The line the chat shows once a cancelled question or request has nothing left behind it (in the style of the note for a
+ *  reply the app closed on). */
+const CANCEL_NOTE = '> ✕ Task cancelled. Send a message to go on.';
+/** Chats where the user cancelled while messages were queued behind: those run first, the note comes after them. */
+const cancelNotes = new Set<string>();
+
+function addCancelNote(sessionId: string) {
+  cancelNotes.delete(sessionId);
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  const list = messagesOf(sessionId);
+  const last = list.at(-1);
+  const lastBlock = last?.blocks.at(-1);
+  if (last?.role === 'assistant' && lastBlock?.kind === 'response' && lastBlock.text === CANCEL_NOTE) return;
+  list.push({
+    id: crypto.randomUUID(),
+    role: 'assistant',
+    time: clock(new Date().toISOString()),
+    at: new Date().toISOString(),
+    agent: session?.agent,
+    blocks: [{ kind: 'response', text: CANCEL_NOTE }],
+  });
+  persistLocal();
+}
+
+/** The user cancels what the agent waits for (its questions or a permission request): nothing is sent to the agent. A
+ *  message queued behind it goes out next and the chat works through the queue; when none is left, the chat says the
+ *  task was cancelled. */
+export function cancelPending(sessionId: string) {
+  if (replies[sessionId] || !pendingInput(sessionId)) return;
+  const list = messagesOf(sessionId);
+  for (let index = list.length - 1; index >= 0; index--) {
+    const message = list[index];
+    if (message.role === 'user') break;
+    if (message.blocks.some((block) => block.kind === 'permission' && block.state === 'pending')) closePendingPermissions(sessionId);
+    message.cancelled = true;
+  }
+  persistLocal();
+  if ((queued[sessionId]?.length ?? 0) > 0) {
+    cancelNotes.add(sessionId);
+    sendNextQueued(sessionId);
+  } else addCancelNote(sessionId);
+}
+
+/** Closes the permission requests the latest user turn left unanswered, as "not answered" (what the cards say), and for a
+ *  Copilot turn, which holds the request open, refuses it so that turn can end. */
+function closePendingPermissions(sessionId: string) {
+  const list = messagesOf(sessionId);
+  for (let index = list.length - 1; index >= 0; index--) {
+    const message = list[index];
+    if (message.role === 'user') break;
+    for (const block of message.blocks) {
+      if (block.kind !== 'permission' || block.state !== 'pending') continue;
+      if (message.agent === 'copilot') for (const request of block.requests) void answerCopilotPermission(request.id, false).catch(() => {});
+      block.state = 'expired';
+    }
+  }
+  persistLocal();
 }
 
 /** Dispatches one queued message only after the active turn and all user decisions are complete. */
@@ -1809,6 +1919,8 @@ function sendNextQueued(sessionId: string) {
       return;
     }
     if (hasOutstandingSessionWork(sessionId)) return;
+    // The queue behind a cancelled question has run out: say the task was cancelled.
+    if (cancelNotes.has(sessionId)) addCancelNote(sessionId);
     notifySessionWorkDone(sessionId);
   }, 0);
 }
@@ -2848,7 +2960,7 @@ function statusText(record: TaskRecord): string {
       record.state === 'approval'
         ? 'Waiting: the worker needs the user to approve a step in its chat.'
         : record.state === 'queued'
-          ? 'Queued: at most 3 workers run at once; it starts when one finishes.'
+          ? `Queued: at most ${MAX_WORKERS} workers run at once; it starts when one finishes.`
           : 'Still working.',
     );
   }
@@ -3263,14 +3375,16 @@ const stepWaiters = new Map<
 const askingCards = new Map<string, DelegateCard>();
 
 /** Sends the answers to questions an agent asked (in its own chat, or a flow step's from the Flow steps card). */
-export function answerQuestions(sessionId: string, text: string) {
-  if (!text.trim() || replies[sessionId]) return;
+export function answerQuestions(sessionId: string, text: string): boolean {
+  // A turn is running (a task's report started one, say): the answers cannot go out now, and the card must not say they did.
+  if (!text.trim() || replies[sessionId]) return false;
   const card = askingCards.get(sessionId);
   if (card) {
     card.state = 'running';
     askingCards.delete(sessionId);
   }
   send(sessionId, text, [], []);
+  return true;
 }
 
 const passes = (step: WorkflowStep, previous: string) => {
@@ -4509,6 +4623,21 @@ export function sendMessage(
   // A task for another agent needs words to say what the task is.
   if (mentions.some((mention) => mention.kind === 'ai') && !text.trim()) return;
   beginSessionWork(session.id);
+  // Questions are waiting and nothing runs: writing a message is the way to skip them. It goes out at once (not behind
+  // the questions), says so to the agent, and the card closes because a newer message of the user follows it.
+  // The same goes for a permission request: writing instead of answering it cancels it, and the agent is told the command
+  // did not run.
+  if (!replies[session.id] && !isRunning(session.id)) {
+    const waiting = pendingInput(session.id);
+    if (waiting === 'question' || waiting === 'permission') {
+      if (waiting === 'permission') closePendingPermissions(session.id);
+      send(session.id, text, images, elements, mentions, {
+        files,
+        preface: agentdeckLead(waiting === 'permission' ? SKIPPED_PERMISSION : openQuestions(session.id).some((question) => question.required) ? SKIPPED_REQUIRED : SKIPPED_QUESTIONS),
+      });
+      return;
+    }
+  }
   if (
     replies[session.id] ||
     isRunning(session.id) ||
@@ -4837,6 +4966,7 @@ function send(
       session.agent === 'codex' ||
       session.agent === 'antigravity' ||
       session.agent === 'opencode' ||
+      session.agent === 'copilot' ||
       session.agent === 'custom')
   )
     startTurn(

@@ -214,7 +214,8 @@ impl Provider for Codex {
             };
         }
         let mut args = vec!["exec".to_string()];
-        if req.permission_mode.as_deref() == Some("auto") {
+        let mode = super::permission::Mode::parse(req.permission_mode.as_deref());
+        if mode == super::permission::Mode::Auto {
             args.push("--approve-for-me".to_string());
         }
         // Codex names its own threads, so only a thread it reported before can be resumed.
@@ -236,14 +237,9 @@ impl Provider for Codex {
             config("model_reasoning_effort", toml_string(effort));
         }
         // Codex cannot stop to ask in exec mode: the approval modes map to how far its sandbox reaches.
-        let sandbox = match req.permission_mode.as_deref() {
-            Some("acceptEdits") | Some("auto") => Some("workspace-write"),
-            Some("bypassPermissions") => None,
-            _ => Some("read-only"),
-        };
-        if let Some(mode) = sandbox {
-            config("sandbox_mode", toml_string(mode));
-            if req.permission_mode.as_deref() != Some("auto") {
+        if let Some(sandbox) = mode.codex_sandbox() {
+            config("sandbox_mode", toml_string(sandbox));
+            if mode != super::permission::Mode::Auto {
                 config("approval_policy", toml_string("never"));
             }
         }
@@ -263,7 +259,7 @@ impl Provider for Codex {
             // Codex gives an MCP tool 60 s by default; delegate_task waits for another agent for many minutes.
             config("mcp_servers.agentdeck.tool_timeout_sec", "7500".to_string());
         }
-        if sandbox.is_none() {
+        if mode == super::permission::Mode::Yolo {
             args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
         }
         // `-` makes `exec` read the prompt from stdin (see `prompt_on_stdin`); `--` keeps it from reading as a flag.
@@ -430,21 +426,32 @@ impl Provider for Codex {
                 }
                 turn.last_was_text = false;
             }
-            ("item.completed", "web_search") => {
-                events.push(AgentEvent::ToolCall {
-                    id: id.clone(),
-                    name: "WebSearch".into(),
-                    input: item["query"].as_str().unwrap_or_default().to_string(),
-                    change: None,
-                    background: false,
-                });
-                events.push(AgentEvent::ToolResult {
-                    id,
-                    output: String::new(),
-                    is_error: false,
-                    image: None,
-                    change: None,
-                });
+            // The search shows as it runs (its start), so the live line can say what it is searching for.
+            ("item.started", "web_search") | ("item.completed", "web_search") => {
+                if turn.started.insert(id.clone()) {
+                    events.push(AgentEvent::ToolCall {
+                        id: id.clone(),
+                        name: "WebSearch".into(),
+                        // The query may be missing on the started item; `action.query` is read as a fallback.
+                        input: item["query"]
+                            .as_str()
+                            .or_else(|| item["action"]["query"].as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        change: None,
+                        background: false,
+                    });
+                }
+                if value["type"] == "item.completed" {
+                    events.push(AgentEvent::ToolResult {
+                        id,
+                        output: String::new(),
+                        is_error: false,
+                        image: None,
+                        change: None,
+                    });
+                }
+                turn.last_was_text = false;
             }
             ("item.completed", "error") => {
                 events.push(AgentEvent::Delta {

@@ -12,7 +12,8 @@
     position = 'bottom-right',
     width = 220,
     class: className = 'size-7!',
-  }: { items: ZDropdownMenuItem[]; icon?: string; label: string; position?: ZPopoverPosition; width?: number; class?: string } = $props();
+    onopen,
+  }: { items: ZDropdownMenuItem[]; icon?: string; label: string; position?: ZPopoverPosition; width?: number; class?: string; /** Called as the menu opens: load what its items need only then. */ onopen?: () => void } = $props();
 
   let anchor = $state<HTMLElement | null>(null);
   let open = $state(false);
@@ -27,7 +28,10 @@
   aria-label={label}
   aria-haspopup="menu"
   aria-expanded={open}
-  onclick={() => (open = !open)}
+  onclick={() => {
+    open = !open;
+    if (open) onopen?.();
+  }}
 >
   <ZIcon zType={icon as ZIconName} class="size-4" />
 </ZButton>

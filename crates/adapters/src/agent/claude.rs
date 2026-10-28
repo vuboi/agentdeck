@@ -155,9 +155,9 @@ impl Provider for Claude {
             args.push("--effort".to_string());
             args.push(effort.clone());
         }
-        if let Some(mode) = &req.permission_mode {
+        if let Some(mode) = super::permission::Mode::parse(req.permission_mode.as_deref()).claude() {
             args.push("--permission-mode".to_string());
-            args.push(mode.clone());
+            args.push(mode.to_string());
         }
         for tool in &req.allowed_tools {
             args.push("--allowedTools".to_string());

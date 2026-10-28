@@ -9,6 +9,16 @@ Tài liệu checklist cho agent code tiếp theo. Đọc `AGENTS.md` và `PLAN.m
 - Mỗi provider có thể cần nhiều lớp riêng: đăng nhập, account switch, runtime, model discovery. Đừng coi việc thêm card Settings là tích hợp xong.
 - Provider chat không tự động là provider tạo ảnh. Phân biệt model dùng để soạn prompt với backend thực sự tạo ảnh.
 - Giữ thay đổi của người dùng đang có trong workspace; không reset hoặc format đệ quy các file ngoài phạm vi.
+- Mỗi bề mặt dưới đây thường có một chuỗi `if agent === ...` hoặc danh sách agent viết tay riêng. Tìm theo ID mới (`grep -rn "'claude'" apps/desktop/src`) để không sót chỗ nào.
+- Trước khi viết code gọi API, tra cách client chính thức của provider làm (repo mã nguồn mở của vendor trên GitHub). Dùng đúng endpoint và header mà client đó dùng; không giả header của client khác.
+
+## Bẫy đã gặp (Copilot)
+
+- **Gửi chat bị chặn:** `sessions.svelte.ts` có danh sách agent được gọi `startTurn`. Provider không có trong danh sách sẽ rơi vào nhánh "`<agent> chats are not connected yet`" dù backend đã có `agent_send`. Thêm ID mới vào đúng danh sách này.
+- **Quota bar không hiện:** `Composer.svelte` (`const quota = $derived.by`) chỉ tính cho agent có nhánh riêng. Thêm nhánh đọc `connectors.accounts[<id>]` (cửa sổ `usage`, `observed_at`) và để `accounts_list` của provider đó điền `usage` cho account active.
+- **Quota không tự làm mới:** vòng kiểm tra 5 phút trong `connectors.svelte.ts` (`setInterval(check, 5 * 60_000)`) chỉ refresh provider được liệt kê. Thêm provider nếu cần cảnh báo ngưỡng.
+- **Đơn vị cửa sổ:** `UsageWindow.pct` là phần đã dùng (%), còn quota bar hiển thị phần còn lại (`100 - pct`). Nhãn cửa sổ phải khớp regex `^\d+(m|h|d)$` (ví dụ `30d`) để tính cửa sổ "gần hết nhất".
+- **Lệnh CLI bị chặn:** `account_tool_allows` (`connectors.rs`) chỉ cho phép một số lệnh của `codex-auth`/`cswap`. Gọi CLI khác (ví dụ `gh api`) không bị chặn, nhưng cần xác nhận khi thêm công cụ mới.
 
 ## Checklist theo bề mặt
 
@@ -78,5 +88,6 @@ Tài liệu checklist cho agent code tiếp theo. Đọc `AGENTS.md` và `PLAN.m
 - `cargo check -p agentdeck-desktop`
 - `cargo clippy -p agentdeck-desktop -- -D warnings`
 - `pnpm --filter desktop check`
+- Chạy app thật (`pnpm dev` hoặc tải lại cửa sổ sau khi HMR không nạp hết): đăng nhập, mở model picker, gửi một tin nhắn ngắn, kiểm tra trả lời và quota bar. Build xanh không chứng minh chat chạy được.
 - Nếu người dùng yêu cầu kiểm thử, thêm/chạy kiểm tra phù hợp; không gọi network trong test. Runtime đăng nhập/chat thật cần xác minh riêng với tài khoản có quyền dùng provider.
 - Báo rõ bề mặt nào đã nối, lệnh kiểm tra thực sự chạy, và giới hạn runtime chưa thể xác minh. Không tuyên bố login/chat thành công nếu chưa chạy lượt thật.

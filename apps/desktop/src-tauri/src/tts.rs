@@ -1,5 +1,5 @@
 // Read an answer aloud with Piper (an offline neural voice, https://github.com/rhasspy/piper) and its Vietnamese voice.
-// Nothing is bundled: the first time the speaker button is used the program (about 22 MB) and the voice (about 63 MB) are
+// Nothing is bundled: the first time the speaker button is used the program (about 22 MB) and the voice (28 to 63 MB) are
 // downloaded into the app's data folder, with progress events. Each sentence is turned into a WAV by one run of Piper
 // and handed to the page, which plays them one after another while the next is being made.
 use std::path::{Path, PathBuf};
@@ -10,8 +10,14 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 const PIPER_RELEASE: &str = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2";
-const VOICE_BASE: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/vi/vi_VN/vais1000/medium/vi_VN-vais1000-medium";
-const VOICE_FILE: &str = "vi_VN-vais1000-medium.onnx";
+const VOICE_HOST: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/vi/vi_VN";
+/// The Vietnamese voices Piper has: the id the page uses, the folder on the voice host and the file name without its extension.
+/// `vais1000` is the best of them (medium); the other two are smaller and lower in quality.
+const VOICES: [(&str, &str, &str); 3] = [
+    ("vais1000", "vais1000/medium", "vi_VN-vais1000-medium"),
+    ("25hours", "25hours_single/low", "vi_VN-25hours_single-low"),
+    ("vivos", "vivos/x_low", "vi_VN-vivos-x_low"),
+];
 /// One sentence at a time: a longer text is cut by the page, this only stops a runaway call.
 const MAX_CHARS: usize = 1200;
 
@@ -35,12 +41,18 @@ fn exe_in(root: &Path) -> PathBuf {
     root.join("piper").join(if cfg!(windows) { "piper.exe" } else { "piper" })
 }
 
-fn voice_in(root: &Path) -> PathBuf {
-    root.join("voice").join(VOICE_FILE)
+/// The voice for an id from the page; an unknown or missing id is the default (the first).
+fn voice_spec(id: Option<&str>) -> (&'static str, &'static str) {
+    let (_, folder, stem) = VOICES.iter().find(|(name, _, _)| Some(*name) == id).unwrap_or(&VOICES[0]);
+    (folder, stem)
 }
 
-fn is_installed(root: &Path) -> bool {
-    let voice = voice_in(root);
+fn voice_in(root: &Path, id: Option<&str>) -> PathBuf {
+    root.join("voice").join(format!("{}.onnx", voice_spec(id).1))
+}
+
+fn is_installed(root: &Path, id: Option<&str>) -> bool {
+    let voice = voice_in(root, id);
     exe_in(root).is_file() && voice.is_file() && voice.with_extension("onnx.json").is_file()
 }
 
@@ -51,8 +63,8 @@ pub struct Status {
 }
 
 #[tauri::command]
-pub fn tts_status(app: AppHandle) -> Result<Status, String> {
-    Ok(Status { installed: is_installed(&root(&app)?), supported: piper_asset(std::env::consts::OS, std::env::consts::ARCH).is_some() })
+pub fn tts_status(app: AppHandle, voice: Option<String>) -> Result<Status, String> {
+    Ok(Status { installed: is_installed(&root(&app)?, voice.as_deref()), supported: piper_asset(std::env::consts::OS, std::env::consts::ARCH).is_some() })
 }
 
 #[derive(Serialize, Clone)]
@@ -94,9 +106,9 @@ async fn download(app: &AppHandle, client: &reqwest::Client, url: &str, dest: &P
 
 /// Downloads Piper and the Vietnamese voice (once). Progress comes as `tts-progress` events.
 #[tauri::command]
-pub async fn tts_install(app: AppHandle) -> Result<(), String> {
+pub async fn tts_install(app: AppHandle, voice: Option<String>) -> Result<(), String> {
     let root = root(&app)?;
-    if is_installed(&root) {
+    if is_installed(&root, voice.as_deref()) {
         return Ok(());
     }
     let asset = piper_asset(std::env::consts::OS, std::env::consts::ARCH).ok_or("no Piper build for this system")?;
@@ -120,12 +132,14 @@ pub async fn tts_install(app: AppHandle) -> Result<(), String> {
                 let _ = std::fs::set_permissions(exe_in(&root), std::fs::Permissions::from_mode(0o755));
             }
         }
-        let voice = voice_in(&root);
-        if !voice.is_file() {
-            download(&app, &client, &format!("{VOICE_BASE}.onnx"), &voice, "voice").await?;
+        let voice_path = voice_in(&root, voice.as_deref());
+        let (folder, stem) = voice_spec(voice.as_deref());
+        let base = format!("{VOICE_HOST}/{folder}/{stem}");
+        if !voice_path.is_file() {
+            download(&app, &client, &format!("{base}.onnx"), &voice_path, "voice").await?;
         }
-        if !voice.with_extension("onnx.json").is_file() {
-            download(&app, &client, &format!("{VOICE_BASE}.onnx.json"), &voice.with_extension("onnx.json"), "voice").await?;
+        if !voice_path.with_extension("onnx.json").is_file() {
+            download(&app, &client, &format!("{base}.onnx.json"), &voice_path.with_extension("onnx.json"), "voice").await?;
         }
         Ok(())
     }
@@ -148,10 +162,10 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// One sentence as a `data:audio/wav;base64,…` URL. `speed` 1.0 is the voice's own pace.
 #[tauri::command]
-pub async fn tts_speak(app: AppHandle, text: String, speed: f32) -> Result<String, String> {
+pub async fn tts_speak(app: AppHandle, text: String, speed: f32, voice: Option<String>) -> Result<String, String> {
     use base64::Engine;
     let root = root(&app)?;
-    if !is_installed(&root) {
+    if !is_installed(&root, voice.as_deref()) {
         return Err("the voice is not installed".into());
     }
     let text: String = text.chars().take(MAX_CHARS).collect::<String>().replace(['\r', '\n'], " ");
@@ -167,7 +181,7 @@ pub async fn tts_speak(app: AppHandle, text: String, speed: f32) -> Result<Strin
         command
             .current_dir(exe.parent().unwrap_or(&root))
             .arg("--model")
-            .arg(voice_in(&root))
+            .arg(voice_in(&root, voice.as_deref()))
             .arg("--output_file")
             .arg(&wav)
             .args(["--length_scale", &length_scale])
@@ -210,10 +224,18 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_voice_is_the_default_one() {
+        assert_eq!(voice_spec(None), voice_spec(Some("vais1000")));
+        assert_eq!(voice_spec(Some("nope")), voice_spec(None));
+        assert_eq!(voice_spec(Some("vivos")).1, "vi_VN-vivos-x_low");
+    }
+
+    #[test]
     fn nothing_is_installed_in_an_empty_folder() {
         let folder = std::env::temp_dir().join(format!("agentdeck-tts-test-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
-        assert!(!is_installed(&folder));
+        assert!(!is_installed(&folder, None));
+        assert!(!is_installed(&folder, Some("vivos")));
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

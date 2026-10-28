@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::mcp_client::Server;
 use crate::slash_commands::{self, ProviderCommand};
+use ag_adapters::agent::permission::{verdict, Action, Mode, Verdict};
 use ag_adapters::agent::{
     allow_entry, file_change, summarize_tool_input, AgentEvent, PermissionRequest,
 };
@@ -1150,37 +1151,31 @@ fn decide(turn: &Turn, name: &str, args: &Value, external: bool) -> Decision {
             return Decision::Deny("the call holds a secret, an environment variable or an internal address: blocked for this provider.");
         }
     }
-    let mode = turn.permission_mode.as_deref();
+    let mode = Mode::parse(turn.permission_mode.as_deref());
     let approved = turn
         .allowed
         .iter()
         .any(|entry| entry == name || *entry == allow_entry(name, args));
-    match name {
-        "Read" | "Glob" | "Grep" | "WebFetch" | "WebSearch" | "Skill" | "LS" => Decision::Allow,
-        _ if external => match mode {
-            Some("plan") => Decision::Deny("plan mode: external tools may not run."),
-            Some("auto" | "bypassPermissions") => Decision::Allow,
-            _ if approved => Decision::Allow,
-            _ => Decision::Ask,
-        },
-        "Write" | "Edit" | "MkDir" | "Move" | "Copy" => match mode {
-            Some("plan") => {
-                Decision::Deny("plan mode: nothing may be changed. Describe the plan instead.")
-            }
-            Some("acceptEdits" | "auto" | "bypassPermissions") => Decision::Allow,
-            _ if approved => Decision::Allow,
-            _ => Decision::Ask,
-        },
-        "Bash" | "Delete" => match mode {
-            Some("plan") => {
-                Decision::Deny("plan mode: commands may not run. Describe the plan instead.")
-            }
-            Some("auto" | "bypassPermissions") => Decision::Allow,
-            _ if approved => Decision::Allow,
-            _ => Decision::Ask,
-        },
+    let (action, refusal) = match name {
+        "Read" | "Glob" | "Grep" | "WebFetch" | "WebSearch" | "Skill" | "LS" => return Decision::Allow,
+        "Write" | "Edit" | "MkDir" | "Move" | "Copy" => (
+            Action::Write,
+            "plan mode: nothing may be changed. Describe the plan instead.",
+        ),
+        "Bash" | "Delete" => (
+            Action::Shell,
+            "plan mode: commands may not run. Describe the plan instead.",
+        ),
+        // External tools from the user's MCP servers.
+        _ if external => (Action::Other, "plan mode: external tools may not run."),
         // The browser tools of AgentDeck itself.
-        _ => Decision::Allow,
+        _ => return Decision::Allow,
+    };
+    match verdict(mode, action) {
+        Verdict::Approve => Decision::Allow,
+        Verdict::Refuse => Decision::Deny(refusal),
+        Verdict::Ask if approved => Decision::Allow,
+        Verdict::Ask => Decision::Ask,
     }
 }
 

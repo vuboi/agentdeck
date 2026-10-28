@@ -56,27 +56,40 @@
   // Text arrives in bursts. It is revealed at a steady, time-based pace instead (faster when more is waiting),
   // whole words at a time, and each new word fades in, as in Claude and ChatGPT. A finished answer that was
   // never streamed shows at once.
-  // A long backlog is drained over a longer time and never faster than MAX_CPS (about one word per frame), so
-  // words keep appearing one after another instead of a whole paragraph popping in at once.
-  // While the agent still writes, a calm, even pace like Claude and Codex (a backlog only nudges it up). Some agents
-  // (Codex) hand over the whole answer at once, already complete: it is still typed out at an even pace, a little
-  // faster only for a long answer (about 8 s for what is left), so it never runs ahead in bursts.
-  const MIN_CPS = 30;
-  const MAX_CPS = 120;
-  const DRAIN_SECONDS = 4;
-  // Once the run is over, what is left is shown within about 3 s, at most about 10 characters a frame: quick enough
-  // that a finished reply does not look like it is still running, slow enough that words still come one after another
-  // instead of in chunks. A newer message shows the rest at once (`flush`).
-  const DONE_MIN_CPS = 150;
-  const DONE_MAX_CPS = 600;
-  const DONE_DRAIN_SECONDS = 3;
+  // The pace follows the model, as llm-ui's throttle does: the speed is how fast text has been arriving (`inflow`, an
+  // average over the last second or two) plus a correction that keeps a small buffer of BUFFER_CHARS not yet shown,
+  // closed over LAG_SECONDS. So a fast model reads fast and a slow one slow, a burst is spread over the time the next one
+  // takes to come, and the reveal neither falls seconds behind nor runs dry and stops between chunks.
+  // When the run is over there is nothing more to wait for: what is left goes out at backlog / LAG_SECONDS.
+  // MIN_CPS keeps a long backlog from crawling, MAX_CPS (about a word a frame) keeps a burst from popping in as whole
+  // lines, and the speed eases towards its target so it never jerks. A newer message shows the rest at once (`flush`).
+  const LAG_SECONDS = 0.6;
+  const BUFFER_CHARS = 12;
+  const MIN_CPS = 60;
+  const MAX_CPS = 360;
+  const EASE_PER_SECOND = 6;
+  /** How long the arrival speed remembers: a burst counts for about this long. */
+  const INFLOW_SECONDS = 1.5;
+  /** The most text held back while the model writes, in seconds of its speed. */
+  const MAX_HOLD_SECONDS = 1.2;
   const FADE_MS = 220;
   const STAGGER_MS = 18;
   // Past FADE_LIMIT words in flight, new ones simply appear: fading dozens at once costs frames.
   const FADE_LIMIT = 80;
 
   let live = untrack(() => streaming);
-  let shown = $state(untrack(() => (streaming ? 0 : text.length)));
+  // What has arrived before this block was put on screen shows at once: coming back to a chat that is still writing must
+  // not type its answer out again from the start. Only text that arrives from now on is revealed.
+  let shown = $state(untrack(() => text.length));
+  // The reveal speed, carried across text updates so it eases instead of restarting.
+  let rate = 0;
+  // How fast text has been arriving (characters a second), and when and how much arrived last.
+  let inflow = 0;
+  let arrived = untrack(() => text.length);
+  let arrivedAt = performance.now();
+  // The usual time between two pieces (seconds), and how many pieces came: the speed is only known from the second one.
+  let gapAverage = 0;
+  let pieces = 0;
   const catching = $derived(shown < text.length);
   // Where the even reveal really is (may sit inside a word): kept across text updates, so each new burst does not
   // restart it from the end of the last shown word.
@@ -87,6 +100,19 @@
   function wordEnd(source: string, at: number, limit: number) {
     let end = at;
     while (end < limit && end - at < 24 && !/\s/.test(source[end])) end++;
+    return graphemeEnd(source, end, limit);
+  }
+
+  /** Never cut inside a character drawn as one: the second half of a surrogate pair, a combining accent, an emoji joined
+   *  with a zero-width joiner or a variation selector would otherwise show broken for a frame. */
+  function graphemeEnd(source: string, at: number, limit: number) {
+    let end = at;
+    while (end < limit) {
+      const code = source.charCodeAt(end);
+      const joined = end > 0 && source.charCodeAt(end - 1) === 0x200d;
+      if ((code >= 0xdc00 && code <= 0xdfff) || joined || /[‍︎️\p{M}]/u.test(source[end])) end++;
+      else break;
+    }
     return end;
   }
 
@@ -111,14 +137,38 @@
     }
     let progress = Math.min(pace, target);
     if (untrack(() => shown) > target) shown = target;
+    // A new piece arrived: fold its speed into `inflow`, weighted by how long it took to come.
+    const arrival = performance.now();
+    if (!streaming) inflow = 0;
+    else if (target > arrived) {
+      const gap = Math.max(0.016, (arrival - arrivedAt) / 1000);
+      // The first piece after the block appears says nothing about speed (it may have waited for the first token).
+      if (pieces++ > 0) {
+        const speed = Math.min(MAX_CPS * 2, (target - arrived) / gap);
+        const weight = Math.min(1, gap / INFLOW_SECONDS);
+        inflow = inflow === 0 ? speed : inflow + (speed - inflow) * weight;
+        gapAverage = gapAverage === 0 ? gap : gapAverage + (gap - gapAverage) * Math.max(0.2, weight);
+      }
+      arrivedAt = arrival;
+    }
+    arrived = target;
     let last = performance.now();
     let frame = 0;
     const step = (now: number) => {
       const dt = Math.min(64, now - last) / 1000;
       last = now;
       const backlog = target - progress;
-      if (backlog <= 0) return;
-      const rate = streaming ? Math.min(MAX_CPS, Math.max(MIN_CPS, backlog / DRAIN_SECONDS)) : Math.min(DONE_MAX_CPS, Math.max(DONE_MIN_CPS, backlog / DONE_DRAIN_SECONDS));
+      if (backlog <= 0) {
+        rate = 0;
+        return;
+      }
+      // While the model still writes, keep in hand what it sends between two pieces (at least BUFFER_CHARS, at most
+      // MAX_HOLD_SECONDS of it) and go at its speed, so the reveal never runs dry and waits; once it is done, empty it.
+      const buffer = streaming ? Math.max(BUFFER_CHARS, Math.min(inflow * gapAverage * 1.2, inflow * MAX_HOLD_SECONDS)) : 0;
+      const ideal = (streaming ? inflow : 0) + (backlog - buffer) / LAG_SECONDS;
+      // The floor only for a real backlog: near the buffer it would run dry and stop until the next piece comes.
+      const wanted = Math.min(MAX_CPS, Math.max(backlog > buffer * 2 ? MIN_CPS : 15, ideal));
+      rate = rate === 0 ? wanted : rate + (wanted - rate) * Math.min(1, dt * EASE_PER_SECOND);
       progress = pace = Math.min(target, progress + rate * dt);
       const next = linkSafe(source, wordEnd(source, Math.floor(progress), target), target);
       // `progress` keeps its own pace: pulling it to the end of each shown word would double the real speed.

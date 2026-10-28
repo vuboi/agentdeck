@@ -11,7 +11,8 @@ export const viewer = $state({
   active: '' as string,
   tabs: [] as ViewerTab[],
   /** The pane beside the open file: the project tree, or the files git sees changed. */
-  side: { open: true, mode: 'files' as 'files' | 'changes', width: 240 },
+  // Closed by default: the file has the whole pane. The Files / Changes panel opens from its button.
+  side: { open: false, mode: 'files' as 'files' | 'changes', width: 240 },
   /** Counts the opens, the same file again included: a narrow Files tool shows the file each time. */
   opened: 0,
 });
@@ -25,7 +26,8 @@ getPref<{ active: string; tabs: ViewerTab[]; side?: typeof viewer.side }>('viewe
   if (saved) {
     viewer.tabs = (saved.tabs ?? []).map((tab) => ({ ...tab, dirty: undefined }));
     viewer.active = saved.active ?? '';
-    if (saved.side) viewer.side = { ...viewer.side, ...saved.side };
+    // The panel starts closed each time, whatever it was when the app closed; its width and mode are kept.
+    if (saved.side) viewer.side = { ...viewer.side, ...saved.side, open: false };
   }
   hydrated = true;
 });
@@ -44,6 +46,9 @@ export function openInViewer(path: string, root: string, view?: 'file' | 'change
   else if (view) open.view = view;
   viewer.active = id;
   viewer.opened++;
+  // A file opened as its changes (the diff) shows the side panel from the start, so the list it came from is there.
+  // A plain file leaves the panel as it is (closed by default).
+  if (view === 'changes') viewer.side.open = true;
   layout.activeTool = 'Explore';
   setToolsOpen(true);
 }

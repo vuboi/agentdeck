@@ -1374,6 +1374,38 @@ fn parse_cswap(text: &str) -> Result<Vec<Account>, String> {
         .unwrap_or_default())
 }
 
+/// Premium-request quota of the account `gh` is signed in as, from `copilot_internal/user`: the call VS Code's Copilot
+/// Chat makes for its own quota meter. Read only; `None` when the call fails.
+async fn copilot_usage(gh: &Path) -> Option<(Vec<UsageWindow>, i64)> {
+    let out = capture(gh, &["api", "copilot_internal/user"], Duration::from_secs(15))
+        .await
+        .ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    out.ok.then(|| parse_copilot_usage(&out.stdout, now)).flatten()
+}
+
+/// `copilot_internal/user` JSON to the premium-request window. An unlimited plan has no window.
+fn parse_copilot_usage(text: &str, now: i64) -> Option<(Vec<UsageWindow>, i64)> {
+    let json: Value = serde_json::from_str(text).ok()?;
+    let premium = &json["quota_snapshots"]["premium_interactions"];
+    if premium["unlimited"].as_bool().unwrap_or(false) {
+        return Some((Vec::new(), now));
+    }
+    let left = premium["percent_remaining"].as_f64()?;
+    let window = UsageWindow {
+        // The quota resets monthly; `30d` is how the other providers label a month.
+        label: "30d".into(),
+        pct: (100.0 - left).clamp(0.0, 100.0),
+        resets_at: json["quota_reset_date"]
+            .as_str()
+            .and_then(|date| parse_iso(&format!("{date}T00:00:00Z"))),
+    };
+    Some((vec![window], now))
+}
+
 /// The accounts one provider has been signed in with. `refresh` asks the switcher tool for fresh usage figures
 /// (a network call by that tool); without it the saved figures are read from disk.
 #[tauri::command]
@@ -1545,23 +1577,31 @@ pub async fn accounts_list(provider: String, refresh: bool) -> Result<Accounts, 
             if accounts.len() == 1 && !accounts[0].1 {
                 accounts[0].1 = true;
             }
+            let mut rows: Vec<Account> = accounts
+                .into_iter()
+                .map(|(id, active)| Account {
+                    id: id.clone(),
+                    email: id,
+                    alias: None,
+                    plan: Some("GitHub Copilot".into()),
+                    active,
+                    usage: Vec::new(),
+                    observed_at: None,
+                    status: None,
+                    expired: false,
+                    reset_credits_available: None,
+                })
+                .collect();
+            // The usage call answers for the account `gh` is signed in as, which is the active row.
+            if let Some(row) = rows.iter_mut().find(|row| row.active) {
+                if let Some((usage, observed)) = copilot_usage(&gh).await {
+                    row.usage = usage;
+                    row.observed_at = Some(observed);
+                }
+            }
             Ok(Accounts {
                 manager: true,
-                accounts: accounts
-                    .into_iter()
-                    .map(|(id, active)| Account {
-                        id: id.clone(),
-                        email: id,
-                        alias: None,
-                        plan: Some("GitHub Copilot".into()),
-                        active,
-                        usage: Vec::new(),
-                        observed_at: None,
-                        status: None,
-                        expired: false,
-                        reset_credits_available: None,
-                    })
-                    .collect(),
+                accounts: rows,
                 auto_switch: None,
                 error: (!out.ok && text.is_empty()).then(|| "GitHub CLI is not signed in".into()),
             })
@@ -2769,6 +2809,23 @@ mod tests {
         assert!(account_tool_allows(&tool("cswap"), &["remove"]).is_err());
         // Other programs are not this guard's business.
         assert!(account_tool_allows(&tool("claude"), &["auth", "login"]).is_ok());
+    }
+
+    #[test]
+    fn copilot_quota_is_the_premium_window_left_until_the_monthly_reset() {
+        let text = r#"{"quota_reset_date":"2026-11-01","quota_snapshots":{
+            "chat":{"unlimited":true,"percent_remaining":100},
+            "premium_interactions":{"entitlement":200,"remaining":142,"unlimited":false,"percent_remaining":71.1}}}"#;
+        let (usage, _) = parse_copilot_usage(text, 1_800_000_000).expect("quota");
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].label, "30d");
+        assert!((usage[0].pct - 28.9).abs() < 1e-9);
+        assert_eq!(usage[0].resets_at, parse_iso("2026-11-01T00:00:00Z"));
+
+        // An unlimited plan has no window to show.
+        let unlimited = r#"{"quota_snapshots":{"premium_interactions":{"unlimited":true,"percent_remaining":100}}}"#;
+        assert_eq!(parse_copilot_usage(unlimited, 1).expect("quota").0, Vec::new());
+        assert!(parse_copilot_usage("not json", 1).is_none());
     }
 
     #[test]

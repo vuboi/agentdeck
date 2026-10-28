@@ -139,8 +139,7 @@ const seconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)} s` : `
 /** A message was sent to an agent: its entry runs until the reply ends. `detail` is what the turn was started with. */
 export function logRequest(sessionId: string, title: string, project: string, agent: string, model: string | null, detail: string, agentId?: string) {
   endRequest(sessionId, 'stopped', 'A new message was sent before this reply ended.');
-  const item: Activity = { key: `${sessionId}:request:${++calls}`, sessionId, title, project, name: 'Request', input: `${agent} · ${model ?? 'default model'}`, agent: agentId, model, background: false, status: 'running', startedAt: Date.now(), output: `Waiting for ${agent} to answer.
-${detail}` };
+  const item: Activity = { key: `${sessionId}:request:${++calls}`, sessionId, title, project, name: 'Request', input: `${agent} · ${model ?? 'default model'}`, agent: agentId, model, background: false, status: 'running', startedAt: Date.now(), output: detail };
   requests.set(sessionId, { item });
   audit.push(item);
 }

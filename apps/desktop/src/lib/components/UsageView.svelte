@@ -3,7 +3,8 @@
   import ProjectSelect from './ProjectSelect.svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { modelLabel } from '../models.svelte';
-  import { workspace } from '../sessions.svelte';
+  import { delegateTasks, workspace } from '../sessions.svelte';
+  import { REWORK_ROUNDS, scorecard } from '../scorecard';
   import { estimateCost, isFreeModel, onPrices, onUsage, shortCount, totalTokens, usageLog, usd, type UsageRecord } from '../usage';
 
   // What the agents used: tokens and cost of every finished reply (kept by recordUsage), by day, kind of token,
@@ -172,6 +173,14 @@
     { title: 'By project', lines: group((item) => item.projectId ?? '', projectName) },
   ]);
 
+  // How each model does the work it is handed (scorecard.ts): a delegated task runs in a chat of its own and every reply
+  // there is a round, so a model that needs three or four rounds for one task shows up at once, whatever a reply costs.
+  const tasksInRange = $derived(Object.values(delegateTasks).filter((task) => task.startedAt >= startOfRange(range)));
+  const score = $derived(scorecard(rows, tasksInRange, (item) => worth(item).cost).filter((row) => row.tasks > 0));
+  const worstRounds = $derived(Math.max(REWORK_ROUNDS, ...score.map((row) => row.avgRounds)));
+  /** Green for a model that gets it right the first time, amber for one fix a task, red for rework. */
+  const roundsTone = (rounds: number) => (rounds >= REWORK_ROUNDS ? 'text-destructive' : rounds > 1.5 ? 'text-amber-500' : 'text-emerald-500');
+
   const seconds = (ms: number) => (ms >= 60_000 ? `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s` : `${(ms / 1000).toFixed(1)}s`);
   const money = (value: number) => `${approx}${usd(value)}`;
 </script>
@@ -299,6 +308,44 @@
           </section>
         {/if}
       {/each}
+
+      {#if score.length > 0}
+        <section>
+          <div class="mb-1.5 flex items-baseline gap-2">
+            <h3 class="m-0 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Delegated work by model</h3>
+            <span class="ml-auto text-[10px] text-muted-foreground" title="Every reply in a worker's chat is one round: the first answer, then each correction sent back.">Rounds per task, fewer is better</span>
+          </div>
+          <ul class="m-0 flex list-none flex-col gap-2.5 p-0">
+            {#each score as row (row.model)}
+              <li class="rounded-lg border border-border px-2.5 py-2">
+                <div class="flex items-baseline gap-2">
+                  <span class="min-w-0 flex-1 truncate font-medium" title={row.model}>{row.model ? modelLabel(row.model) : 'Unknown model'}</span>
+                  <span class="text-muted-foreground tabular-nums">{row.tasks} {row.tasks === 1 ? 'task' : 'tasks'}</span>
+                  <span class="w-14 text-right text-sm font-semibold tabular-nums {roundsTone(row.avgRounds)}" title="Average rounds per task">{row.avgRounds.toFixed(1)}×</span>
+                </div>
+                <!-- First try, one fix, rework: how the tasks split. -->
+                <div class="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-muted" role="img" aria-label="{row.firstTry} right the first time, {row.oneFix} with one fix, {row.rework} reworked">
+                  <div class="bg-emerald-500" style:width="{(row.firstTry / row.tasks) * 100}%"></div>
+                  <div class="bg-amber-500" style:width="{(row.oneFix / row.tasks) * 100}%"></div>
+                  <div class="bg-destructive" style:width="{(row.rework / row.tasks) * 100}%"></div>
+                </div>
+                <div class="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground tabular-nums">
+                  <span class="flex items-center gap-1"><span class="size-1.5 rounded-sm bg-emerald-500"></span>{row.firstTry} first try</span>
+                  <span class="flex items-center gap-1"><span class="size-1.5 rounded-sm bg-amber-500"></span>{row.oneFix} one fix</span>
+                  <span class="flex items-center gap-1"><span class="size-1.5 rounded-sm bg-destructive"></span>{row.rework} rework</span>
+                  {#if row.failed > 0}<span class="text-destructive">{row.failed} failed</span>{/if}
+                </div>
+                <div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground tabular-nums">
+                  <span>Task {row.avgTaskMs ? seconds(row.avgTaskMs) : '–'}</span>
+                  <span>Reply {row.avgReplyMs ? seconds(row.avgReplyMs) : '–'}</span>
+                  <span>Cost / task {row.costPerTask === null ? '–' : money(row.costPerTask)}</span>
+                </div>
+                <div class="mt-1 h-0.5 overflow-hidden rounded-full bg-muted/60" aria-hidden="true"><div class="h-full {row.avgRounds >= REWORK_ROUNDS ? 'bg-destructive/70' : row.avgRounds > 1.5 ? 'bg-amber-500/70' : 'bg-emerald-500/70'}" style:width="{Math.max((row.avgRounds / worstRounds) * 100, 4)}%"></div></div>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
 
       {#if freeUse.replies > 0}
         <!-- Free models apart: they are counted as $0, so the cost above is what was really paid. -->

@@ -106,12 +106,11 @@
   </span>
 {/snippet}
 
-<ZDrawer bind:open zPlacement="right" zWidth="420px" zFloating zClosable={false} zTitle={title} {footer}>
-  <div class="flex h-full min-h-full flex-col gap-2">
-    {#if demo}
-      <p class="m-0 rounded-lg border border-dashed border-border px-3 py-2 text-[11px] leading-snug text-muted-foreground">Sample entries (dev mode): the real log is empty. They are not saved.</p>
-    {/if}
+<ZDrawer bind:open zPlacement="right" zWidth="420px" zFloating zClosable={false} zTitle={title} {footer} zBodyClass="p-0">
+  <div class="flex h-full min-h-full flex-col">
     {#if areasHere.length > 1}
+      <!-- The filter tabs stay at the top of the body while the list scrolls under them. -->
+      <div class="sticky top-0 z-10 shrink-0 border-b border-border bg-background px-2 py-2">
       <ZTabs
         zTabs={[{ value: 'all', label: 'All' }, ...areasHere.map((area) => ({ value: area, label: AREAS[area].label }))]}
         zType="segmented"
@@ -123,6 +122,11 @@
         activeTab={filter}
         onTabChange={(value) => (filter = value as typeof filter)}
       />
+      </div>
+    {/if}
+    <div class="flex flex-1 flex-col gap-1.5 p-2">
+    {#if demo}
+      <p class="m-0 rounded-lg border border-dashed border-border px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground">Sample entries (dev mode): the real log is empty. They are not saved.</p>
     {/if}
     {#if rows.length === 0}
       <div class="flex min-h-38 flex-1 flex-col items-center justify-center gap-2 self-stretch text-xs text-muted-foreground">
@@ -131,21 +135,23 @@
     {/if}
     {#each rows as { entry, index } (index)}
       {@const area = AREAS[entry.area] ?? AREAS.app}
-      <div class="flex min-w-0 flex-wrap items-center gap-x-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
-        <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left text-xs outline-none" aria-expanded={expanded[index] ?? false} onclick={() => toggle(index)}>
-          <ZIcon zType={area.icon as ZIconName} zSize="15" class="shrink-0 {area.tone}" />
-          <span class="flex min-w-0 flex-1 flex-col leading-tight">
-            <span class="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-              <span class="shrink-0 rounded bg-muted px-1 text-[10px] leading-4">{area.label}</span>
-              <span class="truncate" title={whereOf(entry)}>{whereOf(entry)}</span>
-            </span>
-            <span class="mt-0.5 truncate" title={entry.event}>{entry.event}</span>
-            {#if entry.detail}<span class="mt-1 truncate text-[11px] {area.tone}" title={entry.detail}>{entry.detail}</span>{/if}
+      <div class="flex min-w-0 flex-wrap items-center rounded-lg border border-border bg-card/40 py-2 pr-1 pl-2 transition-colors hover:border-primary/40">
+        <!-- Two lines: what happened and when, then the error itself. Where it happened is in the tooltip and the detail. -->
+        <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-md text-left text-xs outline-none" aria-expanded={expanded[index] ?? false} title={whereOf(entry) ? `${area.label} · ${whereOf(entry)}` : area.label} onclick={() => toggle(index)}>
+          <!-- The icon sits at the start in a small tile, tinted by the area it belongs to. -->
+          <span class="grid size-5 shrink-0 place-items-center rounded-md bg-muted {area.tone}">
+            <ZIcon zType={area.icon as ZIconName} zSize="11" />
           </span>
-          <span class="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground tabular-nums">{clock(entry.at)}</span>
+          <span class="flex min-w-0 flex-1 flex-col gap-1 leading-normal">
+            <span class="flex min-w-0 items-center gap-2">
+              <span class="min-w-0 flex-1 truncate font-medium">{entry.event}</span>
+              <span class="shrink-0 text-[10px] text-muted-foreground tabular-nums">{area.label} · {clock(entry.at)}</span>
+            </span>
+            {#if entry.detail}<span class="truncate text-[11px] {area.tone}">{entry.detail}</span>{/if}
+          </span>
         </button>
-        <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Show the detail" aria-expanded={expanded[index] ?? false} onclick={() => toggle(index)}>
-          <ZIcon zType={'lucideChevronRight' as ZIconName} zSize="12" class="transition-transform duration-200 {expanded[index] ? 'rotate-90' : ''}" />
+        <button type="button" class="grid size-5 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Show the detail" aria-expanded={expanded[index] ?? false} onclick={() => toggle(index)}>
+          <ZIcon zType={'lucideChevronRight' as ZIconName} zSize="11" class="transition-transform duration-200 {expanded[index] ? 'rotate-90' : ''}" />
         </button>
         <!-- Opens and closes by animating the row height (grid 0fr to 1fr): no jump at the end of a close. The detail is
              built the first time the row is opened and kept after that. -->
@@ -164,5 +170,6 @@
         {/if}
       </div>
     {/each}
+    </div>
   </div>
 </ZDrawer>

@@ -14,6 +14,8 @@ export const replyStyle = $state({
   projectMemory: true,
   /** Show `![](https://…)` pictures through the app (a copy in the cache), not straight from the web. */
   proxyImages: true,
+  /** The Piper voice that reads Vietnamese aloud (see `VOICES` in speech.ts). */
+  voice: 'vais1000',
 });
 
 const KEY = 'chat.replyStyle';

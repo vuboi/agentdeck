@@ -15,7 +15,7 @@ export type Block =
   /** A document attached to the message: it stays on disk, the agent is given its path. */
   | { kind: 'file'; name: string; path: string; size?: number }
   | { kind: 'element'; tag: string; text: string; selector: string; /** What the chat keeps of the element: for its card, and to send it again when the message is edited. */ url?: string; title?: string; note?: string; html?: string; around?: string; box?: { x?: number; y?: number; w: number; h: number }; style?: Record<string, string>; /** A PNG of the element, for its chip. */ picture?: string }
-  | { kind: 'permission'; requests: { id: string; tool: string; summary: string; allow: string }[]; state: 'pending' | 'allowed' | 'denied' };
+  | { kind: 'permission'; requests: { id: string; tool: string; summary: string; allow: string }[]; state: 'pending' | 'allowed' | 'denied' | 'expired' };
 
 export type Message = {
   id: string;
@@ -44,6 +44,8 @@ export type Message = {
   cost?: number;
   /** The agent that wrote this reply. A chat can switch agents, so each reply keeps its own. */
   agent?: Agent;
+  /** The user cancelled the questions or request this reply ended with: nothing waits on them any more. */
+  cancelled?: boolean;
   /** The session started, resumed or compacted at this message: the chat draws a line above it (chat-dividers.ts). */
   mark?: import('./chat-dividers').SessionMark;
 };
@@ -161,4 +163,20 @@ messages.push(
       },
     ],
   },
+);
+
+// Fake questions to try the cards in the browser mock: the last reply asks one of them, picked by the address
+// (`?ask=quick`, `?ask=quick3`, `?ask=multi`; `quick` when there is none). Not used in the desktop app.
+const ASKS: Record<string, string> = {
+  quick:
+    'I changed the export button on the report page. Do you want the same button on the other pages too?\n\n```agentdeck-ask\n{"questions":[{"question":"Add it to every page that exports?","options":[{"label":"Yes, every page (Recommended)","description":"4 pages, about 20 lines"},{"label":"Only the report page"}]}]}\n```',
+  quick3:
+    'Two ways to fix the flicker; both work.\n\n```agentdeck-ask\n{"questions":[{"question":"Which fix do you want?","options":[{"label":"Keep the height (Recommended)","description":"Cards keep their size while loading"},{"label":"Preload the images","description":"Slower first open"},{"label":"Leave it"}]}]}\n```',
+  multi:
+    'Before I start, a few things I cannot guess from the code.\n\n```agentdeck-ask\n{"questions":[{"header":"Scope","question":"Which pages get the button?","options":[{"label":"Report page only (Recommended)","description":"Smallest change"},{"label":"Every page with an export"},{"label":"All pages"}]},{"header":"Format","question":"Which formats should it export?","multi":true,"options":[{"label":"CSV"},{"label":"PDF"},{"label":"Excel"}]},{"header":"Tests","question":"Add tests for it?","options":[{"label":"Yes (Recommended)"},{"label":"No, skip them"}]}]}\n```',
+};
+const askName = typeof location === 'undefined' ? '' : (new URLSearchParams(location.search).get('ask') ?? 'quick');
+messages.push(
+  { id: 'u-ask', role: 'user', time: '11:30', blocks: [{ kind: 'response', text: 'Add an export button to the report page.' }] },
+  { id: 'a-ask', role: 'assistant', time: '11:31', at: new Date(Date.now() - 60_000).toISOString(), ms: 9_000, agent: 'claude', blocks: [{ kind: 'response', text: ASKS[askName] ?? ASKS.quick }] },
 );

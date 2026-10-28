@@ -6,7 +6,8 @@
   import { parseDiff, type DiffRow } from '../diff';
   import { fileWrites } from '../activity.svelte';
   import { ticker } from '../clock.svelte';
-  import { argOf, describeStep, elapsed, liveState, summarize, toolOf, totalChange, type CommandBlock, type Counts, type ThinkingBlock } from '../blocks';
+  import { ASK } from '../tool-kind';
+  import { argOf, describeStep, elapsed, groupIcon, liveState, stepLine, summarize, toolOf, totalChange, type CommandBlock, type Counts, type ThinkingBlock } from '../blocks';
   import { openImages } from '../preview.svelte';
   import { imagePathsIn, loadImagePath } from '../attachments';
   import { groupState } from '../open-groups.svelte';
@@ -67,6 +68,9 @@
   const thinkingNow = $derived(thoughts.some((thought) => thought.streaming));
 
   const current = $derived(liveState(items));
+  // The newest step still running, and its line for the group's header.
+  const runningStep = $derived(items.findLast((item) => item.status === 'running'));
+  const runningLine = $derived(runningStep ? stepLine(runningStep) : '');
   const total = $derived(totalChange(items));
   const seconds = $derived(elapsed(ticker.sec - (startedAt ?? ticker.sec)));
   const shown = (item: CommandBlock) => (toolOf(item.command) === 'Bash' ? `> ${argOf(item.command)}` : item.command);
@@ -206,8 +210,14 @@
       <ZShimmerText class="stream-label" zText={current.label} />
       <span class="stream-label tabular-nums">{seconds}</span>
     {:else}
-      {#if thoughts.length > 0}<ZIcon zType="lucideLightbulb" class="size-3 shrink-0" />{/if}
-      {#if working || items.some((item) => item.status === 'running')}
+      <!-- Always an icon, by the kind of work: the step running now, else what the group did most (terminal, file edit,
+           search, skill, a plug for an MCP tool). The bulb only for a group that holds nothing but reasoning. -->
+      <ZIcon zType={(items.length > 0 ? groupIcon(items) : 'lucideLightbulb') as ZIconName} class="size-3 shrink-0" />
+      {#if runningStep}
+        <!-- While a step runs the line is that step ("Running pnpm test", "Using officecli load_skill word"), cut to the
+             width; once every step is done it goes back to the summary. -->
+        <span class="min-w-0 truncate" title={runningLine}><ZShimmerText class="font-medium" zText={runningLine} /></span>
+      {:else if working}
         <ZShimmerText class="truncate font-medium" zText={summarize(items)} />
       {:else}
         <span class="truncate font-medium">{summarize(items)}</span>
@@ -256,7 +266,7 @@
               aria-expanded={view.rows[index] ?? false}
               onclick={() => toggleRow(index)}
             >
-              <ZIcon zType={step.icon as ZIconName} zSize="12" class="size-3 shrink-0 {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground/70'}" />
+              <ZIcon zType={step.icon as ZIconName} class="size-3 shrink-0 {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground/70'}" />
               {#if item.status === 'running'}
                 <ZShimmerText class="shrink-0" zText={step.verb} />
                 <ZShimmerText class="min-w-0 truncate font-medium" zText={step.subject || '…'} />
@@ -320,7 +330,8 @@
                       </div>
                     </div>
                   {:else}
-                    <pre class="m-0 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all">{shown(item)}</pre>
+                    <!-- A question the agent asked shows its questions and options (the output), not its command line. -->
+                    {#if !ASK.test(toolOf(item.command))}<pre class="m-0 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all">{shown(item)}</pre>{/if}
                   {/if}
                   {#if item.image}
                     <button type="button" class="w-fit max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border outline-none hover:ring-2 hover:ring-primary/50" aria-label="See the screenshot" onclick={(event) => showShot(event, item.image!)}>

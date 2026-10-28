@@ -3,7 +3,8 @@
   import { refreshOutput, watchServerLog, watchTerminalOutput, type Activity } from '../activity.svelte';
   import { stopServers } from '../browser.svelte';
   import { stopTerminalRun } from '../terminal.svelte';
-  import CommandOutput from './CommandOutput.svelte';
+  import { ZIcon } from '@shival99/z-ui-svelte';
+  import type { ZIconName } from '@shival99/z-ui-svelte';
 
   // The card of one run / terminal / shell command in the Tasks panel (it exists only while the entry is open). A
   // Terminal entry is fed by its tab: the terminal pushes the new output as the shell prints it. A Run project entry
@@ -15,6 +16,8 @@
   const live = $derived(item.name === 'Run project' ? alive : item.status === 'running' || item.status === 'background');
   // The command line only: a run's input also names its folder on a second line.
   const command = $derived(item.name === 'Run project' ? item.input.split('\n')[0] : item.input);
+  // What the one copy button puts on the clipboard: the command, then the output.
+  const copied = $derived([command, item.output].filter(Boolean).join('\n'));
 
   $effect(() => {
     if (item.name !== 'Terminal') return;
@@ -74,13 +77,23 @@
   }
 </script>
 
-<CommandOutput
-  title={item.name === 'Run project' ? 'Run project' : item.name}
-  {command}
-  output={item.output ?? ''}
-  {live}
-  startedAt={item.startedAt}
-  endedAt={item.endedAt}
-  onstop={item.name === 'Bash' ? undefined : stop}
-  {oncopy}
-/>
+<!-- One box for the run: the command on top, a divider, then the output. The header stays put while the output scrolls. -->
+{#if command || item.output}
+  <div class="group/code relative rounded-md border border-border bg-background">
+    {#if command}
+      <pre class="m-0 overflow-x-auto py-1.5 pr-7 pl-2 font-mono whitespace-pre-wrap break-all">{command}</pre>
+    {/if}
+    {#if command && item.output}
+      <div class="border-t border-border"></div>
+    {/if}
+    {#if item.output}
+      <pre class="m-0 max-h-48 overflow-auto py-1 pr-7 pl-2 font-mono whitespace-pre-wrap break-all text-muted-foreground">{item.output}</pre>
+    {/if}
+    <button type="button" class="absolute top-1 right-1 grid size-4 cursor-pointer place-items-center rounded bg-background/80 text-muted-foreground backdrop-blur-sm outline-none hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring" aria-label="Copy" title="Copy" onclick={() => oncopy(copied)}>
+      <ZIcon zType={'lucideCopy' as ZIconName} class="size-2.5" />
+    </button>
+  </div>
+{/if}
+{#if live && item.name !== 'Bash'}
+  <button type="button" class="self-start cursor-pointer rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground outline-none hover:bg-destructive/10 hover:text-destructive" onclick={stop}>Stop</button>
+{/if}

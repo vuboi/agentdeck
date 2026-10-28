@@ -142,12 +142,7 @@ pub fn add_allow_rules(path: &std::path::Path, rules: &[String]) -> Result<(), S
 
 /// `--mode` for a permission mode of the app (`None`: the default mode of `agy`).
 fn mode_flag(permission_mode: &str) -> Option<&'static str> {
-    match permission_mode {
-        "acceptEdits" => Some("accept-edits"),
-        "plan" => Some("plan"),
-        "auto" => Some("auto"),
-        _ => None,
-    }
+    super::permission::Mode::parse(Some(permission_mode)).agy()
 }
 
 /// A model id that already carries its reasoning level (`gemini-3.8-flash-low`) conflicts with `--effort`.
@@ -197,7 +192,7 @@ impl Provider for Antigravity {
             }
         }
         let mode = req.permission_mode.as_deref().unwrap_or_default();
-        if mode == "bypassPermissions" {
+        if super::permission::Mode::parse(Some(mode)) == super::permission::Mode::Yolo {
             args.push("--dangerously-skip-permissions".to_string());
         } else if let Some(mode) = mode_flag(mode) {
             args.push("--mode".to_string());

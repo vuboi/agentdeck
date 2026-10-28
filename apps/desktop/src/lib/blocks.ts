@@ -3,6 +3,8 @@ import type { ZLoadingSpinner } from '@shival99/z-ui-svelte';
 import { LOADER } from './loaders';
 import { kindOfCommand } from './delegate-task';
 import type { Block } from './mock';
+import { askAsStep } from './questions';
+import { AGENT, ASK, CREATE, askSubject, EDIT, FETCH, ICON, detailOf, innerCommand, PAGE_ACT, PAGE_LOOK, PAGE_READ, PAGE_SCRIPT, READ, RUN, SEARCH, WEB_SEARCH, toolIcon } from './tool-kind';
 
 export type CommandBlock = Extract<Block, { kind: 'command' }>;
 export type ThinkingBlock = Extract<Block, { kind: 'thinking' }>;
@@ -52,6 +54,11 @@ export function segments(blocks: Block[]): Segment[] {
     if (block.kind !== 'command') {
       flush();
       out.push({ kind: 'block', block });
+      // The questions in an answer stay in the activity list as a step to open, not only as the card that closes once answered.
+      const ask = block.kind === 'response' ? askAsStep(block.text) : null;
+      if (ask) {
+        out.push({ kind: 'commands', items: [{ kind: 'command', id: ask.id, command: ask.command, output: ask.output, status: 'ok' }], thoughts: [] });
+      }
       continue;
     }
     if (kindOfCommand(block.command) === 'delegate_task') {
@@ -88,22 +95,12 @@ export const toolOf = (command: string) => (command.split(/\s+/, 1)[0] ?? '').re
 /** The argument part of the line. */
 export const argOf = (command: string) => command.slice(toolOf(command).length).trim();
 
-const RUN = /^(Bash|shell|exec_command)$/;
-const EDIT = /^(Edit|MultiEdit|Write|NotebookEdit|apply_patch)$/;
-const READ = /^Read$/;
-const SEARCH = /^(Grep|Glob|LS|WebSearch)$/;
-const FETCH = /^(WebFetch|Fetch)$/;
-const AGENT = /^(Task|Agent)$/;
-// The AgentDeck browser tools: what the agent did on the Preview page.
-const PAGE_ACT = /^browser_(click|type|key|scroll|hover|fill|drag|upload)$/;
-const PAGE_SCRIPT = /^browser_eval$/;
-const PAGE_LOOK = /^browser_screenshot$/;
-const PAGE_READ = /^browser_(dom|console|network|frames|page)$/;
+// The tool names of each agent and their icons are shared with the Audit log (tool-kind.ts).
 
 const basename = (path: string) => path.split(/[\\/]+/).filter(Boolean).at(-1) ?? path;
 
 export type Step = {
-  /** A small icon before the verb, by kind of step (see `iconOf`). */
+  /** A small icon for the kind of step (see `iconOf`). */
   icon: string;
   /** Small muted word: "Ran", "Created", "Read". */
   verb: string;
@@ -116,82 +113,84 @@ export type Step = {
 /** Lines added and removed, and files created and deleted. */
 export type Counts = { added: number; removed: number; created: number; deleted: number };
 
-/** A small icon for each kind of step, so the activity list reads at a glance. */
-const ICON = {
-  edit: 'lucidePencil',
-  create: 'lucideFilePlus',
-  delete: 'lucideTrash2',
-  run: 'lucideTerminal',
-  read: 'lucideFileText',
-  search: 'lucideSearch',
-  fetch: 'lucideGlobe',
-  agent: 'lucideBot',
-  page: 'lucideMonitor',
-  plan: 'lucideListChecks',
-  team: 'lucideUsers',
-  mention: 'lucideAtSign',
-  skill: 'lucideSparkles',
-  tool: 'lucidePlug',
-  other: 'lucideWrench',
-} as const;
-
-/** The icon of a step: by what it did; a tool from an MCP server (`mcp__…`) is a plug, a skill a spark. */
-function iconOf(tool: string, command: string, change?: CommandBlock['change']): string {
-  if (change) return ICON[tool === 'Delete' ? 'delete' : change.create === true ? 'create' : 'edit'];
-  if (RUN.test(tool)) return ICON.run;
-  if (EDIT.test(tool)) return ICON.edit;
-  if (READ.test(tool)) return ICON.read;
-  if (SEARCH.test(tool)) return ICON.search;
-  if (FETCH.test(tool)) return ICON.fetch;
-  if (AGENT.test(tool)) return ICON.agent;
-  if (/^browser_|Page/i.test(tool)) return ICON.page;
-  if (tool === 'Plan') return ICON.plan;
-  const delegation = kindOfCommand(command);
+/** The icon of a step, by what it did (tool-kind.ts): a file change by the change, a delegation or a skill loaded through an
+ *  MCP tool by what the call does, the rest by the tool's name. */
+export function iconOf(item: CommandBlock): string {
+  const tool = toolOf(item.command);
+  if (item.change) return ICON[tool === 'Delete' ? 'delete' : item.change.create === true ? 'create' : 'edit'];
+  const delegation = kindOfCommand(item.command);
   if (delegation === 'delegate_task') return ICON.mention;
-  if (delegation === 'list_agents' || delegation === 'task_status' || delegation === 'task_stop') return ICON.team;
-  if (/^Skill$|skill/i.test(tool)) return ICON.skill;
-  if (/^mcp__/.test(tool)) return ICON.tool;
-  return ICON.other;
+  if (delegation) return ICON.team;
+  if (/^load_skill\b/.test(detailOf(argOf(item.command)))) return ICON.skill;
+  return toolIcon(tool);
+}
+
+/** The icon of a group's header: the step running now, else the kind of step the group did most (first seen wins a tie). */
+export function groupIcon(items: CommandBlock[]): string {
+  const running = items.findLast((item) => item.status === 'running');
+  if (running) return iconOf(running);
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(iconOf(item), (counts.get(iconOf(item)) ?? 0) + 1);
+  let best: string = ICON.tool;
+  let most = 0;
+  for (const [icon, count] of counts) if (count > most) [best, most] = [icon, count];
+  return best;
 }
 
 /** One row of the activity list. Wording follows the tool; a running step says "Running", a failed one "Failed". */
 export function describeStep(item: CommandBlock): Step {
+  return { icon: iconOf(item), ...wordsOf(item) };
+}
+
+function wordsOf(item: CommandBlock): Omit<Step, 'icon'> {
   const tool = toolOf(item.command);
   const running = item.status === 'running';
   const verbs = (done: string, doing: string) => (item.status === 'fail' ? 'Failed' : running ? doing : done);
-  const icon = iconOf(tool, item.command, item.change);
   if (item.change) {
     const removed = tool === 'Delete';
     const created = !removed && item.change.create === true;
     return {
-      icon,
       verb: verbs(removed ? 'Deleted' : created ? 'Created' : 'Edited', removed ? 'Deleting' : created ? 'Creating' : 'Editing'),
       subject: basename(item.change.path),
       counts: { added: item.change.added, removed: item.change.removed, created: created ? 1 : 0, deleted: removed ? 1 : 0 },
     };
   }
-  const subject = argOf(item.command);
-  if (RUN.test(tool)) return { icon, verb: verbs('Ran', 'Running'), subject };
-  if (EDIT.test(tool)) return { icon, verb: verbs('Edited', 'Editing'), subject: basename(subject) };
-  if (READ.test(tool)) return { icon, verb: verbs('Read', 'Reading'), subject: basename(subject) };
-  if (SEARCH.test(tool)) return { icon, verb: verbs('Searched', 'Searching'), subject };
-  if (FETCH.test(tool)) return { icon, verb: verbs('Fetched', 'Fetching'), subject };
-  if (AGENT.test(tool)) return { icon, verb: verbs('Ran agent', 'Running agent'), subject };
-  if (PAGE_ACT.test(tool)) return { icon, verb: verbs('Interacted with page', 'Interacting with page'), subject: '' };
-  if (PAGE_SCRIPT.test(tool)) return { icon, verb: verbs('Ran page script', 'Running page script'), subject: '' };
-  if (tool === 'browser_open') return { icon, verb: verbs('Opened a page', 'Opening a page'), subject: '' };
-  if (tool === 'browser_serve') return { icon, verb: verbs('Started a server', 'Starting a server'), subject: '' };
-  if (PAGE_LOOK.test(tool)) return { icon, verb: verbs('Took a screenshot', 'Taking a screenshot'), subject: '' };
-  if (PAGE_READ.test(tool)) return { icon, verb: verbs('Found on page', 'Finding on page'), subject: '' };
-  if (tool === 'Plan') return { icon, verb: verbs('Planned', 'Planning'), subject: '' };
+  // Some agents send the arguments as JSON (`view {"path":"…"}`): the main one is what the step is about.
+  const raw = argOf(item.command);
+  const subject = RUN.test(tool) || CREATE.test(tool) || EDIT.test(tool) || READ.test(tool) || SEARCH.test(tool) || FETCH.test(tool) ? detailOf(raw) : raw;
+  if (RUN.test(tool)) return { verb: verbs('Ran', 'Running'), subject: innerCommand(subject) };
+  if (CREATE.test(tool)) return { verb: verbs('Created', 'Creating'), subject: basename(subject) };
+  if (EDIT.test(tool)) return { verb: verbs('Edited', 'Editing'), subject: basename(subject) };
+  if (READ.test(tool)) return { verb: verbs('Read', 'Reading'), subject: basename(subject) };
+  if (SEARCH.test(tool)) return { verb: verbs('Searched', 'Searching'), subject };
+  if (FETCH.test(tool)) return { verb: verbs('Fetched', 'Fetching'), subject };
+  if (ASK.test(tool)) return { verb: verbs('Asked', 'Asking'), subject: askSubject(raw) };
+  if (AGENT.test(tool)) return { verb: verbs('Ran agent', 'Running agent'), subject };
+  if (PAGE_ACT.test(tool)) return { verb: verbs('Interacted with page', 'Interacting with page'), subject: '' };
+  if (PAGE_SCRIPT.test(tool)) return { verb: verbs('Ran page script', 'Running page script'), subject: '' };
+  if (tool === 'browser_open') return { verb: verbs('Opened a page', 'Opening a page'), subject: '' };
+  if (tool === 'browser_serve') return { verb: verbs('Started a server', 'Starting a server'), subject: '' };
+  if (PAGE_LOOK.test(tool)) return { verb: verbs('Took a screenshot', 'Taking a screenshot'), subject: '' };
+  if (PAGE_READ.test(tool)) return { verb: verbs('Found on page', 'Finding on page'), subject: '' };
+  if (tool === 'Plan') return { verb: verbs('Planned', 'Planning'), subject: '' };
   const delegation = kindOfCommand(item.command);
-  if (delegation === 'delegate_task') return { icon, verb: verbs('Messaged an agent', 'Messaging an agent'), subject: '' };
-  if (delegation === 'list_agents') return { icon, verb: verbs('Listed the agents', 'Listing the agents'), subject: '' };
-  if (delegation === 'task_status') return { icon, verb: verbs('Checked a task', 'Checking a task'), subject: '' };
-  if (delegation === 'task_stop') return { icon, verb: verbs('Stopped a task', 'Stopping a task'), subject: '' };
-  if (tool === 'PackageInfo') return { icon, verb: verbs('Checked the package', 'Checking the package'), subject };
-  if (/^code_/.test(tool)) return { icon, verb: verbs('Looked up in the code index', 'Looking up in the code index'), subject: `${tool.slice(5)} ${subject}`.trim() };
-  return { icon, verb: verbs('Used', 'Using'), subject: `${tool} ${subject}`.trim() };
+  if (delegation === 'delegate_task') return { verb: verbs('Messaged an agent', 'Messaging an agent'), subject: '' };
+  if (delegation === 'list_agents') return { verb: verbs('Listed the agents', 'Listing the agents'), subject: '' };
+  if (delegation === 'task_status') return { verb: verbs('Checked a task', 'Checking a task'), subject: '' };
+  if (delegation === 'task_stop') return { verb: verbs('Stopped a task', 'Stopping a task'), subject: '' };
+  if (tool === 'PackageInfo') return { verb: verbs('Checked the package', 'Checking the package'), subject };
+  if (/^code_/.test(tool)) return { verb: verbs('Looked up in the code index', 'Looking up in the code index'), subject: `${tool.slice(5)} ${subject}`.trim() };
+  // Any other tool (an MCP tool, say): its name without the server (Codex writes `server.tool`) and its main argument.
+  return { verb: verbs('Used', 'Using'), subject: `${tool.split('.').at(-1) || tool} ${detailOf(subject)}`.trim() };
+}
+
+/** A step as one short line: "Running pnpm exec svelte-check", "Editing Chat.svelte", "Using officecli load_skill word".
+ *  Only its first line, cut at `max`; the row's own width cuts it further. */
+export function stepLine(item: CommandBlock, max = 90): string {
+  const step = describeStep(item);
+  const subject = step.subject.split('\n')[0].trim();
+  const cut = subject.length > max ? `${subject.slice(0, max - 1)}…` : subject;
+  return [step.verb, cut].filter(Boolean).join(' ');
 }
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
@@ -209,7 +208,8 @@ export function summarize(items: CommandBlock[]): string {
   const read = kinds.filter((tool) => READ.test(tool)).length;
   const searched = kinds.filter((tool) => SEARCH.test(tool)).length;
   const fetched = kinds.filter((tool) => FETCH.test(tool)).length;
-  const other = kinds.length - read - searched - fetched;
+  const asked = kinds.filter((tool) => ASK.test(tool)).length;
+  const other = kinds.length - read - searched - fetched - asked;
   const parts = [
     created && `created ${plural(created, 'file')}`,
     edited && `edited ${plural(edited, 'file')}`,
@@ -218,6 +218,7 @@ export function summarize(items: CommandBlock[]): string {
     read && `read ${plural(read, 'file')}`,
     searched && `searched ${plural(searched, 'time', 'times')}`,
     fetched && `fetched ${plural(fetched, 'page')}`,
+    asked && `asked ${plural(asked, 'question')}`,
     other && `used ${plural(other, 'tool')}`,
   ].filter(Boolean) as string[];
   const text = parts.join(', ');
@@ -237,25 +238,44 @@ export function totalChange(items: CommandBlock[]): Counts | null {
   };
 }
 
-/** What the agent is doing right now, and the loader that goes with it. */
+/** What a running step is doing, in a few words: the kind of work, not its details (the step line above has those). */
+function activityOf(item: CommandBlock): { label: string; spinner: ZLoadingSpinner } {
+  const tool = toolOf(item.command);
+  if (item.change || EDIT.test(tool)) {
+    if (tool === 'Delete') return { label: 'Deleting file', spinner: LOADER.action };
+    if (item.change?.create === true || (CREATE.test(tool) && !item.change)) return { label: 'Creating file', spinner: LOADER.action };
+    return { label: 'Editing file', spinner: LOADER.action };
+  }
+  if (RUN.test(tool)) return { label: 'Running command', spinner: LOADER.command };
+  if (READ.test(tool)) return { label: 'Reading file', spinner: LOADER.check };
+  if (WEB_SEARCH.test(tool)) return { label: 'Searching the web', spinner: LOADER.fetch };
+  if (SEARCH.test(tool)) return { label: 'Searching files', spinner: LOADER.check };
+  if (FETCH.test(tool)) return { label: 'Fetching page', spinner: LOADER.fetch };
+  if (ASK.test(tool)) return { label: 'Waiting for your answer', spinner: LOADER.background };
+  if (AGENT.test(tool)) return { label: 'Running agent', spinner: LOADER.background };
+  const delegation = kindOfCommand(item.command);
+  if (delegation === 'delegate_task') return { label: 'Waiting for an agent', spinner: LOADER.background };
+  if (delegation) return { label: 'Checking agents', spinner: LOADER.background };
+  if (PAGE_ACT.test(tool)) return { label: 'Interacting with page', spinner: LOADER.action };
+  if (PAGE_SCRIPT.test(tool)) return { label: 'Running page script', spinner: LOADER.command };
+  if (PAGE_LOOK.test(tool)) return { label: 'Taking screenshot', spinner: LOADER.check };
+  if (PAGE_READ.test(tool)) return { label: 'Reading page', spinner: LOADER.check };
+  if (tool === 'browser_open') return { label: 'Opening page', spinner: LOADER.fetch };
+  if (tool === 'browser_serve') return { label: 'Starting server', spinner: LOADER.command };
+  if (tool === 'Plan') return { label: 'Planning', spinner: LOADER.thinking };
+  return { label: `Using ${tool.split('.').at(-1) || 'tool'}`, spinner: LOADER.command };
+}
+
+/** What the agent is doing right now, and the loader that goes with it. A running step wins over everything: a reasoning or
+ *  text delta that arrives while a tool runs must not turn the line into "Thinking". */
 export function liveState(blocks: Block[]): { label: string; spinner: ZLoadingSpinner } {
+  if (blocks.some((block) => block.kind === 'permission' && block.state === 'pending')) return { label: 'Waiting for approval', spinner: LOADER.background };
+  const running = blocks.filter((block): block is CommandBlock => block.kind === 'command' && block.status === 'running').at(-1);
+  if (running) return activityOf(running);
   const last = blocks.filter((block) => block.kind !== 'loading').at(-1);
   if (last?.kind === 'thinking' && last.streaming) return { label: 'Reasoning', spinner: LOADER.reasoning };
-  if (last?.kind === 'response' && last.streaming) return { label: 'Writing', spinner: LOADER.thinking };
-  if (last?.kind === 'command' && last.status === 'running') {
-    const tool = toolOf(last.command);
-    if (tool === 'Write') return { label: 'Creating', spinner: LOADER.action };
-    if (EDIT.test(tool)) return { label: 'Editing', spinner: LOADER.action };
-    if (READ.test(tool)) return { label: 'Reading', spinner: LOADER.check };
-    if (SEARCH.test(tool)) return { label: 'Searching', spinner: LOADER.check };
-    if (FETCH.test(tool)) return { label: 'Fetching', spinner: LOADER.fetch };
-    if (AGENT.test(tool)) return { label: 'Running agent', spinner: LOADER.background };
-    if (kindOfCommand(last.command) === 'delegate_task') return { label: 'Waiting for an agent', spinner: LOADER.background };
-    if (PAGE_ACT.test(tool)) return { label: 'Interacting with page', spinner: LOADER.action };
-    if (PAGE_SCRIPT.test(tool)) return { label: 'Running page script', spinner: LOADER.command };
-    if (PAGE_LOOK.test(tool) || PAGE_READ.test(tool)) return { label: 'Reading the page', spinner: LOADER.check };
-    return { label: 'Running command', spinner: LOADER.command };
-  }
+  if (last?.kind === 'response' && last.streaming) return { label: 'Writing reply', spinner: LOADER.thinking };
+  // Between steps, or before the first token: the model is deciding what to do next.
   return { label: 'Thinking', spinner: LOADER.thinking };
 }
 

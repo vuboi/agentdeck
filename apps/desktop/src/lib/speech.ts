@@ -61,3 +61,10 @@ const VIETNAMESE = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹ
 
 /** Whether a text is Vietnamese (read by Piper, one voice for all of it) rather than English (read by the system's voice). */
 export const isVietnamese = (text: string) => (text.match(VIETNAMESE)?.length ?? 0) >= 2;
+
+/** The Vietnamese voices Piper has (tts.rs keeps the same ids). The first is the best; the others are smaller and lower in quality. */
+export const VOICES = [
+  { value: 'vais1000', label: 'Vais1000: clearest (63 MB)' },
+  { value: '25hours', label: '25hours: lighter (63 MB)' },
+  { value: 'vivos', label: 'Vivos: smallest (28 MB)' },
+];

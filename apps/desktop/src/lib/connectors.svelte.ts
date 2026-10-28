@@ -485,7 +485,7 @@ export function startWatching() {
     if (!connectors.detected) await refreshDetect();
     const asked = (provider: AccountProvider) => (provider === 'codex' ? installed('codex-auth') : installed('cswap'));
     const targets = (['codex', 'claude'] as const).filter(asked);
-    await Promise.all(targets.map((provider) => refreshAccounts(provider, true)));
+    await Promise.all([...targets.map((provider) => refreshAccounts(provider, true)), refreshAccounts('copilot', true)]);
     for (const warning of warnings()) announce(warning);
   };
   setTimeout(() => void check(), 20_000);

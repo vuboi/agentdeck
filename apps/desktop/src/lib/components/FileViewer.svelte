@@ -258,12 +258,14 @@
         {@render sidePane()}
       </div>
     {:else}
-      <!-- The tree sits beside the file view, hidden but mounted while shut. -->
-      {#if sideShown}
+      <!-- The tree sits beside the file view and stays mounted: opening and closing slide its width, like a drawer, instead
+           of removing it. The inner width is fixed, so the content does not squeeze while the wrapper moves. -->
+      <!-- `inert` while shut: the tree stays mounted, so without it Tab would still walk into the invisible list. -->
+      <div class="flex min-h-0 shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none" style:width="{sideShown ? treeWidth + 1 : 0}px" aria-hidden={!sideShown} inert={!sideShown}>
         <Splitter axis="x" label="Resize file explorer" onDelta={resizeTree} />
-      {/if}
-      <div class="min-h-0 shrink-0 flex-col bg-sidebar {sideShown ? 'flex' : 'hidden'}" style:width="{treeWidth}px" aria-label={sideLabel}>
-        {@render sidePane()}
+        <div class="flex min-h-0 shrink-0 flex-col bg-sidebar" style:width="{treeWidth}px" aria-label={sideLabel}>
+          {@render sidePane()}
+        </div>
       </div>
     {/if}
   </div>

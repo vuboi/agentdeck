@@ -3,9 +3,9 @@
 //! The SDK owns the Copilot runtime and its JSON-RPC protocol. AgentDeck uses `gh` only to read or switch the active
 //! GitHub account; the access token is passed to the SDK in memory and is never persisted by this module.
 
-use std::path::{Path, PathBuf};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use github_copilot_sdk::handler::{PermissionHandler, PermissionResult};
@@ -16,7 +16,9 @@ use github_copilot_sdk::{Client, ClientOptions};
 use serde_json::{json, Value};
 use sha2::Digest;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::oneshot;
 
+use ag_adapters::agent::permission::{verdict, Action, Mode, Verdict};
 use ag_adapters::agent::{
     begin_file_snapshot, file_change, finish_file_snapshot, AgentEvent, FileSnapshot, TurnRequest,
 };
@@ -50,23 +52,54 @@ pub(crate) async fn github_token() -> Result<String, String> {
     Ok(token.to_string())
 }
 
-/// Returns the Copilot models visible to the currently active `gh` account.
+/// Returns the Copilot models visible to the currently active `gh` account. The SDK starts its bundled Copilot CLI on first
+/// use (it may be unpacked then), so a limit keeps the model list from waiting for ever with no message.
 pub(crate) async fn models_list() -> Result<Vec<ag_adapters::models::ModelInfo>, String> {
+    tokio::time::timeout(Duration::from_secs(60), list_models_now())
+        .await
+        .map_err(|_| "GitHub Copilot did not answer in time. Its CLI may still be starting: try again in a moment".to_string())?
+}
+
+/// The Copilot model catalogue, read from the same endpoint the Copilot clients use. The SDK's own `models.list` comes back
+/// empty for this account (its CLI filters the list), so the endpoint is asked directly. Only the models the account may
+/// use are kept (`policy.state` enabled). The token is sent to GitHub's Copilot host and nowhere else.
+async fn list_models_now() -> Result<Vec<ag_adapters::models::ModelInfo>, String> {
     let token = github_token().await?;
-    let client = start_client(token, None).await?;
-    let models = client.list_models().await;
-    let stopped = client.stop().await;
-    let models = models.map_err(|error| error.to_string())?;
-    stopped.map_err(|error| error.to_string())?;
-    let listed = models
-        .into_iter()
-        .map(|model| ag_adapters::models::ModelInfo {
-            value: model.id,
-            label: model.name,
-            description: model.vendor.unwrap_or_default(),
-            efforts: model.supported_reasoning_efforts.unwrap_or_default(),
-            default_effort: model.default_reasoning_effort,
-            hidden: false,
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get("https://api.githubcopilot.com/models")
+        .bearer_auth(&token)
+        .header("Copilot-Integration-Id", "vscode-chat")
+        .header("Editor-Version", "vscode/1.99.0")
+        .send()
+        .await
+        .map_err(|error| format!("GitHub Copilot could not be reached: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("GitHub Copilot refused the model list ({})", response.status()));
+    }
+    let body: Value = response.json().await.map_err(|error| error.to_string())?;
+    let listed = body["data"]
+        .as_array()
+        .ok_or("GitHub Copilot sent a model list in an unexpected shape")?
+        .iter()
+        .filter(|model| model["policy"]["state"].as_str() == Some("enabled"))
+        .filter_map(|model| {
+            let value = model["id"].as_str()?.to_owned();
+            let efforts = model["capabilities"]["supports"]["reasoning_effort"]
+                .as_array()
+                .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default();
+            Some(ag_adapters::models::ModelInfo {
+                label: model["name"].as_str().unwrap_or(&value).to_owned(),
+                description: model["vendor"].as_str().unwrap_or_default().to_owned(),
+                value,
+                efforts,
+                default_effort: None,
+                hidden: false,
+            })
         })
         .collect();
     Ok(listed)
@@ -81,6 +114,7 @@ pub(crate) async fn run_turn(
     stop: ag_adapters::agent::interrupt::StopToken,
 ) {
     let result = run_turn_inner(&app, &chat_id, &turn_id, request, stop).await;
+    forget_pending(&turn_id);
     if let Err(error) = result {
         emit(
             &app,
@@ -108,6 +142,7 @@ async fn run_turn_inner(
         app: app.clone(),
         chat_id: chat_id.to_string(),
         turn_id: turn_id.to_string(),
+        mode: Mode::parse(request.permission_mode.as_deref()),
         allowed: request.allowed_tools.clone(),
     });
     let mcp = mcp_servers(request.cwd.as_deref());
@@ -348,12 +383,51 @@ fn prompt_attachments(prompt: &str) -> Vec<Attachment> {
     attachments
 }
 
-/// Enforces AgentDeck's existing per-tool approval pattern for Copilot SDK permission requests.
+/// A permission request the SDK is waiting on: the turn that asked, and where the card's answer goes.
+type Waiting = (String, oneshot::Sender<bool>);
+
+/// Permission requests the SDK is waiting on, by request id. The card's answer resolves them.
+static PENDING: LazyLock<Mutex<HashMap<String, Waiting>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The user's answer to a Copilot permission card. The SDK keeps the same turn going once its request is answered.
+#[tauri::command]
+pub(crate) fn copilot_permission_answer(request_id: String, allow: bool) -> Result<(), String> {
+    let waiting = PENDING
+        .lock()
+        .map_err(|_| "permission state is unavailable".to_string())?
+        .remove(&request_id);
+    let (_, answer) = waiting.ok_or_else(|| "that permission request is no longer waiting".to_string())?;
+    answer
+        .send(allow)
+        .map_err(|_| "the turn has already ended".to_string())
+}
+
+/// Drops the requests of a turn that ended; their waiters get a refusal.
+fn forget_pending(turn_id: &str) {
+    if let Ok(mut pending) = PENDING.lock() {
+        pending.retain(|_, (turn, _)| turn != turn_id);
+    }
+}
+
+/// Enforces AgentDeck's permission modes for Copilot SDK permission requests. The verdict of the mode comes from
+/// `permission::verdict`, so Copilot reads the five modes the same way the other agents do.
 struct CopilotPermissions {
     app: AppHandle,
     chat_id: String,
     turn_id: String,
+    mode: Mode,
     allowed: Vec<String>,
+}
+
+/// What a Copilot permission kind does, as the modes classify actions.
+fn action_of(kind: &str) -> Action {
+    match kind {
+        "read" => Action::Read,
+        "write" => Action::Write,
+        "shell" => Action::Shell,
+        _ => Action::Other,
+    }
 }
 
 #[async_trait::async_trait]
@@ -384,20 +458,37 @@ impl PermissionHandler for CopilotPermissions {
         if self.allowed.contains(&allow) {
             return PermissionResult::approve_once();
         }
+        match verdict(self.mode, action_of(&kind)) {
+            Verdict::Approve => return PermissionResult::approve_once(),
+            Verdict::Refuse => {
+                return PermissionResult::reject(Some(
+                    "Plan mode is read-only. Describe the change instead of making it.".to_string(),
+                ));
+            }
+            Verdict::Ask => {}
+        }
+        let (answer, waiting) = oneshot::channel();
+        let id = request_id.to_string();
+        if let Ok(mut pending) = PENDING.lock() {
+            pending.insert(id.clone(), (self.turn_id.clone(), answer));
+        }
         emit(
             &self.app,
             &self.chat_id,
             &self.turn_id,
             AgentEvent::PermissionDenied {
                 requests: vec![ag_adapters::agent::PermissionRequest {
-                    id: request_id.to_string(),
+                    id,
                     tool,
                     summary,
                     allow,
                 }],
             },
         );
-        PermissionResult::reject(None)
+        match waiting.await {
+            Ok(true) => PermissionResult::approve_once(),
+            _ => PermissionResult::reject(Some("The user did not allow this tool.".to_string())),
+        }
     }
 }
 

@@ -130,20 +130,6 @@ pub fn kill_script(pid: u32) -> String {
     format!("kill -KILL -- -{pid} 2>/dev/null; pkill -KILL -P {pid} 2>/dev/null; kill -KILL {pid} 2>/dev/null; exit 0")
 }
 
-#[cfg(test)]
-mod kill_tests {
-    use super::kill_script;
-
-    #[test]
-    fn the_kill_script_ends_the_group_the_children_and_the_process() {
-        let script = kill_script(4242);
-        assert!(script.contains("kill -KILL -- -4242"));
-        assert!(script.contains("pkill -KILL -P 4242"));
-        assert!(script.contains("kill -KILL 4242"));
-        assert!(script.ends_with("exit 0"));
-    }
-}
-
 /// Runs one turn: start the CLI, read its stream line by line, translate each line, hand each event to `emit`.
 /// Separate from Tauri so the process handling can be tested with a stand-in binary.
 pub async fn drive_turn(
@@ -512,5 +498,19 @@ echo '{"type":"result","is_error":false,"result":"pong","session_id":"s1"}'"#,
         })
         .await;
         assert!(matches!(events.as_slice(), [AgentEvent::Error { .. }]));
+    }
+}
+
+#[cfg(test)]
+mod kill_tests {
+    use super::kill_script;
+
+    #[test]
+    fn the_kill_script_ends_the_group_the_children_and_the_process() {
+        let script = kill_script(4242);
+        assert!(script.contains("kill -KILL -- -4242"));
+        assert!(script.contains("pkill -KILL -P 4242"));
+        assert!(script.contains("kill -KILL 4242"));
+        assert!(script.ends_with("exit 0"));
     }
 }

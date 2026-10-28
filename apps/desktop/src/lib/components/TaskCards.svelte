@@ -8,7 +8,7 @@
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
   import { connectors } from '../connectors.svelte';
-  import { cardOf, parseTaskResult, type CardState } from '../delegate-task';
+  import { cardOf, MAX_WORKERS, parseTaskResult, type CardState } from '../delegate-task';
   import { modelLabel } from '../models.svelte';
   import { agentDisplayName } from '../provider-registry';
   import { delegateTasks, liveStats, needsApproval, stopDelegateTask, workspace } from '../sessions.svelte';
@@ -109,7 +109,7 @@
             {#if card.report}
               <p class="m-0 max-h-72 overflow-auto leading-snug break-words whitespace-pre-wrap text-muted-foreground">{card.report}</p>
             {:else if live(card.state)}
-              <p class="m-0 text-muted-foreground/70 italic">{card.state === 'queued' ? 'Queued: at most 3 workers run at once; it starts when one finishes.' : card.state === 'background' ? 'Running in the background: the report comes back to the chat when it is done.' : 'Waiting for the report…'}</p>
+              <p class="m-0 text-muted-foreground/70 italic">{card.state === 'queued' ? `Queued: at most ${MAX_WORKERS} workers run at once; it starts when one finishes.` : card.state === 'background' ? 'Running in the background: the report comes back to the chat when it is done.' : 'Waiting for the report…'}</p>
             {:else}
               <p class="m-0 text-muted-foreground/70 italic">No report</p>
             {/if}

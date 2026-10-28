@@ -1,3 +1,24 @@
+<script module lang="ts">
+  // Kept across mounts. The chat's virtual list puts a reply's row in again each time it scrolls into view or the chat is
+  // opened again, and each mount used to ask the disk again (the size, the picture, the whole video) and draw its cards
+  // only then: the row grew after it had been measured, and the chat jumped.
+  /** Size of each file looked at, or null when it is not there. */
+  const knownSizes = new Map<string, number | null>();
+  /** Each picture as a data URL, or 'failed'. */
+  const knownPictures = new Map<string, string>();
+  /** Each sound or video read into memory, as an object URL. The oldest are let go past BLOBS_MAX. */
+  const knownBlobs = new Map<string, string>();
+  const BLOBS_MAX = 24;
+  function keepBlob(path: string, url: string) {
+    knownBlobs.set(path, url);
+    for (const [key, old] of knownBlobs) {
+      if (knownBlobs.size <= BLOBS_MAX) break;
+      knownBlobs.delete(key);
+      URL.revokeObjectURL(old);
+    }
+  }
+</script>
+
 <script lang="ts">
   import { ZIcon } from '@shival99/z-ui-svelte';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
@@ -6,6 +27,7 @@
   import { clock, findArtifacts, type Artifact } from '../artifacts';
   import { fileKind, fileSizeLabel } from '../attachments';
   import { dirOf } from '../paths';
+  import { openWithItem, openWithOptions, type OpenWithOption } from '../open-with';
   import { openAttachment, openMedia } from '../preview.svelte';
   import { toast } from '../toast';
   import { inTauri } from '../history';
@@ -23,6 +45,8 @@
 
   /** Size of each file that exists (bytes); a path missing from it does not exist (yet). */
   let sizes = $state<Record<string, number>>({});
+  /** The paths looked at and not found (their stand-in box goes). */
+  let gone = $state<Record<string, true>>({});
   /** The paths already asked about, so a finished reply does not ask again. */
   const asked = new Set<string>();
   let poll: ReturnType<typeof setInterval> | undefined;
@@ -30,17 +54,29 @@
   async function look(path: string) {
     try {
       const size = await fileSize(path);
+      knownSizes.set(path, size);
       if (size !== null) sizes[path] = size;
+      else gone[path] = true;
     } catch {
       // Not there (yet).
+      knownSizes.set(path, null);
+      gone[path] = true;
     }
   }
 
-  $effect(() => {
+  $effect.pre(() => {
     const list = found;
     if (!inTauri()) return;
     untrack(() => {
-      for (const item of list) if (!asked.has(item.path)) { asked.add(item.path); void look(item.path); }
+      for (const item of list) {
+        if (asked.has(item.path)) continue;
+        asked.add(item.path);
+        // Known from an earlier mount: drawn at once, at its full height.
+        const known = knownSizes.get(item.path);
+        if (known != null) sizes[item.path] = known;
+        // Looked at again only when it was not there: the agent may have made it since.
+        else void look(item.path);
+      }
     });
   });
   // While the reply runs, the files it named that are not there yet are looked for again until they appear.
@@ -56,17 +92,29 @@
 
   const ready = $derived(found.filter((item) => sizes[item.path] !== undefined));
   const pending = $derived(live ? found.filter((item) => sizes[item.path] === undefined) : []);
+  // Not looked at yet (the first time after the app starts): a box of the card's size stands in, so the row is measured
+  // at the height it will have. Only a file that turns out not to be there takes its box away again.
+  const unknown = $derived(!live && inTauri() ? found.filter((item) => sizes[item.path] === undefined && !gone[item.path] && !knownSizes.has(item.path)) : []);
   const images = $derived(ready.filter((item) => item.kind === 'image'));
   const others = $derived(ready.filter((item) => item.kind !== 'image'));
 
   // ---------- pictures ----------
   let pictures = $state<Record<string, string>>({});
-  $effect(() => {
+  $effect.pre(() => {
     for (const item of images) {
-      if (pictures[item.path] === undefined) {
-        pictures[item.path] = '';
-        void readImageDataUrl(item.path).then((url) => (pictures[item.path] = url)).catch(() => (pictures[item.path] = 'failed'));
+      if (pictures[item.path] !== undefined) continue;
+      const known = knownPictures.get(item.path);
+      if (known) {
+        pictures[item.path] = known;
+        continue;
       }
+      pictures[item.path] = '';
+      void readImageDataUrl(item.path)
+        .then((url) => url, () => 'failed')
+        .then((url) => {
+          knownPictures.set(item.path, url);
+          pictures[item.path] = url;
+        });
     }
   });
   const shownPictures = $derived(images.filter((item) => pictures[item.path] && pictures[item.path] !== 'failed'));
@@ -94,9 +142,16 @@
   const loading = new Set<string>();
   async function load(item: Artifact) {
     if (blobs[item.path] || loading.has(item.path)) return;
+    const known = knownBlobs.get(item.path);
+    if (known) {
+      blobs[item.path] = known;
+      return;
+    }
     loading.add(item.path);
     try {
-      blobs[item.path] = URL.createObjectURL(new Blob([await readFileBytes(item.path)], { type: mimeOf(item.name) }));
+      const url = URL.createObjectURL(new Blob([await readFileBytes(item.path)], { type: mimeOf(item.name) }));
+      keepBlob(item.path, url);
+      blobs[item.path] = url;
     } catch {
       toast.error(`Could not open ${item.name}`);
     } finally {
@@ -104,10 +159,10 @@
     }
   }
   // A sound or short video is read at once (its length and the player are then ready); a big one waits for the click.
-  $effect(() => {
+  // The object URLs belong to `knownBlobs`, which outlives this card.
+  $effect.pre(() => {
     for (const item of others) if ((item.kind === 'audio' || item.kind === 'video') && (sizes[item.path] ?? 0) <= 20 * 1024 * 1024) void load(item);
   });
-  onDestroy(() => Object.values(blobs).forEach((url) => URL.revokeObjectURL(url)));
 
   type PlayState = { playing: boolean; time: number; length: number };
   let play = $state<Record<string, PlayState>>({});
@@ -144,21 +199,41 @@
       toast.error(`Could not save: ${error}`);
     }
   }
+  // The apps that can open each file, for "Open with" in its ⋯ menu (the file card itself has no right-click menu).
+  // Asked only when that menu opens: the lookup runs on the app's main thread and reads app icons, so asking for every
+  // file of every reply as the chat loads froze it.
+  let apps = $state<Record<string, OpenWithOption[]>>({});
+  function loadApps(path: string) {
+    if (path in apps) return;
+    apps[path] = [];
+    void openWithOptions(path).then((list) => (apps[path] = list));
+  }
   const menuOf = (item: Artifact): ZDropdownMenuItem[] => [
+    ...openWithItem(item.path, apps[item.path] ?? []),
     { label: 'Save as…', icon: 'lucideDownload', iconSize: '12', class: 'text-xs! py-1', onClick: () => void saveAs(item) },
     { label: 'Show in folder', icon: 'lucideFolderOpen', iconSize: '12', class: 'text-xs! py-1', onClick: () => void revealFile(item.path).catch(() => toast.error('Could not show the file')) },
   ];
   const typeLabel = (item: Artifact) => `${fileKind(item.name).label} ${item.kind === 'audio' ? 'audio' : item.kind === 'video' ? 'video' : ''}`.trim();
 </script>
 
-{#if ready.length > 0 || pending.length > 0}
+{#if ready.length > 0 || pending.length > 0 || unknown.length > 0}
   <div class="flex w-full flex-col gap-2" aria-label="Files of this reply">
+    {#if unknown.some((item) => item.kind === 'image' || item.kind === 'video')}
+      <div class="flex flex-wrap gap-2" aria-hidden="true">
+        {#each unknown.filter((item) => item.kind === 'image' || item.kind === 'video') as item (item.path)}
+          <div class="relative h-36 w-52 overflow-hidden rounded-xl border border-border bg-muted/30"></div>
+        {/each}
+      </div>
+    {/if}
+    {#each unknown.filter((item) => item.kind !== 'image' && item.kind !== 'video') as item (item.path)}
+      <div class="h-11 w-52 overflow-hidden rounded-lg border border-border bg-muted/30" aria-hidden="true"></div>
+    {/each}
     {#each pending as item (item.path)}
-      <div class="artifact-pending relative flex h-[60px] w-full max-w-xl items-center gap-3 overflow-hidden rounded-xl border border-border bg-muted/30 px-3" role="status" aria-label="Creating {item.name}">
-        <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary"><ZIcon zType={(item.kind === 'audio' ? 'lucideMusic' : item.kind === 'video' ? 'lucideFilm' : item.kind === 'image' ? 'lucideImage' : 'lucideFile') as ZIconName} class="size-4.5 animate-pulse" /></span>
+      <div class="artifact-pending relative flex h-9 w-full max-w-64 items-center gap-2 overflow-hidden rounded-lg border border-border bg-muted/30 py-1 pr-2.5 pl-1" role="status" aria-label="Creating {item.name}">
+        <span class="grid size-7 shrink-0 place-items-center rounded-md bg-primary/12 text-primary"><ZIcon zType={(item.kind === 'audio' ? 'lucideMusic' : item.kind === 'video' ? 'lucideFilm' : item.kind === 'image' ? 'lucideImage' : 'lucideFile') as ZIconName} class="size-3.5 animate-pulse" /></span>
         <span class="flex min-w-0 flex-col leading-tight">
-          <span class="truncate text-sm font-medium text-foreground">{item.name}</span>
-          <span class="mt-0.5 text-[11px] text-muted-foreground">Creating…</span>
+          <span class="truncate text-xs font-medium text-foreground">{item.name}</span>
+          <span class="text-[10px] text-muted-foreground">Creating…</span>
         </span>
       </div>
     {/each}
@@ -169,20 +244,20 @@
         {#each images as item (item.path)}
           {#if pictures[item.path] && pictures[item.path] !== 'failed'}
             <div class="group/pic relative">
-              <button type="button" class="artifact-in block cursor-zoom-in overflow-hidden rounded-xl border border-border bg-muted/30 outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Open {item.name}" onclick={() => openPicture(item)}>
+              <button type="button" class="{live ? 'artifact-in' : ''} block cursor-zoom-in overflow-hidden rounded-xl border border-border bg-muted/30 outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Open {item.name}" onclick={() => openPicture(item)}>
                 <img src={pictures[item.path]} alt={item.name} class="block h-36 w-auto max-w-64 object-cover" />
               </button>
-              <span class="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/pic:opacity-100 focus-within:opacity-100"><MenuButton items={menuOf(item)} label="Actions for {item.name}" class="size-7! rounded-md! bg-background/80! backdrop-blur" /></span>
+              <span class="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/pic:opacity-100 focus-within:opacity-100"><MenuButton items={menuOf(item)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" class="size-7! rounded-md! bg-background/80! backdrop-blur" /></span>
             </div>
           {:else if pictures[item.path] === ''}
-            <div class="artifact-pending relative h-36 w-52 overflow-hidden rounded-xl border border-border bg-muted/30" aria-hidden="true"></div>
+            <div class="relative h-36 w-52 overflow-hidden rounded-xl border border-border bg-muted/30" aria-hidden="true"></div>
           {:else}
-            <FileChip name={item.name} size={sizes[item.path]} onclick={() => void openAttachment(item.path, item.name, sizes[item.path])} />
+            <FileChip name={item.name} path={item.path} size={sizes[item.path]} onclick={() => void openAttachment(item.path, item.name, sizes[item.path])} />
           {/if}
         {/each}
         {#each videos as item (item.path)}
           <div class="group/pic relative">
-            <button type="button" class="artifact-in relative block cursor-pointer overflow-hidden rounded-xl border border-border bg-black outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Play {item.name}" onclick={() => void openVisual(item)}>
+            <button type="button" class="{live ? 'artifact-in' : ''} relative block cursor-pointer overflow-hidden rounded-xl border border-border bg-black outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Play {item.name}" onclick={() => void openVisual(item)}>
               {#if blobs[item.path]}
                 <!-- The first frame is the thumbnail: `#t=0.1` makes the engine decode it without playing. -->
                 <video src="{blobs[item.path]}#t=0.1" preload="metadata" muted playsinline class="pointer-events-none block h-36 w-auto max-w-64 object-cover"></video>
@@ -194,7 +269,7 @@
               </span>
               <span class="absolute bottom-1 left-1 max-w-[calc(100%-0.5rem)] truncate rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white" title={item.path}>{item.name} · {fileSizeLabel(sizes[item.path])}</span>
             </button>
-            <span class="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/pic:opacity-100 focus-within:opacity-100"><MenuButton items={menuOf(item)} label="Actions for {item.name}" class="size-7! rounded-md! bg-background/80! backdrop-blur" /></span>
+            <span class="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/pic:opacity-100 focus-within:opacity-100"><MenuButton items={menuOf(item)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" class="size-7! rounded-md! bg-background/80! backdrop-blur" /></span>
           </div>
         {/each}
       </div>
@@ -203,7 +278,7 @@
     {#each others as item (item.path)}
       {#if item.kind === 'audio'}
         {@const state = stateOf(item.path)}
-        <div class="artifact-in flex w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border bg-muted/30">
+        <div class="{live ? 'artifact-in' : ''} flex w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border bg-muted/30">
           <div class="flex items-center gap-3 px-3 py-2.5">
             <span class="grid size-11 shrink-0 place-items-center rounded-lg bg-background text-primary"><ZIcon zType={'lucideAudioLines' as ZIconName} class="size-5 {state.playing ? 'animate-pulse' : ''}" /></span>
             <span class="flex min-w-0 flex-1 flex-col leading-tight">
@@ -213,7 +288,7 @@
             <button type="button" class="grid size-9 shrink-0 cursor-pointer place-items-center rounded-full bg-background text-foreground outline-none transition hover:bg-primary/15 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring" aria-label={state.playing ? `Pause ${item.name}` : `Play ${item.name}`} onclick={() => void toggle(item)}>
               <ZIcon zType={(state.playing ? 'lucidePause' : 'lucidePlay') as ZIconName} class="size-4" />
             </button>
-            <MenuButton items={menuOf(item)} label="Actions for {item.name}" />
+            <MenuButton items={menuOf(item)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" />
           </div>
           <div class="flex items-center gap-3 border-t border-border px-3 py-2">
             <input type="range" min="0" max={state.length || 1} step="0.01" value={state.time} disabled={!blobs[item.path]} class="artifact-range min-w-0 flex-1" style:--fill="{state.length ? (state.time / state.length) * 100 : 0}%" aria-label="Position in {item.name}" oninput={(event) => seek(item, event)} />
@@ -224,9 +299,9 @@
       {:else if item.kind === 'video'}
         <!-- Videos are drawn above, as thumbnails (see `videos`). -->
       {:else}
-        <div class="artifact-in flex flex-wrap items-center gap-1.5">
-          <FileChip name={item.name} size={sizes[item.path]} onclick={() => void openAttachment(item.path, item.name, sizes[item.path])} />
-          <MenuButton items={menuOf(item)} label="Actions for {item.name}" />
+        <div class="{live ? 'artifact-in' : ''} flex flex-wrap items-center gap-1.5">
+          <FileChip name={item.name} path={item.path} size={sizes[item.path]} onclick={() => void openAttachment(item.path, item.name, sizes[item.path])} />
+          <MenuButton items={menuOf(item)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" />
         </div>
       {/if}
     {/each}

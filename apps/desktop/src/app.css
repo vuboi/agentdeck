@@ -272,6 +272,15 @@ html[data-warming] [data-z-popover] {
 .md li::marker { color: var(--muted-foreground); }
 .md a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
 /* A link to a file: bold when the file is there, faded (with a "not found" tooltip) when it is not. No loud error. */
+/* Three dots that rise in turn, for a text that is being read ("Reading accounts…"). Still under reduced motion. */
+.loading-dots span { display: inline-block; animation: loading-dot 1.2s ease-in-out infinite; }
+.loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+.loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes loading-dot {
+  0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) { .loading-dots span { animation: none; } }
 .md a.md-path-ok { font-weight: 600; }
 .md a.md-path-dir::before {
   content: ''; display: inline-block; width: 1em; height: 1em; margin-right: 0.25em; vertical-align: -0.15em; background: currentColor;
@@ -306,7 +315,9 @@ html[data-warming] [data-z-popover] {
    number, and a long code span (a path) may wrap anywhere, so it does not claim a column of its own. */
 .md-table th { white-space: nowrap; }
 .md-table th, .md-table td { overflow-wrap: normal; word-break: normal; }
-.md-table td:first-child, .md-table th:first-child { width: 1%; white-space: nowrap; }
+/* The first column hugs its content but still wraps: a long first cell ("CVE-… — text") is cut by its cell's reading width
+   instead of running into the next column. */
+.md-table td:first-child, .md-table th:first-child { width: 1%; }
 .md-table td code { overflow-wrap: anywhere; }
 /* Columns size to their content up to a reading width, then wrap: a long cell no longer takes the whole table and leaves
    the next column a sliver. The table fills the card, and scrolls sideways only when the columns need more. */

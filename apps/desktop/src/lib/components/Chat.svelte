@@ -19,7 +19,7 @@
   import { openWithItem, openWithOptions, type OpenWithOption } from '../open-with';
   import { openInViewer } from '../file-viewer.svelte';
   import type { PickerItem } from './PickerPopover.svelte';
-  import { activeSession, AGENTS, answerPermission, delegateTasks, answerQuestions, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, prewarmChat, projectOf, releaseReplyRender, replyBlockRendered, replyRendering, resumes, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, answerPermission, delegateTasks, answerQuestions, cancelPending, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, prewarmChat, projectOf, releaseReplyRender, replyBlockRendered, replyRendering, resumes, workspace } from '../sessions.svelte';
   import { ticker } from '../clock.svelte';
   import { agentDisplayName } from '../provider-registry';
   import AgentLogo from './AgentLogo.svelte';
@@ -544,7 +544,7 @@
     }
     for (let index = chat.messages.length - 1; index > lastUser; index--) {
       const message = chat.messages[index];
-      if (message.role !== 'assistant' || message.live) continue;
+      if (message.role !== 'assistant' || message.live || message.cancelled) continue;
       for (const block of message.blocks) {
         if (block.kind !== 'response') continue;
         const questions = parseQuestions(block.text).questions;
@@ -942,7 +942,7 @@
                   {#if documents.length > 0}
                     <div class="mb-1.5 flex max-w-[85%] flex-wrap gap-1.5 {theme.chatLayout === 'split' ? 'justify-end' : ''}">
                       {#each documents as file}
-                        <FileChip name={file.name} size={file.size} onclick={() => void openAttachment(file.path, file.name, file.size)} />
+                        <FileChip name={file.name} path={file.path} size={file.size} onclick={() => void openAttachment(file.path, file.name, file.size)} />
                       {/each}
                     </div>
                   {/if}
@@ -1072,7 +1072,7 @@
                       {:else if segment.kind === 'tasks'}
                         <TaskCards items={segment.items} />
                       {:else}
-                        <ChatBlock block={segment.block} running={Boolean(message.live) && isRunning(workspace.activeId)} flush={chat.messages.at(-1)?.id !== message.id} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} onrendered={segment.block.kind === 'response' ? () => replyBlockRendered(workspace.activeId, message.id, message.blocks.indexOf(segment.block)) : undefined} answered={!message.live && pendingQuestion?.messageId !== message.id} showQuestions={!message.live && pendingQuestion?.messageId !== message.id} />
+                        <ChatBlock block={segment.block} running={Boolean(message.live) && isRunning(workspace.activeId)} flush={chat.messages.at(-1)?.id !== message.id} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} onrendered={segment.block.kind === 'response' ? () => replyBlockRendered(workspace.activeId, message.id, message.blocks.indexOf(segment.block)) : undefined} answered={!message.live && pendingQuestion?.messageId !== message.id} showQuestions={false} />
                       {/if}
                     {/each}
                     <TurnChanges blocks={message.blocks} />
@@ -1140,7 +1140,7 @@
         {/if}
         {#if pendingQuestion}
           <div class="mb-2">
-            <QuestionCard questions={pendingQuestion.questions} from={pendingQuestion.agent ? agentName(pendingQuestion.agent) : ''} onsubmit={(text) => answerQuestions(workspace.activeId, text)} />
+            <QuestionCard questions={pendingQuestion.questions} from={pendingQuestion.agent ? agentName(pendingQuestion.agent) : ''} onsubmit={(text) => answerQuestions(workspace.activeId, text)} oncancel={() => cancelPending(workspace.activeId)} />
           </div>
         {/if}
         <!-- A flow step that needs approval waits in its own chat: say which, and take the user there. -->

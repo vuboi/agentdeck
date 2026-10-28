@@ -1,5 +1,6 @@
 <script lang="ts">
   import ProjectBar from './ProjectBar.svelte';
+  import AgentLogo from './AgentLogo.svelte';
   import { untrack } from 'svelte';
   import { getPref, setPref } from '../prefs';
   import {
@@ -289,6 +290,10 @@
       // A key with a credit limit reads like a quota window: the share still left.
       windows = [{ label: 'credit', pct: Math.min(100, ((keyQuota.limit - keyQuota.remaining) / keyQuota.limit) * 100), resets_at: null }];
       observedAt = keyQuota.at;
+    } else if (agent === 'copilot') {
+      const account = connectors.accounts.copilot?.accounts.find((item) => item.active);
+      windows = account?.usage ?? [];
+      observedAt = account?.observed_at ?? null;
     } else if (agent === 'claude' || agent === 'codex') {
       const account = connectors.accounts[agent]?.accounts.find(
         (item) => item.active,
@@ -1184,6 +1189,7 @@
       {#each attached as file (file.id)}
         <FileChip
           name={file.name}
+          path={file.path}
           size={file.size}
           onclick={() => void openAttachment(file.path, file.name, file.size)}
           onremove={() => setFiles(attached.filter((entry) => entry !== file))}
@@ -1197,7 +1203,12 @@
         <span
           class="inline-flex items-center gap-1 rounded-md bg-primary/10 py-1 pr-0.5 pl-1.5 text-xs text-primary"
         >
-          <ZIcon zType={chipIcon[mention.kind]} class="size-3" />
+          {#if mention.kind === 'ai'}
+            <!-- The provider's own logo: the same model name comes from several providers, so the logo tells which one. -->
+            <AgentLogo agent={mention.id.split('/')[0]} model={mention.id.slice(mention.id.indexOf('/') + 1)} class="size-3 shrink-0" />
+          {:else}
+            <ZIcon zType={chipIcon[mention.kind]} class="size-3" />
+          {/if}
           {mention.label}
           <button
             type="button"

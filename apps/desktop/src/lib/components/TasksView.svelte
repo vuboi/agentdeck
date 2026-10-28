@@ -6,15 +6,19 @@
   import LiveCommand from './LiveCommand.svelte';
   import { ZIcon, ZLoading, ZShimmerText, ZTabs, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { slide } from 'svelte/transition';
+  import { fade, slide } from 'svelte/transition';
+  import { flip } from 'svelte/animate';
   import { activity, audit, auditImage, clearAudit, type Activity } from '../activity.svelte';
   import AgentLogo from './AgentLogo.svelte';
   import { openImages } from '../preview.svelte';
   import { elapsed } from '../blocks';
   import { detailOf, kindOf } from '../activity-kind';
+  import { toolIcon } from '../tool-kind';
+  // A tool call has the icon the chat gives it (tool-kind.ts); these entries are not tool calls and keep their own.
+  const OWN_ICON = new Set(['thinking', 'error', 'talk', 'request', 'raw']);
   import { ticker } from '../clock.svelte';
   import { showSession } from '../content-tabs.svelte';
-  import { workspace } from '../sessions.svelte';
+  import { liveAsks, workspace } from '../sessions.svelte';
   import { toast } from '../toast';
 
   // One list for everything the agents run: live calls and chat errors appear as they happen; the final call
@@ -83,21 +87,40 @@
       return inProject(item);
     });
   });
-  // Newest first: the calls still running are the newest, so they open their day.
-  const shown = $derived(
-    [
-      ...inRange.filter((item) => item.status !== 'running' && item.status !== 'background' && inProject(item) && (!failedOnly || item.status === 'fail')),
-      ...(!failedOnly ? liveItems : []),
-    ].sort((a, b) => b.startedAt - a.startedAt),
+  // Finished entries, newest first, by day. The entries still running are not in it: they sit in their own group on top.
+  const finished = $derived(
+    inRange
+      .filter((item) => !live(item) && inProject(item) && (!failedOnly || item.status === 'fail'))
+      .sort((a, b) => b.startedAt - a.startedAt),
   );
-  type Group = { key: string; at: number; items: Activity[]; failed: number };
+  const runningItems = $derived(!failedOnly ? [...liveItems].sort((a, b) => b.startedAt - a.startedAt) : []);
+  // Chats whose reply is still being written: the prompt they answer, cut short in the row. Not shown per project.
+  type ChatRun = { id: string; title: string; text: string };
+  const chatRuns = $derived.by<ChatRun[]>(() => {
+    if (failedOnly || chosenProject !== null) return [];
+    return Object.entries(liveAsks).flatMap(([id, message]) => {
+      const session = workspace.sessions.find((item) => item.id === id);
+      if (!session) return [];
+      const text = message.blocks
+        .filter((block) => block.kind === 'response')
+        .map((block) => block.text)
+        .join('\n')
+        .trim();
+      return [{ id, title: session.title, text }];
+    });
+  });
+  const shown = $derived([...runningItems, ...finished]);
+  type Group = { key: string; at: number; items: Activity[]; chats: ChatRun[]; failed: number };
+  const RUNNING = 'running';
   const days = $derived.by(() => {
     const groups: Group[] = [];
-    for (const item of shown) {
+    // Running always has its place on top, even with nothing in it (the list then says Empty).
+    if (!failedOnly) groups.push({ key: RUNNING, at: Date.now(), items: runningItems, chats: chatRuns, failed: 0 });
+    for (const item of finished) {
       const key = dayKey(item.startedAt);
       let group = groups.at(-1);
       if (group?.key !== key) {
-        group = { key, at: item.startedAt, items: [], failed: 0 };
+        group = { key, at: item.startedAt, items: [], chats: [], failed: 0 };
         groups.push(group);
       }
       group.items.push(item);
@@ -118,12 +141,18 @@
   const logId = (item: Activity) => item.key.replace(/#\d+$/, '');
 
   // Virtual list: day headers and rows in one flat run, each with a measured height (an estimate until seen).
-  type Flat = { id: string; day: string; kind: 'day'; group: Group } | { id: string; day: string; kind: 'row'; item: Activity };
+  type Flat =
+    | { id: string; day: string; kind: 'day'; group: Group }
+    | { id: string; day: string; kind: 'row'; item: Activity }
+    | { id: string; day: string; kind: 'chat'; chat: ChatRun }
+    | { id: string; day: string; kind: 'empty' };
   const flat = $derived.by(() => {
     const out: Flat[] = [];
     for (const group of days) {
       out.push({ id: `day:${group.key}`, day: group.key, kind: 'day', group });
       if (folded[group.key]) continue;
+      if (group.key === RUNNING && group.items.length === 0 && group.chats.length === 0) out.push({ id: 'empty:running', day: group.key, kind: 'empty' });
+      for (const chat of group.chats) out.push({ id: `chat:${chat.id}`, day: group.key, kind: 'chat', chat });
       for (const item of group.items) out.push({ id: rowId(item), day: group.key, kind: 'row', item });
     }
     return out;
@@ -212,9 +241,21 @@
     fail: { label: 'Failed', tone: 'text-destructive' },
     stopped: { label: 'Stopped', tone: 'text-muted-foreground' },
   };
+  /** What a call asked, for its box: the command of a shell call (`{"command":"...","description":"..."}`), else the text as it is. */
+  function askedOf(input: string): string {
+    const text = input.trim();
+    if (!text.startsWith('{')) return input;
+    try {
+      const args = JSON.parse(text) as Record<string, unknown>;
+      return typeof args.command === 'string' && args.command.trim() ? args.command : input;
+    } catch {
+      return input;
+    }
+  }
   const took = (item: Activity) => elapsed((item.endedAt ?? ticker.sec) - item.startedAt);
   const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const dayLabel = (key: string, at: number) => {
+    if (key === RUNNING) return 'Running';
     const today = dayKey(Date.now());
     const yesterday = dayKey(Date.now() - 86_400_000);
     if (key === today) return 'Today';
@@ -244,7 +285,7 @@
   >
     <ZIcon zType={'lucideChevronRight' as ZIconName} class="size-3 shrink-0 transition-transform duration-200 {folded[group.key] ? '' : 'rotate-90'}" />
     <span>{dayLabel(group.key, group.at)}</span>
-    <span class="tabular-nums normal-case">{group.items.length}</span>
+    <span class="tabular-nums normal-case">{group.items.length + group.chats.length}</span>
     {#if group.failed > 0}<span class="rounded bg-destructive/15 px-1 tabular-nums normal-case text-destructive">{group.failed} failed</span>{/if}
   </button>
 {/snippet}
@@ -271,7 +312,7 @@
             <!-- A request shows the agent it went to, so the log says who answered at a glance. -->
             <AgentLogo agent={item.agent} model={item.model ?? undefined} class="size-3.5" />
           {:else}
-            <ZIcon zType={kind.icon as ZIconName} class="size-3.5 {item.status === 'fail' ? 'text-destructive' : kind.tone}" />
+            <ZIcon zType={(OWN_ICON.has(kind.id) ? kind.icon : toolIcon(item.name)) as ZIconName} class="size-3.5 {item.status === 'fail' ? 'text-destructive' : kind.tone}" />
           {/if}
         </span>
         {#if live(item)}
@@ -307,21 +348,25 @@
         {#if item.input && /^(Run project|Terminal|Bash)$/.test(item.name)}
           <LiveCommand {item} oncopy={(text) => copy(text, 'Output')} />
         {:else}
-          {#if item.input}
-            <div class="group/code relative">
-            <pre class="m-0 overflow-x-auto rounded-md border border-border bg-background py-1.5 pr-7 pl-2 font-mono whitespace-pre-wrap break-all">{item.input}</pre>
-            {@render copyButton(item.input, 'Command')}
-          </div>
-          {:else if empty}
-            <!-- Nothing was asked in text and nothing came back: say so inside the one box, not in an empty box plus a line. -->
-            <p class="m-0 rounded-md border border-border bg-background px-2 py-1.5 text-muted-foreground italic">No information found.</p>
-          {/if}
-          {#if item.output}
-            <div class="group/code relative rounded-md border {item.status === 'fail' ? 'border-destructive/30 bg-destructive/5' : 'border-border bg-background'}">
-              <pre class="m-0 max-h-48 overflow-auto py-1 pr-7 pl-1.5 font-mono whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
-              {@render copyButton(item.output ?? '', item.status === 'fail' ? 'Error' : 'Output')}
+          <!-- One box for the call: what was asked on top, a divider, what came back below, one Copy for both. The top part
+               stays put; each part scrolls on its own when it is long. -->
+          {#if item.input || item.output}
+            {@const failed = item.status === 'fail'}
+            <div class="group/code relative rounded-md border {failed ? 'border-destructive/30 bg-destructive/5' : 'border-border bg-background'}">
+              {#if item.input}
+                <pre class="m-0 max-h-28 overflow-auto py-1.5 pr-7 pl-2 font-mono whitespace-pre-wrap break-all">{askedOf(item.input)}</pre>
+              {/if}
+              {#if item.input && item.output}
+                <div class="border-t {failed ? 'border-destructive/30' : 'border-border'}"></div>
+              {/if}
+              {#if item.output}
+                <pre class="m-0 max-h-48 overflow-auto py-1 pr-7 pl-2 font-mono whitespace-pre-wrap break-all {failed ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
+              {/if}
+              {@render copyButton([askedOf(item.input), item.output].filter(Boolean).join('\n'), failed ? 'Error' : item.input && item.output ? 'Command and output' : item.output ? 'Output' : 'Command')}
             </div>
-          {:else if empty && item.input}
+          {/if}
+          {#if empty && !item.output}
+            <!-- Nothing came back: say so under the call, not in an empty box. -->
             <p class="m-0 px-1 text-muted-foreground italic">No information found.</p>
           {/if}
         {/if}
@@ -374,14 +419,29 @@
     {/if}
   </div>
   <div bind:this={scroller} bind:clientHeight={viewport} class="min-h-0 flex-1 overflow-y-auto" style="overflow-anchor: none" onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)}>
-    {#if days.length === 0}
-      <DevEmpty icon={failedOnly ? 'lucideCircleCheck' : 'lucideListChecks'} title={failedOnly ? 'No failures' : 'Nothing in this range'} hint={failedOnly ? 'No tool call failed in this range.' : 'Tool calls of the agents show up here as they run.'} />
+    {#if failedOnly && days.length === 0}
+      <DevEmpty icon="lucideCircleCheck" title="No failures" hint="No tool call failed in this range." />
     {:else}
       {#if pinned}{@render dayHeader(pinned, true)}{/if}
       <div style="padding-top: {win.padTop}px; padding-bottom: {win.padBottom}px">
+        <!-- A row that moves (a running entry that ends up in its day, or the list changing above it) glides to its place;
+             the Running rows fade in and out. Rows scrolled in or out of view do not fade: their duration is 0. -->
         {#each visible as entry (entry.id)}
-          <div {@attach measure(entry.id)}>
-            {#if entry.kind === 'day'}{@render dayHeader(entry.group, false)}{:else}{@render row(entry.item, entry.id)}{/if}
+          {@const live = entry.kind !== 'day' && entry.day === RUNNING}
+          <div {@attach measure(entry.id)} animate:flip={{ duration: 220 }} in:fade={{ duration: live ? 180 : 0 }} out:fade={{ duration: live ? 150 : 0 }}>
+            {#if entry.kind === 'day'}{@render dayHeader(entry.group, false)}
+            {:else if entry.kind === 'chat'}
+              <div class="flex items-center gap-2 border-b border-border px-1.5 py-1.5 text-xs">
+                <ZIcon zType={'lucideLoaderCircle' as ZIconName} class="size-3 shrink-0 animate-spin text-primary" />
+                <span class="min-w-0 flex-1 truncate" title={entry.chat.text}>{entry.chat.text || 'Working…'}</span>
+                <span class="max-w-[35%] shrink-0 truncate text-[10px] text-muted-foreground" title={entry.chat.title}>{entry.chat.title}</span>
+              </div>
+            {:else if entry.kind === 'empty'}
+              <div class="flex items-center justify-center gap-2 border-b border-border px-1.5 py-1.5 text-xs text-muted-foreground">
+                <ZIcon zType={'lucideInbox' as ZIconName} class="size-3 shrink-0" />
+                <span>No task running</span>
+              </div>
+            {:else}{@render row(entry.item, entry.id)}{/if}
           </div>
         {/each}
       </div>

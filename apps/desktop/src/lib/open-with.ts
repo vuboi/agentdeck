@@ -6,15 +6,23 @@ import { toast } from './toast';
 // found by the Rust side (`file_open_options`) and started by it (`file_open_with`). The menus of a file all ask here.
 export type OpenWithOption = { id: string; label: string; icon?: string | null };
 
+// Asked once per path: the chat's virtual list rebuilds a reply's file cards each time it scrolls into view.
+const known = new Map<string, Promise<OpenWithOption[]>>();
+
 /** The apps that can open `path`; none outside the desktop app or when it cannot be found. */
-export async function openWithOptions(path: string): Promise<OpenWithOption[]> {
-    if (!inTauri()) return [];
-    try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        return await invoke<OpenWithOption[]>('file_open_options', { path });
-    } catch {
-        return [];
+export function openWithOptions(path: string): Promise<OpenWithOption[]> {
+    if (!inTauri()) return Promise.resolve([]);
+    let found = known.get(path);
+    if (!found) {
+        found = import('@tauri-apps/api/core')
+            .then(({ invoke }) => invoke<OpenWithOption[]>('file_open_options', { path }))
+            .catch(() => {
+                known.delete(path);
+                return [];
+            });
+        known.set(path, found);
     }
+    return found;
 }
 
 /** Opens `path` in the app `appId` (from `openWithOptions`). */

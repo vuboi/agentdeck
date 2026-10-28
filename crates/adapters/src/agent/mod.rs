@@ -9,6 +9,7 @@ pub mod codex;
 mod codex_server;
 pub mod interrupt;
 pub mod opencode;
+pub mod permission;
 pub mod resolve;
 pub mod runner;
 pub mod stall;

@@ -270,12 +270,13 @@ test('a delegate_task tool event becomes a command block the card reads', () => 
 // ---------- what the agents are told ----------
 
 test('the delegation hint stays short, because it goes with the first turn of every chat', () => {
-  assert.ok(DELEGATE_HINT.length < 900, `${DELEGATE_HINT.length} characters`);
-  for (const phrase of ['BIG or clearly separable', 'self-contained', 'wait:false', 'in parallel', 'yourself', "relay the user's message", 'final answer', '1-3 workers']) {
+  // The bound only catches the hint growing into an essay; the exact count moves with every wording change.
+  assert.ok(DELEGATE_HINT.length < 1500, `${DELEGATE_HINT.length} characters`);
+  for (const phrase of ['BIG or clearly separable', 'self-contained', 'wait:false', 'in parallel', 'yourself', "relay the user's message", 'final answer', '1-4 workers']) {
     assert.ok(DELEGATE_HINT.includes(phrase), `the hint lacks: ${phrase}`);
   }
   const lead = agentdeckLead('[AgentDeck] You run inside AgentDeck. Use the tools.', DELEGATE_HINT);
-  assert.ok(lead.length < 900 + 200);
+  assert.ok(lead.length < DELEGATE_HINT.length + 200, `${lead.length} characters`);
   assert.ok(lead.startsWith('[AgentDeck] You run inside AgentDeck. Use the tools. Delegation'));
   assert.equal(lead.match(/\[AgentDeck\]/g).length, 1);
   assert.ok(lead.endsWith('\n\n'));

@@ -17,6 +17,7 @@
   import { getPref } from '../prefs';
   import { DEFAULT_HOUSE_STYLE } from '../house-style';
   import { replyStyle } from '../reply-style.svelte';
+  import { VOICES } from '../speech';
   import { readProjectMemory, writeProjectMemory, MEMORY_FILE } from '../project-memory';
   import { workspace } from '../sessions.svelte';
   import { exportArchive, pullArchive, pushArchive } from '../archive';
@@ -833,7 +834,7 @@
                         <p class="rounded-lg bg-destructive/10 p-3 text-xs text-destructive" role="alert">{connectors.errors[`accounts:${provider}`]}</p>
                       {:else if !list || list.accounts.length === 0}
                         <p class="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">
-                          {list ? 'No saved accounts yet. Sign in above, then use “Add account” to save it, or add another one.' : 'Reading accounts…'}
+                          {#if list}No saved accounts yet. Sign in above, then use “Add account” to save it, or add another one.{:else}Reading accounts<span class="loading-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>{/if}
                         </p>
                       {:else}
                         <ul class="grid gap-2 sm:grid-cols-2">
@@ -1105,6 +1106,15 @@
                   <p class="mt-1 text-xs text-muted-foreground">Shown through the app, from a local copy. Off: the picture is asked for straight from its site (the window may refuse it).</p>
                 </div>
                 <ZSwitch zVariant="dot" checked={replyStyle.proxyImages} zSize="sm" onChange={(value) => (replyStyle.proxyImages = value)} />
+              </section>
+              <section class="flex items-start gap-3 rounded-xl border border-border bg-card/40 p-4">
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold">Read aloud: Vietnamese voice</h3>
+                  <p class="mt-1 text-xs text-muted-foreground">The offline voice (Piper) that reads Vietnamese. Each one is downloaded the first time it is used. Answers that are all English use the system voice.</p>
+                </div>
+                <div class="w-56 shrink-0">
+                  <ZSelect zOptions={VOICES} value={replyStyle.voice} onValueChange={(value) => (replyStyle.voice = String(value ?? 'vais1000'))} />
+                </div>
               </section>
             </div>
 

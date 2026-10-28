@@ -59,12 +59,35 @@ const MEASURED_MAX = 5000;
 const bucket = (width: number) => Math.round(width / 40);
 const keyOf = (id: string, width: number) => `${id}@${bucket(width)}`;
 
+// Kept across a reload too: after F5 every row would otherwise stand at its guess and jump to its real height as it is
+// measured. Only the most recent heights are saved, as a viewer's own convenience (a plain cache, not data to keep).
+const STORE = 'chat.rowHeights';
+const SAVED_MAX = 1500;
+try {
+  const saved = typeof localStorage === 'undefined' ? null : localStorage.getItem(STORE);
+  if (saved) for (const [key, height] of JSON.parse(saved) as [string, number][]) measured.set(key, height);
+} catch {
+  // A cache that cannot be read is just empty.
+}
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+function saveSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(STORE, JSON.stringify([...measured].slice(-SAVED_MAX)));
+    } catch {
+      // Storage full or blocked: the heights are measured again next time.
+    }
+  }, 800);
+}
+
 export function rememberRowHeight(id: string, width: number, height: number) {
   if (height <= 0) return;
   const key = keyOf(id, width);
   measured.delete(key);
   measured.set(key, height);
   if (measured.size > MEASURED_MAX) measured.delete(measured.keys().next().value as string);
+  saveSoon();
 }
 
 /** The height a row had before at this width, else the guess. A live reply is never taken from the cache: it grows. */

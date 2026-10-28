@@ -21,3 +21,11 @@ test('an MCP step names its server and tool', () => {
   assert.equal(detailOf('agentdeck.browser_open'), 'agentdeck · browser_open');
   assert.equal(detailOf('Bash'), '');
 });
+
+test('the tools of other agents read as the same kinds of step', () => {
+  const expect: Record<string, string> = {
+    powershell: 'command', run_shell_command: 'command', create: 'create', write_file: 'create', str_replace: 'edit', replace: 'edit',
+    view: 'read', read_file: 'read', list_directory: 'search', google_web_search: 'web', fetch_url: 'fetch',
+  };
+  for (const [name, id] of Object.entries(expect)) assert.equal(kindOf(name).id, id, name);
+});

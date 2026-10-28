@@ -1,6 +1,7 @@
 // What kind of step an Audit entry is: an icon, a plain label and a colour, from the tool's own name. The log keeps the
 // name the CLI used (Write, Bash, mcp__server__tool, a Codex `server.tool`); this is only how a row reads.
-// Free of stores and Tauri so plain node can test it.
+// Free of stores and Tauri so plain node can test it. The names of each agent's tools match tool-kind.ts, the table the
+// chat's steps use for their icons (this file cannot import it: node runs it with the extension, svelte-check without).
 
 export type ActivityKind = { id: string; label: string; icon: string; tone: string };
 
@@ -32,14 +33,14 @@ export function kindOf(name: string): ActivityKind {
   if (tool === 'Chat error') return ERROR;
   if (tool === 'Discussion') return TALK;
   if (tool === 'Request') return REQUEST;
-  if (/^(Write|create_file)$/i.test(tool)) return CREATE;
-  if (/^(Edit|MultiEdit|NotebookEdit|apply_patch|str_replace\w*|edit_file)$/i.test(tool)) return EDIT;
+  if (/^(Write|write_file|create(_file)?)$/i.test(tool)) return CREATE;
+  if (/^(Edit|MultiEdit|NotebookEdit|apply_patch|str_replace\w*|replace|edit_file|insert)$/i.test(tool)) return EDIT;
   if (/^Delete$/i.test(tool)) return DELETE;
-  if (/^(Read|view|read_file)$/i.test(tool)) return READ;
-  if (/^(Bash|BashOutput|KillShell|Terminal|Run project|shell|run_command|exec_command)$/i.test(tool)) return COMMAND;
-  if (/^(Grep|Glob|LS|code_\w+|find|search_files|list_dir)$/i.test(tool)) return SEARCH;
-  if (/^(WebSearch|web_search)$/i.test(tool)) return WEB;
-  if (/^(WebFetch|web_fetch|fetch)$/i.test(tool)) return FETCH;
+  if (/^(Read|view|read_file|read_many_files|open_file|cat)$/i.test(tool)) return READ;
+  if (/^(Bash|BashOutput|KillShell|Terminal|Run project|shell|run_command|exec_command|powershell|pwsh|cmd|run_in_terminal|run_shell_command|(read|write)_(bash|powershell))$/i.test(tool)) return COMMAND;
+  if (/^(Grep|Glob|LS|code_\w+|find|find_files|search|search_files|list_dir(ectory)?|file_search|codebase_search)$/i.test(tool)) return SEARCH;
+  if (/^(WebSearch|web_search|google_web_search)$/i.test(tool)) return WEB;
+  if (/^(WebFetch|web_fetch|fetch|fetch_url)$/i.test(tool)) return FETCH;
   if (/^Skill$/i.test(tool)) return SKILL;
   if (/^(Task|Agent|delegate_task|list_agents|task_status|task_stop)$/i.test(tool)) return AGENT;
   if (/^(TodoWrite|update_plan|ExitPlanMode)$/i.test(tool)) return PLAN;

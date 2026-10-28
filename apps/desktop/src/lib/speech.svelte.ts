@@ -4,6 +4,7 @@
 import { inTauri } from './history';
 import { pathsAsNames } from './path-links';
 import { isVietnamese, sentences, speakable } from './speech';
+import { replyStyle } from './reply-style.svelte';
 import { toast } from './toast';
 
 export const speech = $state({ id: '', phase: 'idle' as 'idle' | 'installing' | 'loading' | 'playing', progress: 0 });
@@ -33,7 +34,7 @@ async function invoke<T>(command: string, args?: Record<string, unknown>) {
 
 /** Makes Piper and the voice available: downloads them once, with the progress in `speech.progress` (0 to 1). */
 async function ensureVoice(mine: number) {
-  const status = await invoke<{ installed: boolean; supported: boolean }>('tts_status');
+  const status = await invoke<{ installed: boolean; supported: boolean }>('tts_status', { voice: replyStyle.voice });
   if (status.installed) return;
   if (!status.supported) throw new Error('The Vietnamese voice is not available on this system');
   speech.phase = 'installing';
@@ -46,7 +47,7 @@ async function ensureVoice(mine: number) {
     speech.progress = from + (to - from) * (event.payload.total ? Math.min(1, event.payload.done / event.payload.total) : 0);
   });
   try {
-    await invoke('tts_install');
+    await invoke('tts_install', { voice: replyStyle.voice });
   } finally {
     off();
   }
@@ -94,7 +95,7 @@ export async function toggleSpeak(id: string, markdown: string) {
       await ensureVoice(mine);
     }
     if (mine !== token) return;
-    const make = (part: { text: string; vi: boolean }): Promise<string | null> => (part.vi ? invoke<string>('tts_speak', { text: part.text, speed: 1 }) : Promise.resolve(null));
+    const make = (part: { text: string; vi: boolean }): Promise<string | null> => (part.vi ? invoke<string>('tts_speak', { text: part.text, speed: 1, voice: replyStyle.voice }) : Promise.resolve(null));
     let next: Promise<string | null> = make(parts[0]);
     for (let index = 0; index < parts.length; index++) {
       const current = next;

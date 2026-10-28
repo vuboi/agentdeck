@@ -51,6 +51,12 @@ export async function sendAgentTurn(args: AgentTurnSettings & { turn: string; pr
   await invoke('agent_send', { ...args, ...billing(args) });
 }
 
+/** The user's answer to a Copilot permission card: the SDK is waiting on it inside the same turn. */
+export async function answerCopilotPermission(requestId: string, allow: boolean): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('copilot_permission_answer', { requestId, allow });
+}
+
 /** Starts the chat's CLI ahead of its next turn (the user is typing it), with the settings that turn will have. */
 export async function prewarmAgent(args: AgentTurnSettings): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');

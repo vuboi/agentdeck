@@ -378,85 +378,6 @@ fn decode(text: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{authorize, is_post_request};
-
-    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
-
-    fn head(target: &str, extra: &str) -> String {
-        format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1:47821\r\n{extra}\r\n")
-    }
-
-    #[test]
-    fn token_in_the_path_is_stripped() {
-        let target = format!("/{TOKEN}/page?x=1");
-        assert_eq!(
-            authorize(&head(&target, ""), &target, TOKEN, 47821).as_deref(),
-            Some("/page?x=1")
-        );
-        let bare = format!("/{TOKEN}");
-        assert_eq!(
-            authorize(&head(&bare, ""), &bare, TOKEN, 47821).as_deref(),
-            Some("/")
-        );
-    }
-
-    #[test]
-    fn wrong_or_missing_token_is_refused() {
-        assert!(authorize(&head("/page", ""), "/page", TOKEN, 47821).is_none());
-        let wrong = format!("/{}x/page", TOKEN);
-        assert!(authorize(&head(&wrong, ""), &wrong, TOKEN, 47821).is_none());
-        assert!(authorize(&head("/mcp", ""), "/mcp", TOKEN, 47821).is_none());
-    }
-
-    #[test]
-    fn foreign_host_or_origin_is_refused() {
-        let target = format!("/{TOKEN}/page");
-        let rebound = "GET / HTTP/1.1\r\nHost: evil.example:47821\r\n\r\n";
-        assert!(authorize(rebound, &target, TOKEN, 47821).is_none());
-        assert!(authorize(
-            &head(&target, "Origin: https://evil.example\r\n"),
-            &target,
-            TOKEN,
-            47821
-        )
-        .is_none());
-        assert!(authorize("GET / HTTP/1.1\r\n\r\n", &target, TOKEN, 47821).is_none());
-        let local = "GET / HTTP/1.1\r\nHost: localhost:47821\r\n\r\n";
-        assert!(authorize(local, &target, TOKEN, 47821).is_some());
-    }
-
-    #[test]
-    fn accepts_post_method_regardless_of_case() {
-        assert!(is_post_request("POST /mcp HTTP/1.1\r\n"));
-        assert!(is_post_request("post /mcp HTTP/1.1\r\n"));
-        assert!(is_post_request("PoSt /mcp HTTP/1.1\r\n"));
-    }
-
-    #[test]
-    fn a_stream_is_sent_only_to_a_client_that_accepts_one() {
-        use super::accepts_stream;
-        assert!(accepts_stream(
-            "POST /mcp HTTP/1.1\r\nHost: x\r\nAccept: application/json, text/event-stream\r\n"
-        ));
-        assert!(accepts_stream(
-            "POST /mcp HTTP/1.1\r\naccept: Text/Event-Stream\r\n"
-        ));
-        assert!(!accepts_stream(
-            "POST /mcp HTTP/1.1\r\nAccept: application/json\r\n"
-        ));
-        assert!(!accepts_stream("POST /mcp HTTP/1.1\r\nHost: x\r\n"));
-    }
-
-    #[test]
-    fn rejects_other_methods_and_prefixes() {
-        assert!(!is_post_request("GET /mcp HTTP/1.1\r\n"));
-        assert!(!is_post_request("POSTX /mcp HTTP/1.1\r\n"));
-        assert!(!is_post_request("POST"));
-    }
-}
-
 fn level_group(level: &str) -> &str {
     match level {
         "error" => "error",
@@ -1062,5 +983,84 @@ pub(crate) async fn ask(
             }
             Err("the page did not answer".into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{authorize, is_post_request};
+
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+    fn head(target: &str, extra: &str) -> String {
+        format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1:47821\r\n{extra}\r\n")
+    }
+
+    #[test]
+    fn token_in_the_path_is_stripped() {
+        let target = format!("/{TOKEN}/page?x=1");
+        assert_eq!(
+            authorize(&head(&target, ""), &target, TOKEN, 47821).as_deref(),
+            Some("/page?x=1")
+        );
+        let bare = format!("/{TOKEN}");
+        assert_eq!(
+            authorize(&head(&bare, ""), &bare, TOKEN, 47821).as_deref(),
+            Some("/")
+        );
+    }
+
+    #[test]
+    fn wrong_or_missing_token_is_refused() {
+        assert!(authorize(&head("/page", ""), "/page", TOKEN, 47821).is_none());
+        let wrong = format!("/{}x/page", TOKEN);
+        assert!(authorize(&head(&wrong, ""), &wrong, TOKEN, 47821).is_none());
+        assert!(authorize(&head("/mcp", ""), "/mcp", TOKEN, 47821).is_none());
+    }
+
+    #[test]
+    fn foreign_host_or_origin_is_refused() {
+        let target = format!("/{TOKEN}/page");
+        let rebound = "GET / HTTP/1.1\r\nHost: evil.example:47821\r\n\r\n";
+        assert!(authorize(rebound, &target, TOKEN, 47821).is_none());
+        assert!(authorize(
+            &head(&target, "Origin: https://evil.example\r\n"),
+            &target,
+            TOKEN,
+            47821
+        )
+        .is_none());
+        assert!(authorize("GET / HTTP/1.1\r\n\r\n", &target, TOKEN, 47821).is_none());
+        let local = "GET / HTTP/1.1\r\nHost: localhost:47821\r\n\r\n";
+        assert!(authorize(local, &target, TOKEN, 47821).is_some());
+    }
+
+    #[test]
+    fn accepts_post_method_regardless_of_case() {
+        assert!(is_post_request("POST /mcp HTTP/1.1\r\n"));
+        assert!(is_post_request("post /mcp HTTP/1.1\r\n"));
+        assert!(is_post_request("PoSt /mcp HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn a_stream_is_sent_only_to_a_client_that_accepts_one() {
+        use super::accepts_stream;
+        assert!(accepts_stream(
+            "POST /mcp HTTP/1.1\r\nHost: x\r\nAccept: application/json, text/event-stream\r\n"
+        ));
+        assert!(accepts_stream(
+            "POST /mcp HTTP/1.1\r\naccept: Text/Event-Stream\r\n"
+        ));
+        assert!(!accepts_stream(
+            "POST /mcp HTTP/1.1\r\nAccept: application/json\r\n"
+        ));
+        assert!(!accepts_stream("POST /mcp HTTP/1.1\r\nHost: x\r\n"));
+    }
+
+    #[test]
+    fn rejects_other_methods_and_prefixes() {
+        assert!(!is_post_request("GET /mcp HTTP/1.1\r\n"));
+        assert!(!is_post_request("POSTX /mcp HTTP/1.1\r\n"));
+        assert!(!is_post_request("POST"));
     }
 }
