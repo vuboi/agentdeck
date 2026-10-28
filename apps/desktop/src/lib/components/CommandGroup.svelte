@@ -2,6 +2,7 @@
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { ZButton, ZIcon, ZLoading, ZShowMore, ZShimmerText, zModalService } from '@shival99/z-ui-svelte';
+  import type { ZIconName } from '@shival99/z-ui-svelte';
   import { parseDiff, type DiffRow } from '../diff';
   import { fileWrites } from '../activity.svelte';
   import { ticker } from '../clock.svelte';
@@ -255,6 +256,7 @@
               aria-expanded={view.rows[index] ?? false}
               onclick={() => toggleRow(index)}
             >
+              <ZIcon zType={step.icon as ZIconName} zSize="12" class="size-3 shrink-0 {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground/70'}" />
               {#if item.status === 'running'}
                 <ZShimmerText class="shrink-0" zText={step.verb} />
                 <ZShimmerText class="min-w-0 truncate font-medium" zText={step.subject || '…'} />

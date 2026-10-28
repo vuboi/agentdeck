@@ -98,8 +98,9 @@ impl Drop for TreeGuard {
     }
 }
 
-/// Ends a process and everything it started. Fire and forget: the kill runs on its own.
-pub(super) fn kill_tree(pid: u32) {
+/// Ends a process and everything it started. Fire and forget: the kill runs on its own. The one place that does this:
+/// the app's own cleanup (`process_guard`, the image generator) calls it too.
+pub fn kill_tree(pid: u32) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -114,12 +115,32 @@ pub(super) fn kill_tree(pid: u32) {
     // macOS and Linux: the CLI leads a process group of its own (see `drive_turn`), so the group is ended.
     #[cfg(unix)]
     {
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", "--", &format!("-{pid}")])
+        let _ = std::process::Command::new("sh")
+            .args(["-c", &kill_script(pid)])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn();
+    }
+}
+
+/// The shell lines that end a process, its group and its direct children, then the process itself in case it does not lead
+/// a group. Pure, so it is tested on any system (and built on every system, for the app's tests).
+pub fn kill_script(pid: u32) -> String {
+    format!("kill -KILL -- -{pid} 2>/dev/null; pkill -KILL -P {pid} 2>/dev/null; kill -KILL {pid} 2>/dev/null; exit 0")
+}
+
+#[cfg(test)]
+mod kill_tests {
+    use super::kill_script;
+
+    #[test]
+    fn the_kill_script_ends_the_group_the_children_and_the_process() {
+        let script = kill_script(4242);
+        assert!(script.contains("kill -KILL -- -4242"));
+        assert!(script.contains("pkill -KILL -P 4242"));
+        assert!(script.contains("kill -KILL 4242"));
+        assert!(script.ends_with("exit 0"));
     }
 }
 

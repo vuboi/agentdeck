@@ -3,7 +3,7 @@
   import { fade, slide } from 'svelte/transition';
   import { ZButton, ZDivider, ZIcon, ZInput, ZModal, ZSwitch, ZTabs } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { OPENAI_SVG } from '../brand-icons';
+  import { GITHUB_SVG, OPENAI_SVG } from '../brand-icons';
   import { ticker } from '../clock.svelte';
   import { inTauri } from '../history';
   import {
@@ -57,6 +57,7 @@
   const AGENT: Record<string, { label: string; tone: string }> = {
     claude: { label: 'Claude', tone: 'text-orange-500' },
     codex: { label: 'Codex', tone: 'text-foreground' },
+    copilot: { label: 'GitHub Copilot', tone: 'text-foreground' },
     antigravity: { label: 'Antigravity', tone: 'text-sky-500' },
     opencode: { label: 'OpenCode', tone: 'text-foreground' },
     custom: { label: 'Providers', tone: 'text-emerald-600 dark:text-emerald-400' },
@@ -71,7 +72,7 @@
   }
 
   // --- Add form ------------------------------------------------------------------------------------------
-  const blank = () => ({ name: '', transport: 'stdio' as 'stdio' | 'http', target: '', args: '', env: '', headers: '', agents: { claude: true, codex: true, antigravity: false } as Record<McpAgent, boolean> });
+  const blank = () => ({ name: '', transport: 'stdio' as 'stdio' | 'http', target: '', args: '', env: '', headers: '', agents: { claude: true, codex: true, antigravity: false, copilot: false } as Record<McpAgent, boolean> });
   let form = $state(blank());
 
   /** Splits `a "b c" d` the way a shell would (no escapes, no variables). */
@@ -357,6 +358,8 @@
         <div class="flex min-h-9 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs">
           {#if agent === 'codex'}
             <ZIcon zSvg={OPENAI_SVG} class="size-4 shrink-0 text-foreground" />
+          {:else if agent === 'copilot'}
+            <ZIcon zSvg={GITHUB_SVG} class="size-4 shrink-0 text-foreground" />
           {:else}
             <ZIcon zType={icon(agent === 'claude' ? 'brandClaude' : 'brandGemini')} class="size-4 shrink-0" />
           {/if}
@@ -365,7 +368,7 @@
         </div>
       {/each}
     </fieldset>
-    <p class="m-0 text-[11px] leading-snug text-muted-foreground">Each agent saves it with its own <code>mcp add</code> command. Keys typed here are passed to that command and never stored by AgentDeck.</p>
+    <p class="m-0 text-[11px] leading-snug text-muted-foreground">Each agent saves its own MCP config. Copilot servers are saved in <code>~/.copilot/mcp-config.json</code>; environment values remain local.</p>
     {#if problem && form.name}<p class="m-0 text-[11px] text-muted-foreground" role="status">{problem}</p>{/if}
   </div>
 </ZModal>

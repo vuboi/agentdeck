@@ -1,7 +1,7 @@
 /** A file a tool wrote: lines added and removed, and the text for a small diff. `create` once the result says so. */
 export type FileChange = { path: string; added: number; removed: number; before: string; after: string; create?: boolean };
 
-export type Agent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'custom';
+export type Agent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot' | 'custom';
 export type Session = { id: string; title: string; agent: Agent; status: 'working' | 'idle' | 'waiting' };
 
 export type Block =

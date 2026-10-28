@@ -146,9 +146,24 @@ fn profiles() -> Vec<Profile> {
         }
     };
     if cfg!(windows) {
-        add("pwsh", "PowerShell 7", find_in(&path, &["pwsh.exe"]), vec!["-NoLogo"]);
-        add("powershell", "Windows PowerShell", find_in(&path, &["powershell.exe"]), vec!["-NoLogo"]);
-        add("cmd", "Command Prompt", find_in(&path, &["cmd.exe"]), vec![]);
+        add(
+            "pwsh",
+            "PowerShell 7",
+            find_in(&path, &["pwsh.exe"]),
+            vec!["-NoLogo"],
+        );
+        add(
+            "powershell",
+            "Windows PowerShell",
+            find_in(&path, &["powershell.exe"]),
+            vec!["-NoLogo"],
+        );
+        add(
+            "cmd",
+            "Command Prompt",
+            find_in(&path, &["cmd.exe"]),
+            vec![],
+        );
         // Git for Windows: its bash sits beside git.exe's folder, whatever drive it was installed to.
         let git_bash = find_in(&path, &["git.exe"])
             .and_then(|git| {
@@ -164,7 +179,10 @@ fn profiles() -> Vec<Profile> {
                     .flat_map(|base| {
                         [
                             base.join("Git").join("bin").join("bash.exe"),
-                            base.join("Programs").join("Git").join("bin").join("bash.exe"),
+                            base.join("Programs")
+                                .join("Git")
+                                .join("bin")
+                                .join("bash.exe"),
                         ]
                     })
                     .find(|bash| bash.is_file())
@@ -301,6 +319,10 @@ fn open_shell(
         .slave
         .spawn_command(command)
         .map_err(|error| format!("could not start {}: {error}", program.display()))?;
+    // The shell and everything it starts end with the app, even when the app is killed (servers.rs job).
+    if let Some(pid) = child.process_id() {
+        crate::process_guard::adopt_pid(pid);
+    }
     // The slave end stays open in this process only while the shell is being started.
     drop(pair.slave);
     let mut reader = pair
@@ -406,8 +428,16 @@ pub fn pty_close(id: String) {
         .ok()
         .and_then(|mut sessions| sessions.remove(&id));
     if let Some(mut session) = session {
-        let _ = session.child.kill();
+        end_shell(&mut session);
     }
+}
+
+/// Ends a shell and what it started (a server, a script): the whole tree, not only the shell.
+fn end_shell(session: &mut Session) {
+    if let Some(pid) = session.child.process_id() {
+        crate::process_guard::kill_tree(pid);
+    }
+    let _ = session.child.kill();
 }
 
 /// The folder a new terminal opens in, for the UI to check a path before it asks for it.
@@ -422,7 +452,7 @@ pub fn pty_default_folder() -> Option<String> {
 pub fn kill_all() {
     if let Ok(mut sessions) = SESSIONS.lock() {
         for (_, mut session) in sessions.drain() {
-            let _ = session.child.kill();
+            end_shell(&mut session);
         }
     }
 }

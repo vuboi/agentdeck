@@ -55,7 +55,7 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
         command: `${event.name}  ${event.input}`.trim(),
         output: '',
         status: 'running',
-        ...(event.change ? { change: { ...event.change, create: event.name === 'Write' && event.change.removed === 0 } } : {}),
+        ...(event.change ? { change: { ...event.change, create: /^(Write|write_file|writefile|create_file|createfile)$/i.test(event.name) && event.change.removed === 0 } } : {}),
       });
       return { blocks, finished: false };
     case 'tool_result': {
@@ -64,6 +64,10 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
         call.output = event.output.length > 6000 ? `${event.output.slice(0, 6000)}…` : event.output;
         call.status = event.is_error ? 'fail' : 'ok';
         if (event.image) call.image = event.image;
+        if (event.change && !event.is_error) {
+          const writes = /^(Write|write_file|writefile|create_file|createfile)$/i.test(call.command.trim().split(/\s+/, 1)[0] ?? '');
+          call.change = { ...event.change, create: writes && event.change.removed === 0 };
+        }
         // A Write over an existing file is an edit, not a creation: the tool's own message says which.
         if (call.change?.create && /updated|overwr/i.test(event.output)) call.change.create = false;
       }

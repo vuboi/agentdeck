@@ -11,7 +11,7 @@ use super::lock;
 use crate::slash_commands;
 
 /// The agents that read skills from a folder AgentDeck can write to.
-pub const SKILL_AGENTS: [&str; 4] = ["claude", "codex", "opencode", "antigravity"];
+pub const SKILL_AGENTS: [&str; 5] = ["claude", "codex", "opencode", "antigravity", "copilot"];
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct SkillItem {
@@ -48,6 +48,7 @@ fn skill_folders(home: &Path, agent: &str) -> Vec<PathBuf> {
         ],
         // Antigravity (agy) reads the skills of its config folder.
         "antigravity" => vec![home.join(".gemini").join("config").join("skills")],
+        "copilot" => vec![home.join(".copilot").join("skills")],
         _ => Vec::new(),
     }
 }

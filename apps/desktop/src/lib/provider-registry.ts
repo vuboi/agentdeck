@@ -1,8 +1,8 @@
 import type { ZIconName } from '@shival99/z-ui-svelte';
-import { OPENAI_SVG, OPENCODE_SVG, providerLogo } from './brand-icons';
+import { GITHUB_SVG, OPENAI_SVG, OPENCODE_SVG, providerLogo } from './brand-icons';
 import { connectors } from './connectors.svelte';
 
-export type BuiltInAgent = 'claude' | 'codex' | 'antigravity' | 'opencode';
+export type BuiltInAgent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot';
 /** `icon` is an icon-set name; `mark`, when set, is the provider's own SVG and wins over `icon` everywhere. */
 export type AgentProfile = { id: BuiltInAgent; label: string; binary: string; icon: ZIconName; mark?: string; tone: string };
 
@@ -12,6 +12,7 @@ export const BUILT_IN_AGENTS: AgentProfile[] = [
   { id: 'codex', label: 'Codex', binary: 'codex', icon: 'brandOpenai' as ZIconName, mark: OPENAI_SVG, tone: 'text-foreground' },
   { id: 'antigravity', label: 'Antigravity', binary: 'agy', icon: 'brandGemini' as ZIconName, tone: 'text-sky-500' },
   { id: 'opencode', label: 'OpenCode', binary: 'opencode', icon: 'lucideTerminal' as ZIconName, mark: OPENCODE_SVG, tone: 'text-foreground' },
+  { id: 'copilot', label: 'GitHub Copilot', binary: 'gh', icon: 'lucideBot' as ZIconName, mark: GITHUB_SVG, tone: 'text-foreground' },
 ];
 
 export const agentProfile = (id: string) => BUILT_IN_AGENTS.find((item) => item.id === id);

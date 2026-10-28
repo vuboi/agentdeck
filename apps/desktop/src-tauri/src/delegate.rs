@@ -313,7 +313,7 @@ pub fn delegate_ready() -> usize {
 
 /// How many delegated workers run at the same time, whoever asked and however (wait=true or false). The webview asks
 /// for a place before it starts a worker (`delegate_enter`) and gives it back when the task ends (`delegate_release`).
-pub const MAX_PARALLEL_WORKERS: usize = 3;
+pub const MAX_PARALLEL_WORKERS: usize = 4;
 
 /// Workers running and workers waiting for a place, in the order they asked. Holds task ids only, no I/O: a place is
 /// given by `enter` or, once one is released, by the list `release` returns.
@@ -511,35 +511,39 @@ mod tests {
         assert!(!is_long_call("not json"));
     }
 
-
     #[test]
-    fn three_workers_run_and_the_fourth_waits_for_a_release() {
+    fn workers_run_up_to_the_limit_and_the_next_waits_for_a_release() {
+        // Written against the limit, not a number: it is raised and lowered in one place.
         let mut gate = Gate::default();
-        assert!(gate.enter("a") && gate.enter("b") && gate.enter("c"));
-        assert!(!gate.enter("d"));
-        assert!(!gate.enter("e"));
+        let running: Vec<String> = (0..MAX_PARALLEL_WORKERS).map(|n| format!("w{n}")).collect();
+        for id in &running {
+            assert!(gate.enter(id));
+        }
+        assert!(!gate.enter("x"));
+        assert!(!gate.enter("y"));
         // Asking twice does not take a second place, nor lose the one in line.
-        assert!(gate.enter("a"));
-        assert!(!gate.enter("d"));
-        assert_eq!(gate.release("b"), ["d"]);
+        assert!(gate.enter(&running[0]));
+        assert!(!gate.enter("x"));
+        assert_eq!(gate.release(&running[1]), ["x"]);
         assert_eq!(gate.running.len(), MAX_PARALLEL_WORKERS);
         // Completion order, not start order: the next place goes to the next in line.
-        assert_eq!(gate.release("a"), ["e"]);
-        assert!(gate.release("c").is_empty());
-        assert_eq!(gate.running, ["d", "e"]);
+        assert_eq!(gate.release(&running[0]), ["y"]);
+        assert!(gate.release(&running[2]).is_empty());
+        assert_eq!(gate.running.len(), MAX_PARALLEL_WORKERS - 1);
     }
 
     #[test]
     fn a_task_stopped_in_line_leaves_the_line_and_an_unknown_release_is_harmless() {
         let mut gate = Gate::default();
-        for id in ["a", "b", "c"] {
+        let running: Vec<String> = (0..MAX_PARALLEL_WORKERS).map(|n| format!("w{n}")).collect();
+        for id in &running {
             assert!(gate.enter(id));
         }
-        assert!(!gate.enter("d"));
-        assert!(!gate.enter("e"));
-        assert!(gate.release("d").is_empty());
+        assert!(!gate.enter("x"));
+        assert!(!gate.enter("y"));
+        assert!(gate.release("x").is_empty());
         assert!(gate.release("nobody").is_empty());
-        assert_eq!(gate.release("a"), ["e"]);
+        assert_eq!(gate.release(&running[0]), ["y"]);
     }
 
     #[test]

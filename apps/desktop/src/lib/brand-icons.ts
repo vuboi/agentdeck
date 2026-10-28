@@ -7,6 +7,9 @@ export const OPENAI_SVG = "<svg fill=\"currentColor\" xmlns=\"http://www.w3.org/
 export const OPENCODE_SVG =
   '<svg viewBox="0 0 16 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 16H4V8H12V16Z" fill="currentColor" opacity="0.42"/><path d="M12 4H4V16H12V4ZM16 20H0V0H16V20Z" fill="currentColor"/></svg>';
 
+/** GitHub mark used for GitHub Copilot's provider identity in AgentDeck. */
+export const GITHUB_SVG = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M12 .7a11.3 11.3 0 0 0-3.57 22.02c.57.1.77-.25.77-.55v-2.12c-3.15.69-3.81-1.34-3.81-1.34-.52-1.32-1.26-1.67-1.26-1.67-1.03-.7.08-.69.08-.69 1.14.08 1.73 1.17 1.73 1.17 1.01 1.73 2.65 1.23 3.3.94.1-.73.4-1.23.72-1.51-2.52-.29-5.17-1.26-5.17-5.6 0-1.24.44-2.26 1.17-3.06-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.11 1.17a10.8 10.8 0 0 1 5.66 0c2.16-1.48 3.11-1.17 3.11-1.17.62 1.57.23 2.73.11 3.02.73.8 1.17 1.82 1.17 3.06 0 4.35-2.66 5.3-5.2 5.59.41.35.77 1.04.77 2.1v3.13c0 .3.2.66.78.55A11.3 11.3 0 0 0 12 .7Z"/></svg>';
+
 // Logos of the free cloud providers (Settings → Providers), from thesvg.org as z-icon's brand set uses; inlined because
 // the packaged app blocks CDNs. Gemini and Groq keep their colours (shown as images); the others follow the text colour.
 export const GEMINI_SVG =

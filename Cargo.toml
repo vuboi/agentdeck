@@ -27,6 +27,9 @@ ag-protocol = { path = "crates/protocol" }
 ag-store = { path = "crates/store" }
 ag-core = { path = "crates/core" }
 ag-adapters = { path = "crates/adapters" }
+github-copilot-sdk = "1.0.28"
+indexmap = "2"
+async-trait = "0.1"
 ag-quota = { path = "crates/quota" }
 ag-orchestrator = { path = "crates/orchestrator" }
 ag-cdp = { path = "crates/cdp" }

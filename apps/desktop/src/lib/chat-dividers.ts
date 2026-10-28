@@ -36,6 +36,22 @@ export function neighbour<T extends Shown>(list: readonly T[], at: number, step:
   return undefined;
 }
 
+/** Where a reply sits in a run of replies of the same agent and model that follow one another (no message of the user
+ *  between, hollow ones skipped): the first carries the name line, the last the footer, and a reply that only ran steps is
+ *  drawn as its step line alone (`quiet`). `fallbackAgent` is the chat's agent, for a reply that names none. */
+export function runPosition<T extends Shown & { agent?: string; model?: string | null }>(
+  list: readonly T[],
+  at: number,
+  fallbackAgent: string,
+): { quiet: boolean; grouped: boolean; lastOfRun: boolean } {
+  const message = list[at];
+  const agentOf = (reply: T) => reply.agent ?? fallbackAgent;
+  const joins = (other: T | undefined) =>
+    other !== undefined && other.role === 'assistant' && agentOf(other) === agentOf(message) && other.model === message.model && !stepsOnly(other);
+  const quiet = stepsOnly(message);
+  return { quiet, grouped: joins(neighbour(list, at, -1)), lastOfRun: !quiet && !joins(neighbour(list, at, 1)) };
+}
+
 /** Whether `current` gets a line above it: it is a reply, the message right above it is a reply too, and nothing else marks it. */
 export function turnDivider(previous: Item | undefined, current: Item | undefined, enabled: boolean): boolean {
   if (!enabled || !previous || !current) return false;

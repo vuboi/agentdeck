@@ -8,12 +8,12 @@ import { requestSystemNotificationPermission, sendSystemNotification } from './s
 // switch between (Codex via `codex-auth`, Claude via `cswap`), the "close to the limit" alerts, and custom / local
 // model providers. The work itself is in Rust (`connectors.rs`); this file holds what the screen shows.
 
-export type ConnectorId = 'claude' | 'codex' | 'agy' | 'opencode';
-export type AccountProvider = 'claude' | 'codex';
+export type ConnectorId = 'claude' | 'codex' | 'agy' | 'opencode' | 'copilot';
+export type AccountProvider = 'claude' | 'codex' | 'copilot';
 
 export type Tool = { id: string; path: string | null; version: string | null };
 export type Login = { logged_in: boolean | null; email: string | null; plan: string | null; detail: string | null };
-export type Detected = { tools: Tool[]; claude: Login; codex: Login; antigravity: Login; opencode: Login };
+export type Detected = { tools: Tool[]; claude: Login; codex: Login; antigravity: Login; opencode: Login; copilot: Login };
 export type UsageWindow = { label: string; pct: number; resets_at: number | null };
 export type Account = {
   id: string;
@@ -62,7 +62,7 @@ export type ClaudeCredit = { apiKey: string; sessionKey: string; enabled: boolea
 export type Probe = { ok: boolean; models: string[]; ms: number; error: string | null };
 export type LocalServer = { kind: ProviderKind; label: string; base_url: string; models: string[] };
 
-export type Section = 'connectors' | 'providers' | 'replies' | 'memory' | 'alerts' | 'sync' | 'computer' | 'about';
+export type Section = 'connectors' | 'providers' | 'replies' | 'memory' | 'office' | 'alerts' | 'sync' | 'computer' | 'about';
 
 export const settings = $state({ open: false, section: 'connectors' as Section });
 
@@ -73,7 +73,7 @@ export function openSettings(section: Section = 'connectors') {
 
 export const connectors = $state({
   detected: null as Detected | null,
-  accounts: { claude: null, codex: null, agy: [] } as Record<AccountProvider, Accounts | null> & { agy: AgyAccount[] },
+  accounts: { claude: null, codex: null, copilot: null, agy: [] } as Record<AccountProvider, Accounts | null> & { agy: AgyAccount[] },
   /** What is running right now, by key (`install:codex`, `login:claude`, `switch:codex`…), with a label for it. */
   busy: {} as Record<string, string>,
   /** Last lines of an install or sign-in, by connector id. */
@@ -138,6 +138,11 @@ async function task(key: string, label: string, action: () => Promise<unknown>):
 }
 
 export const tool = (id: string) => connectors.detected?.tools.find((item) => item.id === id);
+
+/** Reloads the account-specific Copilot model list after GitHub sign-in or account switching. */
+function refreshCopilotModels() {
+  void import('./models.svelte').then(({ loadModels }) => loadModels(['copilot']));
+}
 export const installed = (id: string) => Boolean(tool(id)?.path);
 
 let listening = false;
@@ -245,7 +250,7 @@ export async function refreshAll(refresh = false) {
     // Keep Claude detection first because account adoption depends on its signed-in state.
     // Codex and Antigravity account reads can proceed while CLI detection runs.
     void refreshAgyQuota();
-    await Promise.all([refreshDetect(), refreshAccounts('codex', refresh), refreshAgyAccounts()]);
+    await Promise.all([refreshDetect(), refreshAccounts('codex', refresh), refreshAccounts('copilot'), refreshAgyAccounts()]);
     await refreshAccounts('claude', refresh);
   } finally {
     if (refresh) connectors.manualRefreshing = false;
@@ -277,6 +282,7 @@ export async function login(id: ConnectorId, label: string): Promise<boolean> {
     if (id === 'claude') adopted = false; // a fresh sign-in may fix what stopped the account being saved
     // Login completion is independent from slow usage/account reads. Refresh those in the background.
     void refreshAll();
+    if (id === 'copilot') refreshCopilotModels();
     if (id !== 'agy') toast.success(`${label} signed in`);
   }
   return ok;
@@ -308,6 +314,7 @@ export async function addAccount(provider: AccountProvider, label: string) {
   if (ok) {
     toast.success(`${label} account added`);
     await refreshAll();
+    if (provider === 'copilot') refreshCopilotModels();
   }
 }
 
@@ -328,6 +335,7 @@ export async function switchAccount(provider: AccountProvider, account: Account)
     accountSwitched(provider);
     toast.success(`Now using ${account.email}`);
     await refreshAll();
+    if (provider === 'copilot') refreshCopilotModels();
   }
   return ok;
 }
@@ -365,7 +373,7 @@ export async function consumeCodexResetCredit(email: string): Promise<boolean> {
 
 export type Warning = { provider: AccountProvider; account: Account; window: UsageWindow; better: Account | null };
 
-const NAMES: Record<AccountProvider, string> = { claude: 'Claude', codex: 'Codex' };
+const NAMES: Record<AccountProvider, string> = { claude: 'Claude', codex: 'Codex', copilot: 'GitHub Copilot' };
 export const providerName = (provider: AccountProvider) => NAMES[provider];
 
 /** Windows of the active account that are at or past the threshold and not yet reset. */

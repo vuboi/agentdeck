@@ -94,7 +94,7 @@ mod tests {
         dog.note(&AgentEvent::ToolCall { id: "t".into(), name: "Bash".into(), input: "cargo test".into(), change: None, background: false });
         tokio::time::advance(Duration::from_secs(30 * 60)).await;
         assert!(!dog.expired(), "a long build is not a stall");
-        dog.note(&AgentEvent::ToolResult { id: "t".into(), output: String::new(), is_error: false, image: None });
+        dog.note(&AgentEvent::ToolResult { id: "t".into(), output: String::new(), is_error: false, image: None, change: None });
         assert!(dog.expired(), "after the tool the ordinary limit applies again");
     }
 

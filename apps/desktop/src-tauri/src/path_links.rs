@@ -179,39 +179,93 @@ fn cache_file(url: &str) -> PathBuf {
     std::env::temp_dir().join("agentdeck-images").join(name)
 }
 
+/// Fails when the address a URL points to is on the local network. Loopback stays allowed. Checked for the first address
+/// and again for every redirect, since a public page may answer with a redirect into the network behind the firewall.
+async fn check_target(url: &reqwest::Url) -> Result<(), String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("only http and https".into());
+    }
+    let host = url.host_str().ok_or("no host")?.to_string();
+    if host == "localhost" {
+        return Ok(());
+    }
+    let port = url.port_or_known_default().unwrap_or(80);
+    let addresses: Vec<IpAddr> = match host.trim_matches(|c| c == '[' || c == ']').parse::<IpAddr>() {
+        Ok(ip) => vec![ip],
+        Err(_) => tokio::net::lookup_host((host.as_str(), port)).await.map_err(|error| error.to_string())?.map(|address| address.ip()).collect(),
+    };
+    if addresses.iter().any(|ip| blocked_ip(*ip)) {
+        return Err("address on the local network".into());
+    }
+    Ok(())
+}
+
+/// Most redirects followed for one picture.
+const IMAGE_REDIRECTS: usize = 4;
+/// Largest the cache folder may grow before the oldest pictures go.
+const IMAGE_CACHE_MAX_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Removes the oldest cached pictures until the folder is under `max` bytes. Best effort.
+fn prune_cache(folder: &Path, max: u64) {
+    let Ok(read) = std::fs::read_dir(folder) else { return };
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = read
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok()?;
+            meta.is_file().then(|| (meta.modified().unwrap_or(std::time::UNIX_EPOCH), meta.len(), entry.path()))
+        })
+        .collect();
+    let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
+    files.sort_by_key(|(modified, _, _)| *modified);
+    for (_, size, path) in files {
+        if total <= max {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
+        }
+    }
+}
+
 /// A picture from the web as a `data:` URL, kept in a cache folder (the window may not load it itself). Only http(s),
-/// only images, at most 15 MB, never an address on the local network.
+/// only images, at most 15 MB (counted while it downloads), never an address on the local network, redirects included.
 #[tauri::command]
 pub async fn image_fetch(url: String) -> Result<String, String> {
     use base64::Engine;
-    let parsed = reqwest::Url::parse(&url).map_err(|error| error.to_string())?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("only http and https".into());
-    }
-    let host = parsed.host_str().ok_or("no host")?.to_string();
-    let port = parsed.port_or_known_default().unwrap_or(80);
-    if host != "localhost" {
-        let addresses: Vec<IpAddr> = match host.parse::<IpAddr>() {
-            Ok(ip) => vec![ip],
-            Err(_) => tokio::net::lookup_host((host.as_str(), port)).await.map_err(|error| error.to_string())?.map(|address| address.ip()).collect(),
-        };
-        if addresses.iter().any(|ip| blocked_ip(*ip)) {
-            return Err("address on the local network".into());
-        }
-    }
+    use futures_util::StreamExt;
+    let mut target = reqwest::Url::parse(&url).map_err(|error| error.to_string())?;
+    check_target(&target).await?;
     let file = cache_file(&url);
     let meta = file.with_extension("type");
     if let (Ok(bytes), Ok(kind)) = (std::fs::read(&file), std::fs::read_to_string(&meta)) {
         return Ok(format!("data:{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)));
     }
-    // Sites such as Wikimedia refuse a request with no User-Agent (and answer 429 to a bare client).
+    // Sites such as Wikimedia refuse a request with no User-Agent (and answer 429 to a bare client). Redirects are followed
+    // here, one by one, so each new address is checked before it is asked for.
     let client = reqwest::Client::builder()
         .user_agent(concat!("Mozilla/5.0 AgentDeck/", env!("CARGO_PKG_VERSION"), " (image preview)"))
         .timeout(std::time::Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::limited(4))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| error.to_string())?;
-    let response = client.get(parsed).send().await.map_err(|error| error.to_string())?;
+    let mut hops = 0;
+    let response = loop {
+        let response = client.get(target.clone()).send().await.map_err(|error| error.to_string())?;
+        if !response.status().is_redirection() {
+            break response;
+        }
+        hops += 1;
+        if hops > IMAGE_REDIRECTS {
+            return Err("too many redirects".into());
+        }
+        let next = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or("a redirect with no address")?;
+        target = target.join(next).map_err(|error| error.to_string())?;
+        check_target(&target).await?;
+    };
     if !response.status().is_success() {
         return Err(format!("status {}", response.status()));
     }
@@ -224,9 +278,15 @@ pub async fn image_fetch(url: String) -> Result<String, String> {
     if response.content_length().is_some_and(|length| length > IMAGE_MAX_BYTES as u64) {
         return Err("larger than 15 MB".into());
     }
-    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
-    if bytes.len() > IMAGE_MAX_BYTES {
-        return Err("larger than 15 MB".into());
+    // Read in pieces and stop at the limit: a server that sends no length cannot fill the memory.
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| error.to_string())?;
+        if bytes.len() + chunk.len() > IMAGE_MAX_BYTES {
+            return Err("larger than 15 MB".into());
+        }
+        bytes.extend_from_slice(&chunk);
     }
     // A server may label a picture `application/octet-stream`: the bytes decide.
     let kind = if kind.starts_with("image/") { kind } else { sniff_image(&bytes).ok_or("not an image")?.to_string() };
@@ -234,6 +294,7 @@ pub async fn image_fetch(url: String) -> Result<String, String> {
         let _ = std::fs::create_dir_all(folder);
         let _ = std::fs::write(&file, &bytes);
         let _ = std::fs::write(&meta, &kind);
+        prune_cache(folder, IMAGE_CACHE_MAX_BYTES);
     }
     Ok(format!("data:{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)))
 }
@@ -272,6 +333,35 @@ mod tests {
         assert_eq!(sniff_image(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
         assert_eq!(sniff_image(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
         assert_eq!(sniff_image(b"<html>"), None);
+    }
+
+    #[tokio::test]
+    async fn a_target_on_the_local_network_is_refused_for_the_first_address_and_for_a_redirect() {
+        let target = |text: &str| reqwest::Url::parse(text).unwrap();
+        assert!(check_target(&target("http://127.0.0.1:8765/a.png")).await.is_ok());
+        assert!(check_target(&target("http://localhost/a.png")).await.is_ok());
+        assert!(check_target(&target("http://[::1]/a.png")).await.is_ok());
+        assert!(check_target(&target("http://192.168.1.1/a.png")).await.is_err());
+        assert!(check_target(&target("http://10.0.0.5/a.png")).await.is_err());
+        assert!(check_target(&target("http://[fe80::1]/a.png")).await.is_err());
+        assert!(check_target(&target("ftp://example.com/a.png")).await.is_err());
+        // What a redirect gives: a relative or absolute address joined to the current one is checked the same way.
+        let joined = target("https://example.com/a").join("http://169.254.169.254/latest/meta-data").unwrap();
+        assert!(check_target(&joined).await.is_err());
+    }
+
+    #[test]
+    fn the_cache_keeps_the_newest_pictures_under_its_limit() {
+        let folder = std::env::temp_dir().join(format!("agentdeck-cache-test-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        for name in ["a", "b", "c"] {
+            std::fs::write(folder.join(name), vec![0u8; 100]).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        prune_cache(&folder, 250);
+        assert!(!folder.join("a").exists(), "the oldest goes first");
+        assert!(folder.join("b").exists() && folder.join("c").exists());
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]

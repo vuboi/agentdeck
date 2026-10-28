@@ -9,7 +9,7 @@ import { providerLogo } from './brand-icons';
 // by what each CLI keeps on disk (Rust `models_list`): Codex's cached catalogue with each model's reasoning
 // levels, and Claude Code's current tiers plus the extra models the account is offered.
 
-export type ProviderId = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'custom';
+export type ProviderId = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot' | 'custom';
 export type ModelOption = {
   value: string;
   label: string;
@@ -61,6 +61,7 @@ const catalog = $state<Record<ProviderId, ModelOption[]>>({
     { value: 'opencode/nemotron-3.5-lightning-free', label: 'Nemotron 3.5 Lightning (Free)' },
     { value: 'opencode/nemotron-3.5-super-vl-free', label: 'Nemotron 3.5 Super VL (Free)' },
   ],
+  copilot: [],
   // Every model of every enabled custom provider: filled from the saved providers (see below).
   custom: [],
 });
@@ -102,6 +103,7 @@ const builtIn: ModelSource[] = [
   { key: 'codex', provider: 'codex', label: 'Codex', icon: iconOf('codex'), models: () => catalog.codex },
   { key: 'antigravity', provider: 'antigravity', label: 'Antigravity', icon: iconOf('antigravity'), models: () => catalog.antigravity },
   { key: 'opencode', provider: 'opencode', label: 'OpenCode', icon: iconOf('opencode'), models: () => catalog.opencode },
+  { key: 'copilot', provider: 'copilot', label: 'GitHub Copilot', icon: iconOf('copilot'), models: () => catalog.copilot },
 ];
 
 /** The rows of the model picker: the three CLIs, then one per enabled custom provider. Reactive. */
@@ -140,9 +142,9 @@ type Listed = { value: string; label: string; description: string; efforts: stri
  * Whether each CLI's own model list has been read yet. Until it has, the list in the catalogue is only a fallback: a
  * picker shows a loading state instead of it, so the list is never drawn and then replaced and reordered.
  */
-export const modelsReady = $state<Record<ProviderId, boolean>>({ claude: false, codex: false, antigravity: false, opencode: false, custom: true });
+export const modelsReady = $state<Record<ProviderId, boolean>>({ claude: false, codex: false, antigravity: false, opencode: false, copilot: false, custom: true });
 
-export async function loadModels() {
+export async function loadModels(providers: readonly ProviderId[] = ['claude', 'codex', 'antigravity', 'opencode', 'copilot']) {
   if (!inTauri()) {
     for (const provider of Object.keys(modelsReady) as ProviderId[]) modelsReady[provider] = true;
     return;
@@ -150,7 +152,7 @@ export async function loadModels() {
   const { invoke } = await import('@tauri-apps/api/core');
   // All at once: a slow CLI (OpenCode starts a process to list its models) must not hold the others back.
   await Promise.all(
-    (['claude', 'codex', 'antigravity', 'opencode'] as const).map(async (provider) => {
+    providers.map(async (provider) => {
       try {
         const listed = await invoke<Listed[]>('models_list', { agent: provider });
         if (listed.length) {

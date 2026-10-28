@@ -1,24 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathsAsNames } from './path-links.ts';
-import { isVietnamese, segments, sentences, speakable } from './speech.ts';
-
-test('English terms inside a Vietnamese sentence are split out to an English voice', () => {
-  assert.deepEqual(segments('Mình đã lưu memory agent vào file rồi nhé'), [
-    { text: 'Mình đã lưu', vi: true },
-    { text: 'memory agent', vi: false },
-    { text: 'vào', vi: true },
-    { text: 'file', vi: false },
-    { text: 'rồi nhé', vi: true },
-  ]);
-  assert.deepEqual(segments('Chạy pnpm check trước khi xong'), [
-    { text: 'Chạy', vi: true },
-    { text: 'pnpm check', vi: false },
-    { text: 'trước khi xong', vi: true },
-  ]);
-  assert.deepEqual(segments('Hello there, how are you?'), [{ text: 'Hello there, how are you?', vi: false }]);
-  assert.deepEqual(segments('Chào bạn'), [{ text: 'Chào bạn', vi: true }]);
-});
+import { isVietnamese, sentences, speakable } from './speech.ts';
 
 test('code, links, addresses and symbols are not read', () => {
   const text = speakable('# Tiêu đề\n\nĐây là **đậm** và [liên kết](https://x.com/a), xem https://example.com nhé 👋\n\n```ts\nconst a = 1;\n```\n\n- mục một\n- mục hai\n\nChạy `pnpm check(x)` hoặc `lệnh`.');

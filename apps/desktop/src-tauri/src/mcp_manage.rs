@@ -16,7 +16,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::connectors::{capture, codex_home, command, failure, which, KillTree};
 
-const AGENTS: [&str; 3] = ["claude", "codex", "antigravity"];
+const AGENTS: [&str; 4] = ["claude", "codex", "antigravity", "copilot"];
 
 /// One server as one config file has it.
 #[derive(Clone, Debug, Default)]
@@ -174,6 +174,18 @@ pub(crate) fn read_all() -> Vec<Raw> {
                 &agy.to_string_lossy(),
             ));
         }
+        let copilot = home.join(".copilot").join("mcp-config.json");
+        if let Ok(json) = std::fs::read_to_string(&copilot)
+            .map_err(drop)
+            .and_then(|text| serde_json::from_str::<Value>(&text).map_err(drop))
+        {
+            found.extend(servers_in(
+                &json["mcpServers"],
+                "copilot",
+                "user",
+                &copilot.to_string_lossy(),
+            ));
+        }
     }
     let codex = codex_home().join("config.toml");
     if let Ok(text) = std::fs::read_to_string(&codex) {
@@ -253,7 +265,12 @@ pub async fn mcp_list() -> McpOverview {
         if let Some(url) = bridge_url() {
             // Claude, Codex and OpenCode get it with every turn; custom providers call it directly (free tiers never:
             // custom_chat.rs). Antigravity once it is linked.
-            let mut agents = vec!["claude".to_owned(), "codex".to_owned(), "opencode".to_owned()];
+            let mut agents = vec![
+                "claude".to_owned(),
+                "codex".to_owned(),
+                "opencode".to_owned(),
+                "copilot".to_owned(),
+            ];
             if agy_link.is_some() {
                 agents.push("antigravity".to_owned());
             }
@@ -658,6 +675,11 @@ fn add_args(agent: &str, spec: &AddSpec) -> Result<Vec<String>, String> {
                 args.extend(spec.args.iter().cloned());
             }
         }
+        "copilot" => {
+            return Err(
+                "GitHub Copilot MCP settings are managed through the SDK session".to_string(),
+            )
+        }
         other => return Err(format!("unknown agent {other}")),
     }
     Ok(args)
@@ -702,6 +724,17 @@ pub async fn mcp_add(spec: AddSpec) -> Result<Vec<AgentResult>, String> {
     check(&spec)?;
     let mut results = Vec::new();
     for agent in &spec.agents {
+        if agent == "copilot" {
+            let result = write_copilot_server(&spec);
+            results.push(AgentResult {
+                agent: agent.clone(),
+                ok: result.is_ok(),
+                message: result
+                    .err()
+                    .unwrap_or_else(|| "saved to Copilot MCP config".into()),
+            });
+            continue;
+        }
         results.push(match add_args(agent, &spec) {
             Ok(args) => run_cli(agent, args).await,
             Err(message) => AgentResult {
@@ -725,6 +758,17 @@ pub async fn mcp_remove(name: String, agents: Vec<String>) -> Result<Vec<AgentRe
         .iter()
         .filter(|agent| AGENTS.contains(&agent.as_str()))
     {
+        if agent == "copilot" {
+            let result = remove_copilot_server(&name);
+            results.push(AgentResult {
+                agent: agent.clone(),
+                ok: result.is_ok(),
+                message: result
+                    .err()
+                    .unwrap_or_else(|| "removed from Copilot MCP config".into()),
+            });
+            continue;
+        }
         let mut args: Vec<String> = vec!["mcp".into(), "remove".into()];
         if agent == "claude" {
             args.extend(["-s".to_string(), "user".to_string()]);
@@ -733,6 +777,65 @@ pub async fn mcp_remove(name: String, agents: Vec<String>) -> Result<Vec<AgentRe
         results.push(run_cli(agent, args).await);
     }
     Ok(results)
+}
+
+/// Writes a Copilot SDK MCP server while retaining other servers in the user's config.
+fn write_copilot_server(spec: &AddSpec) -> Result<(), String> {
+    let path = crate::home_folder()?
+        .join(".copilot")
+        .join("mcp-config.json");
+    let mut root = match std::fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<Value>(&text)
+            .map_err(|error| format!("Copilot MCP config is invalid: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({"mcpServers": {}}),
+        Err(error) => return Err(error.to_string()),
+    };
+    let Some(servers) = root["mcpServers"].as_object_mut() else {
+        return Err("Copilot MCP config has an invalid mcpServers value".into());
+    };
+    let mut server = if spec.transport == "http" {
+        json!({"type":"http", "url":spec.target, "headers": pairs_from_lines(&spec.headers)})
+    } else {
+        json!({"type":"stdio", "command":spec.target, "args":spec.args, "env":pairs_from_lines(&spec.env)})
+    };
+    if spec.transport == "stdio" && spec.args.is_empty() {
+        server["args"] = json!([]);
+    }
+    servers.insert(spec.name.clone(), server);
+    let parent = path.parent().ok_or("Copilot config has no parent folder")?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let text = serde_json::to_string_pretty(&root).map_err(|error| error.to_string())?;
+    std::fs::write(path, text).map_err(|error| error.to_string())
+}
+
+/// Removes a server from the Copilot MCP config without affecting other entries.
+fn remove_copilot_server(name: &str) -> Result<(), String> {
+    let path = crate::home_folder()?
+        .join(".copilot")
+        .join("mcp-config.json");
+    let mut root: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    let Some(servers) = root["mcpServers"].as_object_mut() else {
+        return Err("Copilot MCP config has an invalid mcpServers value".into());
+    };
+    servers.remove(name);
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(&root).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn pairs_from_lines(lines: &[String]) -> BTreeMap<String, String> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            line.split_once('=')
+                .or_else(|| line.split_once(':'))
+                .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
+        })
+        .collect()
 }
 
 /// Set when the user turned the AgentDeck browser off for Antigravity: it is then not linked again by itself.
@@ -781,7 +884,10 @@ pub async fn ensure_agy_link() {
     let Some(url) = bridge_url() else { return };
     // Confirmed a moment ago for this address: the MCP and settings files are not read again on every turn.
     if let Ok(checked) = AGY_LINK_CHECKED.lock() {
-        if checked.as_ref().is_some_and(|(seen, at)| *seen == url && at.elapsed() < AGY_LINK_TTL) {
+        if checked
+            .as_ref()
+            .is_some_and(|(seen, at)| *seen == url && at.elapsed() < AGY_LINK_TTL)
+        {
             return;
         }
     }

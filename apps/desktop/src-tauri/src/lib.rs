@@ -12,6 +12,7 @@ mod cdp;
 mod changes;
 mod computer;
 mod connectors;
+mod copilot;
 mod custom_chat;
 mod delegate;
 mod detect;
@@ -29,6 +30,9 @@ mod mcp_manage;
 mod notify;
 mod page_memory;
 mod path_links;
+mod officecli;
+mod process_guard;
+mod process_registry;
 mod project_memory;
 mod tts;
 mod privacy;
@@ -403,6 +407,9 @@ fn attachment_reveal(path: String) -> Result<(), String> {
 /// The models an agent CLI offers, from its own cache on this machine.
 #[tauri::command]
 async fn models_list(agent: String) -> Vec<ag_adapters::models::ModelInfo> {
+    if agent == "copilot" {
+        return copilot::models_list().await.unwrap_or_default();
+    }
     // `agy models` asks the server: off the main thread.
     tauri::async_runtime::spawn_blocking(move || models_of(&agent))
         .await
@@ -1956,6 +1963,11 @@ pub fn run() {
             if let Ok(dir) = app.path().resource_dir() {
                 image_gen::set_resource_dir(dir);
             }
+            // Processes a previous run of the app left behind (it was killed or crashed) are ended before anything starts.
+            if let Ok(data) = app.path().app_data_dir() {
+                process_registry::init(data);
+                process_registry::reap(process_guard::kill_tree_now);
+            }
             let handle = app.handle().clone();
             servers::init(move |port| {
                 let _ = handle.emit("server-log", serde_json::json!({ "port": port }));
@@ -2055,6 +2067,9 @@ pub fn run() {
             path_links::path_open,
             path_links::path_reveal,
             path_links::image_fetch,
+            officecli::officecli_status,
+            officecli::officecli_install,
+            officecli::officecli_remove,
             tts::tts_status,
             tts::tts_install,
             tts::tts_remove,
@@ -2163,6 +2178,8 @@ pub fn run() {
             }
             // The dev servers the agents asked for end only when the user chooses Exit from the tray.
             tauri::RunEvent::Exit => {
+                // End idle agent CLIs as well as the child servers when the user exits.
+                ag_adapters::agent::warm::reset(None);
                 servers::kill_all();
                 pty::kill_all();
                 awake::release();

@@ -8,7 +8,7 @@ export type AgentEvent =
   | { kind: 'delta'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool_call'; id: string; name: string; input: string; change: FileChange | null; background: boolean }
-  | { kind: 'tool_result'; id: string; output: string; is_error: boolean; image?: string }
+  | { kind: 'tool_result'; id: string; output: string; is_error: boolean; image?: string; change?: FileChange | null }
   | { kind: 'tool_output_delta'; id: string; delta: string }
   | { kind: 'permission_denied'; requests: PermissionRequest[] }
   | { kind: 'done'; session_id: string | null; text: string; cost_usd: number | null }

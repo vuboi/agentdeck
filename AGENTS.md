@@ -1,6 +1,7 @@
 # AGENTS.md — quy ước cho mọi coding agent
 
 Đọc `PLAN.md` trước. Chỉ làm đúng module được giao, không làm trước module sau.
+Khi thêm agent/provider, đọc checklist `docs/development/adding-agent-provider.md` và nối đủ các bề mặt liên quan.
 
 ## Môi trường (Windows)
 - Rust: dùng `~/.cargo/bin` (shim mise cho cargo bị lỗi). Trong bash: `export PATH="$HOME/.cargo/bin:$PATH"`.

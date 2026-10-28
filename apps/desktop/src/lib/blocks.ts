@@ -103,6 +103,8 @@ const PAGE_READ = /^browser_(dom|console|network|frames|page)$/;
 const basename = (path: string) => path.split(/[\\/]+/).filter(Boolean).at(-1) ?? path;
 
 export type Step = {
+  /** A small icon before the verb, by kind of step (see `iconOf`). */
+  icon: string;
   /** Small muted word: "Ran", "Created", "Read". */
   verb: string;
   /** What it was done to: the command, the file name, the pattern. */
@@ -114,42 +116,82 @@ export type Step = {
 /** Lines added and removed, and files created and deleted. */
 export type Counts = { added: number; removed: number; created: number; deleted: number };
 
+/** A small icon for each kind of step, so the activity list reads at a glance. */
+const ICON = {
+  edit: 'lucidePencil',
+  create: 'lucideFilePlus',
+  delete: 'lucideTrash2',
+  run: 'lucideTerminal',
+  read: 'lucideFileText',
+  search: 'lucideSearch',
+  fetch: 'lucideGlobe',
+  agent: 'lucideBot',
+  page: 'lucideMonitor',
+  plan: 'lucideListChecks',
+  team: 'lucideUsers',
+  mention: 'lucideAtSign',
+  skill: 'lucideSparkles',
+  tool: 'lucidePlug',
+  other: 'lucideWrench',
+} as const;
+
+/** The icon of a step: by what it did; a tool from an MCP server (`mcp__…`) is a plug, a skill a spark. */
+function iconOf(tool: string, command: string, change?: CommandBlock['change']): string {
+  if (change) return ICON[tool === 'Delete' ? 'delete' : change.create === true ? 'create' : 'edit'];
+  if (RUN.test(tool)) return ICON.run;
+  if (EDIT.test(tool)) return ICON.edit;
+  if (READ.test(tool)) return ICON.read;
+  if (SEARCH.test(tool)) return ICON.search;
+  if (FETCH.test(tool)) return ICON.fetch;
+  if (AGENT.test(tool)) return ICON.agent;
+  if (/^browser_|Page/i.test(tool)) return ICON.page;
+  if (tool === 'Plan') return ICON.plan;
+  const delegation = kindOfCommand(command);
+  if (delegation === 'delegate_task') return ICON.mention;
+  if (delegation === 'list_agents' || delegation === 'task_status' || delegation === 'task_stop') return ICON.team;
+  if (/^Skill$|skill/i.test(tool)) return ICON.skill;
+  if (/^mcp__/.test(tool)) return ICON.tool;
+  return ICON.other;
+}
+
 /** One row of the activity list. Wording follows the tool; a running step says "Running", a failed one "Failed". */
 export function describeStep(item: CommandBlock): Step {
   const tool = toolOf(item.command);
   const running = item.status === 'running';
   const verbs = (done: string, doing: string) => (item.status === 'fail' ? 'Failed' : running ? doing : done);
+  const icon = iconOf(tool, item.command, item.change);
   if (item.change) {
     const removed = tool === 'Delete';
     const created = !removed && item.change.create === true;
     return {
+      icon,
       verb: verbs(removed ? 'Deleted' : created ? 'Created' : 'Edited', removed ? 'Deleting' : created ? 'Creating' : 'Editing'),
       subject: basename(item.change.path),
       counts: { added: item.change.added, removed: item.change.removed, created: created ? 1 : 0, deleted: removed ? 1 : 0 },
     };
   }
   const subject = argOf(item.command);
-  if (RUN.test(tool)) return { verb: verbs('Ran', 'Running'), subject };
-  if (EDIT.test(tool)) return { verb: verbs('Edited', 'Editing'), subject: basename(subject) };
-  if (READ.test(tool)) return { verb: verbs('Read', 'Reading'), subject: basename(subject) };
-  if (SEARCH.test(tool)) return { verb: verbs('Searched', 'Searching'), subject };
-  if (FETCH.test(tool)) return { verb: verbs('Fetched', 'Fetching'), subject };
-  if (AGENT.test(tool)) return { verb: verbs('Ran agent', 'Running agent'), subject };
-  if (PAGE_ACT.test(tool)) return { verb: verbs('Interacted with page', 'Interacting with page'), subject: '' };
-  if (PAGE_SCRIPT.test(tool)) return { verb: verbs('Ran page script', 'Running page script'), subject: '' };
-  if (tool === 'browser_open') return { verb: verbs('Opened a page', 'Opening a page'), subject: '' };
-  if (tool === 'browser_serve') return { verb: verbs('Started a server', 'Starting a server'), subject: '' };
-  if (PAGE_LOOK.test(tool)) return { verb: verbs('Took a screenshot', 'Taking a screenshot'), subject: '' };
-  if (PAGE_READ.test(tool)) return { verb: verbs('Found on page', 'Finding on page'), subject: '' };
-  if (tool === 'Plan') return { verb: verbs('Planned', 'Planning'), subject: '' };
+  if (RUN.test(tool)) return { icon, verb: verbs('Ran', 'Running'), subject };
+  if (EDIT.test(tool)) return { icon, verb: verbs('Edited', 'Editing'), subject: basename(subject) };
+  if (READ.test(tool)) return { icon, verb: verbs('Read', 'Reading'), subject: basename(subject) };
+  if (SEARCH.test(tool)) return { icon, verb: verbs('Searched', 'Searching'), subject };
+  if (FETCH.test(tool)) return { icon, verb: verbs('Fetched', 'Fetching'), subject };
+  if (AGENT.test(tool)) return { icon, verb: verbs('Ran agent', 'Running agent'), subject };
+  if (PAGE_ACT.test(tool)) return { icon, verb: verbs('Interacted with page', 'Interacting with page'), subject: '' };
+  if (PAGE_SCRIPT.test(tool)) return { icon, verb: verbs('Ran page script', 'Running page script'), subject: '' };
+  if (tool === 'browser_open') return { icon, verb: verbs('Opened a page', 'Opening a page'), subject: '' };
+  if (tool === 'browser_serve') return { icon, verb: verbs('Started a server', 'Starting a server'), subject: '' };
+  if (PAGE_LOOK.test(tool)) return { icon, verb: verbs('Took a screenshot', 'Taking a screenshot'), subject: '' };
+  if (PAGE_READ.test(tool)) return { icon, verb: verbs('Found on page', 'Finding on page'), subject: '' };
+  if (tool === 'Plan') return { icon, verb: verbs('Planned', 'Planning'), subject: '' };
   const delegation = kindOfCommand(item.command);
-  if (delegation === 'delegate_task') return { verb: verbs('Messaged an agent', 'Messaging an agent'), subject: '' };
-  if (delegation === 'list_agents') return { verb: verbs('Listed the agents', 'Listing the agents'), subject: '' };
-  if (delegation === 'task_status') return { verb: verbs('Checked a task', 'Checking a task'), subject: '' };
-  if (delegation === 'task_stop') return { verb: verbs('Stopped a task', 'Stopping a task'), subject: '' };
-  if (tool === 'PackageInfo') return { verb: verbs('Checked the package', 'Checking the package'), subject };
-  if (/^code_/.test(tool)) return { verb: verbs('Looked up in the code index', 'Looking up in the code index'), subject: `${tool.slice(5)} ${subject}`.trim() };
-  return { verb: verbs('Used', 'Using'), subject: `${tool} ${subject}`.trim() };
+  if (delegation === 'delegate_task') return { icon, verb: verbs('Messaged an agent', 'Messaging an agent'), subject: '' };
+  if (delegation === 'list_agents') return { icon, verb: verbs('Listed the agents', 'Listing the agents'), subject: '' };
+  if (delegation === 'task_status') return { icon, verb: verbs('Checked a task', 'Checking a task'), subject: '' };
+  if (delegation === 'task_stop') return { icon, verb: verbs('Stopped a task', 'Stopping a task'), subject: '' };
+  if (tool === 'PackageInfo') return { icon, verb: verbs('Checked the package', 'Checking the package'), subject };
+  if (/^code_/.test(tool)) return { icon, verb: verbs('Looked up in the code index', 'Looking up in the code index'), subject: `${tool.slice(5)} ${subject}`.trim() };
+  return { icon, verb: verbs('Used', 'Using'), subject: `${tool} ${subject}`.trim() };
 }
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;

@@ -259,6 +259,12 @@ pub fn list(agent: &str, home: &Path, project: Option<&Path>) -> Vec<ProviderCom
             );
             skills_in(&home.join(".agents").join("skills"), "user", "", &mut found);
         }
+        "copilot" => {
+            if let Some(project) = project {
+                skills_in(&project.join(".github").join("skills"), "project", "", &mut found);
+            }
+            skills_in(&home.join(".copilot").join("skills"), "user", "", &mut found);
+        }
         _ => {}
     }
     let mut seen = std::collections::HashSet::new();
@@ -268,13 +274,13 @@ pub fn list(agent: &str, home: &Path, project: Option<&Path>) -> Vec<ProviderCom
 
 /// The folders a command file may be read from.
 fn allowed_roots(home: &Path, project: Option<&Path>) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = [".claude", ".codex", ".gemini", ".agents"]
+    let mut roots: Vec<PathBuf> = [".claude", ".codex", ".gemini", ".agents", ".copilot"]
         .iter()
         .map(|name| home.join(name))
         .collect();
     if let Some(project) = project {
         roots.extend(
-            [".claude", ".codex", ".agents"]
+            [".claude", ".codex", ".agents", ".github"]
                 .iter()
                 .map(|name| project.join(name)),
         );

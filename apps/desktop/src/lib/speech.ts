@@ -59,29 +59,5 @@ export function sentences(text: string, max = 240): string[] {
 
 const VIETNAMESE = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/gi;
 
-// A word with no Vietnamese mark is Vietnamese only if it can be one syllable (an optional start, vowels, an optional end):
-// "memory", "agent", "deck", "check", "pnpm" cannot, so they are English even inside a Vietnamese sentence.
-const SYLLABLE = /^(ngh|ng|nh|ch|gh|gi|kh|ph|th|tr|qu|[bcdghklmnpqrstvx])?[aeiouy]{1,3}(ch|ng|nh|c|m|n|p|t)?$/;
-
-/** The word is English: only plain letters, and it cannot be a Vietnamese syllable. */
-function englishWord(word: string): boolean {
-  const letters = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toLowerCase();
-  return /^[a-z]{2,}$/.test(letters) && !SYLLABLE.test(letters);
-}
-
-/** A sentence cut into runs by language, so English terms inside Vietnamese are said by an English voice instead of being
- *  read the Vietnamese way. A sentence with no Vietnamese mark at all is English as a whole. */
-export function segments(sentence: string): { text: string; vi: boolean }[] {
-  if (!isVietnamese(sentence)) return [{ text: sentence, vi: false }];
-  const out: { text: string; vi: boolean }[] = [];
-  for (const token of sentence.split(/\s+/).filter(Boolean)) {
-    const vi = !englishWord(token);
-    const last = out[out.length - 1];
-    if (last && last.vi === vi) last.text += ` ${token}`;
-    else out.push({ text: token, vi });
-  }
-  return out;
-}
-
-/** Whether a sentence is Vietnamese (read by Piper) rather than English (read by the system's own voice). */
+/** Whether a text is Vietnamese (read by Piper, one voice for all of it) rather than English (read by the system's voice). */
 export const isVietnamese = (text: string) => (text.match(VIETNAMESE)?.length ?? 0) >= 2;

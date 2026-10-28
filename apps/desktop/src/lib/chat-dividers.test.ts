@@ -1,6 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dividerIndexes, hollow, markerText, neighbour, stepsOnly, sessionMark, turnDivider, type SessionMark } from './chat-dividers.ts';
+import { dividerIndexes, hollow, markerText, neighbour, runPosition, stepsOnly, sessionMark, turnDivider, type SessionMark } from './chat-dividers.ts';
+
+test('replies of one agent and model that follow one another share a name line and a footer', () => {
+  const say = (text: string, agent = 'codex', model = 'm') => ({ role: 'assistant' as const, agent, model, blocks: [{ kind: 'response', text }] });
+  const user = { role: 'user' as const, blocks: [{ kind: 'response', text: 'q' }] };
+  const list = [user, say('one'), say('two'), say('three'), user, say('four')];
+  assert.deepEqual(runPosition(list, 1, 'codex'), { quiet: false, grouped: false, lastOfRun: false });
+  assert.deepEqual(runPosition(list, 2, 'codex'), { quiet: false, grouped: true, lastOfRun: false });
+  assert.deepEqual(runPosition(list, 3, 'codex'), { quiet: false, grouped: true, lastOfRun: true });
+  assert.deepEqual(runPosition(list, 5, 'codex'), { quiet: false, grouped: false, lastOfRun: true }, 'a message of the user starts a new run');
+  // Another model or agent breaks the run.
+  const mixed = [say('a'), say('b', 'codex', 'other'), say('c', 'claude')];
+  assert.equal(runPosition(mixed, 1, 'codex').grouped, false);
+  assert.equal(runPosition(mixed, 2, 'codex').grouped, false);
+  // A reply with no agent is the chat's own agent.
+  const bare = [{ role: 'assistant' as const, model: 'm', blocks: [{ kind: 'response', text: 'x' }] }, say('y')];
+  assert.equal(runPosition(bare, 1, 'codex').grouped, true);
+});
 
 test('a reply of steps only is drawn as its step line, not as a named reply', () => {
   const steps = { role: 'assistant' as const, blocks: [{ kind: 'command' }] };

@@ -151,6 +151,9 @@ impl Server {
             let mut child = process
                 .spawn()
                 .map_err(|error| format!("could not start {name}: {error}"))?;
+            if let Some(pid) = child.id() {
+                crate::process_guard::adopt_pid(pid);
+            }
             let stdin = child.stdin.take().ok_or("no stdin")?;
             let stdout = child.stdout.take().ok_or("no stdout")?;
             Link::Stdio {

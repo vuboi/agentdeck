@@ -77,6 +77,8 @@ pub struct OpenCode {
     tools: Mutex<HashSet<String>>,
     /// Sum of the steps' `cost`, reported with the turn's end.
     cost: Mutex<f64>,
+    root: Mutex<Option<PathBuf>>,
+    file_snapshots: Mutex<std::collections::HashMap<String, super::FileSnapshot>>,
 }
 
 impl Default for OpenCode {
@@ -85,6 +87,8 @@ impl Default for OpenCode {
             session: Mutex::new(None),
             tools: Mutex::new(HashSet::new()),
             cost: Mutex::new(0.0),
+            root: Mutex::new(None),
+            file_snapshots: Mutex::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -98,6 +102,18 @@ impl Provider for OpenCode {
     }
     fn candidates(&self) -> Vec<PathBuf> {
         Vec::new()
+    }
+    fn prepare(&self, req: &TurnRequest) -> Result<(), String> {
+        if let Ok(mut root) = self.root.lock() {
+            *root = req.cwd.clone();
+        }
+        if let Ok(mut snapshots) = self.file_snapshots.lock() {
+            snapshots.clear();
+        }
+        if let Ok(mut tools) = self.tools.lock() {
+            tools.clear();
+        }
+        Ok(())
     }
     fn args(&self, req: &TurnRequest) -> Vec<String> {
         // `--thinking` puts the reasoning parts in the stream; a model without any simply sends none.
@@ -220,15 +236,37 @@ impl Provider for OpenCode {
                     .map(|mut seen| seen.insert(id.clone()))
                     .unwrap_or(false);
                 if first {
+                    let tool = part["tool"].as_str().unwrap_or("tool");
+                    let input = &part["state"]["input"];
+                    let change = super::file_change(tool, input);
+                    if change.is_none() {
+                        let root = self.root.lock().ok().and_then(|root| root.clone());
+                        if let Some(snapshot) = super::begin_file_snapshot(root.as_deref(), tool, input) {
+                            if let Ok(mut snapshots) = self.file_snapshots.lock() {
+                                snapshots.insert(id.clone(), snapshot);
+                            }
+                        }
+                    }
                     events.push(AgentEvent::ToolCall {
                         id: id.clone(),
-                        name: part["tool"].as_str().unwrap_or("tool").to_owned(),
-                        input: input_summary(&part["state"]["input"]),
-                        change: None,
+                        name: tool.to_owned(),
+                        input: input_summary(input),
+                        change,
                         background: false,
                     });
                 }
                 if settled {
+                    let is_error = part["state"]["status"] == "error";
+                    let change = if is_error {
+                        self.file_snapshots.lock().ok().and_then(|mut snapshots| snapshots.remove(&id));
+                        None
+                    } else {
+                        self.file_snapshots
+                            .lock()
+                            .ok()
+                            .and_then(|mut snapshots| snapshots.remove(&id))
+                            .and_then(super::finish_file_snapshot)
+                    };
                     events.push(AgentEvent::ToolResult {
                         id,
                         output: part["state"]["output"]
@@ -236,8 +274,9 @@ impl Provider for OpenCode {
                             .or_else(|| part["state"]["error"].as_str())
                             .unwrap_or_default()
                             .to_owned(),
-                        is_error: part["state"]["status"] == "error",
+                        is_error,
                         image: None,
+                        change,
                     });
                 }
                 events
@@ -325,7 +364,8 @@ mod tests {
                     id: "call_1".into(),
                     output: "hi\n".into(),
                     is_error: false,
-                    image: None
+                    image: None,
+                    change: None,
                 },
             ]
         );
@@ -337,7 +377,8 @@ mod tests {
                 id: "call_1".into(),
                 output: "nope".into(),
                 is_error: true,
-                image: None
+                image: None,
+                change: None
             }]
         );
     }
@@ -363,7 +404,8 @@ mod tests {
                 id: "call_2".into(),
                 output: "ok".into(),
                 is_error: false,
-                image: None
+                image: None,
+                change: None
             }]
         );
     }

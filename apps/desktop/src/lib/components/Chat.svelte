@@ -24,7 +24,7 @@
   import { agentDisplayName } from '../provider-registry';
   import AgentLogo from './AgentLogo.svelte';
   import { theme } from '../theme.svelte';
-  import { hollow, markerText, neighbour, stepsOnly, turnDivider } from '../chat-dividers';
+  import { hollow, markerText, neighbour, runPosition, turnDivider } from '../chat-dividers';
   import { runUsage } from '../run-usage';
   import { answerText, elapsed, segments } from '../blocks';
 
@@ -44,6 +44,7 @@
   import ChatBlock from './ChatBlock.svelte';
   import DelegateList from './DelegateList.svelte';
   import CommandGroup from './CommandGroup.svelte';
+  import TurnChanges from './TurnChanges.svelte';
   import PlanCard from './PlanCard.svelte';
   import TaskCards from './TaskCards.svelte';
   import LiveStatus from './LiveStatus.svelte';
@@ -251,7 +252,7 @@
   });
 
 
-  const agentText = { claude: 'text-orange-500', codex: 'text-emerald-500', antigravity: 'text-sky-500', opencode: 'text-foreground', custom: 'text-violet-500' } as const;
+  const agentText = { claude: 'text-orange-500', codex: 'text-emerald-500', antigravity: 'text-sky-500', opencode: 'text-foreground', copilot: 'text-foreground', custom: 'text-violet-500' } as const;
   const agentName = (agent: string) => AGENTS.find((item) => item.value === agent)?.label ?? agent;
 
   // ---------- virtual list (same approach as ZChat) ----------
@@ -997,12 +998,10 @@
                   {@const working = tail?.kind === 'commands' && tail.items.some((item) => item.status === 'running')}
                   <!-- Replies of the same agent and model that follow one another (a divider between them) share one name line
                        and one footer: only the first carries the name, only the last the copy button. -->
-                  {@const before = neighbour(chat.messages, row.index + from, -1)}
-                  {@const after = neighbour(chat.messages, row.index + from, 1)}
-                  {@const sameAs = (other: typeof message | undefined) => other?.role === 'assistant' && (other.agent ?? agent) === agent && other.model === message.model}
-                  {@const quiet = stepsOnly(message)}
-                  {@const grouped = sameAs(before) && !stepsOnly(before)}
-                  {@const lastOfRun = !(sameAs(after) && !stepsOnly(after)) && !quiet}
+                  {@const position = runPosition(chat.messages, row.index + from, agent)}
+                  {@const quiet = position.quiet}
+                  {@const grouped = position.grouped}
+                  {@const lastOfRun = position.lastOfRun}
                   <!-- The numbers on the name line are the whole run's: the replies a newer message cut off are in them too. -->
                   {@const usage = grouped || quiet ? undefined : runUsage(chat.messages, row.index + from, estimateCost)}
                   {#if !quiet && !grouped}
@@ -1076,6 +1075,7 @@
                         <ChatBlock block={segment.block} running={Boolean(message.live) && isRunning(workspace.activeId)} flush={chat.messages.at(-1)?.id !== message.id} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} onrendered={segment.block.kind === 'response' ? () => replyBlockRendered(workspace.activeId, message.id, message.blocks.indexOf(segment.block)) : undefined} answered={!message.live && pendingQuestion?.messageId !== message.id} showQuestions={!message.live && pendingQuestion?.messageId !== message.id} />
                       {/if}
                     {/each}
+                    <TurnChanges blocks={message.blocks} />
                     <ArtifactCards blocks={message.blocks} root={(activeSession() && projectOf(activeSession()!)?.path) || null} live={Boolean(message.live) && isRunning(workspace.activeId)} />
                     <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
                          editing…), as in Claude and Codex; the steps above stay plain, finished lines. -->

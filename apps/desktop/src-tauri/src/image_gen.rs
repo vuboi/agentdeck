@@ -171,26 +171,8 @@ pub fn image_stop() {
     CANCELLED.store(true, Ordering::SeqCst);
     let pids = ACTIVE.lock().map(|pids| pids.clone()).unwrap_or_default();
     for pid in pids {
-        kill_tree(pid);
+        crate::process_guard::kill_tree(pid);
     }
-}
-
-fn kill_tree(pid: u32) {
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("taskkill");
-        command.args(["/PID", &pid.to_string(), "/T", "/F"]);
-        command
-    } else {
-        let mut command = Command::new("kill");
-        command.args(["-9", &pid.to_string()]);
-        command
-    };
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
-    let _ = command.stdin(Stdio::null()).output();
 }
 
 #[tauri::command]

@@ -41,7 +41,7 @@
 
   // Skills go to the agents that read a skill folder; MCP and plugins are handled by their own commands.
   // The same list as SKILL_AGENTS in src-tauri/src/store/library.rs.
-  const SKILL_AGENTS = ['claude', 'codex', 'opencode', 'antigravity'];
+  const SKILL_AGENTS = ['claude', 'codex', 'opencode', 'antigravity', 'copilot'];
   const ORIGIN_LABEL: Record<string, string> = { library: 'Library', user: 'Own folder' };
   const originLabel = (origin: string) => ORIGIN_LABEL[origin] ?? `Plugin · ${origin}`;
 

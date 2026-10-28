@@ -251,6 +251,9 @@ html[data-warming] [data-z-popover] {
   font-size: 0.875rem;
   line-height: 1.65;
   overflow-wrap: anywhere;
+  /* A wide table scrolls inside its own card (.md-table), instead of widening the whole answer. */
+  min-width: 0;
+  max-width: 100%;
 }
 /* An answer is drawn block by block (Markdown.svelte); the wrappers take no box, so its spacing is as one document. */
 .md > .md-block { display: contents; }

@@ -45,6 +45,7 @@ import {
   type DelegateCall,
 } from './agent';
 import { houseStyleHint } from './house-style';
+import { IDLE, step, type RunEvent, type RunState } from './run-state';
 import { memoryHint, readProjectMemory } from './project-memory';
 import { replyStyle } from './reply-style.svelte';
 import {
@@ -111,7 +112,7 @@ import { agentDisplayName, BUILT_IN_AGENTS, customProviderOf } from './provider-
 import { listen } from './tauri-event';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
-export type Agent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'custom';
+export type Agent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot' | 'custom';
 export type Status = 'working' | 'idle' | 'waiting';
 /** Reasoning effort and the approval modes shared by the agent CLIs. */
 export type Effort =
@@ -169,6 +170,7 @@ export const AGENT_TEXT: Record<Agent, string> = {
   opencode:
     BUILT_IN_AGENTS.find((item) => item.id === 'opencode')?.tone ??
     'text-foreground',
+  copilot: BUILT_IN_AGENTS.find((item) => item.id === 'copilot')?.tone ?? 'text-foreground',
   custom: 'text-violet-500',
 };
 
@@ -180,6 +182,7 @@ export const AGENT_ICON: Record<Agent, ZIconName> = {
   opencode:
     BUILT_IN_AGENTS.find((item) => item.id === 'opencode')?.icon ??
     ('lucideTerminal' as ZIconName),
+  copilot: BUILT_IN_AGENTS.find((item) => item.id === 'copilot')?.icon ?? ('lucideBot' as ZIconName),
   custom: 'lucideServer' as ZIconName,
 };
 
@@ -293,6 +296,15 @@ export type Mention = {
   id: string;
   label: string;
 };
+
+// The run of each chat as the pure reducer (run-state.ts) sees it: every turn start, agent event, stop and permission answer
+// goes through `advanceRun`. The reducer decides what counts as finished, stopped, crashed or waiting; `runOf` reads it.
+export const runStates = $state<Record<string, RunState>>({});
+const runEpochs: Record<string, number> = {};
+export const runOf = (sessionId: string): RunState => runStates[sessionId] ?? IDLE;
+function advanceRun(sessionId: string, event: RunEvent) {
+  runStates[sessionId] = step(runOf(sessionId), event).state;
+}
 
 /** What was typed but not sent, per session: switch away and back and it is still there. */
 export const drafts = $state<Record<string, string>>({});
@@ -1063,6 +1075,7 @@ export const isRunning = (sessionId: string) =>
 export function stopTurn(sessionId: string, quiet = false) {
   // Stopped by the user: a retry or a hand-over waiting to start does not start.
   delete recoveries[sessionId];
+  advanceRun(sessionId, { type: 'cancel' });
   for (const [id, side] of sideTurns) {
     if (side.main !== sessionId) continue;
     void stopAgentTurn(id, side.turn).catch(() => {});
@@ -1483,6 +1496,9 @@ function startTurn(
   } else delete liveHandouts[session.id];
   replies[session.id] = reply.id;
   session.status = 'working';
+  const epoch = (runEpochs[session.id] = (runEpochs[session.id] ?? 0) + 1);
+  advanceRun(session.id, { type: 'spawn', epoch });
+  advanceRun(session.id, { type: 'turnStarted', epoch });
   const cwd =
     workspace.projects.find((project) => project.id === session.projectId)
       ?.path ?? null;
@@ -1652,6 +1668,7 @@ export function answerPermission(
     replies[session.id]
   )
     return;
+  for (let index = 0; index < block.requests.length; index++) advanceRun(session.id, { type: 'waitEnd', kind: 'approval' });
   if (answer === 'deny') {
     block.state = 'denied';
     persistLocal();
@@ -1835,7 +1852,7 @@ export function releaseReplyRender(sessionId: string) {
 // one line for each step. A new message of the user starts the count again.
 type RecoveryState = { retries: number; tried: string[] };
 const recoveries: Record<string, RecoveryState> = {};
-const CLI_OF: Record<string, string> = { claude: 'claude', codex: 'codex', antigravity: 'agy', opencode: 'opencode' };
+const CLI_OF: Record<string, string> = { claude: 'claude', codex: 'codex', antigravity: 'agy', opencode: 'opencode', copilot: 'gh' };
 
 /** The agents a chat can move to now, in the user's order: installed, with models, not at their limit. */
 function recoveryChain(): string[] {
@@ -2081,12 +2098,34 @@ if (typeof window !== 'undefined') {
   }, 30_000);
 }
 
+/** An agent event as the reducer's events (see run-state.ts). Thinking and usage do not move the run. */
+function recordAgentEvent(sessionId: string, event: AgentEvent) {
+  switch (event.kind) {
+    case 'delta':
+      return advanceRun(sessionId, { type: 'output', text: event.text });
+    case 'tool_result':
+    case 'tool_output_delta':
+      return advanceRun(sessionId, { type: 'output' });
+    case 'permission_denied':
+      for (let index = 0; index < event.requests.length; index++) advanceRun(sessionId, { type: 'waitStart', kind: 'approval' });
+      return;
+    case 'done':
+      advanceRun(sessionId, { type: 'output', text: event.text });
+      return advanceRun(sessionId, { type: 'turnResult', isError: false });
+    case 'error':
+      return advanceRun(sessionId, { type: 'turnResult', isError: true, message: event.message });
+    default:
+      return;
+  }
+}
+
 export function handleAgentEvent(
   sessionId: string,
   event: AgentEvent,
   turn?: string,
 ) {
   if (turn !== undefined && turns[sessionId] !== turn) return; // a run that was stopped or replaced
+  recordAgentEvent(sessionId, event);
   const session = workspace.sessions.find((item) => item.id === sessionId);
   // The live reply is kept by reference: the chat list can be swapped under it (another chat opened, a transcript
   // reloaded) and the turn must still finish, or the chat would spin for ever.
@@ -4515,6 +4554,19 @@ export function steerQueued(sessionId: string, item: Queued) {
   send(sessionId, item.text, item.images, item.elements, item.mentions, {
     files: item.files,
   });
+}
+
+/** Messages waiting in a chat (sent while its reply runs, not yet started). */
+export const queuedCount = (sessionId: string) => queued[sessionId]?.length ?? 0;
+
+/** Sends a delegated worker its task again: the last message of its own chat that was written by the user. For a worker
+ *  that failed or was interrupted; the new reply goes in the worker's chat, where the run can open it. */
+export function retryWorker(childId: string) {
+  const last = [...messagesOf(childId)].reverse().find((message) => message.role === 'user');
+  const text = last?.blocks.map((block) => (block.kind === 'response' ? block.text : '')).filter(Boolean).join('\n\n') ?? '';
+  if (!text.trim()) return;
+  beginSessionWork(childId);
+  send(childId, text, [], [], [], { files: [] });
 }
 
 /** A message as it is recognised again in the chat's file (where it has another id than the one it got here). */

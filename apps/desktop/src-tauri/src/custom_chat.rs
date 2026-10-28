@@ -286,6 +286,10 @@ async fn run_bash(command: &str, cwd: Option<&Path>) -> Outcome {
         Ok(child) => child,
         Err(error) => return failed(format!("could not start the shell: {error}")),
     };
+    // Ends with the app even when the app is killed (servers.rs job).
+    if let Some(pid) = child.id() {
+        crate::process_guard::adopt_pid(pid);
+    }
     let (mut stdout, mut stderr) = (child.stdout.take(), child.stderr.take());
     let collect = async {
         let (mut out, mut err) = (String::new(), String::new());
@@ -1135,7 +1139,11 @@ fn decide(turn: &Turn, name: &str, args: &Value, external: bool) -> Decision {
     }
     if turn.restricted {
         // Its web tools must not carry a secret out in a query, nor reach this machine or its network.
-        if name == "WebFetch" && args["url"].as_str().is_some_and(crate::privacy::internal_url) {
+        if name == "WebFetch"
+            && args["url"]
+                .as_str()
+                .is_some_and(crate::privacy::internal_url)
+        {
             return Decision::Deny("internal addresses (localhost, private IPs, .internal hosts) are blocked for this provider.");
         }
         if crate::privacy::private_content(&args.to_string()).is_some() {
@@ -1480,7 +1488,9 @@ pub async fn run_turn(
         .collect();
     let mut tools = builtin_tools();
     if turn.restricted {
-        tools.retain(|tool| RESTRICTED_TOOLS.contains(&tool["function"]["name"].as_str().unwrap_or_default()));
+        tools.retain(|tool| {
+            RESTRICTED_TOOLS.contains(&tool["function"]["name"].as_str().unwrap_or_default())
+        });
     }
     if let Some(folder) = &turn.cwd {
         crate::index::set_root(&chat, &folder.to_string_lossy());
@@ -1488,10 +1498,18 @@ pub async fn run_turn(
     if !turn.restricted {
         tools.extend(browser_tools(app, &chat).await);
     }
-    let skills = if turn.restricted { Vec::new() } else { skills_for(turn.cwd.as_deref()) };
+    let skills = if turn.restricted {
+        Vec::new()
+    } else {
+        skills_for(turn.cwd.as_deref())
+    };
     // The user's own MCP servers: each tool is offered as `mcp__<server>__<tool>`, as Claude names them. A restricted
     // provider gets none: they run on this machine, with the user's accounts.
-    let mut servers = if turn.restricted { Vec::new() } else { start_servers(turn.cwd.as_deref()).await };
+    let mut servers = if turn.restricted {
+        Vec::new()
+    } else {
+        start_servers(turn.cwd.as_deref()).await
+    };
     let mut external: Vec<(String, usize, String)> = Vec::new();
     for (index, server) in servers.iter().enumerate() {
         for tool in &server.tools {
@@ -1520,8 +1538,9 @@ pub async fn run_turn(
         }
     }
 
-    let mut messages: Vec<Value> =
-        vec![json!({ "role": "system", "content": if turn.restricted { RESTRICTED_PROMPT.to_string() } else { system_prompt(turn.cwd.as_deref(), &skills) } })];
+    let mut messages: Vec<Value> = vec![
+        json!({ "role": "system", "content": if turn.restricted { RESTRICTED_PROMPT.to_string() } else { system_prompt(turn.cwd.as_deref(), &skills) } }),
+    ];
     messages.extend(history.iter().map(wire_message));
 
     let mut answer = String::new();
@@ -1762,6 +1781,7 @@ pub async fn run_turn(
                 output: outcome.text.clone(),
                 is_error: outcome.is_error,
                 image: outcome.image.clone(),
+                change: None,
             });
             messages.push(json!({ "role": "tool", "tool_call_id": id, "content": outcome.text }));
         }
@@ -1810,9 +1830,26 @@ mod tests {
     fn a_restricted_provider_may_only_use_the_public_web() {
         let mut restricted = turn(Some("bypassPermissions"), &[]);
         restricted.restricted = true;
-        let call = |name: &str, external: bool| matches!(decide(&restricted, name, &json!({}), external), Decision::Allow);
+        let call = |name: &str, external: bool| {
+            matches!(
+                decide(&restricted, name, &json!({}), external),
+                Decision::Allow
+            )
+        };
         assert!(call("WebSearch", false) && call("WebFetch", false) && call("PackageInfo", false));
-        for name in ["Read", "Grep", "Glob", "LS", "Bash", "Write", "Edit", "Delete", "browser_screenshot", "code_search", "delegate_task"] {
+        for name in [
+            "Read",
+            "Grep",
+            "Glob",
+            "LS",
+            "Bash",
+            "Write",
+            "Edit",
+            "Delete",
+            "browser_screenshot",
+            "code_search",
+            "delegate_task",
+        ] {
             assert!(!call(name, false), "{name} must be denied");
         }
         assert!(!call("mcp__github__create_issue", true));
@@ -1821,15 +1858,31 @@ mod tests {
         for tool in crate::mcp::tool_list().as_array().into_iter().flatten() {
             let name = tool["name"].as_str().unwrap_or_default();
             assert!(!call(name, false), "{name} must be denied");
-            assert!(!call(&format!("{MCP_PREFIX}{name}"), false), "{name} must be denied");
+            assert!(
+                !call(&format!("{MCP_PREFIX}{name}"), false),
+                "{name} must be denied"
+            );
         }
         // Nor can it reach that server, or anything else on this machine, through its web tools.
-        let fetch = |url: &str| matches!(decide(&restricted, "WebFetch", &json!({ "url": url }), false), Decision::Allow);
+        let fetch = |url: &str| {
+            matches!(
+                decide(&restricted, "WebFetch", &json!({ "url": url }), false),
+                Decision::Allow
+            )
+        };
         assert!(!fetch("http://127.0.0.1:47821/2b283ce45cca/mcp"));
         assert!(!fetch("http://localhost:1420/"));
         assert!(fetch("https://example.com/"));
         // The same tools are fine for a trusted provider.
-        assert!(matches!(decide(&turn(Some("bypassPermissions"), &[]), "Bash", &json!({}), false), Decision::Allow | Decision::Ask));
+        assert!(matches!(
+            decide(
+                &turn(Some("bypassPermissions"), &[]),
+                "Bash",
+                &json!({}),
+                false
+            ),
+            Decision::Allow | Decision::Ask
+        ));
     }
 
     #[test]
@@ -1889,7 +1942,10 @@ mod tests {
             &mut step,
             &mut emit,
         );
-        assert_eq!((step.input_tokens, step.cached_tokens, step.output_tokens), (200, 800, 9));
+        assert_eq!(
+            (step.input_tokens, step.cached_tokens, step.output_tokens),
+            (200, 800, 9)
+        );
         read_chunk(
             r#"{"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":1,"prompt_cache_hit_tokens":30}}"#,
             &mut step,

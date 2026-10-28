@@ -27,6 +27,8 @@ const ALLOW_PREFIX: &str = "agy:command(";
 struct Turn {
     conversation: Option<String>,
     started: std::collections::HashSet<u64>,
+    root: Option<PathBuf>,
+    file_snapshots: std::collections::HashMap<u64, super::FileSnapshot>,
     /// Commands `agy` refused to run, in order.
     refused: Vec<String>,
 }
@@ -220,6 +222,10 @@ impl Provider for Antigravity {
     }
 
     fn prepare(&self, req: &TurnRequest) -> Result<(), String> {
+        if let Ok(mut turn) = self.turn.lock() {
+            turn.root = req.cwd.clone();
+            turn.file_snapshots.clear();
+        }
         let rules: Vec<String> = req
             .allowed_tools
             .iter()
@@ -413,6 +419,7 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
                     tool_input(&info["parameters"]),
                 ),
             };
+            let parameters = &info["parameters"];
             let mut events = Vec::new();
             if name == "Bash" {
                 // A refused command fails with a permission message, or ends without any output at all.
@@ -424,12 +431,21 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
                 }
             }
             if turn.started.insert(index) {
+                let change = super::file_change(&name, parameters);
+                if change.is_none() {
+                    if let Some(snapshot) = super::begin_file_snapshot(
+                        turn.root.as_deref(),
+                        raw_name,
+                        parameters,
+                    ) {
+                        turn.file_snapshots.insert(index, snapshot);
+                    }
+                }
                 events.push(AgentEvent::ToolCall {
                     id: index.to_string(),
                     name,
                     input,
-                    // `agy` reports a file tool's path, not what it wrote: there is no diff to show.
-                    change: None,
+                    change,
                     background: false,
                 });
             }
@@ -437,22 +453,31 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
                 "DONE" => {
                     let output = info["output"].as_str().unwrap_or_default().to_string();
                     let image = offloaded_image(&output);
+                    let change = turn
+                        .file_snapshots
+                        .remove(&index)
+                        .and_then(super::finish_file_snapshot);
                     events.push(AgentEvent::ToolResult {
                         id: index.to_string(),
                         output,
                         is_error: false,
                         image,
+                        change,
                     });
                 }
-                "ERROR" => events.push(AgentEvent::ToolResult {
-                    id: index.to_string(),
-                    output: info["error"]["message"]
-                        .as_str()
-                        .unwrap_or("the tool failed")
-                        .to_string(),
-                    is_error: true,
-                    image: None,
-                }),
+                "ERROR" => {
+                    turn.file_snapshots.remove(&index);
+                    events.push(AgentEvent::ToolResult {
+                        id: index.to_string(),
+                        output: info["error"]["message"]
+                            .as_str()
+                            .unwrap_or("the tool failed")
+                            .to_string(),
+                        is_error: true,
+                        image: None,
+                        change: None,
+                    });
+                }
                 _ => {}
             }
             events

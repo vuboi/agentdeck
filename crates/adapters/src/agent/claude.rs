@@ -273,6 +273,7 @@ impl Provider for Claude {
                     output: result_text(&block["content"]),
                     is_error: block["is_error"].as_bool().unwrap_or(false),
                     image: super::result_image(&block["content"]),
+                    change: None,
                 })
                 .collect(),
             // The CLI moved a turn to another model (a refusal, an overload, a model that is gone). Passed on as it is:
@@ -509,6 +510,7 @@ mod tests {
                 output: "a\nb".into(),
                 is_error: true,
                 image: None,
+                change: None,
             }]
         );
         // A screenshot comes back as an image block: it rides along as a data URL.

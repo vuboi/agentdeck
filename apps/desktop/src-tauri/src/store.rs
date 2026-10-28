@@ -294,6 +294,16 @@ async fn install_catalog_skill(home: &std::path::Path, job: &str, url: &str, sub
     Ok(vec![format!("{name} installed")])
 }
 
+/// Installs the skill of a git repository (its folder `subpath`, or the root) through the same path as the catalog: staged,
+/// scanned, then given to the agents. Used by OfficeCLI's setup (officecli.rs); a skill the scan flags needs the Store.
+pub(crate) async fn add_skill_from_git(url: &str, subpath: &str) -> Result<Vec<String>, String> {
+    let home = home()?;
+    let job = stage::new_job_id();
+    let result = install_catalog_skill(&home, &job, url, subpath, false).await;
+    discard(&home, &job);
+    result
+}
+
 #[tauri::command]
 pub async fn store_sources_list() -> Result<Vec<String>, String> {
     Ok(catalog::read_sources(&home()?))

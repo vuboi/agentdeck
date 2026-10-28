@@ -325,6 +325,7 @@ impl Provider for Codex {
                     output: output.to_string(),
                     is_error: failed,
                     image: None,
+                    change: None,
                 });
                 turn.last_was_text = false;
             }
@@ -381,6 +382,7 @@ impl Provider for Codex {
                         output: String::new(),
                         is_error: item["status"] == "failed",
                         image: None,
+                        change: None,
                     });
                 }
                 turn.last_was_text = false;
@@ -423,6 +425,7 @@ impl Provider for Codex {
                         },
                         is_error: item["status"] == "failed",
                         image: super::result_image(&item["result"]["content"]),
+                        change: None,
                     });
                 }
                 turn.last_was_text = false;
@@ -440,6 +443,7 @@ impl Provider for Codex {
                     output: String::new(),
                     is_error: false,
                     image: None,
+                    change: None,
                 });
             }
             ("item.completed", "error") => {

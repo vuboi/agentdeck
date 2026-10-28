@@ -8,7 +8,7 @@
   import { showSession } from '../content-tabs.svelte';
   import { modelLabel } from '../models.svelte';
   import { agentDisplayName } from '../provider-registry';
-  import { answerQuestions, delegateRuns, isDelegating, isRunActive, liveStats, needsApproval, workspace } from '../sessions.svelte';
+  import { answerQuestions, delegateRuns, isDelegating, isRunActive, liveStats, needsApproval, queuedCount, retryWorker, workspace } from '../sessions.svelte';
   import { shortCount, totalTokens, usd } from '../usage';
   import QuestionCard from './QuestionCard.svelte';
   import type { Block } from '../mock';
@@ -108,7 +108,13 @@
           {/if}
         </span>
         {#if needsApproval(block.childId)}<span class="shrink-0 rounded-full bg-warning/15 px-1.5 py-px text-[10px] font-medium text-warning">Needs approval</span>{/if}
+        {#if queuedCount(block.childId) > 0}<span class="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground" title="Messages waiting in this worker's chat">{queuedCount(block.childId)} waiting</span>{/if}
       </button>
+      {#if settled === 'failed'}
+        <button type="button" class="grid w-8 shrink-0 cursor-pointer place-items-center text-muted-foreground outline-none transition-colors hover:text-primary" aria-label="Retry {block.step ?? block.agent}" title="Send the task to this worker again" onclick={() => retryWorker(block.childId)}>
+          <ZIcon zType="lucideRotateCw" class="size-3.5" />
+        </button>
+      {/if}
       <button type="button" class="grid w-9 shrink-0 place-items-center text-muted-foreground outline-none transition-colors hover:text-primary group-hover/row:text-foreground {jumpable ? 'cursor-pointer' : 'cursor-default opacity-40'}" disabled={!jumpable} aria-label="Open the chat of {block.step ?? block.agent}" title="Open this step's chat" onclick={() => jumpable && showSession(block.childId)}>
         <ZIcon zType="lucideChevronRight" class="size-3.5" />
       </button>

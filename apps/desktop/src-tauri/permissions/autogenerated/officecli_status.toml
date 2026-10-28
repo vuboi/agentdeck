@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-officecli-status"
+description = "Enables the officecli_status command without any pre-configured scope."
+commands.allow = ["officecli_status"]
+
+[[permission]]
+identifier = "deny-officecli-status"
+description = "Denies the officecli_status command without any pre-configured scope."
+commands.deny = ["officecli_status"]

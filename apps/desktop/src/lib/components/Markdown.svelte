@@ -21,8 +21,20 @@
   const FOUND_MAX = 3000;
   const CHECK_AGAIN_MS = 15_000;
   // Pictures from the web as data URLs (image_fetch), or null when they could not be had.
+  // Kept by total size, not by count: one picture can be 15 MB, and a data URL is a third larger than its bytes.
   const pictures = new Map<string, string | null>();
-  const PICTURES_MAX = 40;
+  const PICTURES_MAX_CHARS = 40_000_000;
+  let picturesChars = 0;
+  function rememberPicture(url: string, data: string | null) {
+    pictures.set(url, data);
+    picturesChars += data?.length ?? 0;
+    // The oldest go first; the newest stays even when it alone is over the limit (it is on screen).
+    for (const [key, value] of pictures) {
+      if (picturesChars <= PICTURES_MAX_CHARS || pictures.size <= 1) break;
+      pictures.delete(key);
+      picturesChars -= value?.length ?? 0;
+    }
+  }
 </script>
 
 <script lang="ts">
@@ -351,8 +363,7 @@
         } catch {
           data = null;
         }
-        pictures.set(url, data);
-        while (pictures.size > PICTURES_MAX) pictures.delete(pictures.keys().next().value as string);
+        rememberPicture(url, data);
       }
       if (!container.contains(image)) continue;
       if (data) {

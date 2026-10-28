@@ -399,6 +399,7 @@ async fn login_status(provider: &str) -> Login {
             None => Login::default(),
         },
         "codex" => codex_login(),
+        "copilot" => github_login().await,
         _ => Login::default(),
     }
 }
@@ -437,9 +438,10 @@ pub struct Detected {
     codex: Login,
     antigravity: Login,
     opencode: Login,
+    copilot: Login,
 }
 
-const TOOLS: [&str; 8] = [
+const TOOLS: [&str; 9] = [
     "claude",
     "codex",
     "agy",
@@ -448,7 +450,42 @@ const TOOLS: [&str; 8] = [
     "cswap",
     "uv",
     "npm",
+    "gh",
 ];
+
+async fn github_login() -> Login {
+    let Some(gh) = which("gh") else {
+        return Login::default();
+    };
+    match capture(
+        &gh,
+        &["auth", "status", "--hostname", "github.com"],
+        Duration::from_secs(10),
+    )
+    .await
+    {
+        Ok(out) => {
+            let text = format!("{}\n{}", out.stdout, out.stderr);
+            let email = text.lines().find_map(|line| {
+                let (_, account) = line.split_once("Logged in to github.com account ")?;
+                Some(
+                    account
+                        .split_whitespace()
+                        .next()?
+                        .trim_matches(['(', ')'])
+                        .to_owned(),
+                )
+            });
+            Login {
+                logged_in: Some(out.ok || email.is_some()),
+                email,
+                plan: None,
+                detail: Some("GitHub CLI".into()),
+            }
+        }
+        Err(_) => Login::default(),
+    }
+}
 
 pub(crate) fn codex_home() -> PathBuf {
     std::env::var_os("CODEX_HOME")
@@ -662,6 +699,7 @@ pub async fn connectors_detect() -> Detected {
         codex: codex_login(),
         antigravity: antigravity_login(),
         opencode,
+        copilot: github_login().await,
     }
 }
 
@@ -693,7 +731,10 @@ pub async fn connector_install(app: AppHandle, id: String) -> Result<(), String>
             (program, args)
         }
         // Pinned to the version that was read through (see `pins` in endpoints.json): a newer one is looked at before it is used.
-        "codex-auth" => node_tool(&format!("@loongphy/codex-auth@{}", ENDPOINTS.pins.codex_auth))?,
+        "codex-auth" => node_tool(&format!(
+            "@loongphy/codex-auth@{}",
+            ENDPOINTS.pins.codex_auth
+        ))?,
         "cswap" => {
             let uv = which("uv")
                 .ok_or("`uv` is needed for claude-swap: install it from docs.astral.sh/uv first")?;
@@ -759,6 +800,7 @@ pub async fn connector_install(app: AppHandle, id: String) -> Result<(), String>
                 )
             }
         }
+        "copilot" => return Err("Install GitHub CLI (`gh`) to use GitHub Copilot".into()),
         other => return Err(format!("do not know how to install `{other}`")),
     };
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -828,6 +870,19 @@ async fn connector_login_inner(app: AppHandle, id: String) -> Result<(), String>
                 limit,
                 idle_limit,
                 Some("claude"),
+            )
+            .await
+        }
+        "copilot" => {
+            let gh = which("gh").ok_or("GitHub CLI (`gh`) is not installed")?;
+            run_logged_with_idle_timeout(
+                &app,
+                &id,
+                &gh,
+                &["auth", "login", "--hostname", "github.com", "--web"],
+                limit,
+                idle_limit,
+                Some("copilot"),
             )
             .await
         }
@@ -970,7 +1025,6 @@ fn read_codex_registry(codex_home: &Path) -> Result<(Vec<Account>, Option<AutoSw
         std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     parse_codex_registry(&text)
 }
-
 
 fn parse_codex_usage(payload: &Value) -> (Vec<UsageWindow>, Option<String>) {
     let now = std::time::SystemTime::now()
@@ -1447,6 +1501,69 @@ pub async fn accounts_list(provider: String, refresh: bool) -> Result<Accounts, 
                 }),
             }
         }
+        "copilot" => {
+            let Some(gh) = which("gh") else {
+                return Ok(Accounts {
+                    manager: false,
+                    accounts: Vec::new(),
+                    auto_switch: None,
+                    error: None,
+                });
+            };
+            let out = capture(
+                &gh,
+                &["auth", "status", "--hostname", "github.com"],
+                Duration::from_secs(10),
+            )
+            .await?;
+            let text = format!("{}\n{}", out.stdout, out.stderr);
+            let mut accounts = Vec::new();
+            let mut current: Option<(String, bool)> = None;
+            for line in text.lines() {
+                if let Some((_, rest)) = line.split_once("Logged in to github.com account ") {
+                    if let Some((id, active)) = current.take() {
+                        accounts.push((id, active));
+                    }
+                    let id = rest
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or_default()
+                        .trim_matches(['(', ')'])
+                        .to_owned();
+                    current = Some((id, false));
+                } else if line.contains("Active account: true") {
+                    if let Some((_, active)) = current.as_mut() {
+                        *active = true;
+                    }
+                }
+            }
+            if let Some(row) = current {
+                accounts.push(row);
+            }
+            if accounts.len() == 1 && !accounts[0].1 {
+                accounts[0].1 = true;
+            }
+            Ok(Accounts {
+                manager: true,
+                accounts: accounts
+                    .into_iter()
+                    .map(|(id, active)| Account {
+                        id: id.clone(),
+                        email: id,
+                        alias: None,
+                        plan: Some("GitHub Copilot".into()),
+                        active,
+                        usage: Vec::new(),
+                        observed_at: None,
+                        status: None,
+                        expired: false,
+                        reset_credits_available: None,
+                    })
+                    .collect(),
+                auto_switch: None,
+                error: (!out.ok && text.is_empty()).then(|| "GitHub CLI is not signed in".into()),
+            })
+        }
         other => Err(format!("`{other}` has no account list")),
     }
 }
@@ -1479,6 +1596,10 @@ pub async fn account_switch(provider: String, id: String) -> Result<(), String> 
     let (tool, args): (&str, Vec<&str>) = match provider.as_str() {
         "codex" => ("codex-auth", vec!["switch", id]),
         "claude" => ("cswap", vec!["switch", id, "--json"]),
+        "copilot" => (
+            "gh",
+            vec!["auth", "switch", "--hostname", "github.com", "--user", id],
+        ),
         other => return Err(format!("`{other}` has no accounts to switch")),
     };
     let program = which(tool).ok_or_else(|| format!("`{tool}` is not installed"))?;
@@ -1569,6 +1690,19 @@ async fn account_add_inner(app: AppHandle, provider: String) -> Result<(), Strin
             )
             .await?;
             run_logged(&app, "claude", &cswap, &["add"], Duration::from_secs(60)).await
+        }
+        "copilot" => {
+            let gh = which("gh").ok_or("GitHub CLI (`gh`) is not installed")?;
+            run_logged_with_idle_timeout(
+                &app,
+                "copilot",
+                &gh,
+                &["auth", "login", "--hostname", "github.com", "--web"],
+                Duration::from_secs(300),
+                Some(Duration::from_secs(120)),
+                Some("copilot"),
+            )
+            .await
         }
         other => Err(format!("`{other}` has no accounts to add")),
     }
@@ -2422,7 +2556,9 @@ pub struct ConsoleCredit {
 /// An amount the Console gives in minor units with an exponent (`{"amount_minor": 5950, "exponent": 2}` is 59.50).
 fn minor_amount(value: &Value, exponent: i64) -> Option<f64> {
     let minor = value.as_f64()?;
-    (0..=6).contains(&exponent).then(|| minor / 10f64.powi(exponent as i32))
+    (0..=6)
+        .contains(&exponent)
+        .then(|| minor / 10f64.powi(exponent as i32))
 }
 
 /// Reads the Console's prepaid credit with its sign-in cookie (`sessionKey`). There is no API for it: the Console
@@ -2449,44 +2585,69 @@ pub async fn claude_console_credit(session_key: String) -> Result<ConsoleCredit,
     };
     let read = |response: reqwest::Response| async move {
         match response.status().as_u16() {
-            200..=299 => response.json::<Value>().await.map_err(|error| format!("not the Console's answer: {error}")),
+            200..=299 => response
+                .json::<Value>()
+                .await
+                .map_err(|error| format!("not the Console's answer: {error}")),
             401 | 403 => Err("the Console session ended: copy a new sessionKey".to_string()),
             code => Err(format!("the Console answered {code}")),
         }
     };
-    let boot = read(get(ENDPOINTS.anthropic.console_bootstrap.clone()).await.map_err(|error| error.to_string())?).await?;
+    let boot = read(
+        get(ENDPOINTS.anthropic.console_bootstrap.clone())
+            .await
+            .map_err(|error| error.to_string())?,
+    )
+    .await?;
     // The organization of the API keys: the membership whose organization has the `api` capability.
     let org = boot["account"]["memberships"]
         .as_array()
         .into_iter()
         .flatten()
         .map(|member| &member["organization"])
-        .find(|org| org["capabilities"].as_array().is_some_and(|caps| caps.iter().any(|cap| cap == "api")))
+        .find(|org| {
+            org["capabilities"]
+                .as_array()
+                .is_some_and(|caps| caps.iter().any(|cap| cap == "api"))
+        })
         .and_then(|org| org["uuid"].as_str())
         .ok_or("this sign-in has no API organization")?
         .to_string();
     let body = read(
-        get(ENDPOINTS.anthropic.console_prepaid_credits.replace("{org}", &org))
-            .await
-            .map_err(|error| error.to_string())?,
+        get(ENDPOINTS
+            .anthropic
+            .console_prepaid_credits
+            .replace("{org}", &org))
+        .await
+        .map_err(|error| error.to_string())?,
     )
     .await?;
     let credits = &body["balance"]["credits"];
     let exponent = credits["exponent"].as_i64().unwrap_or(2);
-    let balance = minor_amount(&credits["amount_minor"], exponent).ok_or("the Console sent no balance")?;
+    let balance =
+        minor_amount(&credits["amount_minor"], exponent).ok_or("the Console sent no balance")?;
     // The grants that still hold credit: their total (when given) is the bar's full width, the first to end its date.
     let grants: Vec<&Value> = ["promo_tranches", "tranches"]
         .iter()
         .filter_map(|name| body[*name].as_array())
         .flatten()
-        .filter(|grant| grant["remaining_amount_minor_units"].as_f64().unwrap_or(0.0) > 0.0)
+        .filter(|grant| {
+            grant["remaining_amount_minor_units"]
+                .as_f64()
+                .unwrap_or(0.0)
+                > 0.0
+        })
         .collect();
     let granted: f64 = grants
         .iter()
         .filter_map(|grant| {
-            ["amount_minor_units", "initial_amount_minor_units", "original_amount_minor_units"]
-                .iter()
-                .find_map(|field| minor_amount(&grant[*field], exponent))
+            [
+                "amount_minor_units",
+                "initial_amount_minor_units",
+                "original_amount_minor_units",
+            ]
+            .iter()
+            .find_map(|field| minor_amount(&grant[*field], exponent))
         })
         .sum();
     let expires_at = grants
@@ -2513,10 +2674,15 @@ pub async fn provider_quota(
     if host != "openrouter.ai" {
         return None;
     }
-    let key = api_key
-        .filter(|key| !key.is_empty())
-        .or_else(|| key_env.filter(|name| !name.is_empty()).and_then(|name| std::env::var(name).ok()))?;
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(8)).build().ok()?;
+    let key = api_key.filter(|key| !key.is_empty()).or_else(|| {
+        key_env
+            .filter(|name| !name.is_empty())
+            .and_then(|name| std::env::var(name).ok())
+    })?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .ok()?;
     let response = client
         .get(ENDPOINTS.openrouter.key.as_str())
         .bearer_auth(key)
@@ -2550,7 +2716,13 @@ pub async fn local_scan() -> Vec<LocalServer> {
     let servers: Vec<(&str, &str, &str)> = ENDPOINTS
         .local
         .iter()
-        .map(|server| (server.kind.as_str(), server.label.as_str(), server.base.as_str()))
+        .map(|server| {
+            (
+                server.kind.as_str(),
+                server.label.as_str(),
+                server.base.as_str(),
+            )
+        })
         .collect();
     let limit = Duration::from_millis(700);
     let handles: Vec<_> = servers
@@ -2596,7 +2768,6 @@ mod tests {
         // Other programs are not this guard's business.
         assert!(account_tool_allows(&tool("claude"), &["auth", "login"]).is_ok());
     }
-
 
     #[test]
     fn codex_registry_gives_accounts_and_windows() {

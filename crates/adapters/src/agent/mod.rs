@@ -43,6 +43,9 @@ pub enum AgentEvent {
         /// A picture the tool returned (a browser screenshot), as a `data:` URL, shown as a thumbnail.
         #[serde(skip_serializing_if = "Option::is_none")]
         image: Option<String>,
+        /// A file diff captured after a write tool completed when its start event only had a path.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        change: Option<FileChange>,
     },
     /// New command output written since the last update, correlated to the running tool call.
     ToolOutputDelta { id: String, delta: String },
@@ -260,6 +263,64 @@ pub struct FileChange {
     pub after: String,
 }
 
+/// A bounded before-image for a file-writing tool whose provider only reports a path.
+#[derive(Debug, Clone)]
+pub struct FileSnapshot {
+    path: String,
+    full_path: std::path::PathBuf,
+    before: Option<String>,
+}
+
+/// Capture a file before a write tool, constrained to the active project root.
+pub fn begin_file_snapshot(
+    root: Option<&std::path::Path>,
+    name: &str,
+    input: &serde_json::Value,
+) -> Option<FileSnapshot> {
+    let root = root?.canonicalize().ok()?;
+    if !is_write_tool(name) {
+        return None;
+    }
+    let raw_path = ["file_path", "notebook_path", "filePath", "notebookPath", "Path", "AbsolutePath", "absolute_path", "TargetFile", "target_file", "path"]
+        .iter()
+        .find_map(|key| input[*key].as_str())?;
+    let supplied = std::path::Path::new(raw_path);
+    let candidate = if supplied.is_absolute() { supplied.to_path_buf() } else { root.join(supplied) };
+    let (full_path, before) = match candidate.canonicalize() {
+        Ok(path) if path.starts_with(&root) => {
+            let text = read_change_text(&path)?;
+            (path, Some(text))
+        }
+        Ok(_) => return None,
+        Err(_) => {
+            let parent = candidate.parent()?.canonicalize().ok()?;
+            let full_path = parent.join(candidate.file_name()?);
+            if !full_path.starts_with(&root) { return None; }
+            (full_path, None)
+        }
+    };
+    Some(FileSnapshot { path: raw_path.to_owned(), full_path, before })
+}
+
+/// Finish a before-image after a successful write and return only the changed lines.
+pub fn finish_file_snapshot(snapshot: FileSnapshot) -> Option<FileChange> {
+    let after = if snapshot.full_path.exists() { read_change_text(&snapshot.full_path)? } else { String::new() };
+    let before = snapshot.before.as_deref().unwrap_or_default();
+    let diff = line_diff(before, &after);
+    if diff.added == 0 && diff.removed == 0 { return None; }
+    Some(FileChange { path: snapshot.path, added: diff.added, removed: diff.removed, before: diff.before, after: diff.after })
+}
+
+fn read_change_text(path: &std::path::Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() > 2_000_000 || bytes.contains(&0) { return None; }
+    String::from_utf8(bytes).ok()
+}
+
+fn is_write_tool(name: &str) -> bool {
+    matches!(name.to_ascii_lowercase().as_str(), "write" | "edit" | "multiedit" | "notebookedit" | "apply_patch" | "patch" | "write_file" | "writefile" | "create_file" | "createfile" | "edit_file" | "editfile" | "replace_file_content" | "replacefilecontent")
+}
+
 const DIFF_TEXT_MAX: usize = 3000;
 
 fn line_count(text: &str) -> usize {
@@ -375,16 +436,19 @@ pub fn result_image(content: &serde_json::Value) -> Option<String> {
 }
 
 /// The file change a tool call makes, if it is one of the file-writing tools.
+fn string_arg<'a>(source: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| source[*key].as_str())
+}
+
 pub fn file_change(name: &str, input: &serde_json::Value) -> Option<FileChange> {
-    let text =
-        |value: &serde_json::Value, key: &str| value[key].as_str().unwrap_or_default().to_owned();
-    let path = ["file_path", "notebook_path"]
+    let text = |source: &serde_json::Value, keys: &[&str]| string_arg(source, keys).unwrap_or_default().to_owned();
+    let path = ["file_path", "notebook_path", "filePath", "notebookPath", "Path", "AbsolutePath", "absolute_path", "TargetFile", "target_file", "path"]
         .iter()
         .find_map(|key| input[*key].as_str())?
         .to_owned();
-    match name {
-        "Write" => {
-            let content = text(input, "content");
+    match name.to_ascii_lowercase().as_str() {
+        "write" | "write_file" | "writefile" | "create_file" | "createfile" => {
+            let content = string_arg(input, &["content", "Content", "text"])?.to_owned();
             Some(FileChange {
                 path,
                 added: line_count(&content),
@@ -393,8 +457,13 @@ pub fn file_change(name: &str, input: &serde_json::Value) -> Option<FileChange> 
                 after: cut(&content),
             })
         }
-        "Edit" => {
-            let (old, new) = (text(input, "old_string"), text(input, "new_string"));
+        "edit" | "edit_file" | "editfile" | "replace_file_content" | "replacefilecontent" => {
+            if string_arg(input, &["old_string", "oldString", "oldText", "old_text", "oldContent"]).is_none()
+                && string_arg(input, &["new_string", "newString", "newText", "new_text", "newContent", "replacement"]).is_none()
+            {
+                return None;
+            }
+            let (old, new) = (text(input, &["old_string", "oldString", "oldText", "old_text", "oldContent"]), text(input, &["new_string", "newString", "newText", "new_text", "newContent", "replacement"]));
             Some(FileChange {
                 path,
                 added: line_count(&new),
@@ -403,12 +472,12 @@ pub fn file_change(name: &str, input: &serde_json::Value) -> Option<FileChange> 
                 after: cut(&new),
             })
         }
-        "MultiEdit" => {
+        "multiedit" | "notebookedit" => {
             let edits = input["edits"].as_array()?;
             let (mut before, mut after) = (Vec::new(), Vec::new());
             for edit in edits {
-                before.push(text(edit, "old_string"));
-                after.push(text(edit, "new_string"));
+                before.push(text(edit, &["old_string", "oldString", "oldText"]));
+                after.push(text(edit, &["new_string", "newString", "newText"]));
             }
             Some(FileChange {
                 path,

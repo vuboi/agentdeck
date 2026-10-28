@@ -153,6 +153,10 @@ pub(crate) async fn agent_prewarm(
     cwd: Option<String>,
     api_key: Option<String>,
 ) -> Result<(), String> {
+    if agent == "copilot" {
+        // The SDK starts a scoped Copilot runtime when the user sends the first turn.
+        return Ok(());
+    }
     let provider = provider_for(&agent)?;
     let req = TurnRequest {
         prompt: String::new(),
@@ -195,6 +199,26 @@ pub(crate) async fn agent_send(
     api_key: Option<String>,
     keep_open: Option<bool>,
 ) -> Result<(), String> {
+    if agent == "copilot" {
+        let req = TurnRequest {
+            prompt,
+            session_id: agent_session,
+            resume,
+            model,
+            permission_mode,
+            effort,
+            allowed_tools,
+            cwd: cwd.map(Into::into),
+            owner: Some(session.clone()),
+            api_key,
+        };
+        let (stop, token) = StopHandle::new();
+        let handle = tauri::async_runtime::spawn(crate::copilot::run_turn(
+            app.clone(), session.clone(), turn.clone(), req, token,
+        ));
+        track(session, turn, handle, Some(stop));
+        return Ok(());
+    }
     let provider = provider_for(&agent)?;
     let req = TurnRequest {
         prompt,

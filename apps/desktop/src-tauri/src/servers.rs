@@ -68,13 +68,40 @@ mod job {
             let _ = unsafe { AssignProcessToJobObject(job, HANDLE(raw)) };
         }
     }
+
+    /// A process known only by its id (a terminal shell, an MCP server): opened here, put in the job, closed again.
+    pub fn adopt_pid(pid: u32) {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{
+            OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+        };
+        // SAFETY: the handle is opened with the two rights a job needs and closed on every path below.
+        unsafe {
+            if let Ok(process) = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) {
+                adopt_handle(process.0 as _);
+                let _ = CloseHandle(process);
+            }
+        }
+    }
 }
 
-/// Ties every agent CLI to the app's job (Windows), so a killed app leaves none running. Elsewhere a CLI leads its own
-/// process group and ends with its turn.
+/// The Windows half of `process_guard::adopt_pid`: a process known by its id joins the app's job.
+#[cfg(windows)]
+pub fn adopt_pid_windows(pid: u32) {
+    job::adopt_pid(pid);
+}
+
+/// Ties every agent CLI to the app's lifetime (`process_guard`), so a killed app leaves none running: a job object on
+/// Windows, a watchdog on macOS and Linux.
 pub fn adopt_agents() {
     #[cfg(windows)]
     ag_adapters::agent::runner::on_spawn(job::adopt_agent);
+    #[cfg(unix)]
+    ag_adapters::agent::runner::on_spawn(|child| {
+        if let Some(pid) = child.id() {
+            crate::process_guard::adopt_pid(pid);
+        }
+    });
 }
 
 /// What tells the page that the log of the server on a port grew (set once at start-up; tests run without one). A
@@ -197,17 +224,30 @@ const QUIET: std::time::Duration = std::time::Duration::from_millis(700);
 /// The log of the server on `port` from byte `from` on, without colour codes.
 fn log_since(port: u16, from: u64) -> (String, u64) {
     use std::io::{Read, Seek, SeekFrom};
-    let Ok(path) = log_path(port) else { return (String::new(), from) };
-    let Ok(mut file) = std::fs::File::open(path) else { return (String::new(), from) };
+    let Ok(path) = log_path(port) else {
+        return (String::new(), from);
+    };
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return (String::new(), from);
+    };
     let length = file.metadata().map_or(0, |meta| meta.len());
     let _ = file.seek(SeekFrom::Start(from.min(length)));
     let mut bytes = Vec::new();
     let _ = file.read_to_end(&mut bytes);
-    (crate::detect::plain(&String::from_utf8_lossy(&bytes)), length)
+    (
+        crate::detect::plain(&String::from_utf8_lossy(&bytes)),
+        length,
+    )
 }
 
 /// Types the answers a script's questions need, while the server (process `pid` on `port`) runs.
-fn answer_questions(port: u16, pid: u32, mut keyboard: ChildStdin, options: Options, expected: u16) {
+fn answer_questions(
+    port: u16,
+    pid: u32,
+    mut keyboard: ChildStdin,
+    options: Options,
+    expected: u16,
+) {
     std::thread::spawn(move || {
         let mut queue: VecDeque<String> = options.answers.iter().cloned().collect();
         let (mut answered, mut seen) = (0u64, 0u64);
@@ -219,7 +259,9 @@ fn answer_questions(port: u16, pid: u32, mut keyboard: ChildStdin, options: Opti
                 .lock()
                 .map(|mut running| {
                     running.iter_mut().any(|server| {
-                        server.key == port && server.child.id() == pid && matches!(server.child.try_wait(), Ok(None))
+                        server.key == port
+                            && server.child.id() == pid
+                            && matches!(server.child.try_wait(), Ok(None))
                     })
                 })
                 .unwrap_or(false);
@@ -244,7 +286,10 @@ fn answer_questions(port: u16, pid: u32, mut keyboard: ChildStdin, options: Opti
                 continue;
             }
             let answer = crate::answers::decide(&text, &mut queue, Some(expected));
-            if writeln!(keyboard, "{answer}").and_then(|()| keyboard.flush()).is_err() {
+            if writeln!(keyboard, "{answer}")
+                .and_then(|()| keyboard.flush())
+                .is_err()
+            {
                 return;
             }
             answered = end;
@@ -258,7 +303,12 @@ fn answer_questions(port: u16, pid: u32, mut keyboard: ChildStdin, options: Opti
 
 /// Starts `command` in `cwd` for the server expected on `port`, with `options`: a keyboard and answers for a script
 /// that asks, and extra environment. A server this app started earlier on the same port is stopped first.
-pub fn start_with(command: &str, cwd: &str, port: u16, options: &Options) -> Result<PathBuf, String> {
+pub fn start_with(
+    command: &str,
+    cwd: &str,
+    port: u16,
+    options: &Options,
+) -> Result<PathBuf, String> {
     let log = log_path(port)?;
     std::fs::create_dir_all(log.parent().ok_or("no folder for the server log")?)
         .map_err(|error| error.to_string())?;
@@ -276,7 +326,11 @@ pub fn start_with(command: &str, cwd: &str, port: u16, options: &Options) -> Res
     shell
         .current_dir(cwd)
         .envs(options.env.iter().cloned())
-        .stdin(if options.interactive { Stdio::piped() } else { Stdio::null() })
+        .stdin(if options.interactive {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(out)
         .stderr(err);
     #[cfg(windows)]
@@ -487,10 +541,18 @@ mod tests {
 
     #[test]
     fn kill_all_ends_the_server_and_the_processes_it_started() {
-        let _alone = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _alone = ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let before = pings();
         let cwd = std::env::temp_dir();
-        start_with("ping -n 60 127.0.0.1", &cwd.to_string_lossy(), 59_998, &Options::default()).expect("starts");
+        start_with(
+            "ping -n 60 127.0.0.1",
+            &cwd.to_string_lossy(),
+            59_998,
+            &Options::default(),
+        )
+        .expect("starts");
         std::thread::sleep(std::time::Duration::from_millis(1500));
         assert!(pings() > before, "the child of the shell is running");
         kill_all();
@@ -502,7 +564,9 @@ mod tests {
     /// A script that asks which project and which port starts by itself: the questions are answered from the log.
     #[test]
     fn a_script_that_asks_is_answered() {
-        let _alone = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _alone = ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let folder = std::env::temp_dir().join("agentdeck-test-asks");
         std::fs::create_dir_all(&folder).expect("a folder");
         std::fs::write(
@@ -513,7 +577,11 @@ rl.question('Which app?\n1) web admin\n2) web shop\nNumber: ',a=>{
 });"#,
         )
         .expect("a script");
-        let options = Options { interactive: true, answers: vec!["shop".to_string()], env: Vec::new() };
+        let options = Options {
+            interactive: true,
+            answers: vec!["shop".to_string()],
+            env: Vec::new(),
+        };
         start_with("node ask.js", &folder.to_string_lossy(), 59_997, &options).expect("starts");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut log = String::new();
@@ -525,6 +593,9 @@ rl.question('Which app?\n1) web admin\n2) web shop\nNumber: ',a=>{
             }
         }
         kill_all();
-        assert!(log.contains("GOT 2 "), "the shop was chosen, then a port: {log}");
+        assert!(
+            log.contains("GOT 2 "),
+            "the shop was chosen, then a port: {log}"
+        );
     }
 }

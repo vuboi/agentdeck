@@ -12,7 +12,7 @@
   import { testSystemNotification } from '../system-notifications';
   import { toast } from '../toast';
   import { ticker } from '../clock.svelte';
-  import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
+  import { GITHUB_SVG, OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
   import { inTauri, isPreviewCopy } from '../history';
   import { getPref } from '../prefs';
   import { DEFAULT_HOUSE_STYLE } from '../house-style';
@@ -71,6 +71,7 @@
     { id: 'providers', label: 'Providers', icon: 'lucideServer', hint: 'Custom and local models' },
     { id: 'replies', label: 'Replies', icon: 'lucideMessageSquare', hint: 'House style and file links' },
     { id: 'memory', label: 'Memory', icon: 'lucideBrain', hint: 'What agents know about a project' },
+    { id: 'office', label: 'Office files', icon: 'lucideFileText', hint: 'Word, Excel and PowerPoint for agents' },
     { id: 'alerts', label: 'Limit alerts', icon: 'lucideBell', hint: 'Warn before a limit' },
     { id: 'sync', label: 'Sync', icon: 'lucideCloudUpload', hint: 'History backup (planned)' },
     { id: 'computer', label: 'Computer use', icon: 'lucideMonitor', hint: 'Windows control via MCP' },
@@ -102,6 +103,31 @@
       toast.error(String(error));
     } finally {
       memoryBusy = false;
+    }
+  }
+
+  // Office files: OfficeCLI (officecli.rs) is downloaded on the first install, then registered with the agents.
+  type OfficeStatus = { supported: boolean; installed: boolean; version: string | null };
+  let office = $state<OfficeStatus | null>(null);
+  let officeBusy = $state(false);
+  let officeNote = $state('');
+  $effect(() => {
+    if (!settings.open || settings.section !== 'office' || !inTauri()) return;
+    void import('@tauri-apps/api/core').then(({ invoke }) => invoke<OfficeStatus>('officecli_status')).then((value) => (office = value)).catch(() => (office = null));
+  });
+  async function installOffice() {
+    officeBusy = true;
+    officeNote = '';
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const setup = await invoke<{ version: string; agents: { agent: string; ok: boolean; message: string }[]; skill: string }>('officecli_install');
+      const failed = setup.agents.filter((item) => !item.ok).map((item) => item.agent);
+      officeNote = `OfficeCLI ${setup.version} installed. Skill: ${setup.skill}.${failed.length ? ` Not registered: ${failed.join(', ')}.` : ''}`;
+      office = await invoke<OfficeStatus>('officecli_status');
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      officeBusy = false;
     }
   }
 
@@ -170,6 +196,17 @@
       svg: OPENCODE_SVG,
       tone: 'bg-foreground/10 text-foreground',
       note: 'Open-source coding agent. Sign-in opens the OpenCode provider chooser.',
+    },
+    {
+      id: 'copilot',
+      label: 'GitHub Copilot',
+      binary: 'gh',
+      brand: 'lucideBot',
+      svg: GITHUB_SVG,
+      tone: 'bg-foreground/10 text-foreground',
+      note: 'GitHub Copilot coding models. Sign in and switch accounts with GitHub CLI.',
+      accounts: 'copilot',
+      manager: { id: 'gh', label: 'GitHub CLI', why: 'Uses the active gh auth account for Copilot access.' },
     },
   ];
 
@@ -1070,6 +1107,29 @@
                     <ZButton zWave={false} zSize="sm" class="h-7 px-3 text-xs" disabled={memoryBusy || memoryText === memorySaved} onclick={() => void saveMemory()}>Save</ZButton>
                   </div>
                 {/if}
+              </section>
+            </div>
+
+          {:else if settings.section === 'office'}
+            <div class="flex flex-col gap-4" in:fade={{ duration: 200 }}>
+              <section class="rounded-xl border border-border p-4">
+                <div class="flex items-start gap-3">
+                  <div class="min-w-0 flex-1">
+                    <h3 class="text-sm font-semibold">OfficeCLI</h3>
+                    <p class="mt-1 text-xs text-muted-foreground">Lets agents create, read and edit Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files, with no Office installed. Downloaded once from its GitHub release, then given to Claude, Codex, Antigravity and Copilot as an MCP server and a skill.</p>
+                  </div>
+                  <ZButton zWave={false} zSize="sm" class="h-8 shrink-0 px-3 text-xs" disabled={officeBusy || !office?.supported || !inTauri()} onclick={() => void installOffice()}>
+                    {officeBusy ? 'Installing…' : office?.installed ? 'Update' : 'Install'}
+                  </ZButton>
+                </div>
+                <p class="mt-3 text-[11px] text-muted-foreground">
+                  {#if !inTauri()}Needs the desktop app.
+                  {:else if office === null}Checking…
+                  {:else if !office.supported}No OfficeCLI release for this system.
+                  {:else if office.installed}Installed: {office.version}
+                  {:else}Not installed.{/if}
+                </p>
+                {#if officeNote}<p class="mt-2 text-xs text-muted-foreground">{officeNote}</p>{/if}
               </section>
             </div>
 

@@ -17,7 +17,7 @@
   // The catalog of plugins, MCP servers and skills. Rust filters it and hands over a page at a time: the next page loads
   // when the list is scrolled near its end, so the first view never waits for thousands of items.
   type Kind = 'all' | CatalogItem['kind'];
-  type AgentFilter = 'all' | 'claude' | 'codex' | 'opencode' | 'antigravity';
+  type AgentFilter = 'all' | 'claude' | 'codex' | 'opencode' | 'antigravity' | 'copilot';
   const KINDS: { value: Kind; label: string; icon: string }[] = [
     { value: 'all', label: 'All kinds', icon: 'lucideLayers' },
     { value: 'plugin', label: 'Plugins', icon: 'lucidePuzzle' },
@@ -31,6 +31,7 @@
     // Skills only: plugins and MCP entries of the catalog are for Claude and Codex.
     { value: 'opencode', label: 'OpenCode' },
     { value: 'antigravity', label: 'Antigravity' },
+    { value: 'copilot', label: 'GitHub Copilot' },
   ];
 
   let query = $state('');

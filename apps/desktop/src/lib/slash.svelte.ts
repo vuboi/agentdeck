@@ -5,7 +5,7 @@ import { inTauri } from './history';
 // message is sent, `expandSlash` swaps the command for its text, so the chat shows what was typed and the agent gets
 // the full instructions. That works the same for every agent: nothing depends on the CLI knowing the command.
 
-export type SlashAgent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'custom';
+export type SlashAgent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot' | 'custom';
 export type SlashItem = {
   name: string;
   description: string;
