@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tts-remove"
+description = "Enables the tts_remove command without any pre-configured scope."
+commands.allow = ["tts_remove"]
+
+[[permission]]
+identifier = "deny-tts-remove"
+description = "Denies the tts_remove command without any pre-configured scope."
+commands.deny = ["tts_remove"]

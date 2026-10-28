@@ -6,7 +6,7 @@
   import { clock, findArtifacts, type Artifact } from '../artifacts';
   import { fileKind, fileSizeLabel } from '../attachments';
   import { dirOf } from '../paths';
-  import { openAttachment, openImages } from '../preview.svelte';
+  import { openAttachment, openMedia } from '../preview.svelte';
   import { toast } from '../toast';
   import { inTauri } from '../history';
   import FileChip from './FileChip.svelte';
@@ -70,7 +70,22 @@
     }
   });
   const shownPictures = $derived(images.filter((item) => pictures[item.path] && pictures[item.path] !== 'failed'));
-  const openPicture = (item: Artifact) => openImages(shownPictures.map((entry) => ({ src: pictures[entry.path], name: entry.name })), Math.max(0, shownPictures.indexOf(item)));
+  // Pictures and videos of the reply open in one gallery (z-ui's lightbox), side by side with arrows.
+  const videos = $derived(others.filter((item) => item.kind === 'video'));
+  async function openVisual(item: Artifact) {
+    if (item.kind === 'video') await load(item);
+    const list = ready.filter((entry) => (entry.kind === 'image' && pictures[entry.path] && pictures[entry.path] !== 'failed') || (entry.kind === 'video' && blobs[entry.path]));
+    const at = Math.max(0, list.findIndex((entry) => entry.path === item.path));
+    openMedia(
+      list.map((entry) =>
+        entry.kind === 'image'
+          ? { name: entry.name, url: pictures[entry.path], thumb: pictures[entry.path], type: pictures[entry.path].slice(5, pictures[entry.path].indexOf(';')) || 'image/png', size: sizes[entry.path] }
+          : { name: entry.name, url: blobs[entry.path], type: mimeOf(entry.name) || 'video/mp4', size: sizes[entry.path] },
+      ),
+      at,
+    );
+  }
+  const openPicture = (item: Artifact) => void openVisual(item);
 
   // ---------- sound and video ----------
   const MIME: Record<string, string> = { wav: 'audio/wav', mp3: 'audio/mpeg', ogg: 'audio/ogg', oga: 'audio/ogg', m4a: 'audio/mp4', flac: 'audio/flac', aac: 'audio/aac', opus: 'audio/ogg', weba: 'audio/webm', mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mkv: 'video/x-matroska', avi: 'video/x-msvideo' };
@@ -148,21 +163,39 @@
       </div>
     {/each}
 
-    {#if images.length > 0}
+    {#if images.length > 0 || videos.length > 0}
+      <!-- Pictures and videos share one row of small thumbnails. -->
       <div class="flex flex-wrap gap-2">
         {#each images as item (item.path)}
           {#if pictures[item.path] && pictures[item.path] !== 'failed'}
             <div class="group/pic relative">
               <button type="button" class="artifact-in block cursor-zoom-in overflow-hidden rounded-xl border border-border bg-muted/30 outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Open {item.name}" onclick={() => openPicture(item)}>
-                <img src={pictures[item.path]} alt={item.name} class="block max-h-72 max-w-full object-contain" />
+                <img src={pictures[item.path]} alt={item.name} class="block h-36 w-auto max-w-64 object-cover" />
               </button>
               <span class="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/pic:opacity-100 focus-within:opacity-100"><MenuButton items={menuOf(item)} label="Actions for {item.name}" class="size-7! rounded-md! bg-background/80! backdrop-blur" /></span>
             </div>
           {:else if pictures[item.path] === ''}
-            <div class="artifact-pending relative h-40 w-56 overflow-hidden rounded-xl border border-border bg-muted/30" aria-hidden="true"></div>
+            <div class="artifact-pending relative h-36 w-52 overflow-hidden rounded-xl border border-border bg-muted/30" aria-hidden="true"></div>
           {:else}
             <FileChip name={item.name} size={sizes[item.path]} onclick={() => void openAttachment(item.path, item.name, sizes[item.path])} />
           {/if}
+        {/each}
+        {#each videos as item (item.path)}
+          <div class="group/pic relative">
+            <button type="button" class="artifact-in relative block cursor-pointer overflow-hidden rounded-xl border border-border bg-black outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Play {item.name}" onclick={() => void openVisual(item)}>
+              {#if blobs[item.path]}
+                <!-- The first frame is the thumbnail: `#t=0.1` makes the engine decode it without playing. -->
+                <video src="{blobs[item.path]}#t=0.1" preload="metadata" muted playsinline class="pointer-events-none block h-36 w-auto max-w-64 object-cover"></video>
+              {:else}
+                <span class="block h-36 w-64"></span>
+              {/if}
+              <span class="absolute inset-0 grid place-items-center">
+                <span class="grid size-9 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm transition group-hover/pic:scale-105 group-hover/pic:bg-black/70"><ZIcon zType={'lucidePlay' as ZIconName} class="size-4" /></span>
+              </span>
+              <span class="absolute bottom-1 left-1 max-w-[calc(100%-0.5rem)] truncate rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white" title={item.path}>{item.name} · {fileSizeLabel(sizes[item.path])}</span>
+            </button>
+            <span class="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/pic:opacity-100 focus-within:opacity-100"><MenuButton items={menuOf(item)} label="Actions for {item.name}" class="size-7! rounded-md! bg-background/80! backdrop-blur" /></span>
+          </div>
         {/each}
       </div>
     {/if}
@@ -189,18 +222,7 @@
           {#if blobs[item.path]}<audio use:bind={item.path} src={blobs[item.path]} preload="metadata" class="hidden"></audio>{/if}
         </div>
       {:else if item.kind === 'video'}
-        <div class="artifact-in flex w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border bg-muted/30">
-          {#if blobs[item.path]}
-            <!-- svelte-ignore a11y_media_has_caption (a generated clip has no captions) -->
-            <video src={blobs[item.path]} controls preload="metadata" class="block max-h-80 w-full bg-black"></video>
-          {:else}
-            <button type="button" class="grid h-40 w-full cursor-pointer place-items-center bg-black/40 text-muted-foreground outline-none hover:text-foreground" aria-label="Load {item.name}" onclick={() => void load(item)}><ZIcon zType={'lucidePlay' as ZIconName} class="size-8" /></button>
-          {/if}
-          <div class="flex items-center gap-2 border-t border-border px-3 py-1.5">
-            <span class="min-w-0 flex-1 truncate text-xs"><span class="font-medium text-foreground" title={item.path}>{item.name}</span> <span class="text-muted-foreground">· {typeLabel(item)} · {fileSizeLabel(sizes[item.path])}</span></span>
-            <MenuButton items={menuOf(item)} label="Actions for {item.name}" />
-          </div>
-        </div>
+        <!-- Videos are drawn above, as thumbnails (see `videos`). -->
       {:else}
         <div class="artifact-in flex flex-wrap items-center gap-1.5">
           <FileChip name={item.name} size={sizes[item.path]} onclick={() => void openAttachment(item.path, item.name, sizes[item.path])} />

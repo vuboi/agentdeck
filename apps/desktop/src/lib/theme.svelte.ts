@@ -2,8 +2,8 @@ import { neutralTokens, primaryTokens, radiusTokens, type Mode, type Neutral, ty
 
 const KEY = 'agentdeck.theme';
 export type ChatLayout = 'split' | 'single';
-type Saved = { primary: Primary; neutral: Neutral; mode: Mode; chatLayout: ChatLayout };
-const DEFAULTS: Saved = { primary: 'violet', neutral: 'zinc', mode: 'dark', chatLayout: 'split' };
+type Saved = { primary: Primary; neutral: Neutral; mode: Mode; chatLayout: ChatLayout; turnDividers: boolean };
+const DEFAULTS: Saved = { primary: 'violet', neutral: 'zinc', mode: 'dark', chatLayout: 'split', turnDividers: true };
 // The corner radii live in app.css (--radius-small / --radius-large). `--radius` itself is what z-ui falls back to when
 // something reads it directly: the large size.
 const RADIUS = 0.375;
@@ -27,6 +27,8 @@ class Theme {
   mode = $state(initial.mode);
   /** `split`: your messages on the right, the agent on the left. `single`: everything on the left. */
   chatLayout = $state(initial.chatLayout);
+  /** A thin line between two replies of the agent, and a line where a session was resumed or compacted (on by default). */
+  turnDividers = $state(initial.turnDividers);
   private systemDark = $state(media.matches);
 
   readonly dark = $derived(this.mode === 'system' ? this.systemDark : this.mode === 'dark');
@@ -45,7 +47,7 @@ class Theme {
         root.classList.toggle('dark', this.dark);
         for (const [name, value] of Object.entries(this.tokens)) root.style.setProperty(name, value, 'important');
         try {
-          const saved: Saved = { primary: this.primary, neutral: this.neutral, mode: this.mode, chatLayout: this.chatLayout };
+          const saved: Saved = { primary: this.primary, neutral: this.neutral, mode: this.mode, chatLayout: this.chatLayout, turnDividers: this.turnDividers };
           localStorage.setItem(KEY, JSON.stringify(saved));
         } catch {
           // Persisting is best-effort.

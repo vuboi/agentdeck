@@ -44,6 +44,9 @@ import {
   type AgentEvent,
   type DelegateCall,
 } from './agent';
+import { houseStyleHint } from './house-style';
+import { memoryHint, readProjectMemory } from './project-memory';
+import { replyStyle } from './reply-style.svelte';
 import {
   agentdeckLead,
   argsOfCall,
@@ -92,6 +95,7 @@ import { requestSystemNotificationPermission, sendSystemNotification } from './s
 import { dequeue, enqueue } from './queue';
 import { accountEpoch } from './account-epoch.svelte';
 import { needsContext } from './context-need';
+import { sessionMark } from './chat-dividers';
 import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from './handback';
 import { joinContinuations } from './continuations';
 import {
@@ -309,6 +313,8 @@ export type FileAttachment = {
   name: string;
   path: string;
   size: number;
+  /** Where it came from, told to the agent beside the path (a selection of a file: which file). */
+  note?: string;
 };
 export const draftFiles = $state<Record<string, FileAttachment[]>>({});
 
@@ -1052,8 +1058,9 @@ export const isRunning = (sessionId: string) =>
   workspace.sessions.find((item) => item.id === sessionId)?.status ===
     'working' || hasSideTurn(sessionId);
 
-/** Stops the reply of a chat now. What was written so far stays. */
-export function stopTurn(sessionId: string) {
+/** Stops the reply of a chat now. What was written so far stays. `quiet`: the stop is only to make room for a newer
+ *  message (sent while the reply ran, an edit), not the user's Stop button: the reply does not say "You stopped after". */
+export function stopTurn(sessionId: string, quiet = false) {
   // Stopped by the user: a retry or a hand-over waiting to start does not start.
   delete recoveries[sessionId];
   for (const [id, side] of sideTurns) {
@@ -1104,7 +1111,7 @@ export function stopTurn(sessionId: string) {
   const turn = turns[sessionId];
   // Every agent and provider stops here, so every stopped reply says so, with how long it had run.
   const live = liveReplies[sessionId];
-  if (live?.live) live.stoppedAfter = Date.now() - (live.startedAt ?? Date.now());
+  if (live?.live && !quiet) live.stoppedAfter = Date.now() - (live.startedAt ?? Date.now());
   void stopAgentTurn(sessionId, turn).catch(() => {});
   handleAgentEvent(sessionId, { kind: 'error', message: 'stopped' }, turn);
 }
@@ -1190,6 +1197,11 @@ function missedTurns(
   if (digest.length > 16000) digest = `…${digest.slice(-16000)}`;
   return `Earlier in this chat, other agents answered these turns (you were not part of them):\n\n${digest}\n\n---\nNow the user says:\n`;
 }
+
+/** The chats that ran a turn since the app started: the first turn of any other chat that resumes a conversation resumes a session from before. */
+const touchedThisRun = new Set<string>();
+/** Chats whose next turn starts another CLI conversation (an edited message): that turn carries a "New session" line. */
+const pendingNew = new Set<string>();
 
 /** When each chat's CLI was last asked to start ahead (by chat, agent and model), so typing does not ask on every key. */
 const prewarmedAt = new Map<string, number>();
@@ -1321,6 +1333,8 @@ function startTurn(
   let resume: boolean;
   /** The conversation so far was put in `forkContext` for a new session (model or account change). */
   let digested = false;
+  /** The turn starts another CLI conversation than the chat had (a model or account change, an edited message). */
+  let conversationChanged = pendingNew.delete(session.id);
   const selectedModel = modelFor(session);
   rememberLastChat(
     session.agent,
@@ -1346,6 +1360,7 @@ function startTurn(
       session.agentStarted = false;
       session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id), MODEL_LEAD);
       digested = true;
+      conversationChanged = true;
     }
     // A conversation begun under another account starts a new session: resuming the old one stalls. What was said
     // so far goes with the first message, so the agent does not lose the work in progress.
@@ -1357,6 +1372,7 @@ function startTurn(
       session.agentSession = undefined;
       if (!digested) session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id));
       digested = true;
+      conversationChanged = true;
     }
     session.agentEpoch = epoch;
     if (cliId) session.agentSession = cliId;
@@ -1384,6 +1400,7 @@ function startTurn(
       cliId = null;
       session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id), MODEL_LEAD);
       digested = true;
+      conversationChanged = true;
     }
     // The same account rule as the chat's first agent: a new session, with the conversation so far.
     const accountChanged = own.epoch !== undefined && own.epoch !== epoch;
@@ -1393,6 +1410,7 @@ function startTurn(
       if (cliId) own.id = cliId;
       if (!digested) session.forkContext = (session.forkContext ?? '') + handoffDigest(messagesOf(session.id));
       digested = true;
+      conversationChanged = true;
     }
     own.epoch = epoch;
     resume = cliId !== null && !modelChanged && !accountChanged && own.started;
@@ -1442,7 +1460,21 @@ function startTurn(
     preface + (session.forkContext ?? '') + (digested ? '' : missedTurns(session, list, !silent));
   session.forkContext = undefined;
   const asked = silent ? undefined : list.at(-1);
+  // The line that says a session was resumed, compacted or replaced goes above the user's message that starts it (or
+  // above the reply, for the compaction, which has no message of the user). A silent turn has none.
+  const mark = silent
+    ? undefined
+    : sessionMark({
+        resume,
+        changed: conversationChanged,
+        compacting: text === COMPACT_COMMAND,
+        firstThisRun: !touchedThisRun.has(session.id),
+        hasHistory: list.some((message) => message !== asked && message !== reply),
+        now: new Date(),
+      });
+  touchedThisRun.add(session.id);
   if (!continues) list.push(reply);
+  if (mark) (asked?.role === 'user' ? asked : list[list.length - 1]).mark = mark;
   liveReplies[session.id] = list[list.length - 1]; // the stored (reactive) object
   if (asked?.role === 'user') liveAsks[session.id] = asked;
   if (silent) {
@@ -1538,14 +1570,19 @@ function startTurn(
           : '';
     if (!isWorkerChat(session.id)) orchestrateTold.set(hintKey, orchestrate);
     if (delegateHint === DELEGATE_HINT) rememberDelegateHint(hintKey);
-    const hint = agentdeckLead(openHint, delegateHint);
+    // The reply conventions (house-style.ts): only when the conversation starts, the agent keeps them in its history.
+    const styleHint = !resume && !isWorkerChat(session.id) ? houseStyleHint(replyStyle.houseStyle, replyStyle.houseStyleText) : '';
+    // The project's memory (project-memory.ts): read from its file when a conversation starts, so every agent of the
+    // project begins with what earlier ones learned.
+    const memoryNote = !resume && !isWorkerChat(session.id) && cwd && replyStyle.projectMemory ? memoryHint(true, cwd, await readProjectMemory(cwd)) : '';
+    const hint = agentdeckLead(openHint, delegateHint, styleHint, memoryNote);
     // Pictures and documents are on disk: the prompt names their paths, which the agent opens with its own tools.
     const attached =
       (paths.length
         ? `Attached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
         : '') +
       (files.length
-        ? `${paths.length ? '\n\n' : ''}Attached file${files.length > 1 ? 's' : ''} (open with the Read tool or a shell command):\n${files.map((file) => `- ${file.path}`).join('\n')}`
+        ? `${paths.length ? '\n\n' : ''}Attached file${files.length > 1 ? 's' : ''} (open with the Read tool or a shell command):\n${files.map((file) => `- ${file.path}${file.note ? ` (${file.note})` : ''}`).join('\n')}`
         : '');
     // `/compact` (auto-compress) goes as it is: anything before it would make it a plain message.
     const prompt = text === COMPACT_COMMAND
@@ -4461,7 +4498,7 @@ export function sendMessage(
       });
       return;
     }
-    stopTurn(session.id);
+    stopTurn(session.id, true);
   }
   send(session.id, text, images, elements, mentions, {
     files,
@@ -4474,7 +4511,7 @@ export function steerQueued(sessionId: string, item: Queued) {
   const rest = (queued[sessionId] ?? []).filter((entry) => entry !== item);
   if (rest.length) queued[sessionId] = rest;
   else delete queued[sessionId];
-  if (replies[sessionId]) stopTurn(sessionId);
+  if (replies[sessionId]) stopTurn(sessionId, true);
   send(sessionId, item.text, item.images, item.elements, item.mentions, {
     files: item.files,
   });
@@ -4506,7 +4543,7 @@ export function editMessage(messageId: string, text: string) {
     (message) => message.id === messageId && message.role === 'user',
   );
   if (index === -1) return;
-  if (replies[session.id]) stopTurn(session.id);
+  if (replies[session.id]) stopTurn(session.id, true);
   delete queued[session.id];
   // The pictures, page elements and files sent with it go again too: an edit changes the words, not what was attached.
   const { images, elements, files } = attachmentsOf(list[index]);
@@ -4538,6 +4575,7 @@ export function editMessage(messageId: string, text: string) {
     own.started = false;
   }
   session.forkContext = (session.forkContext ?? '') + handoffDigest(list, EDIT_LEAD);
+  pendingNew.add(session.id);
   send(session.id, text, images, elements, [], { files });
 }
 

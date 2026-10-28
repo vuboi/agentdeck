@@ -62,7 +62,7 @@ export type ClaudeCredit = { apiKey: string; sessionKey: string; enabled: boolea
 export type Probe = { ok: boolean; models: string[]; ms: number; error: string | null };
 export type LocalServer = { kind: ProviderKind; label: string; base_url: string; models: string[] };
 
-export type Section = 'connectors' | 'providers' | 'alerts' | 'sync' | 'computer' | 'about';
+export type Section = 'connectors' | 'providers' | 'replies' | 'memory' | 'alerts' | 'sync' | 'computer' | 'about';
 
 export const settings = $state({ open: false, section: 'connectors' as Section });
 

@@ -23,10 +23,12 @@ sha2.workspace = true
 hex.workspace = true
 tokio.workspace = true
 base64 = "0.22"
+unicode-normalization = "0.1"
 portable-pty = "0.9"
 png = "0.17"
 toml = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+futures-util = "0.3"
 regex = "1"
 walkdir = "2"
 rusqlite = { version = "0.37", features = ["bundled"] }

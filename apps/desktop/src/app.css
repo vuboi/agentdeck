@@ -268,8 +268,25 @@ html[data-warming] [data-z-popover] {
 .md li > p { margin: 0; }
 .md li::marker { color: var(--muted-foreground); }
 .md a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+/* A link to a file: bold when the file is there, faded (with a "not found" tooltip) when it is not. No loud error. */
+.md a.md-path-ok { font-weight: 600; }
+.md a.md-path-dir::before {
+  content: ''; display: inline-block; width: 1em; height: 1em; margin-right: 0.25em; vertical-align: -0.15em; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.md a.md-path-missing { opacity: 0.5; text-decoration-style: dotted; cursor: default; }
+.md .md-image-missing { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem; border: 1px dashed var(--border); border-radius: var(--radius-large); color: var(--muted-foreground); font-size: 0.8125rem; }
 .md blockquote { margin: 0 0 0.75rem; padding: 0.1rem 0.9rem; border-left: 3px solid var(--border); color: var(--muted-foreground); }
 .md hr { margin: 1rem 0; border: 0; border-top: 1px solid var(--border); }
+/* The chat's line between two replies of the agent, and each side of a session line: 1px, fading out at both ends, from
+   the theme's own border colour (so it is right in light and dark). Not like the solid rule of a markdown `---`. */
+.chat-rule {
+  height: 1px;
+  flex: 1 1 auto;
+  min-width: 1.5rem;
+  background: linear-gradient(to right, transparent, color-mix(in oklab, var(--border) 85%, transparent) 18%, color-mix(in oklab, var(--border) 85%, transparent) 82%, transparent);
+}
 .md strong { font-weight: 600; }
 .md :not(pre) > code {
   padding: 0.1rem 0.35rem;

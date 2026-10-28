@@ -14,8 +14,10 @@
   import { diffCache, fileKey, rememberText, textCache } from '../file-cache';
   import { MAX_EDIT_BYTES, splitFileText } from '../file-edit';
   import { toast } from '../toast';
-  import { activeSession, drafts as chatDrafts } from '../sessions.svelte';
+  import { activeSession, draftFiles, drafts as chatDrafts } from '../sessions.svelte';
+  import { saveFileAttachment } from '../agent';
   import Menu from './Menu.svelte';
+  import MenuButton from './MenuButton.svelte';
   import { onDestroy, tick, untrack } from 'svelte';
   import { fade } from 'svelte/transition';
   import { fileWrites } from '../activity.svelte';
@@ -42,9 +44,27 @@
     codeMenu = { x: event.clientX, y: event.clientY };
     codeMenuOpen = true;
   }
-  function addCodeToChat() {
+  /** The selection goes into the message as an attached file (a chip, like a document): it is saved next to the other
+   *  attachments and the agent is told which file it was taken from. Outside the desktop app it is pasted as a code block. */
+  async function addCodeToChat() {
     const session = activeSession();
     if (!session) return toast.error('Open a chat first');
+    if (inTauri()) {
+      try {
+        const base = shortPath.split(/[\\/]/).pop() || 'file';
+        const dot = base.lastIndexOf('.');
+        const name = dot > 0 ? `${base.slice(0, dot)}-selection${base.slice(dot)}` : `${base}-selection.txt`;
+        const bytes = new TextEncoder().encode(pickedCode.endsWith('\n') ? pickedCode : `${pickedCode}\n`);
+        let binary = '';
+        for (const byte of bytes) binary += String.fromCharCode(byte);
+        const path = await saveFileAttachment(name, btoa(binary));
+        draftFiles[session.id] = [...(draftFiles[session.id] ?? []), { id: crypto.randomUUID(), name, path, size: bytes.length, note: `a selection from ${shortPath}` }];
+        toast.success('Added to chat');
+        return;
+      } catch {
+        // Falls back to the code block below.
+      }
+    }
     const fence = pickedCode.includes('```') ? '````' : '```';
     const body = pickedCode.endsWith('\n') ? pickedCode.slice(0, -1) : pickedCode;
     const block = [shortPath, `${fence}${language ?? ''}`, body, fence].join(String.fromCharCode(10));
@@ -299,7 +319,12 @@
   let matchTotal = $state(0);
   let matchAt = $state(0);
   let findInput: HTMLInputElement | undefined = $state();
-  let findButton = $state<HTMLElement>();
+  // The tool buttons by id, and the box that holds them: the find popover hangs under its button, or under the box when
+  // that button has gone into the menu.
+  let buttons = $state<Record<string, HTMLElement | null | undefined>>({});
+  let toolsEnd = $state<HTMLElement>();
+  const findButton = $derived(buttons.find ?? toolsEnd);
+  let barWidth = $state(1000);
   // The bar is ready to type in as soon as it opens (the popover mounts a moment after `findOpen` turns true).
   $effect(() => {
     if (!findOpen) return;
@@ -398,6 +423,28 @@
     });
   }
 
+  // The tools of the bar, in the order they drop out as it narrows (the last first).
+  type FileTool = { id: string; label: string; title?: string; icon: string; on?: boolean; toggle?: boolean; disabled?: boolean; spin?: boolean; run: () => void };
+  const tools = $derived<FileTool[]>([
+    ...(dirty ? [{ id: 'save', label: 'Save', title: 'Save (Ctrl+S)', icon: 'lucideSave', on: true, run: save }] : []),
+    { id: 'wrap', label: 'Wrap long lines', icon: 'lucideWrapText', on: wrap, toggle: true, run: () => (wrap = !wrap) },
+    { id: 'find', label: 'Find in file', title: 'Find in file (Ctrl+F)', icon: 'lucideSearch', on: findOpen, run: () => (findOpen ? (findOpen = false) : void openFind()) },
+    ...(isMarkdown ? [{ id: 'preview', label: 'Preview the rendered Markdown', icon: 'lucideEye', run: () => ((previewText = currentText()), (previewOpen = true)) }] : []),
+    ...(formattable ? [{ id: 'format', label: 'Format the file', title: 'Format the file (an edit: Ctrl+Z undoes it, Ctrl+S saves it)', icon: formatting ? 'lucideLoaderCircle' : 'lucideBraces', disabled: formatting, spin: formatting, run: format }] : []),
+    { id: 'copy', label: 'Copy the whole file', title: copiedAll ? 'Copied' : 'Copy the whole file', icon: copiedAll ? 'lucideCheck' : 'lucideCopy', run: copyAll },
+  ]);
+  // A button is 32px with a 4px gap. The File/Changes tabs on the left keep their room; when not every tool fits, the
+  // menu button (32px) takes the last place and the tools that do not fit go into its menu.
+  const BUTTON = 36;
+  const visibleTools = $derived.by(() => {
+    const room = barWidth - 20 - (changed || !diffRead ? 140 : 0);
+    if (tools.length * BUTTON <= room) return tools.length;
+    return Math.max(0, Math.floor((room - 32) / BUTTON));
+  });
+  const hiddenTools = $derived<ZDropdownMenuItem[]>(
+    tools.slice(visibleTools).map((item) => ({ label: item.label, icon: item.icon as ZIconName, iconSize: 12, class: 'text-xs! py-1', checked: item.on && item.toggle, disabled: item.disabled, onClick: item.run })),
+  );
+
   // File actions stay compact and use tooltips for their names.
   const toolBase = 'inline-flex h-8 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded text-xs outline-none disabled:opacity-40';
   const tool = `${toolBase} w-8`;
@@ -473,34 +520,19 @@
     <OfficePreview {file} />
   {:else if view === 'changes' || disk !== null}
     <!-- One bar for both views, so the File/Changes tabs keep their place and their sliding mark when the view changes. -->
-    <div class="flex h-10 shrink-0 items-center gap-2 overflow-hidden border-b border-border px-1.5 text-xs">
+    <div bind:clientWidth={barWidth} class="flex h-10 shrink-0 items-center gap-2 overflow-hidden border-b border-border px-1.5 text-xs">
       <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">{#if changed || !diffRead}<div class="flex items-center gap-1 transition-opacity duration-200 {diffRead ? 'opacity-100' : 'opacity-0'}" aria-hidden={!diffRead}>{@render viewToggle()}</div>{/if}</div>
       {#if view !== 'changes'}
-      <div class="flex shrink-0 items-center gap-1">
-        {#if dirty}
-          <button type="button" class="{tool} {toolOn}" aria-label="Save" title="Save (Ctrl+S)" onclick={save}>
-            <ZIcon zType={icon('lucideSave')} zSize="14" />
+      <!-- The tools drop out of the bar from the last one as it narrows, and go into the menu button that takes their place. -->
+      <div bind:this={toolsEnd} class="flex shrink-0 items-center gap-1">
+        {#each tools.slice(0, visibleTools) as item (item.id)}
+          <button bind:this={buttons[item.id]} type="button" class="{tool} {item.on ? toolOn : toolOff}" disabled={item.disabled ?? false} aria-pressed={item.toggle ? item.on : undefined} aria-expanded={item.id === 'find' ? findOpen : undefined} aria-label={item.label} title={item.title ?? item.label} onclick={item.run}>
+            <ZIcon zType={icon(item.icon)} zSize="14" class={item.spin ? 'animate-spin' : ''} />
           </button>
+        {/each}
+        {#if visibleTools < tools.length}
+          <MenuButton items={hiddenTools} icon="lucideMenu" label="More tools" width={220} />
         {/if}
-        <button type="button" class="{tool} {wrap ? toolOn : toolOff}" aria-pressed={wrap} aria-label="Wrap long lines" title="Wrap long lines" onclick={() => (wrap = !wrap)}>
-          <ZIcon zType={icon('lucideWrapText')} zSize="14" />
-        </button>
-        <button bind:this={findButton} type="button" class="{tool} {findOpen ? toolOn : toolOff}" aria-expanded={findOpen} aria-label="Find in file" title="Find in file (Ctrl+F)" onclick={() => (findOpen ? (findOpen = false) : void openFind())}>
-          <ZIcon zType={icon('lucideSearch')} zSize="14" />
-        </button>
-        {#if isMarkdown}
-          <button type="button" class="{tool} {toolOff}" aria-label="Preview the rendered Markdown" title="Preview the rendered Markdown" onclick={() => ((previewText = currentText()), (previewOpen = true))}>
-            <ZIcon zType={icon('lucideEye')} zSize="14" />
-          </button>
-        {/if}
-        {#if formattable}
-          <button type="button" class="{tool} {toolOff}" disabled={formatting} aria-label="Format the file" title="Format the file (an edit: Ctrl+Z undoes it, Ctrl+S saves it)" onclick={format}>
-            <ZIcon zType={icon(formatting ? 'lucideLoaderCircle' : 'lucideBraces')} zSize="14" class={formatting ? 'animate-spin' : ''} />
-          </button>
-        {/if}
-        <button type="button" class="{tool} {toolOff}" aria-label="Copy the whole file" title={copiedAll ? 'Copied' : 'Copy the whole file'} onclick={copyAll}>
-          <ZIcon zType={icon(copiedAll ? 'lucideCheck' : 'lucideCopy')} zSize="14" />
-        </button>
       </div>
       {/if}
     </div>

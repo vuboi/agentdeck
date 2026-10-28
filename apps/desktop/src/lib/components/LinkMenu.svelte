@@ -8,6 +8,7 @@
   import { openInViewer } from '../file-viewer.svelte';
   import { fileWrites } from '../activity.svelte';
   import { toast } from '../toast';
+  import { fileUrl, hostPlatform, nativePath } from '../path-links';
   import { openWithItem, openWithOptions as getOpenWithOptions, type OpenWithOption } from '../open-with';
 
   let openWithOptions = $state<OpenWithOption[]>([]);
@@ -97,7 +98,8 @@
       onClick: async () => {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
-          await invoke('reveal_path', { path: linkMenu.file.replace(/[\\/][^\\/]*$/, '') });
+          // The file is selected in the file manager; a link is followed to the real folder (path_links.rs).
+          await invoke('path_reveal', { path: linkMenu.file });
         } catch (error) {
           toast.error(String(error));
         }
@@ -109,8 +111,19 @@
       iconSize: '12',
       class: 'text-xs! py-1',
       onClick: () => {
-        void navigator.clipboard.writeText(linkMenu.file);
+        // As this system writes it: backslashes on Windows, slashes on macOS and Linux.
+        void navigator.clipboard.writeText(nativePath(linkMenu.file, hostPlatform()));
         toast.success('Path copied');
+      },
+    },
+    {
+      label: 'Copy as file:// URL',
+      icon: 'lucideLink',
+      iconSize: '12',
+      class: 'text-xs! py-1',
+      onClick: () => {
+        void navigator.clipboard.writeText(fileUrl(linkMenu.file));
+        toast.success('URL copied');
       },
     },
     {

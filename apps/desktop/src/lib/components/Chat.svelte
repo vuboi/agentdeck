@@ -24,7 +24,21 @@
   import { agentDisplayName } from '../provider-registry';
   import AgentLogo from './AgentLogo.svelte';
   import { theme } from '../theme.svelte';
-  import { elapsed, segments } from '../blocks';
+  import { hollow, markerText, neighbour, stepsOnly, turnDivider } from '../chat-dividers';
+  import { runUsage } from '../run-usage';
+  import { answerText, elapsed, segments } from '../blocks';
+
+  /** What the speaker button reads: the replies of the agent that run up to this one (no message of yours between). */
+  function spokenRun(index: number) {
+    const list = chat.messages;
+    let from = index;
+    while (from > 0 && list[from - 1].role === 'assistant') from--;
+    return list
+      .slice(from, index + 1)
+      .map((reply) => answerText(reply.blocks))
+      .filter(Boolean)
+      .join('\n\n');
+  }
   import { openAttachment, openImages, preview, releasePreview, revealPreviewed } from '../preview.svelte';
   import ArtifactCards from './ArtifactCards.svelte';
   import ChatBlock from './ChatBlock.svelte';
@@ -888,7 +902,21 @@
           {@const agent = message?.agent ?? activeSession()?.source ?? activeSession()?.agent ?? 'claude'}
           {#if message}
             <div class="absolute top-0 left-0 w-full" data-index={row.index} style:transform="translateY({row.start}px)" {@attach measureRow}>
+              <!-- A session line (resumed, compacted, new) or, between two replies of the agent, a thin line. Read from the roles and
+                   the mark of the neighbours only, never the text, so a reply that is still streaming keeps one stable line. -->
+              {#if theme.turnDividers && message.mark}
+                <div class="chat-mark mx-auto flex w-full max-w-[52rem] items-center gap-3 px-3 pt-3 min-[720px]:px-8" role="separator" aria-label={markerText(message.mark)}>
+                  <span class="chat-rule"></span>
+                  <span class="shrink-0 text-[11px] text-muted-foreground">{markerText(message.mark)}</span>
+                  <span class="chat-rule"></span>
+                </div>
+              {:else if hollow(message, chat.messages.at(-1) !== message)}
+                <!-- Cut off before it wrote anything: nothing to draw. -->
+              {:else if turnDivider(neighbour(chat.messages, row.index + from, -1), message, theme.turnDividers)}
+                <div class="mx-auto w-full max-w-[52rem] px-3 pt-1 min-[720px]:px-8" role="separator" aria-hidden="true"><div class="chat-rule"></div></div>
+              {/if}
               <!-- No avatars: your messages are a bubble (right side, or left in one-sided mode); the agent is just its coloured name. -->
+              {#if !hollow(message, chat.messages.at(-1) !== message)}
               <article oncontextmenu={(event) => openSelectionMenu(event, message.blocks.map((block) => (block.kind === 'response' ? block.text : '')).filter(Boolean).join('\n\n'))} class="group/msg mx-auto flex w-full min-w-0 max-w-[52rem] flex-col break-words py-2.5 px-3 min-[720px]:px-8 {mine && theme.chatLayout === 'split' ? 'items-end' : 'items-start'}">
                 {#if mine}
                   {@const pictures = message.blocks.flatMap((block) => (block.kind === 'image' ? [block] : []))}
@@ -967,7 +995,19 @@
                   {@const parts = segments(message.blocks)}
                   {@const tail = parts.at(-1)}
                   {@const working = tail?.kind === 'commands' && tail.items.some((item) => item.status === 'running')}
+                  <!-- Replies of the same agent and model that follow one another (a divider between them) share one name line
+                       and one footer: only the first carries the name, only the last the copy button. -->
+                  {@const before = neighbour(chat.messages, row.index + from, -1)}
+                  {@const after = neighbour(chat.messages, row.index + from, 1)}
+                  {@const sameAs = (other: typeof message | undefined) => other?.role === 'assistant' && (other.agent ?? agent) === agent && other.model === message.model}
+                  {@const quiet = stepsOnly(message)}
+                  {@const grouped = sameAs(before) && !stepsOnly(before)}
+                  {@const lastOfRun = !(sameAs(after) && !stepsOnly(after)) && !quiet}
+                  <!-- The numbers on the name line are the whole run's: the replies a newer message cut off are in them too. -->
+                  {@const usage = grouped || quiet ? undefined : runUsage(chat.messages, row.index + from, estimateCost)}
+                  {#if !quiet && !grouped}
                   <div class="mb-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs">
+                    {#if !grouped}
                     <span class="inline-flex items-center gap-1 font-semibold {agentText[agent]}">
                       <AgentLogo agent={agent} model={message.model} class="size-3 shrink-0" />
                       {agent === 'custom' ? agentDisplayName(agent, message.model) : agentName(agent)}
@@ -978,9 +1018,10 @@
                     {/if}
                     <span class="text-muted-foreground/40" aria-hidden="true">·</span>
                     <span class="text-muted-foreground/80 tabular-nums">{message.time}</span>
-                    {#if message.tokens}
-                      {@const cost = message.cost ?? estimateCost(message.tokens, message.model)}
-                      {@const tokens = message.tokens}
+                    {/if}
+                    {#if usage}
+                      {@const cost = usage.cost}
+                      {@const tokens = usage.tokens}
                       {@const parts = costParts(tokens, message.model)}
                       {#snippet usageTip()}
                         <div class="flex min-w-44 flex-col gap-1 py-0.5 text-[11px] tabular-nums">
@@ -1001,7 +1042,7 @@
                             <div class="-mx-[0.6rem] mt-0.5 flex items-center gap-2 border-t border-border px-[0.6rem] pt-1.5">
                               <ZIcon zType={'lucideCoins' as ZIconName} zSize="12" class="size-3! shrink-0 text-success" />
                               <span class="flex-1 text-muted-foreground">Total</span>
-                              <span class="font-semibold text-success">{message.cost == null ? '≈ ' : ''}{usd(cost)}</span>
+                              <span class="font-semibold text-success">{usage.exact ? '' : '≈ '}{usd(cost)}</span>
                             </div>
                           {/if}
                         </div>
@@ -1010,14 +1051,15 @@
                       {@const rolling = Boolean(message.live) && isRunning(workspace.activeId)}
                       <!-- Tokens and cost, quiet and on the right; hover for the breakdown. -->
                       <span class="ml-auto flex items-baseline gap-1.5 text-[11px] tabular-nums" {@attach zTooltip({ content: usageTip, position: 'top' })}>
-                        <span class="text-muted-foreground">{#if rolling}<ZNumberTicker zValue={totalTokens(message.tokens)} zFormat="compact" zDuration={600} />{:else}{shortCount(totalTokens(message.tokens))}{/if} tokens</span>
+                        <span class="text-muted-foreground">{#if rolling}<ZNumberTicker zValue={totalTokens(usage.tokens)} zFormat="compact" zDuration={600} />{:else}{shortCount(totalTokens(usage.tokens))}{/if} tokens</span>
                         {#if cost != null}
                           <span class="text-muted-foreground/40" aria-hidden="true">·</span>
-                          <span class="font-medium text-success">{message.cost == null ? '≈ ' : ''}{#if rolling}<ZNumberTicker zValue={cost} zFormat="currency" zCurrency="USD" zLocale="en-US" zMinimumFractionDigits={2} zMaximumFractionDigits={cost < 0.01 ? 3 : 2} zDuration={600} />{:else}{usd(cost)}{/if}</span>
+                          <span class="font-medium text-success">{usage.exact ? '' : '≈ '}{#if rolling}<ZNumberTicker zValue={cost} zFormat="currency" zCurrency="USD" zLocale="en-US" zMinimumFractionDigits={2} zMaximumFractionDigits={cost < 0.01 ? 3 : 2} zDuration={600} />{:else}{usd(cost)}{/if}</span>
                         {/if}
                       </span>
                     {/if}
                   </div>
+                  {/if}
                   <div class="flex w-full min-w-0 flex-col gap-2">
                     {#each parts as segment, position (position)}
                       {#if segment.kind === 'commands'}
@@ -1046,19 +1088,20 @@
                   {@const showLive = message.live && isRunning(workspace.activeId)}
                   <!-- The footer (copy, fork, time) waits until the text has been written out on screen, not only until the run ends. -->
                   {@const typing = !showLive && replyRendering(workspace.activeId, message.id)}
-                  {#if showLive || message.blocks.length > 0 || message.stoppedAfter !== undefined}
+                  {#if showLive || ((message.blocks.length > 0 || message.stoppedAfter !== undefined) && lastOfRun)}
                     <div class="relative h-[30px] w-full shrink-0">
                       {#if showLive}
                         <div class="absolute inset-x-0 bottom-0 flex h-5 items-center"><LiveStatus {message} /></div>
                       {:else if typing}
                         <!-- Nothing yet: the slot keeps its height. -->
                       {:else}
-                        <MessageFooter {message} onfork={() => forkSession(workspace.activeId)} />
+                        <MessageFooter {message} onfork={() => forkSession(workspace.activeId)} speak={spokenRun(row.index + from)} />
                       {/if}
                     </div>
                   {/if}
                 {/if}
               </article>
+              {/if}
             </div>
           {/if}
         {/each}

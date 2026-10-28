@@ -44,6 +44,8 @@ export type Message = {
   cost?: number;
   /** The agent that wrote this reply. A chat can switch agents, so each reply keeps its own. */
   agent?: Agent;
+  /** The session started, resumed or compacted at this message: the chat draws a line above it (chat-dividers.ts). */
+  mark?: import('./chat-dividers').SessionMark;
 };
 
 export const sessions: Session[] = [

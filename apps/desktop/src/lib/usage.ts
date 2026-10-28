@@ -42,7 +42,17 @@ const LIST: [RegExp, () => Price][] = [
   [/gpt-5\.6-luna/i, () => ({ input: 0.2, output: 1.2, cacheRead: 0.02 })],
   [/gemini-4-argon/i, () => (Date.now() >= Date.UTC(2026, 11, 1) ? { input: 4, output: 20, cacheRead: 0.4 } : { input: 2, output: 10, cacheRead: 0.2 })],
 ];
-const listed = (model: string): Price | undefined => LIST.find(([pattern]) => pattern.test(model))?.[1]();
+/** A free model (OpenCode's `…-free`, a provider's free tier): it costs nothing, so its replies count as $0. */
+export const isFreeModel = (model: string | undefined) => Boolean(model && /(?:^|[-_:/ ])free(?:$|[-_:/ ])/i.test(model));
+const FREE: Price = { input: 0, output: 0, cacheRead: 0 };
+/** A model with no list price, estimated from the tier its name says: the small, fast ones (flash, mini, lite…) at the
+ *  small-model rate. Only an estimate (shown with ≈), and a typed price wins over it. */
+const SMALL_TIER = /(?:flash|mini|lite|nano|haiku|luna|small)/i;
+const SMALL_PRICE: Price = { input: 0.1, output: 0.5, cacheRead: 0.01 };
+/** Any other model without a list price: a mid-size rate, so every reply has a cost estimate (shown with ≈). */
+const MID_PRICE: Price = { input: 1, output: 5, cacheRead: 0.1 };
+const listed = (model: string): Price =>
+  isFreeModel(model) ? FREE : (LIST.find(([pattern]) => pattern.test(model))?.[1]() ?? (SMALL_TIER.test(model) ? SMALL_PRICE : MID_PRICE));
 // A `credit:` model is the same model billed to the API credit: it costs what that model costs.
 export const priceOf = (model: string | undefined): Price | undefined => {
   if (!model) return undefined;

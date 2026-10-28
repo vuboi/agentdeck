@@ -2,6 +2,7 @@
 // with a language label and a copy button (colouring is added afterwards by Markdown.svelte, not here).
 import DOMPurify from 'dompurify';
 import { marked, type Tokens } from 'marked';
+import { labelOf, matchPath, pathStart, type PathSpan } from './path-links';
 
 const escapeHtml = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -16,9 +17,45 @@ const COPY_ICON =
   svg('ic-copy', '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>') +
   svg('ic-check', '<path d="M20 6 9 17l-5-5"/>');
 
+// Settings > Replies. A change drops the cached HTML, which was made under the old setting.
+let linkPaths = true;
+let proxyImages = true;
+export function setMarkdownOptions(options: { linkPaths: boolean; proxyImages: boolean }) {
+  if (options.linkPaths === linkPaths && options.proxyImages === proxyImages) return;
+  linkPaths = options.linkPaths;
+  proxyImages = options.proxyImages;
+  rendered.clear();
+}
+
+type PathToken = Tokens.Generic & { type: 'mdpath'; span: PathSpan };
+
+// A file path in plain text becomes a link (path-links.ts). It is drawn with the shortest guess as the link and the rest of
+// the longest guess as plain text after it; Markdown.svelte then checks the disk and keeps the longest guess that exists,
+// which is how a path with spaces gets its right end. Inside a link, code or a code block it never runs.
+const pathExtension = {
+  name: 'mdpath',
+  level: 'inline' as const,
+  start: (src: string) => (linkPaths ? pathStart(src) : undefined),
+  tokenizer(this: { lexer: { state: { inLink: boolean } } }, src: string): PathToken | undefined {
+    if (!linkPaths || this.lexer.state.inLink) return undefined;
+    const span = matchPath(src);
+    return span ? { type: 'mdpath', raw: span.raw, span } : undefined;
+  },
+  renderer(token: Tokens.Generic) {
+    const { span } = token as PathToken;
+    const short = span.candidates[span.candidates.length - 1];
+    const cands = span.candidates.map(({ path, length, line }) => [path, length, line]);
+    return (
+      `<a href="#" class="md-path" data-file="${escapeHtml(short.path)}${escapeHtml(short.line)}" data-cands="${escapeHtml(JSON.stringify(cands))}" data-raw="${escapeHtml(span.raw)}">${escapeHtml(labelOf(short.path, short.line))}</a>` +
+      `<span class="md-path-rest">${escapeHtml(span.raw.slice(short.length))}</span>`
+    );
+  },
+};
+
 marked.use({
   gfm: true,
   breaks: true,
+  extensions: [pathExtension],
   renderer: {
     // `http://localhost:4200` in backticks is an address too: make it a link.
     // marked passes the code as written (not escaped): `<pre>` in backticks must show as text, not become a tag.
@@ -30,6 +67,9 @@ marked.use({
     // (ArtifactCards: a player, a picture): as an <img> here it was a broken picture. Web and data pictures stay.
     image({ href, text }: Tokens.Image) {
       if (!/^(https?:|data:image\/)/i.test(href)) return '';
+      // A picture on the web is fetched by the app and shown from its cache (the window may not load it itself): the
+      // tag waits with `data-remote` until Markdown.svelte has the copy.
+      if (proxyImages && /^https?:/i.test(href)) return `<img data-remote="${escapeHtml(href)}" alt="${escapeHtml(text)}">`;
       return `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}">`;
     },
     // A link to a file (`E:/repo/a.txt`, `/home/me/a.txt`, `src/a.ts:12`) keeps its path in data-file: DOMPurify drops

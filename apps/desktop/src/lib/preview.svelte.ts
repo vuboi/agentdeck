@@ -31,6 +31,13 @@ export function openImages(images: { src: string; name: string }[], index: numbe
   preview.file = preview.files[index] ?? null;
 }
 
+/** Opens the lightbox on a mix of pictures and videos (the media of one reply). The caller owns the URLs it passes in. */
+export function openMedia(items: { name: string; url: string; type: string; size?: number; thumb?: string }[], index: number) {
+  releasePreview();
+  preview.files = items.map((item, position) => ({ id: `${position}:${item.name}`, name: item.name, size: item.size ?? 0, type: item.type, url: item.url, thumbnailUrl: item.thumb }));
+  preview.file = preview.files[index] ?? null;
+}
+
 /** Whether the lightbox can show this document; otherwise the caller should just reveal it in the file manager. */
 export const canPreviewDocument = (name: string) => previewMime(name) !== null;
 

@@ -13,6 +13,16 @@
   const COLOUR_MAX_CHARS = 20_000;
   const coloured = new Map<string, string>();
   const COLOURED_MAX = 600;
+
+  // Which paths exist (path_links.rs), kept for the session: a row that mounts again is marked at once, with no second
+  // look at the disk. A path the agent is about to create is looked at again after a while (CHECK_AGAIN_MS).
+  type Found = { exists: boolean; dir: boolean; path: string; at: number };
+  const found = new Map<string, Found>();
+  const FOUND_MAX = 3000;
+  const CHECK_AGAIN_MS = 15_000;
+  // Pictures from the web as data URLs (image_fetch), or null when they could not be had.
+  const pictures = new Map<string, string | null>();
+  const PICTURES_MAX = 40;
 </script>
 
 <script lang="ts">
@@ -68,6 +78,17 @@
     return end;
   }
 
+  /** A link `[name](path)` is never shown half typed: its raw text (with the whole path) would show and then shrink to
+   *  the name. When `at` falls inside one, the reveal waits before it, or takes the whole link at once when it has arrived. */
+  function linkSafe(source: string, at: number, limit: number) {
+    const open = source.lastIndexOf('[', at - 1);
+    if (open < 0 || at - open > 800) return at;
+    const head = source.slice(open, at);
+    if (!/^\[[^\]\n]*$|^\[[^\]\n]*\]$|^\[[^\]\n]*\]\([^)\n]*$/.test(head)) return at;
+    const whole = /^\[[^\]\n]*\]\([^)\n]*\)/.exec(source.slice(open, limit));
+    return whole ? open + whole[0].length : open;
+  }
+
   $effect(() => {
     const source = text;
     const target = source.length;
@@ -87,7 +108,7 @@
       if (backlog <= 0) return;
       const rate = streaming ? Math.min(MAX_CPS, Math.max(MIN_CPS, backlog / DRAIN_SECONDS)) : Math.min(DONE_MAX_CPS, Math.max(DONE_MIN_CPS, backlog / DONE_DRAIN_SECONDS));
       progress = pace = Math.min(target, progress + rate * dt);
-      const next = wordEnd(source, Math.floor(progress), target);
+      const next = linkSafe(source, wordEnd(source, Math.floor(progress), target), target);
       // `progress` keeps its own pace: pulling it to the end of each shown word would double the real speed.
       if (next > shown) shown = next;
       frame = requestAnimationFrame(step);
@@ -245,6 +266,126 @@
     return () => clearTimeout(id);
   });
 
+  const NOT_FOUND = 'Không tìm thấy';
+
+  function mark(link: HTMLAnchorElement, result: Found | undefined) {
+    link.classList.toggle('md-path-ok', Boolean(result?.exists));
+    link.classList.toggle('md-path-missing', result !== undefined && !result.exists);
+    // A folder gets a folder icon, and a click opens it in the file manager.
+    link.classList.toggle('md-path-dir', Boolean(result?.exists && result.dir));
+    if (result && !result.exists) link.title = NOT_FOUND;
+    else if (link.title === NOT_FOUND) link.removeAttribute('title');
+  }
+
+  /** Marks the links to files: one that exists is bold, one that does not is faded with a tooltip (no error). A path
+   *  found in plain text comes with several guesses of where it ends (a name with spaces): the longest that exists wins,
+   *  and the words after it go back to plain text. */
+  async function checkPaths(container: HTMLElement) {
+    const links = [...container.querySelectorAll<HTMLAnchorElement>('a[data-file]')].filter((link) => link.dataset.checked !== '1');
+    if (!links.length) return;
+    const projectRoot = workspace.projects.find((project) => project.id === activeSession()?.projectId)?.path ?? '';
+    const guessesOf = (link: HTMLAnchorElement): [string, number, string][] => {
+      try {
+        const parsed = link.dataset.cands ? (JSON.parse(link.dataset.cands) as [string, number, string][]) : [];
+        if (parsed.length) return parsed;
+      } catch {
+        // Falls to the single path below.
+      }
+      const file = filePathOf(link.dataset.file ?? '', projectRoot);
+      return file ? [[file, 0, '']] : [];
+    };
+    const now = Date.now();
+    const asked = new Set<string>();
+    for (const link of links) {
+      for (const [path] of guessesOf(link)) {
+        const known = found.get(path);
+        if (!known || (!known.exists && now - known.at > CHECK_AGAIN_MS)) asked.add(path);
+      }
+    }
+    if (asked.size && inTauri()) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const list = [...asked];
+        const results = await invoke<{ exists: boolean; dir: boolean; path: string }[]>('path_resolve', { paths: list });
+        results.forEach((result, index) => found.set(list[index], { ...result, at: Date.now() }));
+        while (found.size > FOUND_MAX) found.delete(found.keys().next().value as string);
+      } catch {
+        return;
+      }
+    }
+    for (const link of links) {
+      if (!container.contains(link)) continue;
+      const guesses = guessesOf(link);
+      const hit = guesses.find(([path]) => found.get(path)?.exists);
+      const pick = hit ?? guesses[guesses.length - 1];
+      if (!pick) continue;
+      const result = found.get(pick[0]);
+      if (link.dataset.cands) {
+        const rest = link.nextElementSibling;
+        // The label is the file's own name (with the line it points at), never the path.
+        const name = (result?.exists ? result.path : pick[0]).replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).at(-1) ?? pick[0];
+        link.textContent = `${name}${pick[2]}`;
+        link.dataset.file = `${result?.exists ? result.path : pick[0]}${pick[2]}`;
+        if (rest?.classList.contains('md-path-rest')) rest.textContent = (link.dataset.raw ?? '').slice(pick[1]);
+      } else if (result?.exists && !isAbsolutePath(link.dataset.file ?? '')) {
+        link.dataset.file = result.path;
+      }
+      mark(link, result);
+      // A path that is not there yet stays open to a later look (the agent may be about to write it).
+      if (result?.exists) link.dataset.checked = '1';
+    }
+  }
+
+  /** A picture from the web (`data-remote`): fetched by the app, shown from its copy; when it cannot be had, a
+   *  placeholder with a button that opens the address in the Preview. */
+  async function loadPictures(container: HTMLElement) {
+    const images = [...container.querySelectorAll<HTMLImageElement>('img[data-remote]:not([data-loading])')];
+    for (const image of images) {
+      const url = image.dataset.remote ?? '';
+      image.dataset.loading = '1';
+      let data = pictures.get(url);
+      if (data === undefined) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          data = await invoke<string>('image_fetch', { url });
+        } catch {
+          data = null;
+        }
+        pictures.set(url, data);
+        while (pictures.size > PICTURES_MAX) pictures.delete(pictures.keys().next().value as string);
+      }
+      if (!container.contains(image)) continue;
+      if (data) {
+        image.src = data;
+        image.removeAttribute('data-remote');
+        continue;
+      }
+      const holder = document.createElement('span');
+      holder.className = 'md-image-missing';
+      const label = document.createElement('span');
+      label.textContent = image.alt || 'Picture not loaded';
+      const open = document.createElement('a');
+      open.href = url;
+      open.textContent = 'Open in Preview';
+      open.dataset.previewImage = '1';
+      holder.append(label, open);
+      image.replaceWith(holder);
+    }
+  }
+
+  // After each render (and whenever the text settles): mark the file links and fetch the pictures. Blocks that were
+  // already marked are skipped (`data-checked`), so only the block being written is looked at again.
+  $effect(() => {
+    void html;
+    const container = root;
+    if (!container || !inTauri()) return;
+    const id = setTimeout(() => {
+      void checkPaths(container);
+      void loadPictures(container);
+    }, streaming || catching ? 400 : 0);
+    return () => clearTimeout(id);
+  });
+
   const linkOf = (event: Event) => (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
 
   /** A link the agent wrote to a file: `E:/repo/a.txt`, `/home/me/a.txt`, `file:///…`, or `src/a.ts:42` inside the
@@ -287,6 +428,14 @@
     const link = linkOf(event);
     if (link && inTauri()) {
       event.preventDefault();
+      if (link.classList.contains('md-path-dir') && link.dataset.file) {
+        void import('@tauri-apps/api/core').then(({ invoke }) => invoke('path_open', { path: link.dataset.file }));
+        return;
+      }
+      if (link.dataset.previewImage) {
+        openInPreview(link.href);
+        return;
+      }
       if (link.dataset.file === undefined && link.getAttribute('href') === '#') return;
       // A file the agent linked to opens in a tab of its own, like a file picked in Explore.
       const projectRoot = workspace.projects.find((project) => project.id === activeSession()?.projectId)?.path ?? '';

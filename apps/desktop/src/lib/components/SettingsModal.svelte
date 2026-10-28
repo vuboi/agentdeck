@@ -15,6 +15,10 @@
   import { OPENAI_SVG, OPENCODE_SVG } from '../brand-icons';
   import { inTauri, isPreviewCopy } from '../history';
   import { getPref } from '../prefs';
+  import { DEFAULT_HOUSE_STYLE } from '../house-style';
+  import { replyStyle } from '../reply-style.svelte';
+  import { readProjectMemory, writeProjectMemory, MEMORY_FILE } from '../project-memory';
+  import { workspace } from '../sessions.svelte';
   import { exportArchive, pullArchive, pushArchive } from '../archive';
   import { syncProviders } from '../sync';
   import { describeExport, exportData, importData, parseExport, pickExport, type ExportFile } from '../data-export';
@@ -65,11 +69,41 @@
   const NAV: { id: Section; label: string; icon: string; hint: string }[] = [
     { id: 'connectors', label: 'Connectors', icon: 'lucidePlug', hint: 'CLIs and accounts' },
     { id: 'providers', label: 'Providers', icon: 'lucideServer', hint: 'Custom and local models' },
+    { id: 'replies', label: 'Replies', icon: 'lucideMessageSquare', hint: 'House style and file links' },
+    { id: 'memory', label: 'Memory', icon: 'lucideBrain', hint: 'What agents know about a project' },
     { id: 'alerts', label: 'Limit alerts', icon: 'lucideBell', hint: 'Warn before a limit' },
     { id: 'sync', label: 'Sync', icon: 'lucideCloudUpload', hint: 'History backup (planned)' },
     { id: 'computer', label: 'Computer use', icon: 'lucideMonitor', hint: 'Windows control via MCP' },
     { id: 'about', label: 'About', icon: 'lucideInfo', hint: 'Version and links' },
   ];
+
+  // Memory: the small file each project keeps for its agents (project-memory.ts), edited here.
+  let memoryProjectId = $state('');
+  let memoryText = $state('');
+  let memorySaved = $state('');
+  let memoryBusy = $state(false);
+  const memoryProject = $derived(workspace.projects.find((project) => project.id === memoryProjectId) ?? workspace.projects[0]);
+  $effect(() => {
+    const path = memoryProject?.path;
+    if (!settings.open || settings.section !== 'memory' || !path) return;
+    void readProjectMemory(path).then((text) => {
+      if (memoryProject?.path !== path) return;
+      memoryText = memorySaved = text;
+    });
+  });
+  async function saveMemory() {
+    if (!memoryProject) return;
+    memoryBusy = true;
+    try {
+      await writeProjectMemory(memoryProject.path, memoryText);
+      memorySaved = memoryText;
+      toast.success('Memory saved');
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      memoryBusy = false;
+    }
+  }
 
   let computerUseEnabled = $state(false);
   void getPref<boolean>('computer_use.enabled').then((value) => {
@@ -966,6 +1000,77 @@
                 <ZIcon zType={icon(updateUi.spinning ? 'lucideLoaderCircle' : 'lucideRefreshCw')} class="size-3.5 {updateUi.spinning ? 'animate-spin' : ''}" /> {updateUi.spinning ? 'Checking…' : 'Check for updates'}
               </ZButton>
               <p class="m-0 text-[11px] text-muted-foreground">Built with Tauri 2, Svelte 5 and Rust.</p>
+            </div>
+
+          {:else if settings.section === 'replies'}
+            <div class="flex flex-col gap-4" in:fade={{ duration: 200 }}>
+              <section class="flex items-start gap-3 rounded-xl border border-border bg-card/40 p-4">
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold">Reply conventions</h3>
+                  <p class="mt-1 text-xs text-muted-foreground">Given to the agent when a new conversation starts: files come back as links named after the file, with no raw paths in the text, and web pictures are saved locally. Old conversations are not changed.</p>
+                </div>
+                <ZSwitch zVariant="dot" checked={replyStyle.houseStyle} zSize="sm" onChange={(value) => (replyStyle.houseStyle = value)} />
+              </section>
+              {#if replyStyle.houseStyle}
+                <section class="rounded-xl border border-border p-4">
+                  <label class="text-xs font-medium" for="house-style-text">Wording</label>
+                  <textarea
+                    id="house-style-text"
+                    rows="6"
+                    class="mt-2 w-full resize-y rounded-lg border border-border bg-background p-2 text-xs"
+                    placeholder={DEFAULT_HOUSE_STYLE}
+                    value={replyStyle.houseStyleText}
+                    oninput={(event) => (replyStyle.houseStyleText = event.currentTarget.value)}
+                  ></textarea>
+                  <div class="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span>Blank uses the built-in wording shown above.</span>
+                    <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-3 text-xs" disabled={!replyStyle.houseStyleText} onclick={() => (replyStyle.houseStyleText = '')}>Reset</ZButton>
+                  </div>
+                </section>
+              {/if}
+              <section class="flex items-start gap-3 rounded-xl border border-border bg-card/40 p-4">
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold">Links for file paths</h3>
+                  <p class="mt-1 text-xs text-muted-foreground">A path in an answer (Windows, macOS or Linux, even a raw one) becomes a link showing the file name. Click opens it; right-click opens the folder or copies the path. Paths in code are left alone.</p>
+                </div>
+                <ZSwitch zVariant="dot" checked={replyStyle.linkPaths} zSize="sm" onChange={(value) => (replyStyle.linkPaths = value)} />
+              </section>
+              <section class="flex items-start gap-3 rounded-xl border border-border bg-card/40 p-4">
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold">Pictures from the web</h3>
+                  <p class="mt-1 text-xs text-muted-foreground">Shown through the app, from a local copy. Off: the picture is asked for straight from its site (the window may refuse it).</p>
+                </div>
+                <ZSwitch zVariant="dot" checked={replyStyle.proxyImages} zSize="sm" onChange={(value) => (replyStyle.proxyImages = value)} />
+              </section>
+            </div>
+
+          {:else if settings.section === 'memory'}
+            <div class="flex flex-col gap-4" in:fade={{ duration: 200 }}>
+              <section class="flex items-start gap-3 rounded-xl border border-border bg-card/40 p-4">
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold">Project memory</h3>
+                  <p class="mt-1 text-xs text-muted-foreground">A short note per project, kept in <code>{MEMORY_FILE}</code> inside it. Every agent that starts a conversation there reads it, and adds what it learns (a convention, a command that works, a pitfall). The same for Claude, Codex and the rest.</p>
+                </div>
+                <ZSwitch zVariant="dot" checked={replyStyle.projectMemory} zSize="sm" onChange={(value) => (replyStyle.projectMemory = value)} />
+              </section>
+              <section class="rounded-xl border border-border p-4">
+                {#if workspace.projects.length === 0}
+                  <p class="text-xs text-muted-foreground">Add a project first.</p>
+                {:else}
+                  <ZSelect zLabel="Project" zOptions={workspace.projects.map((project) => ({ label: project.name, value: project.id }))} zShowSearch={workspace.projects.length > 8} value={memoryProject?.id} onValueChange={(value) => (memoryProjectId = String(value ?? ''))} />
+                  <textarea
+                    rows="10"
+                    class="mt-3 w-full resize-y rounded-lg border border-border bg-background p-2 font-mono text-xs"
+                    placeholder="- Uses pnpm, never npm&#10;- UI copy is Vietnamese&#10;- Run `pnpm check` before finishing"
+                    value={memoryText}
+                    oninput={(event) => (memoryText = event.currentTarget.value)}
+                  ></textarea>
+                  <div class="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span>The first 3000 characters go to the agent; keep it short. No secrets.</span>
+                    <ZButton zWave={false} zSize="sm" class="h-7 px-3 text-xs" disabled={memoryBusy || memoryText === memorySaved} onclick={() => void saveMemory()}>Save</ZButton>
+                  </div>
+                {/if}
+              </section>
             </div>
 
           {:else if settings.section === 'computer'}

@@ -28,6 +28,9 @@ mod mcp_client;
 mod mcp_manage;
 mod notify;
 mod page_memory;
+mod path_links;
+mod project_memory;
+mod tts;
 mod privacy;
 mod pty;
 mod servers;
@@ -2048,6 +2051,16 @@ pub fn run() {
             audit_image_read,
             folder_list,
             reveal_path,
+            path_links::path_resolve,
+            path_links::path_open,
+            path_links::path_reveal,
+            path_links::image_fetch,
+            tts::tts_status,
+            tts::tts_install,
+            tts::tts_remove,
+            tts::tts_speak,
+            project_memory::project_memory_read,
+            project_memory::project_memory_write,
             file_open_options,
             file_open_with,
             file_save_as,
