@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { slide } from 'svelte/transition';
   import { ZIcon } from '@shival99/z-ui-svelte';
   import type { Block, FileChange } from '../mock';
   import { toolOf } from '../blocks';
@@ -45,11 +46,10 @@
       <span class="font-semibold">Edited {files.length} {files.length === 1 ? 'file' : 'files'}</span>
       <span class="tabular-nums text-emerald-500">+{added}</span>
       <span class="tabular-nums text-destructive">−{removed}</span>
-      <span class="ml-auto text-muted-foreground">{open ? 'Hide changes' : 'View changes'}</span>
-      <ZIcon zType="lucideChevronDown" class="size-3.5 shrink-0 text-muted-foreground transition-transform {open ? 'rotate-180' : ''}" />
+      <ZIcon zType="lucideChevronDown" class="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 {open ? 'rotate-180' : ''}" />
     </button>
     {#if open}
-      <div class="border-t border-border">
+      <div class="overflow-hidden border-t border-border" transition:slide={{ duration: 200 }}>
         {#each files as file (file.change.path)}
           <div class="border-b border-border last:border-b-0">
             <button type="button" class="flex min-h-9 w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left outline-none hover:bg-muted/40" aria-expanded={selected === file.change.path} onclick={() => (selected = selected === file.change.path ? '' : file.change.path)}>
@@ -60,6 +60,7 @@
               <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground transition-transform {selected === file.change.path ? 'rotate-90' : ''}" />
             </button>
             {#if selected === file.change.path}
+              <div class="overflow-hidden" transition:slide={{ duration: 180 }}>
               <div class="max-h-72 overflow-auto border-t border-border/60 bg-background py-1 font-mono text-[11px] leading-relaxed">
                 {#if !file.change.before && !file.change.after}
                   <div class="px-3 py-2 text-muted-foreground">The provider reported the file change without preview content.</div>
@@ -68,6 +69,7 @@
                     <div class="whitespace-pre-wrap break-all px-3 {row.kind === 'add' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-destructive/10 text-destructive'}">{row.kind === 'add' ? '+' : '−'} {row.text}</div>
                   {/each}
                 {/if}
+              </div>
               </div>
             {/if}
           </div>

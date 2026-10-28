@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ZButton, ZIcon, ZModal, ZPopover } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZModal, ZPopover, zModalService } from '@shival99/z-ui-svelte';
   import { glide, ROW_ON, TRIGGER_ON_PLAIN } from '../popover';
   import PickerPopover, { type PickerItem } from './PickerPopover.svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
@@ -60,14 +60,14 @@
   let accountOpen = $state(false);
   let confirmOpen = $state(false);
   let confirmBusy = $state(false);
-  let confirmMode = $state<'switch' | 'login'>('switch');
+  let switchingAccount = $state(false);
   let loginLaunched = $state(false);
   let confirmError = $state('');
   let confirmAccount = $state<QuickAccount | null>(null);
   let confirmGeneration = 0;
   let loginRequired = $state<Record<string, boolean>>({});
   const entryKey = (entry: QuickAccount) => `${entry.provider}:${entry.account.id}`;
-  const labelFor = (provider: AccountProvider | 'agy') => (provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : 'Antigravity');
+  const labelFor = (provider: AccountProvider | 'agy') => (provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : provider === 'copilot' ? 'GitHub Copilot' : 'Antigravity');
   async function addQuickAccount() {
     if (!accountProvider || !canQuickAdd) return;
     if (accountProvider === 'agy') {
@@ -114,21 +114,59 @@
   }
   const ACCOUNT_ORDER: Record<AccountState, number> = { 'in-use': 0, switch: 1, limit: 2, 'sign-in': 3 };
   const sortedAccountRows = $derived([...accountRows].sort((a, b) => ACCOUNT_ORDER[accountState(a)] - ACCOUNT_ORDER[accountState(b)]));
+  function openLoginConfirm(entry: QuickAccount, error = '') {
+    confirmAccount = entry;
+    loginLaunched = false;
+    confirmError = error;
+    confirmOpen = true;
+  }
   function beginAccountAction(entry: QuickAccount) {
+    if (switchingAccount || confirmOpen) return;
     if (entry.account.active && !needsLogin(entry)) {
       accountOpen = false;
       return;
     }
-    confirmAccount = entry;
-    confirmMode = needsLogin(entry) ? 'login' : 'switch';
-    loginLaunched = false;
-    confirmError = '';
     accountOpen = false;
-    confirmOpen = true;
+    if (needsLogin(entry)) {
+      openLoginConfirm(entry);
+      return;
+    }
+    switchingAccount = true;
+    let loginError = '';
+    const ref = zModalService.show({
+      zTitle: 'Switch account?',
+      zContent: `Switch the active ${labelFor(entry.provider)} account to ${entry.account.email}?`,
+      zConfirmStyle: 'dialog',
+      zIcon: 'lucideArrowLeftRight',
+      zOkIcon: 'lucideArrowLeftRight',
+      zOkText: 'Switch account',
+      zCancelText: 'Cancel',
+      zWidth: '440px',
+      onOk: async () => {
+        const ok = entry.provider === 'agy' ? await switchAgyAccount(entry.account) : await switchAccount(entry.provider, entry.account);
+        if (ok) {
+          delete loginRequired[entryKey(entry)];
+          return true;
+        }
+        const error = connectors.errors[switchErrorKey(entry)] ?? 'Could not switch accounts.';
+        if (isAuthFailure(error)) {
+          loginRequired[entryKey(entry)] = true;
+          loginError = error;
+          return true;
+        }
+        toast.error(error);
+        return false;
+      },
+    });
+    // Hand authentication failures to the login dialog after the switch confirmation has closed.
+    void ref.closed.then((confirmed) => {
+      switchingAccount = false;
+      if (confirmed && loginError) openLoginConfirm(entry, loginError);
+    });
   }
   function closeAccountConfirm() {
     const provider = confirmAccount?.provider;
-    const cancelInFlightLogin = confirmBusy && confirmMode === 'login' && !loginLaunched && provider;
+    const cancelInFlightLogin = confirmBusy && !loginLaunched && provider;
     confirmGeneration += 1;
     confirmOpen = false;
     confirmAccount = null;
@@ -148,24 +186,6 @@
     confirmBusy = true;
     confirmError = '';
     try {
-      if (confirmMode === 'switch') {
-        const ok = entry.provider === 'agy' ? await switchAgyAccount(entry.account) : await switchAccount(entry.provider, entry.account);
-        if (generation !== confirmGeneration) return;
-        if (ok) {
-          delete loginRequired[entryKey(entry)];
-          closeAccountConfirm();
-          return;
-        }
-        const error = connectors.errors[switchErrorKey(entry)] ?? 'Could not switch accounts.';
-        confirmError = error;
-        if (isAuthFailure(error)) {
-          loginRequired[entryKey(entry)] = true;
-          confirmMode = 'login';
-          loginLaunched = false;
-        }
-        return;
-      }
-
       if (entry.provider === 'agy') {
         if (!loginLaunched) {
           const ok = await login('agy', 'Antigravity');
@@ -395,10 +415,10 @@
 
   <ZModal
     bind:open={confirmOpen}
-    zTitle={confirmMode === 'login' ? `Sign in to ${labelFor(confirmAccount?.provider ?? 'agy')}` : 'Switch account?'}
+    zTitle={`Sign in to ${labelFor(confirmAccount?.provider ?? 'agy')}`}
     zWidth="440px"
     zBodyClass="min-h-0! py-3"
-    zOkText={confirmMode === 'switch' ? 'Switch account' : confirmAccount?.provider === 'agy' ? loginLaunched ? 'Continue and switch' : 'Open sign-in' : 'Sign in and switch'}
+    zOkText={confirmAccount?.provider === 'agy' ? loginLaunched ? 'Continue and switch' : 'Open sign-in' : 'Sign in and switch'}
     zCancelText="Cancel"
     zLoading={confirmBusy}
     zOkDisabled={!confirmAccount}
@@ -407,9 +427,7 @@
   >
     {#if confirmAccount}
       <p class="text-sm text-muted-foreground">
-        {#if confirmMode === 'switch'}
-          Switch the active {labelFor(confirmAccount.provider)} account to <b class="text-foreground">{confirmAccount.account.email}</b>?
-        {:else if confirmAccount.provider === 'agy'}
+        {#if confirmAccount.provider === 'agy'}
           {#if loginLaunched}
             Finish signing in in the Antigravity window. AgentDeck will save the refreshed credentials for this account, then switch back to <b class="text-foreground">{confirmAccount.account.email}</b>.
           {:else}
