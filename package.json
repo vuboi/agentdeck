@@ -3,9 +3,9 @@
   "private": true,
   "packageManager": "pnpm@10.32.1",
   "scripts": {
-    "dev": "pnpm --filter desktop tauri dev --config src-tauri/tauri.dev.conf.json",
-    "dev:update": "node scripts/dev-update.mjs",
-    "dev:linux": "GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 pnpm --filter desktop tauri dev --config src-tauri/tauri.dev.conf.json",
+    "dev": "node scripts/run-desktop.mjs dev",
+    "dev:update": "node scripts/run-desktop.mjs dev --fake-update",
+    "dev:linux": "node scripts/run-desktop.mjs dev",
     "build": "node scripts/build.mjs",
     "build:win": "node scripts/build.mjs win",
     "build:mac": "node scripts/build.mjs mac",
@@ -17,7 +17,9 @@
     "hooks:install": "git config core.hooksPath .githooks",
     "gen:icons": "node scripts/gen-icons.mjs",
     "gen:types": "node scripts/cargo.mjs run -q -p ag-protocol --example export_ts",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "dev:web": "node scripts/run-desktop.mjs web",
+    "run:build": "node scripts/run-desktop.mjs build"
   },
   "devDependencies": {
     "prettier": "^3.5.3",

@@ -1770,6 +1770,9 @@ pub async fn account_remove(provider: String, id: String) -> Result<(), String> 
     }
     let id = safe_arg(&id)?;
     let auth = which("codex-auth").ok_or("`codex-auth` is not installed")?;
+    // Several removals can be asked at once; codex-auth edits one registry file, so they run in turn.
+    static REMOVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _turn = REMOVE_LOCK.lock().await;
     let out = capture(&auth, &["remove", id], Duration::from_secs(30)).await?;
     if out.ok {
         Ok(())

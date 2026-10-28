@@ -1,4 +1,7 @@
 <script lang="ts">
+  import StoreSourceEditor from './StoreSourceEditor.svelte';
+  import { availableUpdateCount, checkStoreUpdates, type SourceEdit } from '../store-maintenance.svelte';
+  import { updates, updateSkill } from '../store.svelte';
   import { onMount } from 'svelte';
   import { ZButton, ZIcon, ZSwitch, ZTabs, zFormatCompact, zModalService, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
@@ -36,9 +39,12 @@
   import { matchesStoreCategory } from '../store-categories.svelte';
   import StoreSync from './StoreSync.svelte';
 
-  type Tab = 'sync' | 'installed' | 'discover' | 'updates' | 'sources';
+  type Tab = 'sync' | 'installed' | 'discover' | 'sources';
   let tab = $state<Tab>('installed');
+  let syncSection = $state<'sync' | 'updates'>('sync');
+  let discoverSource = $state('');
   let addOpen = $state(false);
+  let sourceEdit = $state<SourceEdit | null>(null);
   let mcpAdding = $state(false);
   let query = $state('');
   let category = $state('all');
@@ -72,9 +78,8 @@
   $effect(() => {
     if (tab !== 'installed' || !inTauri()) return;
     setTopActions(owner, [
-      { id: 'add', label: section === 'mcp' ? 'Add an MCP server' : 'Add from outside', icon: 'lucidePlus', onclick: () => (section === 'mcp' ? (mcpAdding = true) : (addOpen = true)) },
       ...(section === 'mcp' ? [{ id: 'test', label: 'Test every server', icon: 'lucideActivity', onclick: () => void testAllMcp(), disabled: mcpEntries.length === 0 }] : []),
-      { id: 'refresh', label: 'Refresh', icon: 'lucideRefreshCw', onclick: () => { void loadStore(); void loadMcp(); }, busy: refreshing },
+      { id: 'refresh', label: 'Refresh', icon: 'lucideRefreshCw', onclick: () => { void loadStore(); void loadMcp(); void checkStoreUpdates(true); }, busy: refreshing },
     ]);
     return () => clearTopActions(owner);
   });
@@ -86,6 +91,9 @@
   onMount(() => {
     void loadStore();
     void loadMcp();
+    void checkStoreUpdates();
+    const timer = setInterval(() => void checkStoreUpdates(), 30 * 60_000);
+    return () => clearInterval(timer);
   });
 
   // Destructive actions ask first, in the same confirm dialog as the rest of the app (Revert, Clear, …).
@@ -120,13 +128,12 @@
 
   const refreshing = $derived(store.loading || mcp.loading);
 
-  const TABS = [
+  const TABS = $derived([
     { value: 'installed', label: 'Installed' },
     { value: 'discover', label: 'Discover' },
-    { value: 'updates', label: 'Updates' },
-    { value: 'sync', label: 'Sync' },
+    { value: 'sync', label: 'Sync', badge: availableUpdateCount() || undefined },
     { value: 'sources', label: 'Sources' },
-  ];
+  ]);
 </script>
 
 <div class="flex h-full min-h-0 flex-1 flex-col overflow-hidden" role="tabpanel" aria-label="Store" bind:clientWidth={panelWidth}>
@@ -143,21 +150,24 @@
   </div>
 
   <StoreAddDialog bind:open={addOpen} />
+  <StoreSourceEditor bind:item={sourceEdit} />
 
   {#if !inTauri()}
     <StoreEmpty icon="lucidePuzzle" text="Desktop app only" hint="The Store is read from your computer. Open the desktop app to use it." />
   {:else if tab === 'discover'}
-    <StoreDiscover />
+    <StoreDiscover bind:source={discoverSource} />
   {:else if tab === 'sync'}
-    <StoreSync />
-  {:else if tab === 'updates'}
-    <StoreUpdates />
+    <StoreHeader>
+      <ZTabs zTabs={[{ value: 'sync', label: 'Sync', icon: icon('lucideRefreshCw') }, { value: 'updates', label: 'Updates', icon: icon('lucideDownload'), badge: availableUpdateCount() || undefined }]} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={syncSection} onTabChange={(next) => (syncSection = next as typeof syncSection)} />
+    </StoreHeader>
+    {#if syncSection === 'updates'}<StoreUpdates />{:else}<StoreSync />{/if}
   {:else if tab === 'sources'}
-    <StoreSources />
+    <StoreSources onbrowse={(url) => { discoverSource = url; tab = 'discover'; }} />
   {:else}
     <!-- Header 2: what kind of thing; header 3: the search box. -->
     <StoreHeader>
       <div class="store-kinds min-w-0"><ZTabs zTabs={KIND_TABS} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={section} onTabChange={(next) => (section = next as Section)} /></div>
+      <ZButton zType="outline" zSize="sm" class="ml-auto h-8 shrink-0 px-2 text-xs" onclick={() => section === 'mcp' ? (mcpAdding = true) : (addOpen = true)}><ZIcon zType="lucidePlus" class="size-3.5" />{section === 'mcp' ? 'Add MCP' : section === 'skills' ? 'Add skill' : 'Import'}</ZButton>
     </StoreHeader>
     {#snippet categoryFilter()}<StoreCategoryFilter class="w-full" bind:value={category} />{/snippet}
     <StoreBar
@@ -189,6 +199,9 @@
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-1.5">
                         <span class="truncate font-medium text-foreground">{skill.name}</span>
+                        {#if skill.origin === 'library' && updates.items.some((item) => item.name === skill.name && item.changed && !item.error)}
+                          <ZButton zType="ghost" zSize="sm" class="h-5 shrink-0 rounded bg-primary/15 px-1.5 text-[10px] text-primary" zLoading={busy(`update:${skill.name}`)} onclick={() => void withAck((ack) => updateSkill(skill.name, ack), skill.name)}>Update available</ZButton>
+                        {/if}
                         <span class="shrink-0 rounded bg-muted px-1.5 py-px text-[10px] text-muted-foreground">{originLabel(skill.origin)}</span>
                       </div>
                       {#if skill.description}
@@ -196,6 +209,7 @@
                       {/if}
                     </div>
                     {#if skill.origin === 'library'}
+                      <ZButton zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Edit source for {skill.name}" title="Edit Git source" onclick={() => (sourceEdit = { kind: 'skill', name: skill.name })}><ZIcon zType="lucidePencil" class="size-3.5" /></ZButton>
                       <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! p-0 text-destructive hover:!bg-destructive/10" zDisabled={busy(`remove:${skill.name}`)} aria-label="Remove from library" {@attach zTooltip({ content: 'Remove from library', position: 'top' })} onclick={() => dropSkill(skill)}>
                         <ZIcon zType={icon(busy(`remove:${skill.name}`) ? 'lucideLoaderCircle' : 'lucideTrash2')} class="size-3.5 {busy(`remove:${skill.name}`) ? 'animate-spin' : ''}" />
                       </ZButton>

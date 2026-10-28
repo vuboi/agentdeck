@@ -685,7 +685,7 @@
 <main class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden" aria-label="Conversation">
   <!-- With tools open, the window controls sit over the tools header, so this row only needs a small inset. -->
   <!-- Above the conversation body: its turn ruler (ZChatNavigator) is taller than the body and must not paint over the tabs. -->
-  <header class="relative z-40 flex h-10 shrink-0 items-center border-b border-border bg-background {layout.toolsVisible ? 'pr-[7px]' : 'pr-[106px]'}" {@attach windowDrag}>
+  <header class="relative z-40 flex h-10 shrink-0 items-center border-b border-border bg-background {layout.toolsVisible && !layout.toolsOnLeft ? 'pr-[7px]' : 'pr-[106px]'}" {@attach windowDrag}>
     <!-- Browser-style tabs: chats and files side by side, each with a close button; + starts a new chat.
          No scrollbar: when the tabs overflow, an arrow opens the full list. -->
     {#if layout.sidebarHidden || layout.sidebarCollapsed}
@@ -1076,7 +1076,7 @@
                         <ChatBlock block={segment.block} running={Boolean(message.live) && isRunning(workspace.activeId)} flush={chat.messages.at(-1)?.id !== message.id} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} onrendered={segment.block.kind === 'response' ? () => replyBlockRendered(workspace.activeId, message.id, message.blocks.indexOf(segment.block)) : undefined} answered={!message.live && pendingQuestion?.messageId !== message.id} showQuestions={false} />
                       {/if}
                     {/each}
-                    <TurnChanges blocks={message.blocks} />
+                    <TurnChanges blocks={message.blocks} projectRoot={(activeSession() && projectOf(activeSession()!)?.path) || ''} />
                     <ArtifactCards blocks={message.blocks} root={(activeSession() && projectOf(activeSession()!)?.path) || null} live={Boolean(message.live) && isRunning(workspace.activeId)} />
                     <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
                          editing…), as in Claude and Codex; the steps above stay plain, finished lines. -->

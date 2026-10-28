@@ -36,3 +36,11 @@ OpenCode's native paths are documented at <https://opencode.ai/docs/skills>. Cod
 4. Extend provider registry and Store assignment UI, plus catalog compatibility filters. A picker entry alone is insufficient.
 5. Verify install, replacement (including removed upstream files), disable/unassign, and removal for both scopes. Check native discovery and that independent folders survive.
 6. Keep MCP configuration paths separate: skills directories are not MCP config locations. Use `mcp_manage.rs` and `mcp_providers.rs` for MCP scopes and enable/disable.
+
+## Editable sources and update badges
+
+- A managed skill's pencil action edits its HTTPS Git repository and relative skill folder through `store_skill_source`. Keep the installed hash until an update succeeds; editing provenance must not claim that installed content changed. Resolve source folders inside the staged repository, including symlinks.
+- An MCP's pencil action edits its command/arguments or endpoint through `mcp_source`. Preserve environment variables, HTTP headers, timeouts, provider-specific fields, scope and enabled state. Disabled definitions must remain in Credential Manager instead of becoming active during editing. Return only the connection fields needed by the editor.
+- Store checks on opening and every 30 minutes while mounted. A manual refresh forces another check. Fetch each Git repository once per check, then compare its installed skill subfolders. Badge counts represent detected changes; checks never install automatically.
+- Version detection for MCP currently supports stable explicit npm pins in `npx`, `pnpm dlx` and `bunx` arguments. Compare the configured pin with the npm registry's stable `latest` version. Floating tags such as `@latest`, unversioned/local commands, Python runners and HTTP servers have no inferred version badge. Do not show them as up to date without evidence.
+- MCP package Update requires an explicit confirmation, rechecks the registry, changes only the package argument and preserves other configuration. New provider sessions use the new version. A provider-specific edit can partially succeed across files; report failures and refresh the current configuration.

@@ -189,7 +189,7 @@
   <div class="flex shrink-0 items-center gap-2 border-b border-border px-1.5 py-1.5">
     <ZTabs zTabs={RANGES.map(({ value, label }) => ({ value, label }))} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={range} onTabChange={(next) => (range = next as typeof range)} />
     {#if projectIds.length > 1}
-      <ProjectSelect bind:value={project} options={projectIds} label={projectName} class="ml-auto" />
+      <ProjectSelect variant="select" bind:value={project} options={projectIds} label={projectName} class="ml-auto" />
     {/if}
   </div>
 

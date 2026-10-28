@@ -8,7 +8,7 @@
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { fade, slide } from 'svelte/transition';
   import { flip } from 'svelte/animate';
-  import { activity, audit, auditImage, clearAudit, type Activity } from '../activity.svelte';
+  import { activity, audit, auditImage, auditPaging, clearAudit, loadMoreAudit, type Activity } from '../activity.svelte';
   import AgentLogo from './AgentLogo.svelte';
   import { openImages } from '../preview.svelte';
   import { elapsed } from '../blocks';
@@ -165,6 +165,42 @@
   let scroller = $state<HTMLElement>();
   let scrollTop = $state(0);
   let viewport = $state(0);
+  let scrollIntent = false;
+
+  // The virtual window is based on scrollTop. When a range or project filter shrinks the list,
+  // the browser may retain a position beyond its new end, leaving the window empty and pinning
+  // a header from the old position. Reset before the filtered rows are rendered.
+  $effect.pre(() => {
+    range;
+    project;
+    failedOnly;
+    scrollIntent = false;
+    scrollTop = 0;
+    if (scroller) scroller.scrollTop = 0;
+  });
+
+  // Nothing to list once the log is read to its end: the pane says so in its middle.
+  const nothingToShow = $derived(!auditPaging.loading && !auditPaging.hasMore && finished.length === 0 && runningItems.length === 0 && chatRuns.length === 0);
+
+  // A range or project filter that leaves the list shorter than the pane reads on by itself, until it is full or the log ends.
+  $effect(() => {
+    if (!scroller || viewport === 0) return;
+    if (auditPaging.hasMore && !auditPaging.loading && layout.total < viewport + 220) loadMoreAudit();
+  });
+
+  function onAuditWheel() {
+    scrollIntent = true;
+  }
+
+  function onAuditScroll() {
+    if (!scroller) return;
+    scrollTop = scroller.scrollTop;
+    const distanceToBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    if (scrollIntent && distanceToBottom < 220 && auditPaging.hasMore && !auditPaging.loading) {
+      scrollIntent = false;
+      loadMoreAudit();
+    }
+  }
 
   const heightAt = (index: number) => heights.get(flat[index].id) ?? (flat[index].kind === 'day' ? EST_DAY : EST_ROW);
   const layout = $derived.by(() => {
@@ -415,15 +451,17 @@
   <div class="flex shrink-0 items-center gap-2 border-b border-border px-1.5 py-1.5 text-xs">
     <ZTabs zTabs={RANGES.map(({ value, label }) => ({ value, label }))} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={range} onTabChange={(next) => (range = next as Range)} />
     {#if projects.length > 1}
-      <ProjectSelect bind:value={project} options={projects} label={(name) => name || 'No project'} class="ml-auto" />
+      <ProjectSelect variant="select" bind:value={project} options={projects} label={(name) => name || 'No project'} class="ml-auto" />
     {/if}
   </div>
-  <div bind:this={scroller} bind:clientHeight={viewport} class="min-h-0 flex-1 overflow-y-auto" style="overflow-anchor: none" onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)}>
+  <div bind:this={scroller} bind:clientHeight={viewport} class="flex min-h-0 flex-1 flex-col overflow-y-auto" style="overflow-anchor: none" onscroll={onAuditScroll} onwheel={onAuditWheel}>
     {#if failedOnly && days.length === 0}
       <DevEmpty icon="lucideCircleCheck" title="No failures" hint="No tool call failed in this range." />
+    {:else if nothingToShow}
+      <DevEmpty icon="lucideInbox" title="No tasks" hint="Nothing ran in this range." />
     {:else}
       {#if pinned}{@render dayHeader(pinned, true)}{/if}
-      <div style="padding-top: {win.padTop}px; padding-bottom: {win.padBottom}px">
+      <div class="shrink-0" style="padding-top: {win.padTop}px; padding-bottom: {win.padBottom}px">
         <!-- A row that moves (a running entry that ends up in its day, or the list changing above it) glides to its place;
              the Running rows fade in and out. Rows scrolled in or out of view do not fade: their duration is 0. -->
         {#each visible as entry (entry.id)}
@@ -445,6 +483,19 @@
           </div>
         {/each}
       </div>
+    {/if}
+    {#if auditPaging.loading}
+      {#if finished.length === 0}
+        <!-- First read (or a filter that has nothing yet): the same centred block as an empty list. -->
+        <div class="flex min-h-40 flex-1 flex-col items-center justify-center gap-1.5 p-4 text-center" role="status">
+          <span class="grid size-11 place-items-center rounded-full bg-muted"><ZLoading zLoading zSpinner="orbit" zSize="xs" zColor="primary" /></span>
+          <p class="m-0 text-xs font-medium">Loading logs…</p>
+        </div>
+      {:else}
+        <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-muted-foreground" role="status">
+          <ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="primary" /> Loading older logs…
+        </div>
+      {/if}
     {/if}
   </div>
 </div>

@@ -26,27 +26,45 @@ fn from_git(entry: &LockEntry) -> bool {
 async fn with_source<T>(home: &Path, entry: &LockEntry, work: impl FnOnce(&Path) -> Result<T, String>) -> Result<T, String> {
     let job = stage::new_job_id();
     let result = match stage::stage(home, &job, Source::Git { url: entry.source.clone() }).await {
-        Ok(root) => work(&root.join(&entry.subpath)),
+        Ok(root) => resolve_folder(&root, &entry.subpath).and_then(|folder| work(&folder)),
         Err(error) => Err(error),
     };
     let _ = std::fs::remove_dir_all(stage::staging_root(home).join(&job));
     result
 }
 
+/// A source path (including any symlink) must resolve inside its staged repository.
+fn resolve_folder(root: &Path, subpath: &str) -> Result<std::path::PathBuf, String> {
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let folder = root.join(subpath).canonicalize().map_err(|e| e.to_string())?;
+    if !folder.starts_with(&root) { return Err("Skill source folder escapes the repository".into()); }
+    Ok(folder)
+}
+
 /// Stages every git-sourced skill and compares its content with the installed hash.
 pub async fn check(home: &Path) -> Vec<UpdateItem> {
-    let mut items = Vec::new();
+    let mut groups: std::collections::BTreeMap<String, Vec<(String, LockEntry)>> = std::collections::BTreeMap::new();
     for (name, entry) in lock::read(home) {
-        if !from_git(&entry) {
-            continue;
-        }
-        let result = with_source(home, &entry, |folder| lock::content_hash(folder).map(|hash| hash != entry.hash)).await;
-        let (changed, error) = match result {
-            Ok(changed) => (changed, None),
-            Err(error) => (false, Some(error)),
-        };
-        items.push(UpdateItem { name, source: entry.source, changed, error });
+        if from_git(&entry) { groups.entry(entry.source.clone()).or_default().push((name, entry)); }
     }
+    let mut items = Vec::new();
+    for (source, entries) in groups {
+        let root_entry = LockEntry { source: source.clone(), subpath: String::new(), hash: String::new(), installed_at: 0 };
+        let found = with_source(home, &root_entry, |root| {
+            Ok(entries.iter().map(|(name, entry)| {
+                let result = resolve_folder(root, &entry.subpath).and_then(|folder| {
+                    if !folder.join("SKILL.md").is_file() { return Err("Skill source no longer contains SKILL.md".into()); }
+                    lock::content_hash(&folder)
+                });
+                UpdateItem { name: name.clone(), source: source.clone(), changed: result.as_ref().is_ok_and(|hash| hash != &entry.hash), error: result.err() }
+            }).collect::<Vec<_>>())
+        }).await;
+        match found {
+            Ok(found) => items.extend(found),
+            Err(error) => items.extend(entries.into_iter().map(|(name, _)| UpdateItem { name, source: source.clone(), changed: false, error: Some(error.clone()) })),
+        }
+    }
+    items.sort_by(|a,b| a.name.cmp(&b.name));
     items
 }
 
@@ -98,6 +116,17 @@ fn replace(home: &Path, name: &str, folder: &Path, entry: &LockEntry) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_folder_must_resolve_inside_the_repository() {
+        let home = std::env::temp_dir().join(format!("agentdeck-source-{}", stage::new_job_id()));
+        let root = home.join("repo");
+        std::fs::create_dir_all(root.join("skills/example")).expect("folder");
+        std::fs::create_dir_all(home.join("outside")).expect("outside");
+        assert!(resolve_folder(&root, "skills/example").is_ok());
+        assert!(resolve_folder(&root, "../outside").is_err());
+        std::fs::remove_dir_all(home).expect("cleanup");
+    }
 
     #[test]
     fn replacement_removes_obsolete_files_and_preparation_failure_preserves_old_skill() {

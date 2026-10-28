@@ -92,6 +92,60 @@ fn write_config(path: &Path, root: &Value) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+pub struct SourceDetails { pub target: String, pub args: Vec<String> }
+
+/// Edit connection source while retaining provider-specific options, secrets and enabled state.
+#[tauri::command]
+pub async fn mcp_source(id: String, target: Option<String>, args: Option<Vec<String>>) -> Result<SourceDetails, String> {
+    tauri::async_runtime::spawn_blocking(move || edit_source(&id, target, args)).await.map_err(|e| e.to_string())?
+}
+
+pub(crate) fn edit_source(id: &str, target: Option<String>, args: Option<Vec<String>>) -> Result<SourceDetails, String> {
+    let _guard = MUTATIONS.lock().map_err(|e| e.to_string())?;
+    let definitions = mcp_manage::read_all().into_iter().filter(|r| mcp_manage::raw_id(r) == id && r.name != "agentdeck").collect::<Vec<_>>();
+    let first = definitions.first().ok_or("MCP source is no longer available")?;
+    let Some(target) = target else { return Ok(SourceDetails { target: first.url.clone().or_else(|| first.command.clone()).unwrap_or_default(), args: first.args.clone() }); };
+    let target = target.trim().to_owned();
+    if target.is_empty() { return Err("Source cannot be empty".into()); }
+    if first.url.is_some() && !target.starts_with("https://") && !target.starts_with("http://") { return Err("HTTP source must start with http:// or https://".into()); }
+    let args = args.unwrap_or_else(|| first.args.clone());
+    let index = read_index()?;
+    let mut saved_files = std::collections::HashSet::new();
+    for raw in &definitions {
+        if !saved_files.insert((raw.source.clone(), raw.agent, raw.scope.clone())) { continue; }
+        let saved = index.iter().find(|s| s.agent == raw.agent && s.scope == raw.scope && s.name == raw.name);
+        let mut root = config(Path::new(&raw.source))?;
+        let entries = map(&mut root, raw)?;
+        let in_file = entries.contains_key(&raw.name);
+        let mut value = if in_file { entries[&raw.name].clone() } else {
+            let row = saved.ok_or("MCP definition is missing")?;
+            serde_json::from_str::<Value>(&secret(&row.vault).ok_or("Saved MCP definition is unavailable")?).map_err(|_| "Saved MCP definition is invalid")?
+        };
+        patch_connection(&mut value, raw.url.is_some(), &target, &args)?;
+        if in_file {
+            entries.insert(raw.name.clone(), value);
+            write_config(Path::new(&raw.source), &root)?;
+        } else {
+            save_secret(&saved.ok_or("Missing disabled definition")?.vault, &serde_json::to_string(&value).map_err(|e| e.to_string())?)?;
+        }
+    }
+    Ok(SourceDetails { target, args })
+}
+
+/// Patch only connection location; environment, headers, timeouts and enabled flags remain provider-owned.
+fn patch_connection(value: &mut Value, http: bool, target: &str, args: &[String]) -> Result<(), String> {
+    let object = value.as_object_mut().ok_or("Invalid MCP definition")?;
+    if http {
+        let key = if object.contains_key("serverUrl") { "serverUrl" } else { "url" };
+        object.insert(key.into(), json!(target));
+    } else {
+        object.insert("command".into(), json!(target));
+        object.insert("args".into(), json!(args));
+    }
+    Ok(())
+}
+
 /// Enable/disable one provider in the row's own scope; native config is changed for future sessions.
 #[tauri::command]
 pub async fn mcp_provider_set(id: String, agent: String, enabled: bool) -> Result<(), String> {
@@ -175,6 +229,22 @@ fn set(id: &str, agent: &str, enabled: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editing_sources_preserves_secrets_and_native_options() {
+        let mut stdio = json!({"command":"old", "args":["old"], "env":{"TOKEN":"private"}, "enabled":false, "startup_timeout_sec":60});
+        patch_connection(&mut stdio, false, "pnpm", &["dlx".into(), "tool@2.0.0".into()]).expect("edit");
+        assert_eq!(stdio["env"]["TOKEN"], "private");
+        assert_eq!(stdio["enabled"], false);
+        assert_eq!(stdio["startup_timeout_sec"], 60);
+        assert_eq!(stdio["command"], "pnpm");
+        let mut http = json!({"serverUrl":"https://old", "headers":{"Authorization":"private"}, "disabled":true});
+        patch_connection(&mut http, true, "https://new", &[]).expect("edit");
+        assert_eq!(http["serverUrl"], "https://new");
+        assert_eq!(http["headers"]["Authorization"], "private");
+        assert_eq!(http["disabled"], true);
+        assert!(http.get("url").is_none());
+    }
 
     #[test]
     fn disable_and_restore_preserve_full_native_definition_and_other_entries() {

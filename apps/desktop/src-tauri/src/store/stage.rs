@@ -195,22 +195,23 @@ async fn download(url: &str, dest: &Path) -> Result<(), String> {
     std::fs::write(dest.join(name), &body).map_err(|error| error.to_string())
 }
 
-/// Skill folders in a staged job: the root itself, or each child (or `skills/<child>`) that holds a `SKILL.md`.
+/// Skill folders in a staged job, including provider and plugin subfolders. Do not follow links or
+/// descend into a skill's bundled resources, dependency trees, build output or test fixtures.
 pub fn find_skills(root: &Path) -> Vec<(String, PathBuf)> {
-    if root.join("SKILL.md").is_file() {
-        let name = root.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        return vec![(name, root.to_path_buf())];
-    }
     let mut found = Vec::new();
-    for base in [root.to_path_buf(), root.join("skills")] {
-        let Ok(entries) = std::fs::read_dir(&base) else {
+    let mut entries = walkdir::WalkDir::new(root).follow_links(false).max_depth(12).into_iter();
+    while let Some(entry) = entries.next() {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_dir() { continue; }
+        let name = entry.file_name().to_string_lossy();
+        if entry.depth() > 0 && matches!(name.as_ref(), ".git" | "node_modules" | "target" | "dist" | "build" | ".venv" | "venv" | "__pycache__" | "test" | "tests" | "fixtures") {
+            entries.skip_current_dir();
             continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.join("SKILL.md").is_file() && std::fs::read_link(&path).is_err() {
-                found.push((entry.file_name().to_string_lossy().into_owned(), path));
-            }
+        }
+        let manifest = entry.path().join("SKILL.md");
+        if manifest.is_file() && std::fs::read_link(&manifest).is_err() {
+            found.push((name.into_owned(), entry.path().to_path_buf()));
+            entries.skip_current_dir();
         }
     }
     found.sort();
@@ -240,5 +241,20 @@ mod tests {
         let found: Vec<String> = find_skills(&dir).into_iter().map(|(name, _)| name).collect();
         assert_eq!(found, vec!["alpha".to_owned(), "beta".to_owned()]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nested_provider_and_plugin_skills_exclude_fixtures_and_bundled_skills() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-nested-skills-{}", new_job_id()));
+        for folder in [".agents/skills/review-pr", "plugins/official/web/skills/web", "tests/fixtures/fixture", "node_modules/dependency", ".agents/skills/review-pr/resources/example"] {
+            std::fs::create_dir_all(dir.join(folder)).expect("creates folder");
+            std::fs::write(dir.join(folder).join("SKILL.md"), "skill").expect("writes manifest");
+        }
+        let found = find_skills(&dir);
+        assert_eq!(found.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["review-pr", "web"]);
+        assert!(found.iter().all(|(_, path)| path.starts_with(&dir)));
+        std::fs::write(dir.join("SKILL.md"), "root skill").expect("writes root manifest");
+        assert_eq!(find_skills(&dir).len(), 1);
+        std::fs::remove_dir_all(&dir).expect("cleans fixture");
     }
 }

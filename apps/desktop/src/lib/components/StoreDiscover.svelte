@@ -4,7 +4,7 @@
   import { workspace } from '../sessions.svelte';
   import { onMount } from 'svelte';
   import { ZButton, ZIcon, ZSelect, zModalService } from '@shival99/z-ui-svelte';
-  import { catalog, installCatalogItem, loadCatalog, loadMoreCatalog, refreshCatalog, store, withAck, type CatalogFilter, type CatalogItem } from '../store.svelte';
+  import { catalog, installCatalogItem, loadCatalog, loadMoreCatalog, loadSources, refreshCatalog, sources, store, withAck, type CatalogFilter, type CatalogItem } from '../store.svelte';
   import AgentLogo from './AgentLogo.svelte';
   import StoreEmpty from './StoreEmpty.svelte';
   import StoreBar from './StoreBar.svelte';
@@ -33,6 +33,12 @@
     { value: 'copilot', label: 'GitHub Copilot' },
   ];
 
+  let { source = $bindable('') }: { source?: string } = $props();
+  const sourceOptions = $derived([
+    { label: 'All sources', value: '' },
+    ...[...new Set([...sources.urls, ...(source ? [source] : [])])].map((url) => ({ label: url.replace(/^https:\/\/github\.com\//, '').replace(/^https:\/\//, ''), value: url })),
+  ]);
+
   let project = $state<string | null>(null);
   const projects = $derived(workspace.projects.filter((p) => p.path).map((p) => p.path!));
   let query = $state('');
@@ -46,7 +52,7 @@
     setTopActions(owner, [{ id: 'refresh', label: 'Refresh the catalog', icon: 'lucideRefreshCw', onclick: () => void refreshCatalog(), busy: catalog.refreshing }]);
     return () => clearTopActions(owner);
   });
-  const filter = $derived<CatalogFilter>({ query: searched.value, kind, agent, category });
+  const filter = $derived<CatalogFilter>({ query: searched.value, kind, agent, category, source });
 
   // A new filter reads its first page; the search waits for typing to stop (`debounced`), so each key does not ask Rust. The
   // placeholder rows stay at least `SETTLE` ms, so a fast answer does not flash: the rows then rise in.
@@ -71,6 +77,7 @@
   });
 
   onMount(async () => {
+    void loadSources();
     await loadCatalog(filter);
     // Never refreshed yet: read the sources once, so the tab is not empty on first use.
     if (catalog.fetchedAt === 0 && !catalog.error) await refreshCatalog();
@@ -116,23 +123,29 @@
 <div class="flex min-h-0 flex-1 flex-col">
   <StoreBar bind:query placeholder="Search plugins, MCP servers, skills">
     {#snippet filters()}
-      <ZSelect zSize="sm" class="h-8 min-w-0 text-xs" zOptions={[{ label: 'Global · all projects', value: '' }, ...projects.map((path) => ({ label: workspace.projects.find((p) => p.path === path)?.name ?? path, value: path }))]} value={project ?? ''} onValueChange={(value) => (project = String(value ?? '') || null)} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
+      <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zPlaceholder="Choose project" zOptions={[{ label: 'Global · all projects', value: '' }, ...projects.map((path) => ({ label: workspace.projects.find((p) => p.path === path)?.name ?? path, value: path }))]} value={project ?? ''} onValueChange={(value) => (project = String(value ?? '') || null)} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
     {/snippet}
   </StoreBar>
   <StoreHeader>
-    <div class="flex min-w-0 items-center gap-1">
-      <StoreCategoryFilter bind:value={category} />
-      <div class="w-28 min-w-0 max-w-32">
-        <ZSelect zSize="sm" class="h-8 min-w-0 text-xs" zOptions={KINDS.map((option) => ({ label: option.label, value: option.value }))} value={kind} onValueChange={(value) => (kind = String(value ?? 'all') as Kind)} zShowSearch={false} zDropdownWidth={170} />
+    <div class="grid w-full min-w-0 grid-cols-4 items-center gap-1">
+      <StoreCategoryFilter class="w-full" bind:value={category} />
+      <div class="min-w-0">
+        <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zPlaceholder="All kinds" zOptions={KINDS.map((option) => ({ label: option.label, value: option.value }))} value={kind} onValueChange={(value) => (kind = String(value ?? 'all') as Kind)} zShowSearch={false} zDropdownWidth={170} />
       </div>
-      <div class="w-28 min-w-0 max-w-32">
-        <ZSelect zSize="sm" class="h-8 min-w-0 text-xs" zOptions={AGENTS.map((option) => ({ label: option.label, value: option.value }))} value={agent} onValueChange={(value) => (agent = String(value ?? 'all') as AgentFilter)} zShowSearch zPlaceholderSearch="Find provider…" zDropdownWidth={210}>
+      <div class="min-w-0">
+        <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zPlaceholder="Any agent" zOptions={AGENTS.map((option) => ({ label: option.label, value: option.value }))} value={agent} onValueChange={(value) => (agent = String(value ?? 'all') as AgentFilter)} zShowSearch zPlaceholderSearch="Find provider…" zDropdownWidth={210}>
           {#snippet option(item)}
             <span class="flex min-w-0 items-center gap-2">{#if item.value !== 'all'}<AgentLogo agent={item.value} class="size-3.5 shrink-0" />{/if}<span class="truncate">{item.label}</span></span>
           {/snippet}
           {#snippet selection(item)}
             <span class="flex min-w-0 items-center gap-1.5">{#if item.value !== 'all'}<AgentLogo agent={item.value} class="size-3.5 shrink-0" />{/if}<span class="truncate">{item.label}</span></span>
           {/snippet}
+        </ZSelect>
+      </div>
+      <div class="min-w-0">
+        <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zPlaceholder="All sources" zOptions={sourceOptions} value={source} onValueChange={(value) => (source = String(value ?? ''))} zShowSearch zPlaceholderSearch="Search skill sources…" zDropdownWidth={260}>
+          {#snippet option(item)}<span class="block truncate" title={String(item.value || 'All sources')}>{item.label}</span>{/snippet}
+          {#snippet selection(item)}<span class="block truncate" title={String(item.value || 'All sources')}>{item.label}</span>{/snippet}
         </ZSelect>
       </div>
     </div>
@@ -151,7 +164,7 @@
     {#if catalog.items.length === 0 && (catalog.refreshing || filtering || catalog.loading)}
       <StoreSkeleton />
     {:else if catalog.items.length === 0}
-      <StoreEmpty icon="lucideSearch" text={catalog.fetchedAt && (query || kind !== 'all' || agent !== 'all' || category !== 'all') ? 'Nothing matches this search.' : 'The catalog is empty.'} hint={catalog.fetchedAt ? '' : 'Press refresh to read the agents\' plugin lists, the MCP registry and your skill sources.'} />
+      <StoreEmpty icon="lucideSearch" text={catalog.fetchedAt && (query || kind !== 'all' || agent !== 'all' || category !== 'all' || source) ? 'Nothing matches this search.' : 'The catalog is empty.'} hint={catalog.fetchedAt ? '' : 'Press refresh to read the agents\' plugin lists, the MCP registry and your skill sources.'} />
     {:else}
       <ul class="m-0 flex list-none flex-col gap-2 p-1.5">
         {#each catalog.items as item (item.key)}

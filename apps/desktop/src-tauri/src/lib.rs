@@ -545,14 +545,95 @@ fn audit_append(line: String) -> Result<(), String> {
     writeln!(file, "{line}").map_err(|error| error.to_string())
 }
 
-/// Everything in the Audit log; empty when nothing was recorded yet.
-#[tauri::command]
-fn audit_read() -> Result<String, String> {
-    match std::fs::read_to_string(audit_file()?) {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(error.to_string()),
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditPageEntry {
+    offset: u64,
+    line: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditPage {
+    entries: Vec<AuditPageEntry>,
+    cursor: Option<u64>,
+    has_more: bool,
+}
+
+fn audit_previous_newline(file: &mut std::fs::File, before: u64) -> std::io::Result<Option<u64>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const CHUNK: u64 = 8192;
+    let mut end = before;
+    while end > 0 {
+        let start = end.saturating_sub(CHUNK);
+        let mut bytes = vec![0; (end - start) as usize];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut bytes)?;
+        if let Some(index) = bytes.iter().rposition(|byte| *byte == b'\n') {
+            return Ok(Some(start + index as u64));
+        }
+        end = start;
     }
+    Ok(None)
+}
+
+/// Reads a bounded page of the Audit log, newest first on disk and chronological within each returned page.
+/// `cursor` is the byte offset of the oldest line in the previous page; appends do not invalidate it.
+#[tauri::command]
+async fn audit_read(cursor: Option<u64>, limit: usize) -> Result<AuditPage, String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = audit_file()?;
+        let mut file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(AuditPage { entries: Vec::new(), cursor: None, has_more: false });
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let length = file.metadata().map_err(|error| error.to_string())?.len();
+        let mut end = cursor.unwrap_or(length).min(length);
+        if end > 0 {
+            file.seek(SeekFrom::Start(end - 1)).map_err(|error| error.to_string())?;
+            let mut last = [0];
+            file.read_exact(&mut last).map_err(|error| error.to_string())?;
+            if last[0] == b'\n' {
+                end -= 1;
+            }
+        }
+
+        let page_size = limit.clamp(1, 100);
+        let mut entries = Vec::with_capacity(page_size + 1);
+        while end > 0 && entries.len() <= page_size {
+            let separator = audit_previous_newline(&mut file, end).map_err(|error| error.to_string())?;
+            let start = separator.map_or(0, |offset| offset + 1);
+            if start < end {
+                let mut bytes = vec![0; (end - start) as usize];
+                file.seek(SeekFrom::Start(start)).map_err(|error| error.to_string())?;
+                file.read_exact(&mut bytes).map_err(|error| error.to_string())?;
+                if !bytes.iter().all(u8::is_ascii_whitespace)
+                    && serde_json::from_slice::<serde_json::Value>(&bytes).is_ok()
+                {
+                    entries.push(AuditPageEntry {
+                        offset: start,
+                        line: String::from_utf8_lossy(&bytes).into_owned(),
+                    });
+                }
+            }
+            let Some(separator) = separator else { break };
+            end = separator;
+        }
+
+        let has_more = entries.len() > page_size;
+        entries.truncate(page_size);
+        entries.reverse();
+        let cursor = has_more.then(|| entries.first().map(|entry| entry.offset)).flatten();
+        Ok(AuditPage { entries, cursor, has_more })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Keeps only the Audit log lines that started at or after `cutoff` (ms since the epoch; the app passes the start of
@@ -1899,6 +1980,7 @@ pub fn run() {
                 .find(|window| window.label == "main")
                 .ok_or_else(|| std::io::Error::other("the main window configuration is missing"))?;
             tauri::WebviewWindowBuilder::from_config(app.handle(), main_window)?
+                .title(app.config().product_name.as_deref().unwrap_or("AgentDeck"))
                 .browser_extensions_enabled(browser::EXTENSIONS_ENABLED)
                 .build()?;
 
@@ -1910,7 +1992,7 @@ pub fn run() {
                 .ok_or_else(|| std::io::Error::other("the AgentDeck tray icon is missing"))?;
             let tray_builder = tauri::tray::TrayIconBuilder::new()
                 .icon(tray_icon)
-                .tooltip("AgentDeck")
+                .tooltip(app.config().product_name.as_deref().unwrap_or("AgentDeck"))
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
@@ -2028,6 +2110,10 @@ pub fn run() {
             store::store_source_add,
             store::store_source_remove,
             store::store_updates_check,
+            store::maintenance::store_skill_source,
+            store::maintenance::store_mcp_updates,
+            store::maintenance::store_mcp_update,
+            mcp_providers::mcp_source,
             store::store_update_skill,
             store::sync::store_sync,
             store::categories::store_categories,

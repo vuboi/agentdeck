@@ -213,7 +213,7 @@
         <label class="flex flex-col gap-1.5 text-xs"><span class="font-medium">Name</span><ZInput bind:value={step.name} zPlaceholder="What this step is called" /></label>
         <div class="flex flex-col gap-1.5 text-xs">
           <span class="font-medium">Agent and model</span>
-          <ZSelect
+          <ZSelect class="h-8 min-w-0 text-xs" zSize="sm" zPosition="bottom-right"
             zOptions={tree}
             zTree
             zTreeRootLabel="All models"
@@ -233,7 +233,7 @@
         </div>
         <div class="flex flex-col gap-1.5 text-xs">
           <span class="font-medium">Effort</span>
-          <ZSelect zOptions={effortChoices(step.agent, step.model)} value={step.effort ?? ''} onValueChange={(value) => (step.effort = String(value) || undefined)} />
+          <ZSelect class="h-8 min-w-0 text-xs" zSize="sm" zPosition="bottom-right" zOptions={effortChoices(step.agent, step.model)} value={step.effort ?? ''} onValueChange={(value) => (step.effort = String(value) || undefined)} />
           <span class="text-[11px] leading-snug text-muted-foreground">A light step (listing files, running tests) can think less and cost less. The permission mode is the chat's own, shared by every step.</span>
         </div>
         <label class="flex flex-col gap-1.5 text-xs">
@@ -243,7 +243,7 @@
         </label>
         <div class="flex flex-col gap-1.5 text-xs">
           <span class="font-medium">Run</span>
-          <ZSelect
+          <ZSelect class="h-8 min-w-0 text-xs" zSize="sm" zPosition="bottom-right"
             zOptions={[{ label: 'Always', value: 'always' }, { label: 'If the handoff before contains…', value: 'contains' }, { label: 'If the handoff before lacks…', value: 'missing' }]}
             value={step.condition.mode}
             onValueChange={(value) => (step.condition.mode = String(value) as typeof step.condition.mode)}

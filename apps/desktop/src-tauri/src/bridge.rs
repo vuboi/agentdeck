@@ -168,12 +168,22 @@ fn authorize(head: &str, target: &str, token: &str, port: u16) -> Option<String>
     }
 }
 
+/// Keep stable bridge ports separate across installed, development and local release channels.
+fn preferred_port(identifier: &str) -> u16 {
+    match identifier {
+        "dev.agentdeck.desktop.dev" => PREFERRED_PORT + 1,
+        "dev.agentdeck.desktop.local" => PREFERRED_PORT + 2,
+        _ => PREFERRED_PORT,
+    }
+}
+
 /// Starts the server; its address goes to `AGENTDECK_BRIDGE`.
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         // A fixed port first: an MCP server stored in Antigravity's own config (it has no per-turn flag) must keep
         // its address between runs. If another program has it, any free port does and the MCP tab shows the link as stale.
-        let bound = match TcpListener::bind(("127.0.0.1", PREFERRED_PORT)).await {
+        let preferred = preferred_port(&app.config().identifier);
+        let bound = match TcpListener::bind(("127.0.0.1", preferred)).await {
             Ok(listener) => Ok(listener),
             Err(_) => TcpListener::bind("127.0.0.1:0").await,
         };
@@ -1062,5 +1072,16 @@ mod tests {
         assert!(!is_post_request("GET /mcp HTTP/1.1\r\n"));
         assert!(!is_post_request("POSTX /mcp HTTP/1.1\r\n"));
         assert!(!is_post_request("POST"));
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::preferred_port;
+    #[test]
+    fn installed_dev_and_local_have_distinct_bridge_ports() {
+        assert_eq!(preferred_port("dev.agentdeck.desktop"), 47821);
+        assert_eq!(preferred_port("dev.agentdeck.desktop.dev"), 47822);
+        assert_eq!(preferred_port("dev.agentdeck.desktop.local"), 47823);
     }
 }

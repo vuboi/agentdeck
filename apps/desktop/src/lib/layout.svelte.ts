@@ -18,6 +18,8 @@ export type FloatingTool = {
 
 export const layout = $state({
   toolsOpen: true,
+  /** Swap the tools/content pane to the left of the conversation without remounting either pane. */
+  toolsOnLeft: false,
   themePanelOpen: false,
   themeAnchor: null as HTMLElement | null,
   /** Tool shown in the right panel. */
@@ -91,6 +93,18 @@ getPref<{ floating: FloatingTool[]; activeTool: string; docked?: typeof layout.d
     }
   }
   floatingHydrated = true;
+});
+
+let placementHydrated = false;
+getPref<boolean>('layout.toolsOnLeft').then((saved) => {
+  if (typeof saved === 'boolean') layout.toolsOnLeft = saved;
+  placementHydrated = true;
+});
+$effect.root(() => {
+  $effect(() => {
+    const toolsOnLeft = layout.toolsOnLeft;
+    if (placementHydrated) setPref('layout.toolsOnLeft', toolsOnLeft);
+  });
 });
 
 let collapsedHydrated = false;

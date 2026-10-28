@@ -224,7 +224,7 @@
       {/if}
       {#if total}{@render chips(total)}{/if}
     {/if}
-    <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 transition-transform duration-300 {view.open ? 'rotate-180' : ''}" />
+    <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 transition-transform duration-300 motion-reduce:transition-none {view.open ? 'rotate-90' : ''}" />
   </button>
 
   <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {view.open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">

@@ -97,20 +97,16 @@
   </div>
 {/snippet}
 
-{#snippet title()}
-  <span class="flex w-full min-w-0 items-center gap-2">
-    <ZIcon zType={'lucideScrollText' as ZIconName} class="size-4 shrink-0 text-primary" />
-    <span class="truncate">Error log</span>
-    <span class="flex-1"></span>
-    <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! bg-muted/60! p-0!" aria-label="Close" onclick={() => (open = false)}><ZIcon zType={'lucideX' as ZIconName} class="size-4" /></ZButton>
-  </span>
-{/snippet}
-
-<ZDrawer bind:open zPlacement="right" zWidth="420px" zFloating zClosable={false} zTitle={title} {footer} zBodyClass="p-0">
-  <div class="flex h-full min-h-full flex-col">
+{#snippet header()}
+  <!-- The title, close button and tabs are the drawer's own header, so the body scrollbar starts below them. -->
+  <div class="flex w-full min-w-0 flex-col gap-3">
+    <span class="-mx-4 flex w-[calc(100%+2rem)] min-w-0 items-center gap-2 border-b border-border px-4 pb-3 text-base font-semibold">
+      <ZIcon zType={'lucideScrollText' as ZIconName} class="size-4 shrink-0 text-primary" />
+      <span class="truncate">Error log</span>
+      <span class="flex-1"></span>
+      <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! bg-muted/60! p-0!" aria-label="Close" onclick={() => (open = false)}><ZIcon zType={'lucideX' as ZIconName} class="size-4" /></ZButton>
+    </span>
     {#if areasHere.length > 1}
-      <!-- The filter tabs stay at the top of the body while the list scrolls under them. -->
-      <div class="sticky top-0 z-10 shrink-0 border-b border-border bg-background px-2 py-2">
       <ZTabs
         zTabs={[{ value: 'all', label: 'All' }, ...areasHere.map((area) => ({ value: area, label: AREAS[area].label }))]}
         zType="segmented"
@@ -122,8 +118,12 @@
         activeTab={filter}
         onTabChange={(value) => (filter = value as typeof filter)}
       />
-      </div>
     {/if}
+  </div>
+{/snippet}
+
+<ZDrawer bind:open zPlacement="right" zWidth="420px" zFloating zClosable={false} {header} {footer} zScrollMode="inner" zBodyClass="p-0">
+  <div class="flex min-h-0 flex-1 flex-col">
     <div class="flex flex-1 flex-col gap-1.5 p-2">
     {#if demo}
       <p class="m-0 rounded-lg border border-dashed border-border px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground">Sample entries (dev mode): the real log is empty. They are not saved.</p>

@@ -52,8 +52,8 @@ importers:
         specifier: 6.43.15
         version: 6.43.15
       '@shival99/z-ui-svelte':
-        specifier: 0.1.15
-        version: 0.1.15(@aiden0z/pptx-renderer@1.4.0)(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(docx-preview@0.4.1)(svelte@5.57.2)(tailwindcss@4.3.3)
+        specifier: 0.1.17
+        version: 0.1.17(@aiden0z/pptx-renderer@1.4.0)(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(docx-preview@0.4.1)(svelte@5.57.2)(tailwindcss@4.3.3)
       '@tauri-apps/api':
         specifier: ^2.0.0
         version: 2.12.4
@@ -814,8 +814,8 @@ packages:
   '@shikijs/vscode-textmate@10.1.0':
     resolution: {integrity: sha512-cVBuhDQjBZaNMTwBquYfPydrUP+E3hE6oYGasx8h6ZrODIM7/r+gxLDXdd66oszbrggZHEntdE6j+5gYIVyMWQ==}
 
-  '@shival99/z-ui-svelte@0.1.15':
-    resolution: {integrity: sha512-jn0IH9sLIR0IOxzDdXB4MamI3lTg6ng611DxQLe2cF8aglqyFP4f3gbBmpHdcwG77TU+exnhBZPmrAPwWdLQLA==}
+  '@shival99/z-ui-svelte@0.1.17':
+    resolution: {integrity: sha512-TEBdEyHFZgA/+NMRgfk8fykFDCFIDreBKmqJQiNuY8TRFETNObm3QdepjuQRdgDxhdfr6urRQ+EaY9PsGkQufQ==}
     peerDependencies:
       '@aiden0z/pptx-renderer': '>=1.2.4'
       '@ng-icons/lucide': '>=33.0.0'
@@ -3438,7 +3438,7 @@ snapshots:
 
   '@shikijs/vscode-textmate@10.1.0': {}
 
-  '@shival99/z-ui-svelte@0.1.15(@aiden0z/pptx-renderer@1.4.0)(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(docx-preview@0.4.1)(svelte@5.57.2)(tailwindcss@4.3.3)':
+  '@shival99/z-ui-svelte@0.1.17(@aiden0z/pptx-renderer@1.4.0)(@ng-icons/lucide@36.1.0(@ng-icons/core@36.1.0(@angular-devkit/schematics@22.2.3)(@angular/common@22.2.3(@angular/core@22.2.3(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.2.3(rxjs@7.8.2))(@schematics/angular@22.2.3)(rxjs@7.8.2)))(@tiptap/extensions@3.30.1(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(@tiptap/suggestion@3.30.1(@floating-ui/dom@1.8.0)(@tiptap/core@3.30.1(@tiptap/pm@3.30.1))(@tiptap/pm@3.30.1))(boneyard-js@1.10.0(@angular/core@22.2.3(rxjs@7.8.2))(svelte@5.57.2)(vite@6.4.5(jiti@2.7.0)(lightningcss@1.32.0)))(docx-preview@0.4.1)(svelte@5.57.2)(tailwindcss@4.3.3)':
     dependencies:
       '@dayflow/blossom-color-picker-svelte': 1.3.0(svelte@5.57.2)
       '@floating-ui/dom': 1.8.0
@@ -3468,6 +3468,7 @@ snapshots:
       exceljs: 4.4.0
       file-saver: 2.0.5
       isomorphic-dompurify: 2.36.0
+      marked: 17.0.6
       overlayscrollbars: 2.16.0
       qrcode: 1.5.4
       shiki: 4.5.0

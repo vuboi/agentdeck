@@ -200,8 +200,8 @@
     }
   }
   // The apps that can open each file, for "Open with" in its ⋯ menu (the file card itself has no right-click menu).
-  // Asked only when that menu opens: the lookup runs on the app's main thread and reads app icons, so asking for every
-  // file of every reply as the chat loads froze it.
+  // Preload only the targeted menu on hover/focus, with an open fallback: looking up every file while
+  // the chat loads reads app icons on the main thread and can freeze it.
   let apps = $state<Record<string, OpenWithOption[]>>({});
   function loadApps(path: string) {
     if (path in apps) return;
@@ -247,7 +247,7 @@
               <button type="button" class="{live ? 'artifact-in' : ''} block cursor-zoom-in overflow-hidden rounded-xl border border-border bg-muted/30 outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Open {item.name}" onclick={() => openPicture(item)}>
                 <img src={pictures[item.path]} alt={item.name} class="block h-36 w-auto max-w-64 object-cover" />
               </button>
-              <span class="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/pic:opacity-100 focus-within:opacity-100"><MenuButton items={menuOf(item)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" class="size-7! rounded-md! bg-background/80! backdrop-blur" /></span>
+              <span class="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/pic:opacity-100 focus-within:opacity-100"><MenuButton items={menuOf(item)} onprepare={() => loadApps(item.path)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" class="size-7! rounded-md! bg-background/80! backdrop-blur" /></span>
             </div>
           {:else if pictures[item.path] === ''}
             <div class="relative h-36 w-52 overflow-hidden rounded-xl border border-border bg-muted/30" aria-hidden="true"></div>
@@ -269,7 +269,7 @@
               </span>
               <span class="absolute bottom-1 left-1 max-w-[calc(100%-0.5rem)] truncate rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white" title={item.path}>{item.name} · {fileSizeLabel(sizes[item.path])}</span>
             </button>
-            <span class="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/pic:opacity-100 focus-within:opacity-100"><MenuButton items={menuOf(item)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" class="size-7! rounded-md! bg-background/80! backdrop-blur" /></span>
+            <span class="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/pic:opacity-100 focus-within:opacity-100"><MenuButton items={menuOf(item)} onprepare={() => loadApps(item.path)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" class="size-7! rounded-md! bg-background/80! backdrop-blur" /></span>
           </div>
         {/each}
       </div>
@@ -288,7 +288,7 @@
             <button type="button" class="grid size-9 shrink-0 cursor-pointer place-items-center rounded-full bg-background text-foreground outline-none transition hover:bg-primary/15 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring" aria-label={state.playing ? `Pause ${item.name}` : `Play ${item.name}`} onclick={() => void toggle(item)}>
               <ZIcon zType={(state.playing ? 'lucidePause' : 'lucidePlay') as ZIconName} class="size-4" />
             </button>
-            <MenuButton items={menuOf(item)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" />
+            <MenuButton items={menuOf(item)} onprepare={() => loadApps(item.path)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" />
           </div>
           <div class="flex items-center gap-3 border-t border-border px-3 py-2">
             <input type="range" min="0" max={state.length || 1} step="0.01" value={state.time} disabled={!blobs[item.path]} class="artifact-range min-w-0 flex-1" style:--fill="{state.length ? (state.time / state.length) * 100 : 0}%" aria-label="Position in {item.name}" oninput={(event) => seek(item, event)} />
@@ -301,7 +301,7 @@
       {:else}
         <div class="{live ? 'artifact-in' : ''} flex flex-wrap items-center gap-1.5">
           <FileChip name={item.name} path={item.path} size={sizes[item.path]} onclick={() => void openAttachment(item.path, item.name, sizes[item.path])} />
-          <MenuButton items={menuOf(item)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" />
+          <MenuButton items={menuOf(item)} onprepare={() => loadApps(item.path)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" />
         </div>
       {/if}
     {/each}

@@ -71,6 +71,18 @@ pub fn forget(home: &Path, name: &str) -> Result<(), String> {
     write(home, &lock)
 }
 
+/// Change only provenance; preserve the installed content hash until a replacement succeeds.
+pub fn set_source(home: &Path, name: &str, source: String, subpath: String) -> Result<LockEntry, String> {
+    let text = std::fs::read_to_string(lock_file(home)).map_err(|e| e.to_string())?;
+    let mut entries: Lock = serde_json::from_str(&text).map_err(|_| "Skill source metadata is invalid")?;
+    let entry = entries.get_mut(name).ok_or("Skill has no managed source metadata")?;
+    entry.source = source;
+    entry.subpath = subpath;
+    let updated = entry.clone();
+    write(home, &entries)?;
+    Ok(updated)
+}
+
 /// Hash of a folder: the relative path and the bytes of every file, in path order. Links and `.git` are left out.
 pub fn content_hash(folder: &Path) -> Result<String, String> {
     let mut files = Vec::new();

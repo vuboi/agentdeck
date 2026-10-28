@@ -65,9 +65,11 @@
 
     // The submenu of the row that has one: opens beside it.
     let sub = $state<{
-        items: ZDropdownMenuItem[];
+        rowId: string;
         anchor: HTMLElement;
     } | null>(null);
+    // Read live items so an asynchronous Open with lookup updates an already hovered submenu.
+    const subItems = $derived(sub ? rows.find((row) => row.id === sub?.rowId)?.data.submenu ?? [] : []);
     let subOpen = $state(false);
     let closeSubTimer: ReturnType<typeof setTimeout> | undefined;
     function clearSubTimer() {
@@ -90,7 +92,7 @@
             }, 120);
             return;
         }
-        sub = { items: row.data.submenu, anchor: element };
+        sub = { rowId: row.id, anchor: element };
         subOpen = true;
     }
     function leaveRow(row: PickerItem<ZDropdownMenuItem>) {
@@ -114,7 +116,7 @@
                 `[data-picker-row="${CSS.escape(row.id)}"]`,
             );
             if (element) {
-                sub = { items: item.submenu, anchor: element };
+                sub = { rowId: row.id, anchor: element };
                 subOpen = true;
             }
             return;
@@ -154,7 +156,7 @@
 
 {#if sub}
     <Menu
-        items={sub.items}
+        items={subItems}
         bind:open={subOpen}
         anchor={sub.anchor}
         position="right-top"

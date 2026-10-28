@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ZIcon } from '@shival99/z-ui-svelte';
+  import { ZIcon, ZSelect } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import PickerPopover, { type PickerItem } from './PickerPopover.svelte';
   import { TRIGGER_ON_PLAIN } from '../popover';
@@ -13,7 +13,8 @@
     label,
     allLabel = 'All projects',
     class: className = '',
-  }: { value?: string | null; options: string[]; label: (option: string) => string; allLabel?: string; class?: string } = $props();
+    variant = 'popover',
+  }: { value?: string | null; options: string[]; label: (option: string) => string; allLabel?: string; class?: string; variant?: 'popover' | 'select' } = $props();
 
   let trigger = $state<HTMLElement | null>(null);
   let open = $state(false);
@@ -33,6 +34,11 @@
   }
 </script>
 
+{#if variant === 'select'}
+  <span class="w-40 min-w-0 max-w-48 {className}">
+    <ZSelect zSize="sm" class="h-8 min-w-0 text-xs" zPosition="bottom-right" zPlaceholder={allLabel} zOptions={items.map((item) => ({ label: item.label, value: item.id }))} value={current === null ? '::all' : `project:${current}`} onValueChange={(next) => (value = items.find((item) => item.id === next)?.data ?? null)} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
+  </span>
+{:else}
 <button
   bind:this={trigger}
   type="button"
@@ -47,3 +53,4 @@
 </button>
 
 <PickerPopover anchor={trigger} bind:open bind:query {items} local search placeholder="Search projects…" label="Project" empty="No project matches" position="bottom-right" size="sm" width={220} onpick={pick} onclose={() => (query = '')} />
+{/if}

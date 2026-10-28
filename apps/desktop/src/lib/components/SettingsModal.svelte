@@ -862,8 +862,9 @@
                                   </ZButton>
                                 {/if}
                                 {#if !account.active && provider === 'codex'}
-                                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0 text-muted-foreground hover:!border-destructive/60 hover:!bg-destructive/10 hover:!text-destructive" aria-label="Remove {account.email}" title="Remove from the list" disabled={Boolean(busyOf(`remove:${provider}`))} onclick={() => void removeAccount(provider, account)}>
-                                    <ZIcon zType={icon('lucideTrash2')} class="size-3" />
+                                  {@const removing = Boolean(connectors.busy[`remove:${provider}:${account.id}`])}
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0 text-muted-foreground hover:!border-destructive/60 hover:!bg-destructive/10 hover:!text-destructive" aria-label="Remove {account.email}" aria-busy={removing} title="Remove from the list" disabled={removing} onclick={() => void removeAccount(provider, account)}>
+                                    <ZIcon zType={icon(removing ? 'lucideLoaderCircle' : 'lucideTrash2')} class="size-3 {removing ? 'animate-spin' : ''}" />
                                   </ZButton>
                                 {/if}
                               </div>
@@ -913,8 +914,9 @@
                             </li>
                           {/each}
                         </ul>
-                        {#if connectors.errors[`switch:${provider}`] || connectors.errors[`remove:${provider}`]}
-                          <p class="mt-2 text-xs text-destructive" role="alert">{connectors.errors[`switch:${provider}`] ?? connectors.errors[`remove:${provider}`]}</p>
+                        {@const removeError = Object.entries(connectors.errors).find(([key]) => key.startsWith(`remove:${provider}:`))?.[1]}
+                        {#if connectors.errors[`switch:${provider}`] || removeError}
+                          <p class="mt-2 text-xs text-destructive" role="alert">{connectors.errors[`switch:${provider}`] ?? removeError}</p>
                         {/if}
                         <p class="mt-2 text-[11px] text-muted-foreground">A chat that is already running keeps its account; the next message uses the new one.</p>
 

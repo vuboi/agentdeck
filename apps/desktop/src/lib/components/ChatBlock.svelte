@@ -69,10 +69,10 @@
   {#if answerText}<div class="block-in text-sm leading-relaxed text-foreground"><Markdown text={answerText} streaming={block.streaming} {onrendered} {flush} /></div>{/if}
   {#if asked.questions.length && onquestions && showQuestions}<QuestionCard questions={asked.questions} {answered} onsubmit={onquestions} />{/if}
 {:else if block.kind === 'response'}
-  <!-- Your own message: plain text, folded when long. -->
+  <!-- Your own message keeps the same Markdown formatting as the draft, folded when long. -->
   <div class="block-in text-sm leading-relaxed text-foreground">
     <ZShowMore zMaxHeight={240} zButtonSize="sm" zBlurColor={fade}>
-      <p class="m-0 whitespace-pre-wrap">{block.text}</p>
+      <Markdown text={block.text} />
     </ZShowMore>
   </div>
 {:else if block.kind === 'command'}

@@ -5,7 +5,7 @@
   import { fly } from 'svelte/transition';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { revealTab } from '../tab-strip';
-  import { ZDrawer, ZIcon, ZLoading, ZPopover, ZSwitch, zModalService, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDrawer, ZIcon, ZLoading, ZPopover, ZSwitch, zModalService, zTooltip } from '@shival99/z-ui-svelte';
   import { toast } from '../toast';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
@@ -885,12 +885,13 @@
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
 </script>
 
-{#snippet processTitle()}
-  <span class="flex w-full min-w-0 items-center gap-2">
+{#snippet processHeader()}
+  <span class="flex w-full min-w-0 items-center gap-2 text-base font-semibold">
+    <ZIcon zType={'lucideServer' as ZIconName} class="size-4 shrink-0 text-primary" />
     <span class="truncate">Running in the background</span>
-    <span class="rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground tabular-nums">{rowCount}</span>
+    <span class="rounded-full bg-muted px-1.5 text-[11px] font-normal text-muted-foreground tabular-nums">{rowCount}</span>
     <span class="flex-1"></span>
-    <button type="button" class="grid size-7 cursor-pointer place-items-center rounded-md border border-border bg-muted/60 outline-none hover:bg-accent" aria-label="Close" onclick={() => (processOpen = false)}><ZIcon zType={'lucideX' as ZIconName} class="size-4" /></button>
+    <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md border border-border bg-muted/60 outline-none hover:bg-accent" aria-label="Close" onclick={() => (processOpen = false)}><ZIcon zType={'lucideX' as ZIconName} class="size-4" /></button>
   </span>
 {/snippet}
 
@@ -1079,10 +1080,10 @@
             {/if}
           {/each}
         </div>
-        <ZDrawer bind:open={processOpen} zPlacement="right" zWidth="380px" zFloating zClosable={false} zTitle={processTitle} footer={processFooter}>
-<div class="flex min-h-full flex-col gap-2">
+        <ZDrawer bind:open={processOpen} zPlacement="right" zWidth="380px" zFloating zClosable={false} header={processHeader} footer={processFooter} zScrollMode="inner" zBodyClass="p-0">
+<div class="flex min-h-0 flex-1 flex-col gap-2 p-2">
               {#if rowCount === 0}
-                <div class="col-start-1 row-start-1 flex min-h-38 flex-col items-center justify-center gap-2 self-center text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="24" /> Nothing is running in the background</div>
+                <div class="flex min-h-38 flex-1 flex-col items-center justify-center gap-2 self-stretch text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="24" /> Nothing is running in the background</div>
               {/if}
               {#each terminalRuns.list as run (run.id)}
                 <div class="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
@@ -1167,12 +1168,12 @@
                     {@const busyRow = extBusy !== '' && extBusy === item.id}
                     <!-- One card each: its logo and name on top, what can be done to it below. -->
                     <div class="rounded-lg border border-border bg-card/40 transition-colors hover:border-primary/30">
-                      <button type="button" class="flex w-full items-center gap-2.5 px-2.5 pt-2.5 pb-2 text-left outline-none {item.popup && item.enabled ? 'cursor-pointer' : 'cursor-default'}" disabled={!item.popup || !item.enabled} title={item.popup && item.enabled ? 'Open its page in a new tab' : item.name} onclick={() => openExtensionPage(item)}>
+                      <button type="button" class="flex w-full items-center gap-2.5 px-2.5 pt-2.5 pb-2 text-left outline-none {item.popup && item.enabled ? 'cursor-pointer' : 'cursor-default'}" disabled={!item.popup || !item.enabled} title={item.popup && item.enabled ? 'Open its page in a new tab' : undefined} onclick={() => openExtensionPage(item)}>
                         <span class="grid size-7 shrink-0 place-items-center rounded-md bg-muted {item.enabled ? '' : 'grayscale opacity-60'}">
                           {#if item.icon}<img src={item.icon} alt="" class="size-5 object-contain" />{:else}<ZIcon zType={'lucidePuzzle' as ZIconName} class="size-4 text-muted-foreground" />{/if}
                         </span>
                         <span class="min-w-0 flex-1">
-                          <span class="block truncate font-medium {item.enabled ? 'text-foreground' : 'text-muted-foreground'}">{item.name}</span>
+                          <span class="block truncate font-medium {item.enabled ? 'text-foreground' : 'text-muted-foreground'}" {@attach zTooltip({ content: item.name, position: 'top', autoDetect: true })}>{item.name}</span>
                           <span class="mt-0.5 block truncate text-[11px] text-muted-foreground">{!item.id ? 'Loads when a page opens' : item.enabled ? (item.popup ? 'On · click to open its page' : 'On') : 'Off'}</span>
                         </span>
                       </button>
@@ -1193,9 +1194,11 @@
                 {#if extensions.some((item) => !item.id)}
                   <p class="m-0 px-3 pb-2 text-[11px] text-muted-foreground">Open a page to turn them on or off, reload or remove them.</p>
                 {/if}
-                <button type="button" class="flex items-center justify-center gap-1.5 border-t border-border px-3 py-2 font-medium text-primary outline-none hover:bg-primary/10" onclick={() => void addExtension()}>
-                  <ZIcon zType={'lucidePlus' as ZIconName} class="size-3.5" /> Add unpacked extension…
-                </button>
+                <div class="border-t border-border p-2">
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 w-full gap-1.5 px-3 text-xs" onclick={() => void addExtension()}>
+                    <ZIcon zType={'lucidePlus' as ZIconName} class="size-3.5" /> Add unpacked extension…
+                  </ZButton>
+                </div>
               </div>
             {/snippet}
           </ZPopover>

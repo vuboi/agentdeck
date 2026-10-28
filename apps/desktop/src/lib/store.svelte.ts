@@ -207,7 +207,7 @@ export type CatalogItem = {
   install: { how: 'plugin' | 'mcp' | 'skill'; [field: string]: unknown };
 };
 /** What the Discover tab narrows the catalog by; Rust filters and cuts the list, so only scrolled-to pages are held here. */
-export type CatalogFilter = { category?: string; query: string; kind: string; agent: string };
+export type CatalogFilter = { category?: string; query: string; kind: string; agent: string; source?: string };
 type CatalogPage = { items: CatalogItem[]; total: number; fetched_at: number; errors: string[] };
 
 const PAGE_SIZE = 40;
@@ -273,19 +273,28 @@ export async function loadMoreCatalog() {
   }
 }
 
-/** Rebuilds the catalog from every source, then reads the first page again. */
-export async function refreshCatalog() {
-  if (!inTauri() || catalog.refreshing) return;
-  catalog.refreshing = true;
-  catalog.loading = true;
-  try {
-    await call('store_catalog_refresh');
-  } catch (error) {
-    catalog.error = message(error);
-  } finally {
-    catalog.refreshing = false;
+let catalogRefresh: Promise<void> | null = null;
+/** Rebuilds the catalog, retaining refresh errors. Source edits wait out an older refresh before rebuilding. */
+export async function refreshCatalog(afterCurrent = false): Promise<void> {
+  if (!inTauri()) return;
+  if (catalogRefresh) {
+    await catalogRefresh;
+    if (afterCurrent) return refreshCatalog();
+    return;
   }
-  await loadCatalog();
+  catalogRefresh = (async () => {
+    catalog.refreshing = true;
+    catalog.loading = true;
+    let failure = '';
+    try { await call('store_catalog_refresh'); }
+    catch (error) { failure = message(error); }
+    try {
+      await loadCatalog();
+      if (failure) catalog.error = failure;
+    } finally { catalog.refreshing = false; }
+  })();
+  try { await catalogRefresh; }
+  finally { catalogRefresh = null; }
 }
 
 export function installCatalogItem(item: CatalogItem, acknowledged: boolean, project: string | null = null) {
@@ -299,13 +308,19 @@ export async function loadSources() {
 
 export async function addSource(url: string): Promise<boolean> {
   const next = await step<string[]>('store_source_add', { url });
-  if (next) sources.urls = next;
+  if (next) {
+    sources.urls = next;
+    await refreshCatalog(true);
+  }
   return Boolean(next);
 }
 
 export async function removeSource(url: string) {
   const next = await step<string[]>('store_source_remove', { url });
-  if (next) sources.urls = next;
+  if (next) {
+    sources.urls = next;
+    await refreshCatalog(true);
+  }
 }
 
 // Updates of library skills that came from a git source.
@@ -325,7 +340,9 @@ export async function checkUpdates() {
 }
 
 export function updateSkill(name: string, acknowledged: boolean) {
-  return attempt(`update:${name}`, 'store_update_skill', { name, acknowledged }, () => `${name} updated`, () =>
-    Promise.all([loadStore(), checkUpdates()]),
-  );
+  return attempt(`update:${name}`, 'store_update_skill', { name, acknowledged }, () => `${name} updated`, async () => {
+    updates.items = updates.items.map((item) => item.name === name ? { ...item, changed: false, error: null } : item);
+    await loadStore();
+    void import('./store-maintenance.svelte').then(({ checkStoreUpdates }) => checkStoreUpdates(true));
+  });
 }

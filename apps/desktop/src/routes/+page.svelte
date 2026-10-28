@@ -186,7 +186,7 @@
   {/if}
 
   <!-- Workspace: left zone | conversation column | right zone -->
-  <div class="flex h-full min-w-0 flex-1 min-[720px]:min-w-[280px]" data-workspace>
+  <div class="flex h-full min-w-0 flex-1 min-[720px]:min-w-[280px]" style:order={layout.toolsOnLeft ? 3 : 1} data-workspace>
     {#if showZones && shows('left')}
       <div transition:slideWidth class="flex h-full min-w-[200px] {SIDE} [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1" style:width="{layout.sizes.left}px">
         <DockZone zone="left" />
@@ -230,11 +230,12 @@
   </div>
 
   {#if !narrow}
-    {#if showTools && toolsPanelWidth >= MIN.tools}<Splitter axis="x" label="Resize tools panel" onDelta={grow('tools', -1, MIN.tools, () => toolsAvailableWidth)} />{/if}
+    {#if showTools && toolsPanelWidth >= MIN.tools}<div class="flex h-full shrink-0" style:order={2}><Splitter axis="x" label="Resize tools panel" onDelta={grow('tools', layout.toolsOnLeft ? 1 : -1, MIN.tools, () => toolsAvailableWidth)} /></div>{/if}
     <div
       class="tools-shell flex h-full min-w-0 shrink-0 overflow-hidden [&>*]:h-full [&>*]:min-w-0 [&>*]:flex-1"
       class:tools-shell-animating={layout.toolsWidthAnimating}
       class:tools-shell-visible={showTools && toolsPanelWidth > 0}
+      style:order={layout.toolsOnLeft ? 1 : 3}
       style:width="{showTools ? toolsPanelWidth : 0}px"
       style:minWidth="{showTools ? Math.min(MIN.tools, toolsPanelWidth) : 0}px"
       style:opacity={showTools && toolsPanelWidth > 0 ? 1 : 0}

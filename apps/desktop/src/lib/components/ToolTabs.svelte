@@ -16,7 +16,7 @@
   const panelTools = $derived(TOOLS.filter((tool) => !isAway(tool.value)));
   const visibleCount = $derived.by(() => {
     if (room === undefined) return panelTools.length;
-    const fit = Math.floor(room / TAB);
+    const fit = Math.floor(room / TAB) - 1; // keep one slot for the layout switch after Usage
     // Everything fits, or one slot goes to the hamburger.
     return fit >= panelTools.length ? panelTools.length : Math.max(0, fit - 1);
   });
@@ -68,4 +68,7 @@
     <MenuButton items={menuItems} icon="lucideMenu" label="More tools" width={200} />
     </div>
   {/if}
+  <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! shrink-0 p-0 !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label={layout.toolsOnLeft ? 'Move content to the right' : 'Move content to the left'} title={layout.toolsOnLeft ? 'Content right · chat left' : 'Content left · chat right'} onclick={() => (layout.toolsOnLeft = !layout.toolsOnLeft)}>
+    <ZIcon zType={layout.toolsOnLeft ? 'lucideArrowRightLeft' : 'lucideArrowLeftRight'} class="size-4" />
+  </ZButton>
 </div>

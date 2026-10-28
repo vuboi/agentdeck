@@ -355,7 +355,8 @@ export async function switchAccount(provider: AccountProvider, account: Account)
 }
 
 export async function removeAccount(provider: AccountProvider, account: Account) {
-  const ok = await task(`remove:${provider}`, 'Removing', () => call('account_remove', { provider, id: account.id }));
+  // One key per account so several can be removed at once.
+  const ok = await task(`remove:${provider}:${account.id}`, 'Removing', () => call('account_remove', { provider, id: account.id }));
   if (ok) {
     toast.success(`${account.email} removed`);
     await refreshAll();

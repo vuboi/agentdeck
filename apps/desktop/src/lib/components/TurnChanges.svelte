@@ -3,8 +3,9 @@
   import { ZIcon } from '@shival99/z-ui-svelte';
   import type { Block, FileChange } from '../mock';
   import { toolOf } from '../blocks';
+  import { openProjectFile } from '../file-viewer.svelte';
 
-  let { blocks }: { blocks: Block[] } = $props();
+  let { blocks, projectRoot = '' }: { blocks: Block[]; projectRoot?: string } = $props();
   let open = $state(false);
   let selected = $state('');
 
@@ -52,13 +53,15 @@
       <div class="overflow-hidden border-t border-border" transition:slide={{ duration: 200 }}>
         {#each files as file (file.change.path)}
           <div class="border-b border-border last:border-b-0">
-            <button type="button" class="flex min-h-9 w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left outline-none hover:bg-muted/40" aria-expanded={selected === file.change.path} onclick={() => (selected = selected === file.change.path ? '' : file.change.path)}>
+            <div class="flex min-h-9 w-full items-center gap-2 px-3 py-1.5 hover:bg-muted/40">
               <ZIcon zType={file.deleted ? 'lucideTrash2' : file.change.create ? 'lucideFilePlus' : 'lucideFile'} class="size-3.5 shrink-0 text-muted-foreground" />
-              <span class="min-w-0 flex-1 truncate font-mono" title={file.change.path}>{file.change.path}</span>
+              <button type="button" class="min-w-0 flex-1 cursor-pointer truncate text-left font-mono underline-offset-2 outline-none hover:underline focus-visible:underline focus-visible:ring-2 focus-visible:ring-ring" title={file.change.path} aria-label={`Open file ${file.change.path}`} onclick={() => openProjectFile(file.change.path, projectRoot, 'file')}>{file.change.path}</button>
+              <button type="button" class="flex shrink-0 cursor-pointer items-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Show changes for ${file.change.path}`} aria-expanded={selected === file.change.path} onclick={() => (selected = selected === file.change.path ? '' : file.change.path)}>
               <span class="tabular-nums text-emerald-500">+{file.added}</span>
               <span class="tabular-nums text-destructive">−{file.removed}</span>
               <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground transition-transform {selected === file.change.path ? 'rotate-90' : ''}" />
-            </button>
+              </button>
+            </div>
             {#if selected === file.change.path}
               <div class="overflow-hidden" transition:slide={{ duration: 180 }}>
               <div class="max-h-72 overflow-auto border-t border-border/60 bg-background py-1 font-mono text-[11px] leading-relaxed">

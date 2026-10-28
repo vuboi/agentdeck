@@ -58,6 +58,8 @@ export const fileWrites = $state({ tick: 0 });
 
 /** Live and finished calls plus chat errors, oldest first: live rows enter at start and persist on completion. */
 export const audit = $state<Activity[]>([]);
+export const auditPaging = $state({ cursor: null as number | null, hasMore: false, loading: false });
+let auditPageGeneration = 0;
 
 async function tauriCall(command: string, args?: Record<string, unknown>) {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -71,31 +73,61 @@ const startOfYesterday = () => {
   day.setDate(day.getDate() - 1);
   return day.getTime();
 };
-function pruneAudit() {
+function pruneAudit(): Promise<number> {
   const cutoff = startOfYesterday();
   for (let index = audit.length - 1; index >= 0; index--) if (audit[index].startedAt < cutoff) audit.splice(index, 1);
-  return tauriCall('audit_prune', { cutoff }).catch(() => 0);
+  return tauriCall('audit_prune', { cutoff }).then(Number).catch(() => 0);
+}
+
+type AuditPage = { entries: { offset: number; line: string }[]; cursor: number | null; hasMore: boolean };
+
+async function readAuditPage(limit: number, cursor: number | null) {
+  if (!inTauri() || auditPaging.loading) return;
+  const generation = auditPageGeneration;
+  auditPaging.loading = true;
+  try {
+    const page = (await tauriCall('audit_read', { cursor, limit })) as AuditPage;
+    if (generation !== auditPageGeneration) return;
+    const loaded: Activity[] = [];
+    for (const { offset, line } of page.entries) {
+      try {
+        const entry = JSON.parse(line) as Activity;
+        loaded.push({ ...entry, key: `${entry.key}#${offset}` });
+      } catch {
+        // A corrupt line is skipped; the Rust cursor still advances past it.
+      }
+    }
+    audit.unshift(...loaded);
+    auditPaging.cursor = page.cursor;
+    auditPaging.hasMore = page.hasMore;
+  } catch {
+    // Keep the current page visible if disk access fails; a later scroll can retry.
+  } finally {
+    if (generation === auditPageGeneration) auditPaging.loading = false;
+  }
+}
+
+function resetAuditPages() {
+  auditPageGeneration++;
+  auditPaging.cursor = null;
+  auditPaging.hasMore = false;
+  auditPaging.loading = false;
+  for (let index = audit.length - 1; index >= 0; index--) {
+    if (/#\d+$/.test(audit[index].key)) audit.splice(index, 1);
+  }
+  void readAuditPage(100, null);
+}
+
+export function loadMoreAudit() {
+  if (!auditPaging.hasMore || auditPaging.loading) return;
+  void readAuditPage(50, auditPaging.cursor);
 }
 
 if (inTauri()) {
   // Checked every hour too, so an app left open over midnight drops the old day as well.
-  setInterval(() => void pruneAudit(), 3_600_000);
+  setInterval(() => void pruneAudit().then((dropped) => dropped > 0 && resetAuditPages()), 3_600_000);
   void pruneAudit()
-    .then(() => tauriCall('audit_read'))
-    .then((text) => {
-      const loaded: Activity[] = [];
-      for (const line of String(text).split('\n')) {
-        if (!line.trim()) continue;
-        try {
-          // Entries saved before keys were unique can share one: each loaded entry gets its own position in the key.
-          const entry = JSON.parse(line) as Activity;
-          loaded.push({ ...entry, key: `${entry.key}#${loaded.length}` });
-        } catch {
-          // A line cut short by a crash is skipped, the rest still loads.
-        }
-      }
-      audit.unshift(...loaded);
-    })
+    .then(() => readAuditPage(100, null))
     .catch(() => {});
 }
 
@@ -458,5 +490,9 @@ export const clearActivity =() => activity.splice(0, activity.length);
 /** Empties the Audit log, in memory and on disk. */
 export function clearAudit() {
   audit.splice(0, audit.length);
+  auditPageGeneration++;
+  auditPaging.cursor = null;
+  auditPaging.hasMore = false;
+  auditPaging.loading = false;
   if (inTauri()) void tauriCall('audit_clear').catch(() => {});
 }

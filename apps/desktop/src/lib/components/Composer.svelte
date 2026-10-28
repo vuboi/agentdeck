@@ -77,6 +77,10 @@
   // What is typed belongs to the open session: switch away and back and it is still there.
   const sessionId = $derived(workspace.activeId);
   const draft = $derived(drafts[sessionId] ?? '');
+  /** Recognize common Markdown without parsing the entire draft on every keystroke. */
+  function hasMarkdown(text: string): boolean {
+    return /(^|\n)\s{0,3}(#{1,6}\s|>\s|[-*+]\s|\d+[.)]\s|`{3}|~{3}|[-*_]{3,}\s*$)|\*\*[^\n]+\*\*|__[^\n]+__|~~[^\n]+~~|`[^`\n]+`|(?:^|\s)(?:\*[^*\n]+\*|_[^_\n]+_)(?=$|[\s.,!?])|!?\[[^\]]+\]\([^)]+\)|(^|\n)[^\n]*\|[^\n]*\n\s*\|?\s*:?-{3}/m.test(text);
+  }
   const mentions = $derived(draftMentions[sessionId] ?? []);
   // Text wiped by accident (select all + delete, cut) comes back with Ctrl+Z, even after switching chats, which
   // drops the textarea's own undo history. A send clears the field on purpose and keeps nothing.
@@ -710,6 +714,11 @@
   const DOC_MAX = 25 * 1024 * 1024; // the backend refuses larger ones too
   const LONG_PASTE_CHARS = 10_000;
 
+  /** Markdown paste travels as an attachment, leaving the composer free for a question. */
+  function attachMarkdown(text: string, id: string) {
+    void addDocuments([new File([text], 'Pasted Markdown.md', { type: 'text/markdown' })], id);
+  }
+
   async function addFiles(files: File[]) {
     const isPicture = (file: File) =>
       /^image\/(png|jpeg|gif|webp)$/.test(file.type);
@@ -850,10 +859,11 @@
     const clip = clipFromPaste(event.clipboardData);
     if (clip) {
       event.preventDefault();
-      const at = area?.selectionStart ?? draft.length;
-      setDraft(
-        `${draft.slice(0, at)}${clip.text}${draft.slice(area?.selectionEnd ?? at)}`,
-      );
+      if (hasMarkdown(clip.text)) attachMarkdown(clip.text, sessionId);
+      else {
+        const at = area?.selectionStart ?? draft.length;
+        setDraft(`${draft.slice(0, at)}${clip.text}${draft.slice(area?.selectionEnd ?? at)}`);
+      }
       if (clip.images.length)
         setImages([
           ...images,
@@ -883,6 +893,11 @@
     const files = [...(event.clipboardData?.files ?? [])];
     if (files.length === 0) {
       const text = event.clipboardData?.getData('text/plain') ?? '';
+      if (hasMarkdown(text)) {
+        event.preventDefault();
+        attachMarkdown(text, sessionId);
+        return;
+      }
       if (text.length <= LONG_PASTE_CHARS) return; // short plain text pastes as usual
       event.preventDefault();
       // Long text travels as a regular file chip, so it stays out of the prompt until the agent reads the attachment.
@@ -1244,7 +1259,7 @@
     placeholder={running
       ? `Enter runs beside · ${mac ? '⌥' : 'Alt'}+Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt`
       : 'Do anything…'}
-    class="max-h-45 min-h-10 w-[calc(100%+0.5rem)] resize-none overflow-x-hidden break-words border-0 bg-transparent pt-0 pr-2 pb-1 pl-0.5 text-sm leading-normal outline-none placeholder:text-muted-foreground"
+    class="max-h-45 min-h-10 w-[calc(100%+0.5rem)] resize-none overflow-x-hidden break-words border-0 bg-transparent pt-0 pr-0 pb-1 pl-0.5 text-sm leading-normal outline-none placeholder:text-muted-foreground"
   ></textarea>
 
   <div class="flex min-w-0 items-center justify-between gap-2">
@@ -1387,8 +1402,12 @@
         {#if quota.remaining > 0}
           <span
             class="pointer-events-none absolute inset-0 overflow-hidden rounded-full"
-            aria-hidden="true"><span class="quota-sheen"></span></span
-          >
+            aria-hidden="true">
+            <span class="quota-sheen"></span>
+            <span class="quota-droplet" style="--level: 0.5px; --duration: 4.8s; --delay: -1.2s"></span>
+            <span class="quota-droplet" style="--level: 2px; --duration: 6.2s; --delay: -3.8s"></span>
+            <span class="quota-droplet" style="--level: 1px; --duration: 5.4s; --delay: -4.6s"></span>
+          </span>
           <span
             class="absolute -right-1 top-1/2 grid size-2 -translate-y-1/2 place-items-center rounded-full {quota.remaining <=
             10
@@ -1472,18 +1491,34 @@
 {/if}
 
 <style>
-  /* A faint highlight drifts toward the tip so the draining bar reads as live. */
+  /* Adapt ZProgress's shine and drifting bubbles to the compact 6px quota track. */
   .quota-sheen {
     position: absolute;
-    inset: 0;
+    inset-block: 0;
+    left: -38%;
+    width: 38%;
     background: linear-gradient(
       90deg,
       transparent 0%,
-      rgb(255 255 255 / 0.28) 50%,
+      rgb(255 255 255 / 0.12) 24%,
+      rgb(255 255 255 / 0.72) 48%,
+      rgb(255 255 255 / 0.88) 52%,
+      rgb(255 255 255 / 0.12) 76%,
       transparent 100%
     );
-    transform: translateX(-100%);
-    animation: quota-sheen 3.2s ease-in-out infinite;
+    animation: quota-sheen 3s ease-in-out infinite;
+  }
+  .quota-droplet {
+    position: absolute;
+    left: -6%;
+    bottom: var(--level);
+    width: 2.5px;
+    height: 2.5px;
+    border: 0.5px solid rgb(255 255 255 / 0.75);
+    border-radius: 50%;
+    background: rgb(255 255 255 / 0.35);
+    box-shadow: 0 0 3px rgb(255 255 255 / 0.55);
+    animation: quota-droplet var(--duration) linear var(--delay) infinite;
   }
   /* At 20% or less the fill breathes once every couple of seconds; dim, not a strobe. */
   .quota-low {
@@ -1504,13 +1539,12 @@
     }
   }
   @keyframes quota-sheen {
-    0% {
-      transform: translateX(-100%);
-    }
-    60%,
-    100% {
-      transform: translateX(100%);
-    }
+    0% { left: -38%; }
+    80%, 100% { left: 100%; }
+  }
+  @keyframes quota-droplet {
+    from { left: -6%; }
+    to { left: 106%; }
   }
   @keyframes quota-low {
     0%,
@@ -1524,6 +1558,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .quota-sheen,
+    .quota-droplet { display: none; }
     .quota-low {
       animation: none;
     }

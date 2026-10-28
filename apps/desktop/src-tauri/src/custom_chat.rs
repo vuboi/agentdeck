@@ -1328,7 +1328,9 @@ async fn model_call(
         });
     }
     let mut step = Step::default();
-    let mut pending = String::new();
+    // Buffer raw bytes: a network chunk can end inside a Vietnamese character or emoji.
+    // Decode only complete lines; ASCII newlines cannot occur inside a multi-byte UTF-8 character.
+    let mut pending: Vec<u8> = Vec::new();
     'stream: loop {
         // A server that stops sending (a stuck model, a dropped connection) must not leave the chat waiting for ever.
         let next = match tokio::time::timeout(STALL, response.chunk()).await {
@@ -1342,9 +1344,8 @@ async fn model_call(
         };
         match next {
             Ok(Some(bytes)) => {
-                pending.push_str(&String::from_utf8_lossy(&bytes));
-                while let Some(end) = pending.find('\n') {
-                    let line: String = pending.drain(..=end).collect();
+                pending.extend_from_slice(&bytes);
+                while let Some(line) = take_line(&mut pending) {
                     let Some(data) = line.trim().strip_prefix("data:") else {
                         continue;
                     };
@@ -1360,6 +1361,13 @@ async fn model_call(
         }
     }
     Ok(step)
+}
+
+/// The next complete SSE line (including its newline), decoded as UTF-8; incomplete bytes stay buffered.
+fn take_line(pending: &mut Vec<u8>) -> Option<String> {
+    let end = pending.iter().position(|byte| *byte == b'\n')?;
+    let line: Vec<u8> = pending.drain(..=end).collect();
+    Some(String::from_utf8_lossy(&line).into_owned())
 }
 
 fn system_prompt(cwd: Option<&Path>, skills: &[ProviderCommand]) -> String {
@@ -1825,6 +1833,37 @@ pub async fn run_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_character_split_across_chunks_stays_whole() {
+        // "ệ" is three UTF-8 bytes: cut it between two network chunks.
+        let text = "data: {\"t\":\"Việt\"}\n".as_bytes();
+        let cut = text.iter().position(|byte| *byte == 0xE1).map(|at| at + 1).expect("contains ệ");
+        let mut pending = Vec::new();
+        pending.extend_from_slice(&text[..cut]);
+        assert_eq!(take_line(&mut pending), None);
+        pending.extend_from_slice(&text[cut..]);
+        assert_eq!(take_line(&mut pending).as_deref(), Some("data: {\"t\":\"Việt\"}\n"));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn sse_lines_survive_every_chunk_boundary_and_keep_an_unterminated_tail() {
+        let first = "data: {\"t\":\"Tiếng Việt 😀\"}\r\n";
+        let second = "data: [DONE]\n";
+        let text = format!("{first}{second}data: unfinished");
+        for cut in 0..=text.len() {
+            let mut pending = Vec::new();
+            let mut lines = Vec::new();
+            for chunk in [&text.as_bytes()[..cut], &text.as_bytes()[cut..]] {
+                pending.extend_from_slice(chunk);
+                while let Some(line) = take_line(&mut pending) { lines.push(line); }
+            }
+            assert_eq!(lines, [first, second], "chunk boundary {cut}");
+            assert_eq!(pending, b"data: unfinished");
+            assert_eq!(take_line(&mut pending), None);
+        }
+    }
 
     fn turn(mode: Option<&str>, allowed: &[&str]) -> Turn {
         Turn {

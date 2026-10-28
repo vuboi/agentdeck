@@ -6,7 +6,7 @@ import tailwindcss from '@tailwindcss/vite';
 // The Tauri dev config (src-tauri/tauri.dev.conf.json) points its window at the same port.
 export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const port = Number(env.VITE_DEV_PORT || 1420);
+  const port = Number(process.env.VITE_DEV_PORT || env.VITE_DEV_PORT || 1431);
   return {
     plugins: [tailwindcss(), sveltekit()],
     clearScreen: false,

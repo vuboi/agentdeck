@@ -1,0 +1,5 @@
+{
+  "identifier": "dev.agentdeck.desktop.local",
+  "productName": "AgentDeck Local",
+  "bundle": { "active": false, "createUpdaterArtifacts": false }
+}

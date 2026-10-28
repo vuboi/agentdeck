@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ZButton, ZIcon, ZModal, ZPopover, zModalService } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZPopover, zModalService } from '@shival99/z-ui-svelte';
   import { glide, ROW_ON, TRIGGER_ON_PLAIN } from '../popover';
   import PickerPopover, { type PickerItem } from './PickerPopover.svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
@@ -8,6 +8,7 @@
   import { toast } from '../toast';
   import { addAccount, cancelLogin, connectors, installed, login, refreshAccounts, refreshAgyAccounts, switchAccount, switchAgyAccount, type Account, type AccountProvider, type AgyAccount } from '../connectors.svelte';
   import AgentLogo from './AgentLogo.svelte';
+  import QuotaBattery from './QuotaBattery.svelte';
   import { ticker } from '../clock.svelte';
   import { resetCountdown, steadyReset } from '../countdown';
 
@@ -67,6 +68,18 @@
   let confirmGeneration = 0;
   let loginRequired = $state<Record<string, boolean>>({});
   const entryKey = (entry: QuickAccount) => `${entry.provider}:${entry.account.id}`;
+  /** Match the composer's most restrictive limit; Antigravity only exposes quota for its active account. */
+  function quotaRemaining(entry: QuickAccount): number | null {
+    const model = session?.model ?? '';
+    const family = model.startsWith('gemini-') ? 'gemini' : /^(claude-|gpt-oss-)/.test(model) ? '3p' : null;
+    const windows = entry.provider === 'agy'
+      ? entry.account.active ? connectors.agyQuota?.groups.find((group) => group.id === family)?.windows ?? [] : []
+      : entry.account.usage;
+    const remaining = windows.filter((window) => Number.isFinite(window.pct)).map((window) =>
+      window.resets_at !== null && window.resets_at * 1000 <= ticker.sec ? 100 : Math.max(0, Math.min(100, 100 - window.pct)),
+    );
+    return remaining.length ? Math.min(...remaining) : null;
+  }
   const labelFor = (provider: AccountProvider | 'agy') => (provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : provider === 'copilot' ? 'GitHub Copilot' : 'Antigravity');
   async function addQuickAccount() {
     if (!accountProvider || !canQuickAdd) return;
@@ -119,6 +132,44 @@
     loginLaunched = false;
     confirmError = error;
     confirmOpen = true;
+    showSignIn();
+  }
+  let signInRef: ReturnType<typeof zModalService.create<boolean>> | null = null;
+  function signInText(entry: QuickAccount) {
+    const email = entry.account.email;
+    const body =
+      entry.provider !== 'agy'
+        ? `The login for ${email} needs attention. Sign in again and AgentDeck will retry switching to this account. Cancel stops the sign-in.`
+        : loginLaunched
+          ? `Finish signing in in the Antigravity window. AgentDeck will save the refreshed credentials for this account, then switch back to ${email}.`
+          : `The saved login for ${email} needs attention. Open Antigravity sign-in; after it completes, return here to continue.`;
+    return confirmError ? `${body}\n\n${confirmError}` : body;
+  }
+  /** Shows the sign-in dialog for the current state. Cancel is never blocked: the handlers return at once and the sign-in runs in the background. */
+  function showSignIn() {
+    const entry = confirmAccount;
+    if (!entry) return;
+    const previous = signInRef;
+    signInRef = zModalService.create<boolean>({
+      zTitle: `Sign in to ${labelFor(entry.provider)}`,
+      zConfirmType: 'show',
+      zConfirmStyle: 'dialog',
+      zConfirmIcon: 'lucideLogIn',
+      zContent: signInText(entry),
+      zOkText: entry.provider === 'agy' ? (loginLaunched ? 'Continue and switch' : 'Open sign-in') : 'Sign in and switch',
+      zOkIcon: 'lucideLogIn',
+      zCancelText: 'Cancel',
+      zWidth: '440px',
+      zOkDisabled: () => confirmBusy,
+      onOk: () => {
+        void confirmAccountAction();
+        return false;
+      },
+      onCancel: () => {
+        closeAccountConfirm();
+      },
+    });
+    previous?.close();
   }
   function beginAccountAction(entry: QuickAccount) {
     if (switchingAccount || confirmOpen) return;
@@ -170,6 +221,8 @@
     confirmGeneration += 1;
     confirmOpen = false;
     confirmAccount = null;
+    signInRef?.close();
+    signInRef = null;
     confirmBusy = false;
     loginLaunched = false;
     confirmError = '';
@@ -230,7 +283,10 @@
         closeAccountConfirm();
       } else confirmError = connectors.errors[switchErrorKey(entry)] ?? 'Could not switch accounts.';
     } finally {
-      if (generation === confirmGeneration) confirmBusy = false;
+      if (generation === confirmGeneration) {
+        confirmBusy = false;
+        if (confirmOpen) showSignIn();
+      }
     }
   }
 
@@ -384,9 +440,7 @@
             {@const expired = needsLogin(entry)}
             {@const exhausted = exhaustedLimits(entry)}
             {@const unavailable = expired || exhausted.length > 0}
-            {@const state = accountState(entry)}
             {@const reset = expired ? null : nextReset(entry)}
-            {@const tagStyle = state === 'in-use' ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'}
             <button
               type="button"
               role="option"
@@ -395,7 +449,7 @@
               aria-disabled={exhausted.length > 0 && !expired}
               disabled={exhausted.length > 0 && !expired}
               title={exhausted.length ? `Limit reached: ${exhausted.join(', ')}` : undefined}
-              class="relative flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none {exhausted.length ? 'cursor-not-allowed text-muted-foreground/55' : 'cursor-pointer'} {active && !unavailable ? 'bg-primary/10' : ''}"
+              class="relative grid w-full min-w-0 grid-cols-[0.875rem_minmax(0,1fr)_2rem] items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none {exhausted.length ? 'cursor-not-allowed text-muted-foreground/55' : 'cursor-pointer'} {active && !unavailable ? 'bg-primary/10' : ''}"
               onclick={() => beginAccountAction(entry)}
             >
               <ZIcon zType={icon(expired ? 'lucideLogIn' : exhausted.length ? 'lucideCircleOff' : active ? 'lucideCheck' : 'lucideArrowLeftRight')} class="size-3.5 shrink-0 {expired ? 'text-warning' : exhausted.length ? 'text-muted-foreground/55' : active ? 'text-primary' : 'text-muted-foreground'}" />
@@ -405,7 +459,7 @@
                 {:else if reset}<span class="mt-0.5 block truncate text-[10px] text-muted-foreground">{reset.label} · <span class="tabular-nums">resets in {resetCountdown(reset.at, ticker.sec)}</span></span>
                 {:else if entry.account.status}<span class="mt-0.5 block truncate text-[10px] text-muted-foreground">{entry.account.status}</span>{/if}
               </span>
-              <span class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase {tagStyle}">{state === 'sign-in' ? 'Sign in' : state === 'limit' ? 'Limit' : state === 'in-use' ? 'In use' : 'Switch'}</span>
+              <QuotaBattery remaining={quotaRemaining(entry)} />
             </button>
           {/each}
         </div>
@@ -413,31 +467,4 @@
     {/snippet}
   </ZPopover>
 
-  <ZModal
-    bind:open={confirmOpen}
-    zTitle={`Sign in to ${labelFor(confirmAccount?.provider ?? 'agy')}`}
-    zWidth="440px"
-    zBodyClass="min-h-0! py-3"
-    zOkText={confirmAccount?.provider === 'agy' ? loginLaunched ? 'Continue and switch' : 'Open sign-in' : 'Sign in and switch'}
-    zCancelText="Cancel"
-    zLoading={confirmBusy}
-    zOkDisabled={!confirmAccount}
-    onOk={() => void confirmAccountAction()}
-    onCancel={closeAccountConfirm}
-  >
-    {#if confirmAccount}
-      <p class="text-sm text-muted-foreground">
-        {#if confirmAccount.provider === 'agy'}
-          {#if loginLaunched}
-            Finish signing in in the Antigravity window. AgentDeck will save the refreshed credentials for this account, then switch back to <b class="text-foreground">{confirmAccount.account.email}</b>.
-          {:else}
-            The saved login for <b class="text-foreground">{confirmAccount.account.email}</b> needs attention. Open Antigravity sign-in; after it completes, return here to continue.
-          {/if}
-        {:else}
-          The login for <b class="text-foreground">{confirmAccount.account.email}</b> needs attention. Sign in again and AgentDeck will retry switching to this account.
-        {/if}
-      </p>
-      {#if confirmError}<p class="mt-3 rounded-md bg-destructive/10 p-2 text-xs text-destructive" role="alert">{confirmError}</p>{/if}
-    {/if}
-  </ZModal>
 {/if}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-mcp-update"
+description = "Enables the store_mcp_update command without any pre-configured scope."
+commands.allow = ["store_mcp_update"]
+
+[[permission]]
+identifier = "deny-store-mcp-update"
+description = "Denies the store_mcp_update command without any pre-configured scope."
+commands.deny = ["store_mcp_update"]

@@ -44,9 +44,9 @@
     { value: 'url', label: 'URL' },
   ];
   const PLACEHOLDER: Record<string, string> = {
-    folder: 'Path to a folder',
+    folder: 'C:\\Users\\you\\skills\\my-skill (contains SKILL.md)',
     git: 'https://github.com/owner/repo',
-    zip: 'Path to a .zip file',
+    zip: 'C:\\Users\\you\\Downloads\\my-skill.zip',
     url: 'https://… a SKILL.md or an MCP config JSON',
   };
 
@@ -122,7 +122,7 @@
 
 <ZModal
   bind:open
-  zTitle="Add from outside"
+  zTitle="Import skill or MCP config"
   zWidth="560px"
   zBodyClass="py-3"
   zCancelText="Cancel"
@@ -142,7 +142,7 @@
           </ZButton>
         {/if}
       </div>
-      <p class="m-0 leading-snug text-muted-foreground">Nothing in it runs. It is copied to a staging folder, scanned, and reviewed before any install.</p>
+      <p class="m-0 leading-snug text-muted-foreground">Choose a skill folder, Git repository, ZIP or MCP config JSON. It is scanned and reviewed before installation. To browse a repository's skills first, add it in Sources and open View skills.</p>
     {:else if step === 'scanned' && job}
       <div class="flex items-center gap-2">
         <span class="font-medium text-foreground capitalize">{job.kind}</span>

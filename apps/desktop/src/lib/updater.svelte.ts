@@ -19,6 +19,7 @@ let pending: Update | null = null;
 
 // Developer aid: `pnpm dev:update` starts the app with a pretend update, so its dialog (changelog, progress) can be seen
 // and styled without publishing a release.
+const releaseUpdates = !import.meta.env.DEV && (import.meta.env.VITE_APP_CHANNEL ?? 'prod') === 'prod';
 export const FAKE_UPDATE = import.meta.env.DEV && import.meta.env.VITE_FAKE_UPDATE === '1';
 const FAKE_NOTES = `### What's new
 
@@ -50,7 +51,7 @@ import { toast } from './toast';
 
 /** Look for an update. `quiet` keeps a failed check silent (the background checks). Returns true if one is waiting. */
 export async function checkForUpdate(quiet = false): Promise<boolean> {
-  if (!inTauri()) return false;
+  if (!inTauri() || !releaseUpdates) return false;
   if (updater.status === 'available' || updater.status === 'ready') return true;
   if (updater.status === 'checking' || updater.status === 'downloading') return false;
   updater.status = 'checking';
@@ -84,6 +85,7 @@ export const updateUi = $state({ open: false, spinning: false });
  * (the sidebar's drawer goes away then). A dialog already waiting opens at once.
  */
 export async function runUpdateCheck(done?: () => void) {
+  if (!releaseUpdates && !FAKE_UPDATE) { toast.info('App updates are disabled in Dev and Local builds'); return; }
   if (updateUi.spinning) return;
   if (updater.status !== 'idle' && updater.status !== 'error') {
     updateUi.open = true;
@@ -113,7 +115,7 @@ export async function installUpdate() {
     useFakeUpdate();
     return;
   }
-  if (!pending || updater.status === 'downloading') return;
+  if (!releaseUpdates || !pending || updater.status === 'downloading') return;
   updater.status = 'downloading';
   updater.progress = 0;
   updater.error = '';
@@ -137,7 +139,7 @@ export async function installUpdate() {
 
 /** Check shortly after start, then every six hours. */
 export function startUpdateChecks() {
-  if (!inTauri()) return () => {};
+  if (!inTauri() || !releaseUpdates) return () => {};
   const first = setTimeout(() => void checkForUpdate(true), 8000);
   const every = setInterval(() => void checkForUpdate(true), 6 * 60 * 60 * 1000);
   return () => {

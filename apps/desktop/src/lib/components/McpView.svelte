@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { parseMcpArguments } from '../mcp-arguments';
   import { matchesStoreCategory } from '../store-categories.svelte';
+  import StoreSourceEditor from './StoreSourceEditor.svelte';
+  import { maintenance, updateMcp, type SourceEdit } from '../store-maintenance.svelte';
   import McpProviders from './McpProviders.svelte';
   import { onMount } from 'svelte';
   import { fade, slide } from 'svelte/transition';
@@ -48,6 +51,7 @@
 
   let open = $state<Record<string, boolean>>({});
   let confirmRemove = $state<McpEntry | null>(null);
+  let sourceEdit = $state<SourceEdit | null>(null);
 
   const HEALTH: Record<Health, { label: string; tone: string; dot: string }> = {
     working: { label: 'Working', tone: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400', dot: 'bg-emerald-500' },
@@ -77,10 +81,6 @@
   const blank = () => ({ name: '', transport: 'stdio' as 'stdio' | 'http', target: '', args: '', env: '', headers: '', agents: { claude: true, codex: true, antigravity: false, copilot: false } as Record<McpAgent, boolean> });
   let form = $state(blank());
 
-  /** Splits `a "b c" d` the way a shell would (no escapes, no variables). */
-  function split(text: string): string[] {
-    return [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2] ?? match[3]);
-  }
   const lines = (text: string) => text.split('\n').map((line) => line.trim()).filter(Boolean);
 
   const chosen = $derived((Object.keys(form.agents) as McpAgent[]).filter((agent) => form.agents[agent]));
@@ -91,6 +91,10 @@
     if (lines(form.env).some((line) => !/^[A-Za-z0-9_]+=/.test(line))) return 'Each variable is KEY=value, one per line';
     if (form.transport === 'http' && lines(form.headers).some((line) => !line.includes(':'))) return 'Each header is Name: value, one per line';
     if (chosen.length === 0) return 'Pick at least one agent';
+    if (form.transport === 'stdio') {
+      try { parseMcpArguments(form.args); }
+      catch (cause) { return cause instanceof Error ? cause.message : String(cause); }
+    }
     return '';
   });
 
@@ -100,7 +104,7 @@
       name: form.name,
       transport: form.transport,
       target: form.target.trim(),
-      args: form.transport === 'stdio' ? split(form.args) : [],
+      args: form.transport === 'stdio' ? parseMcpArguments(form.args) : [],
       env: lines(form.env),
       headers: form.transport === 'http' ? lines(form.headers) : [],
       agents: chosen,
@@ -115,6 +119,8 @@
     void loadMcp();
   });
 </script>
+
+<StoreSourceEditor bind:item={sourceEdit} />
 
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="MCP">
   <div class="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]">
@@ -161,6 +167,7 @@
       {:else}
         <ul class="m-0 flex list-none flex-col gap-2 p-1.5">
           {#each entries as entry, index (entry.id)}
+            {@const packageUpdate = maintenance.mcp.find((item) => item.id === entry.id && item.changed && !item.error)}
             {@const stats = usage.get(entry.name)}
             {@const health = healthOf(entry, stats)}
             {@const test = mcp.tests[entry.id]}
@@ -186,18 +193,24 @@
                     </span>
                   </span>
                 </button>
-                <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Test {entry.name}" title="Start it and list its tools" disabled={test?.state === 'testing' || entry.disabled} onclick={() => void testMcp(entry.id)}>
-                  <ZIcon zType={icon(test?.state === 'testing' ? 'lucideLoaderCircle' : 'lucideZap')} class="size-3 {test?.state === 'testing' ? 'animate-spin' : ''}" />
+                {#if packageUpdate}
+                  <ZButton zType="ghost" zSize="sm" class="h-5 shrink-0 rounded bg-primary/15 px-1.5 text-[10px] text-primary" zLoading={maintenance.busy === entry.id} title={`${packageUpdate.current} → ${packageUpdate.latest}`} onclick={() => updateMcp(packageUpdate, entry.name)}>Update available</ZButton>
+                {/if}
+                {#if !entry.builtin}
+                  <ZButton zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Edit source for {entry.name}" title="Edit MCP source" zDisabled={Boolean(mcp.busy)} onclick={() => (sourceEdit = { kind: 'mcp', id: entry.id, name: entry.name, transport: entry.transport })}><ZIcon zType="lucidePencil" class="size-3.5" /></ZButton>
+                {/if}
+                <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Test {entry.name}" title="Start it and list its tools" disabled={test?.state === 'testing' || entry.disabled} onclick={() => void testMcp(entry.id)}>
+                  <ZIcon zType={icon(test?.state === 'testing' ? 'lucideLoaderCircle' : 'lucideZap')} class="size-3.5 {test?.state === 'testing' ? 'animate-spin' : ''}" />
                 </ZButton>
                 <!-- A server behind OAuth signs in for Codex here (Claude Code asks by itself the first time it is used). -->
                 {#if !entry.builtin && entry.transport === 'http' && entry.agents.includes('codex')}
-                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Log in to {entry.name}" title="Log in over OAuth (Codex)" disabled={store.busy === `login:${entry.name}`} onclick={() => void mcpLogin('codex', entry.name)}>
-                    <ZIcon zType={icon(store.busy === `login:${entry.name}` ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3 {store.busy === `login:${entry.name}` ? 'animate-spin' : ''}" />
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Log in to {entry.name}" title="Log in over OAuth (Codex)" disabled={store.busy === `login:${entry.name}`} onclick={() => void mcpLogin('codex', entry.name)}>
+                    <ZIcon zType={icon(store.busy === `login:${entry.name}` ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {store.busy === `login:${entry.name}` ? 'animate-spin' : ''}" />
                   </ZButton>
                 {/if}
                 {#if !entry.builtin}
-                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0 text-muted-foreground hover:!border-destructive/60 hover:!bg-destructive/10 hover:!text-destructive" aria-label="Remove {entry.name}" title="Remove from {entry.agents.join(', ')}" disabled={mcp.busy.startsWith('remove')} onclick={() => (confirmRemove = entry)}>
-                    <ZIcon zType={icon('lucideTrash2')} class="size-3" />
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0 text-destructive hover:!bg-destructive/10" aria-label="Remove {entry.name}" title="Remove from {entry.agents.join(', ')}" disabled={mcp.busy.startsWith('remove')} onclick={() => (confirmRemove = entry)}>
+                    <ZIcon zType={icon('lucideTrash2')} class="size-3.5" />
                   </ZButton>
                 {/if}
               </div>
@@ -334,7 +347,7 @@
         <ZInput bind:value={form.target} zPlaceholder="npx" />
       </label>
       <label class="flex flex-col gap-1 text-[11px]">
-        {@render caption("Arguments")}
+        {@render caption("Arguments", "Space-separated; quote values containing spaces")}
         <ZInput bind:value={form.args} zPlaceholder="-y @modelcontextprotocol/server-github" />
       </label>
     {:else}

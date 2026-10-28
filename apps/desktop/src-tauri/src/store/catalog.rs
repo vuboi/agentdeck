@@ -146,6 +146,8 @@ pub struct Filter {
     pub category: String,
     pub kind: String,
     pub agent: String,
+    /// Restrict Discover to the exact skill repository selected in Sources.
+    pub source: String,
 }
 
 /// One page of the matching items; the UI asks for the next one when the list is scrolled near its end.
@@ -167,6 +169,7 @@ pub fn page(cache: &Cache, filter: &Filter, offset: usize, limit: usize) -> Page
     let words: Vec<String> = filter.query.to_lowercase().split_whitespace().map(str::to_owned).collect();
     let matching = cache.items.iter().filter(|item| {
         (any(&filter.kind) || item.kind == filter.kind)
+            && (filter.source.is_empty() || matches!(&item.install, Install::Skill { url, .. } if url == &filter.source))
             && (any(&filter.agent) || item.agents.contains(&filter.agent))
             && super::categories::matches(&format!("{} {}", item.name, item.summary), &filter.category)
             && (words.is_empty() || {
@@ -380,7 +383,7 @@ async fn skill_items(home: &Path, url: &str) -> Result<Vec<CatalogItem>, String>
     let job = stage::new_job_id();
     let root = stage::stage(home, &job, stage::Source::Git { url: url.to_owned() }).await?;
     let found = stage::find_skills(&root);
-    let items = found
+    let items: Vec<CatalogItem> = found
         .into_iter()
         .map(|(name, path)| {
             let subpath = path.strip_prefix(&root).map(|rel| rel.to_string_lossy().replace('\\', "/")).unwrap_or_default();
@@ -398,6 +401,9 @@ async fn skill_items(home: &Path, url: &str) -> Result<Vec<CatalogItem>, String>
         })
         .collect();
     let _ = std::fs::remove_dir_all(stage::staging_root(home).join(&job));
+    if items.is_empty() {
+        return Err("No SKILL.md found. Use a repository containing skill folders; adding a source does not install skills.".to_owned());
+    }
     Ok(items)
 }
 
@@ -526,6 +532,24 @@ mod page_tests {
         assert_eq!(page(&cache, &by_kind, 0, 50).total, 5);
         let by_agent = Filter { agent: "codex".to_owned(), ..Filter::default() };
         assert_eq!(page(&cache, &by_agent, 0, 50).items[0].name, "other");
+    }
+
+    #[test]
+    fn source_filter_uses_the_exact_repository_and_keeps_pagination() {
+        let mut cache = cache();
+        let url = "https://github.com/example/skills";
+        for name in ["first", "second"] {
+            let mut skill = item(name, "skill", "codex");
+            skill.install = Install::Skill { url: url.to_owned(), subpath: format!(".agents/skills/{name}") };
+            cache.items.push(skill);
+        }
+        let filter = Filter { source: url.to_owned(), ..Filter::default() };
+        let first = page(&cache, &filter, 0, 1);
+        assert_eq!(first.total, 2);
+        assert_eq!(first.items[0].name, "first");
+        assert_eq!(page(&cache, &filter, 1, 1).items[0].name, "second");
+        let other = Filter { source: format!("{url}-other"), ..Filter::default() };
+        assert_eq!(page(&cache, &other, 0, 40).total, 0);
     }
 }
 

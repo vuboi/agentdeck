@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mcp-source"
+description = "Enables the mcp_source command without any pre-configured scope."
+commands.allow = ["mcp_source"]
+
+[[permission]]
+identifier = "deny-mcp-source"
+description = "Denies the mcp_source command without any pre-configured scope."
+commands.deny = ["mcp_source"]

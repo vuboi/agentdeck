@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-store-skill-source"
+description = "Enables the store_skill_source command without any pre-configured scope."
+commands.allow = ["store_skill_source"]
+
+[[permission]]
+identifier = "deny-store-skill-source"
+description = "Denies the store_skill_source command without any pre-configured scope."
+commands.deny = ["store_skill_source"]

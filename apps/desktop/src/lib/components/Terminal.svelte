@@ -106,7 +106,9 @@
       if (tab) tab.status = status;
     },
     find: () => openFind(),
-    scrolled: (top, bottom) => (ends[id] = { top, bottom }),
+    scrolled: (top, bottom) => {
+      ends[id] = { top, bottom };
+    },
   });
 
   // Where each tab's view is, for its scroll arrows.

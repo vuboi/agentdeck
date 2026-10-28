@@ -18,6 +18,7 @@ pub mod categories;
 pub mod install;
 pub mod library;
 pub mod lock;
+pub mod maintenance;
 pub mod plugins;
 pub mod review;
 pub mod scan;
