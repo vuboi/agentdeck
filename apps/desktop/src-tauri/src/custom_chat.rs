@@ -243,15 +243,18 @@ fn ok(text: impl Into<String>) -> Outcome {
     }
 }
 
-/// The end of `text` when it is longer than the limit (the end of a command's output is what matters).
-fn tail(text: &str, limit: usize) -> String {
-    let count = text.chars().count();
-    if count <= limit {
-        return text.to_owned();
-    }
-    let kept: String = text.chars().skip(count - limit).collect();
-    format!("…(cut {} characters)\n{kept}", count - limit)
+/// How much of a tool's output the model gets: all of it when it fits, else its start and its end around a marker that says
+/// how much was cut (the middle is the part that matters least). Command output keeps mostly its end, where the verdict
+/// is; a page or a file keeps mostly its start.
+fn trim_output(text: &str, limit: usize, tail_percent: usize) -> String {
+    ag_adapters::agent::output::trim_middle(text, limit, tail_percent)
 }
+/// The end of a command's output is what matters.
+const END_HEAVY: usize = 75;
+/// A file or a page is read from the top.
+const START_HEAVY: usize = 25;
+/// A reply of a tool server: no side matters more.
+const BALANCED: usize = 50;
 
 fn resolve(cwd: Option<&Path>, path: &str) -> PathBuf {
     let path = PathBuf::from(path);
@@ -315,7 +318,7 @@ async fn run_bash(command: &str, cwd: Option<&Path>) -> Outcome {
                 .copied()
                 .collect::<Vec<_>>()
                 .join("\n");
-            let text = tail(&text, OUTPUT_MAX);
+            let text = trim_output(&text, OUTPUT_MAX, END_HEAVY);
             match status {
                 Ok(status) if status.success() => ok(if text.is_empty() {
                     "(no output)".to_string()
@@ -541,9 +544,10 @@ async fn web_fetch(args: &Value, restricted: bool) -> Outcome {
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|kind| kind.contains("html"));
             match response.text().await {
-                Ok(text) => ok(tail(
+                Ok(text) => ok(trim_output(
                     &if html { page_text(&text) } else { text },
                     OUTPUT_MAX,
+                    START_HEAVY,
                 )),
                 Err(error) => failed(error.to_string()),
             }
@@ -766,7 +770,7 @@ fn read_file(args: &Value, cwd: Option<&Path>) -> Outcome {
     ok(if numbered.is_empty() {
         "(empty)".to_string()
     } else {
-        tail(&numbered.join("\n"), OUTPUT_MAX * 3)
+        trim_output(&numbered.join("\n"), OUTPUT_MAX * 3, START_HEAVY)
     })
 }
 
@@ -1119,7 +1123,7 @@ async fn browser_call(app: &AppHandle, chat: &str, name: &str, args: &Value) -> 
         text = "Screenshot taken.".into();
     }
     Outcome {
-        text: tail(&text, OUTPUT_MAX),
+        text: trim_output(&text, OUTPUT_MAX, BALANCED),
         is_error: result["isError"].as_bool().unwrap_or(false),
         image,
     }
@@ -1149,6 +1153,12 @@ fn decide(turn: &Turn, name: &str, args: &Value, external: bool) -> Decision {
         }
         if crate::privacy::private_content(&args.to_string()).is_some() {
             return Decision::Deny("the call holds a secret, an environment variable or an internal address: blocked for this provider.");
+        }
+    }
+    // A guard can only refuse and runs before the mode and before any earlier "always allow".
+    if name == "Bash" {
+        if let Some(reason) = ag_adapters::agent::permission::guard_shell(args["command"].as_str().unwrap_or_default()) {
+            return Decision::Deny(reason);
         }
     }
     let mode = Mode::parse(turn.permission_mode.as_deref());
@@ -1745,7 +1755,7 @@ pub async fn run_turn(
                             let wanted = args["name"].as_str().unwrap_or_default().trim_start_matches('/');
                             match (skills.iter().find(|item| item.name == wanted), crate::home_folder()) {
                                 (Some(skill), Ok(home)) => match slash_commands::read(Path::new(&skill.path), &home, turn.cwd.as_deref()) {
-                                    Ok(text) => ok(tail(&text, OUTPUT_MAX * 2)),
+                                    Ok(text) => ok(trim_output(&text, OUTPUT_MAX * 2, START_HEAVY)),
                                     Err(error) => failed(error),
                                 },
                                 _ => failed(format!("no skill named {wanted}")),
@@ -1754,7 +1764,7 @@ pub async fn run_turn(
                         name => match user_tool {
                             Some((_, index, tool)) => {
                                 let reply = servers[*index].call(tool, &args).await;
-                                Outcome { text: tail(&reply.text, OUTPUT_MAX), is_error: reply.is_error, image: reply.image }
+                                Outcome { text: trim_output(&reply.text, OUTPUT_MAX, BALANCED), is_error: reply.is_error, image: reply.image }
                             }
                             None => {
                                 if name.starts_with("browser_") {
@@ -1994,6 +2004,32 @@ mod tests {
             ),
             ("c1", "Bash", r#"{"command":"ls"}"#)
         );
+    }
+
+    #[test]
+    fn the_guard_refuses_what_cannot_be_undone_in_every_mode_and_after_an_approval() {
+        let wipe = json!({ "command": "rm -rf /" });
+        let build = json!({ "command": "rm -rf target" });
+        for mode in [None, Some("acceptEdits"), Some("auto"), Some("bypassPermissions")] {
+            assert!(matches!(decide(&turn(mode, &[]), "Bash", &wipe, false), Decision::Deny(_)), "{mode:?}");
+        }
+        // Not even a command the user allowed before.
+        assert!(matches!(decide(&turn(None, &["Bash(rm -rf /)"]), "Bash", &wipe, false), Decision::Deny(_)));
+        // An ordinary command is still the mode's business.
+        assert!(matches!(decide(&turn(Some("bypassPermissions"), &[]), "Bash", &build, false), Decision::Allow));
+    }
+
+    #[test]
+    fn long_output_keeps_its_start_and_end() {
+        let long = format!("first line\n{}last line: error", "noise\n".repeat(10_000));
+        let command = trim_output(&long, OUTPUT_MAX, END_HEAVY);
+        assert!(command.chars().count() <= OUTPUT_MAX);
+        assert!(command.starts_with("first line") && command.ends_with("last line: error"));
+        assert!(command.contains("characters pruned"));
+        // A command keeps more of its end than a file does.
+        let file = trim_output(&long, OUTPUT_MAX, START_HEAVY);
+        let noise = |text: &str| text.matches("noise").count();
+        assert!(noise(&command) > 0 && noise(&file) > 0);
     }
 
     #[test]

@@ -448,6 +448,13 @@ impl PermissionHandler for CopilotPermissions {
             .find_map(|key| data.extra.get(*key).and_then(Value::as_str))
             .unwrap_or("Copilot requested permission to use a tool")
             .to_string();
+        // A guard can only refuse and runs before the mode and before any earlier "always allow".
+        if kind == "shell" {
+            let command = data.extra.get("fullCommandText").and_then(Value::as_str).unwrap_or(&summary);
+            if let Some(reason) = ag_adapters::agent::permission::guard_shell(command) {
+                return PermissionResult::reject(Some(reason.to_string()));
+            }
+        }
         let permission_key = format!("{kind}\0{tool}\0{summary}");
         let digest = sha2::Sha256::digest(permission_key.as_bytes());
         let digest = digest
