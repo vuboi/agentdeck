@@ -19,6 +19,9 @@ pub struct SyncResult { pub target: String, pub item: String, pub ok: bool, pub 
 /// Applies updates and links/config merges, returning each failure without hiding successful targets.
 #[tauri::command]
 pub async fn store_sync(request: SyncRequest) -> Result<Vec<SyncResult>, String> {
+    // Several syncs can be asked at once; they edit the same config files, so each waits for its turn.
+    static TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _turn = TURN.lock().await;
     let home = crate::home_folder()?;
     remember_projects(&home, &request.projects)?;
     let mut results = Vec::new();

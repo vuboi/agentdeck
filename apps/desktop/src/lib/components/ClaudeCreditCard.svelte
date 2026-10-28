@@ -96,7 +96,7 @@
   {/if}
 </li>
 
-<ZModal bind:open zTitle="Claude Console" zWidth="540px" zBodyClass="scrollbar-full py-3" zOkText="Save" zCancelText="Cancel" zOkDisabled={!apiKey.trim()} zLoading={testing} onOk={() => void save()}>
+<ZModal bind:open zTitle="Claude Console" zWidth="540px" zBodyClass="min-h-0! scrollbar-full py-3" zOkText="Save" zCancelText="Cancel" zOkDisabled={!apiKey.trim()} zLoading={testing} onOk={() => void save()}>
   <form class="flex flex-col gap-3" onsubmit={(event) => { event.preventDefault(); void save(); }}>
     <p class="m-0 text-xs text-muted-foreground">With an API key saved, the Claude picker lists every model again under "Claude credit": Claude Code then runs on that key and the Console credit pays, not your plan.</p>
     <label class="flex flex-col gap-1 text-xs">

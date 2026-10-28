@@ -265,9 +265,9 @@
     {/if}
   </ZDrawer>
 
-  <ZModal bind:open={renaming} zTitle="Edit flow" zWidth="460px" zBodyClass="py-3" zOkText="Save" zCancelText="Cancel" zOkDisabled={Boolean(problem)} onOk={() => { renaming = false; save(); }}>
+  <ZModal bind:open={renaming} zTitle="Edit flow" zWidth="460px" zBodyClass="min-h-0! py-3" zOkText="Save" zCancelText="Cancel" zOkDisabled={Boolean(problem)} onOk={() => { renaming = false; save(); }}>
     <div class="flex flex-col gap-3">
-      <label class="flex flex-col gap-1.5 text-xs"><span class="font-medium">Name</span><ZInput bind:value={draft.name} zPlaceholder="Flow name" /></label>
+      <label class="flex flex-col gap-1.5 text-xs"><span class="font-medium">Name</span><ZInput bind:value={draft.name} autofocus zPlaceholder="Flow name" /></label>
       <label class="flex flex-col gap-1.5 text-xs"><span class="font-medium">Description</span><ZInput zType="textarea" bind:value={draft.description} zPlaceholder="What this flow is for" /></label>
       <div class="flex items-start gap-3 rounded-lg border border-border p-3">
         <div class="min-w-0 flex-1 text-xs">

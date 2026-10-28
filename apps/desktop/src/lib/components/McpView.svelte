@@ -6,7 +6,7 @@
   import McpProviders from './McpProviders.svelte';
   import { onMount } from 'svelte';
   import { fade, slide } from 'svelte/transition';
-  import { ZButton, ZDivider, ZIcon, ZInput, ZModal, ZSwitch, ZTabs } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDivider, ZIcon, ZInput, ZModal, ZSwitch, ZTabs, zModalService } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { GITHUB_SVG, OPENAI_SVG } from '../brand-icons';
   import { ticker } from '../clock.svelte';
@@ -50,7 +50,18 @@
   });
 
   let open = $state<Record<string, boolean>>({});
-  let confirmRemove = $state<McpEntry | null>(null);
+  function confirmRemove(entry: McpEntry) {
+    zModalService.danger({
+      zTitle: `Remove ${entry.name}?`,
+      zContent: `It is removed from ${entry.agents.map((agent) => AGENT[agent]?.label ?? agent).join(', ')} with their own mcp remove. The server itself is not touched.`,
+      zConfirmStyle: 'dialog',
+      zOkText: 'Remove',
+      zOkIcon: 'lucideTrash2',
+      zCancelText: 'Cancel',
+      zWidth: '400px',
+      onOk: () => void removeMcp(entry),
+    });
+  }
   let sourceEdit = $state<SourceEdit | null>(null);
 
   const HEALTH: Record<Health, { label: string; tone: string; dot: string }> = {
@@ -209,7 +220,7 @@
                   </ZButton>
                 {/if}
                 {#if !entry.builtin}
-                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0 text-destructive hover:!bg-destructive/10" aria-label="Remove {entry.name}" title="Remove from {entry.agents.join(', ')}" disabled={mcp.busy.startsWith('remove')} onclick={() => (confirmRemove = entry)}>
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0 text-destructive hover:!bg-destructive/10" aria-label="Remove {entry.name}" title="Remove from {entry.agents.join(', ')}" disabled={mcp.busy.startsWith('remove')} onclick={() => confirmRemove(entry)}>
                     <ZIcon zType={icon('lucideTrash2')} class="size-3.5" />
                   </ZButton>
                 {/if}
@@ -296,23 +307,6 @@
   </div>
 </div>
 
-{#if confirmRemove}
-  {@const target = confirmRemove}
-  <div class="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="presentation" transition:fade={{ duration: 120 }}>
-    <button type="button" class="absolute inset-0 cursor-default" aria-label="Cancel" tabindex="-1" onclick={() => (confirmRemove = null)}></button>
-    <div class="relative w-[min(420px,100%)] rounded-xl border border-border bg-background p-4 shadow-2xl" role="alertdialog" aria-label="Remove {target.name}">
-      <h3 class="m-0 text-sm font-semibold">Remove {target.name}?</h3>
-      <p class="mt-1.5 mb-4 text-xs text-muted-foreground">It is removed from {target.agents.map((agent) => AGENT[agent]?.label ?? agent).join(', ')} with their own <code>mcp remove</code>. The server itself is not touched.</p>
-      <div class="flex justify-end gap-2">
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 px-3 text-xs" onclick={() => (confirmRemove = null)}>Cancel</ZButton>
-        <ZButton zWave={false} zSize="sm" class="h-7 gap-1.5 bg-destructive px-3 text-xs text-white hover:bg-destructive/90" onclick={() => { void removeMcp(target); confirmRemove = null; }}>
-          <ZIcon zType={icon('lucideTrash2')} class="size-3.5" /> Remove
-        </ZButton>
-      </div>
-    </div>
-  </div>
-{/if}
-
 {#snippet caption(text: string, hint?: string)}
   <span class="text-muted-foreground">{text}{#if hint}<span class="ml-1 opacity-70">({hint})</span>{/if}</span>
 {/snippet}
@@ -324,7 +318,7 @@
   </span>
 {/snippet}
 
-<ZModal bind:open={adding} zTitle={addTitle} zWidth="520px" zBodyClass="py-3" zOkText="Add server" zCancelText="Cancel" zOkDisabled={Boolean(problem)} zLoading={mcp.busy === 'add'} onOk={() => void save()}>
+<ZModal bind:open={adding} zTitle={addTitle} zWidth="520px" zBodyClass="min-h-0! py-3" zOkText="Add server" zCancelText="Cancel" zOkDisabled={Boolean(problem)} zLoading={mcp.busy === 'add'} onOk={() => void save()}>
   <div class="flex flex-col gap-3">
     <div class="flex items-center gap-2">
       <ZTabs
@@ -339,7 +333,7 @@
     </div>
     <label class="flex flex-col gap-1 text-[11px]">
       {@render caption("Name")}
-      <ZInput bind:value={form.name} zPlaceholder="github" />
+      <ZInput bind:value={form.name} autofocus zPlaceholder="github" />
     </label>
     {#if form.transport === 'stdio'}
       <label class="flex flex-col gap-1 text-[11px]">

@@ -123,8 +123,8 @@
 <ZModal
   bind:open
   zTitle="Import skill or MCP config"
-  zWidth="560px"
-  zBodyClass="py-3"
+  zWidth="480px"
+  zBodyClass="min-h-0! py-3"
   zCancelText="Cancel"
   zOkText={step === 'source' ? 'Check' : step === 'scanned' ? 'Review' : 'Install'}
   zOkDisabled={busy || (step === 'source' && !value.trim()) || (step === 'reviewed' && !canInstall)}
@@ -134,14 +134,12 @@
   <div class="flex flex-col gap-3 text-xs">
     {#if step === 'source'}
       <ZTabs zTabs={KIND_TABS} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={kind} onTabChange={(next) => (kind = next as typeof kind)} />
-      <div class="flex items-center gap-2">
-        <ZInput bind:value zPlaceholder={PLACEHOLDER[kind]} class="flex-1" />
-        {#if kind === 'folder'}
-          <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-2.5 text-xs" onclick={() => void browse()}>
-            <ZIcon zType={icon('lucideFolderOpen')} class="size-3.5" /> Browse
-          </ZButton>
-        {/if}
-      </div>
+      <ZInput bind:value autofocus zPlaceholder={PLACEHOLDER[kind]} />
+      {#if kind === 'folder'}
+        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 w-fit gap-1.5 px-2.5 text-xs" onclick={() => void browse()}>
+          <ZIcon zType={icon('lucideFolderOpen')} class="size-3.5" /> Browse
+        </ZButton>
+      {/if}
       <p class="m-0 leading-snug text-muted-foreground">Choose a skill folder, Git repository, ZIP or MCP config JSON. It is scanned and reviewed before installation. To browse a repository's skills first, add it in Sources and open View skills.</p>
     {:else if step === 'scanned' && job}
       <div class="flex items-center gap-2">

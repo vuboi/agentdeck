@@ -189,7 +189,7 @@
               role="tab"
               tabindex="0"
               aria-selected={selected}
-              class="group/tab flex h-7 max-w-48 shrink-0 cursor-pointer items-center gap-1 rounded-md pr-1 pl-2.5 text-xs outline-none {selected ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+              class="group/tab flex h-7 max-w-48 shrink-0 cursor-pointer items-center gap-1 rounded-md pr-1 pl-2.5 text-xs outline-none {selected ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
               title={tab.path}
               onclick={() => (viewer.active = tab.id)}
               onauxclick={(event) => event.button === 1 && closeViewerTab(tab.id)}

@@ -12,11 +12,14 @@
   let details = $state('');
   let originalArgs = $state<string[]>([]);
   let loading = $state(false);
+  let saving = $state(false);
+  // The last source opened: the dialog keeps its labels while it closes, so nothing changes under the exit animation.
+  let shown = $state<SourceEdit | null>(null);
   let error = $state('');
   let ready = $state(false);
   let generation = 0;
   const argumentError = $derived.by(() => {
-    if (item?.kind !== 'mcp' || item.transport !== 'stdio') return '';
+    if (shown?.kind !== 'mcp' || shown.transport !== 'stdio') return '';
     try { parseMcpArguments(details); return ''; }
     catch (cause) { return String(cause instanceof Error ? cause.message : cause); }
   });
@@ -26,6 +29,7 @@
     const request = ++generation;
     ready = false;
     if (!current) return;
+    shown = current;
     loading = true;
     error = '';
     void (async () => {
@@ -43,6 +47,8 @@
           details = formatMcpArguments(source.args);
         }
         ready = true;
+        // The first field was disabled while the source loaded; put the cursor in it now.
+        setTimeout(() => document.querySelector<HTMLInputElement>('[data-testid="z-modal"] input:not([disabled])')?.focus(), 30);
       } catch (cause) { if (request === generation) error = String(cause); }
       finally { if (request === generation) loading = false; }
     })();
@@ -50,8 +56,8 @@
 
   async function save() {
     const current = item;
-    if (!current || loading || !ready || argumentError) return;
-    loading = true;
+    if (!current || loading || saving || !ready || argumentError) return;
+    saving = true;
     error = '';
     try {
       if (current.kind === 'skill') {
@@ -67,19 +73,19 @@
       item = null;
       void checkStoreUpdates(true);
     } catch (cause) { error = `${String(cause)}. Some provider targets may already have been saved; refresh before retrying.`; }
-    finally { loading = false; }
+    finally { saving = false; }
   }
 </script>
 
 <!-- Keep the modal's internal close action in sync so the same source can be opened again. -->
-<ZModal bind:open={() => item !== null, (open) => { if (!open) item = null; }} zTitle={`Edit source · ${item?.name ?? ''}`} zWidth="480px" zBodyClass="min-h-0! py-3" zOkText="Save source" zCancelText="Cancel" zLoading={loading} zOkDisabled={!ready || !target.trim() || Boolean(argumentError)} onOk={() => void save()}>
+<ZModal bind:open={() => item !== null, (open) => { if (!open) item = null; }} zTitle={`Edit source · ${shown?.name ?? ''}`} zWidth="480px" zBodyClass="min-h-0! py-3" zOkText="Save source" zCancelText="Cancel" zLoading={saving} zOkDisabled={!ready || !target.trim() || Boolean(argumentError)} onOk={() => void save()}>
   <div class="flex flex-col gap-3 text-xs">
-    <ZInput zLabel={item?.kind === 'skill' ? 'Git repository (HTTPS)' : item?.transport === 'stdio' ? 'Command' : 'Server URL'} zPlaceholder={item?.kind === 'skill' ? 'https://github.com/owner/skills' : item?.transport === 'stdio' ? 'npx' : 'https://example.com/mcp'} bind:value={target} />
-    {#if item?.kind === 'skill'}
-      <ZInput zLabel="Skill folder inside repository (empty for root)" zPlaceholder="skills/my-skill · leave empty for repository root" bind:value={details} />
+    <ZInput zDisabled={loading} zLabel={shown?.kind === 'skill' ? 'Git repository (HTTPS)' : shown?.transport === 'stdio' ? 'Command' : 'Server URL'} zPlaceholder={shown?.kind === 'skill' ? 'https://github.com/owner/skills' : shown?.transport === 'stdio' ? 'npx' : 'https://example.com/mcp'} bind:value={target} />
+    {#if shown?.kind === 'skill'}
+      <ZInput zDisabled={loading} zLabel="Skill folder inside repository (empty for root)" zPlaceholder="skills/my-skill · leave empty for repository root" bind:value={details} />
       <p class="m-0 text-muted-foreground">Saving changes the update source. Installed files stay until you choose Update.</p>
-    {:else if item?.transport === 'stdio'}
-      <ZInput zLabel="Arguments" zPlaceholder="-y @angular/cli mcp" bind:value={details} />
+    {:else if shown?.transport === 'stdio'}
+      <ZInput zDisabled={loading} zLabel="Arguments" zPlaceholder="-y @angular/cli mcp" bind:value={details} />
       <p class="m-0 text-muted-foreground">Separate arguments with spaces. Wrap values containing spaces in double quotes.</p>
       {#if argumentError}<p role="alert" class="m-0 text-destructive">{argumentError}</p>{/if}
     {/if}

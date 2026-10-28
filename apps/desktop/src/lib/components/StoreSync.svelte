@@ -10,7 +10,10 @@
 
   let target = $state<string | null>('');
   let update = $state(true);
-  let busy = $state(false);
+  /** What is syncing now: the names being synced one by one, and whether the whole-store sync runs. */
+  let running = $state<string[]>([]);
+  let runningAll = $state(false);
+  const busy = $derived(runningAll || running.length > 0);
   let runLabel = $state('');
   let results = $state<{ target: string; item: string; ok: boolean; message: string }[]>([]);
   const projects = $derived(workspace.projects.filter((p) => p.path).map((p) => p.path!));
@@ -20,20 +23,27 @@
   ])]);
   onMount(() => { void loadStore(); void loadMcp(); });
 
-  /** Sync only explicitly selected targets; retain results until the next action. */
+  /** Sync only explicitly selected targets; one name syncs on its own while the others stay free to start. */
   async function sync(name: string | null = null) {
-    if (busy) return;
-    busy = true;
-    runLabel = `${name ?? 'All skills & MCP'} · ${target === null ? 'All projects' : target || 'Global'}`;
-    results = [];
+    if (name === null ? runningAll : running.includes(name) || runningAll) return;
+    const where = target === null ? 'All projects' : target || 'Global';
+    const label = `${name ?? 'All skills & MCP'} · ${where}`;
+    if (name === null) runningAll = true;
+    else running.push(name);
+    if (!busy || results.length === 0) results = [];
+    runLabel = running.length + (runningAll ? 1 : 0) > 1 ? `${running.length + (runningAll ? 1 : 0)} syncs · ${where}` : label;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      results = await invoke('store_sync', { request: { projects: target === null ? projects : target ? [target] : [], name, update: name !== null || update } });
+      const done = (await invoke('store_sync', { request: { projects: target === null ? projects : target ? [target] : [], name, update: name !== null || update } })) as typeof results;
+      results = [...results, ...done];
       await Promise.all([loadStore(), loadMcp()]);
       void checkStoreUpdates(true);
     } catch (error) {
-      results = [{ target: 'Store', item: name ?? 'All', ok: false, message: String(error) }];
-    } finally { busy = false; }
+      results = [...results, { target: 'Store', item: name ?? 'All', ok: false, message: String(error) }];
+    } finally {
+      if (name === null) runningAll = false;
+      else running = running.filter((item) => item !== name);
+    }
   }
 </script>
 
@@ -42,7 +52,7 @@
     <div class="w-40 min-w-0 max-w-48 shrink">
       <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zOptions={[{ label: 'Global · all projects', value: '' }, { label: 'All projects', value: '::all' }, ...projects.map((path) => ({ label: workspace.projects.find((p) => p.path === path)?.name ?? path, value: path }))]} value={target ?? '::all'} onValueChange={(value) => (target = value === '::all' ? null : String(value ?? ''))} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
     </div>
-    <ZButton zSize="sm" zType="outline" class="h-8 shrink-0 px-2 text-xs" zLoading={busy} zDisabled={target === null && projects.length === 0} onclick={() => void sync()}><ZIcon zType="lucideRefreshCw" class="size-3.5 shrink-0" />Sync all skills & MCP</ZButton>
+    <ZButton zSize="sm" zType="outline" class="h-8 shrink-0 px-2 text-xs" zLoading={runningAll} zDisabled={runningAll || (target === null && projects.length === 0)} onclick={() => void sync()}><ZIcon zType="lucideRefreshCw" class="size-3.5 shrink-0" />Sync all skills & MCP</ZButton>
   </StoreHeader>
   <div class="flex min-h-0 flex-1 flex-col overflow-y-auto {GUTTER}">
   <div class="flex shrink-0 flex-col gap-3 p-3">
@@ -54,7 +64,7 @@
   {#each names as name (name)}
     <li class="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card p-2.5 {ROW.plugin}">
       <span class="min-w-0 flex-1 truncate font-medium text-foreground" title={name}>{name}</span>
-      <ZButton zSize="sm" zType="outline" class="h-8 shrink-0 px-2 text-xs" zDisabled={busy} onclick={() => void sync(name)}><ZIcon zType="lucideRefreshCw" class="size-3.5 shrink-0" />Sync / update</ZButton>
+      <ZButton zSize="sm" zType="outline" class="h-8 shrink-0 px-2 text-xs" zLoading={running.includes(name)} zDisabled={runningAll || running.includes(name)} onclick={() => void sync(name)}><ZIcon zType="lucideRefreshCw" class="size-3.5 shrink-0" />Sync / update</ZButton>
     </li>
   {/each}
   </ul>

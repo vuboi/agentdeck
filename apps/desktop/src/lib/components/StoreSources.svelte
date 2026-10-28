@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ZButton, ZIcon, ZInput, ZModal } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZInput, ZModal, zModalService } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { addSource, catalog, loadSources, refreshCatalog, removeSource, sources } from '../store.svelte';
   import StoreEmpty from './StoreEmpty.svelte';
@@ -11,6 +11,19 @@
   let { onbrowse }: { onbrowse: (url: string) => void } = $props();
 
   const icon = (name: string) => name as ZIconName;
+
+  function dropSource(url: string) {
+    zModalService.danger({
+      zTitle: 'Remove this source?',
+      zContent: `${url} is removed from Discover. Skills already installed from it stay.`,
+      zConfirmStyle: 'dialog',
+      zOkText: 'Remove',
+      zOkIcon: 'lucideTrash2',
+      zCancelText: 'Cancel',
+      zWidth: '400px',
+      onOk: () => void removeSource(url),
+    });
+  }
 
   // The git repositories the skill catalog reads. Each one is cloned at refresh and its SKILL.md folders are listed.
   // Keep searching in the header; new repository addresses are entered in the add dialog.
@@ -63,7 +76,7 @@
           <li class="flex items-center gap-2 rounded-md border border-border bg-card p-2.5">
             <span class="min-w-0 flex-1 truncate font-mono text-[11px]" title={url}>{url}</span>
             <ZButton zType="outline" zSize="sm" class="h-7 shrink-0 px-2 text-xs" zDisabled={catalog.refreshing} onclick={() => onbrowse(url)}>View skills</ZButton>
-            <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! p-0 text-destructive hover:!bg-destructive/10" title="Remove source" aria-label="Remove source" zDisabled={catalog.refreshing} onclick={() => void removeSource(url)}>
+            <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! p-0 text-destructive hover:!bg-destructive/10" title="Remove source" aria-label="Remove source" zDisabled={catalog.refreshing} onclick={() => dropSource(url)}>
               <ZIcon zType={icon('lucideTrash2')} class="size-3.5" />
             </ZButton>
           </li>
@@ -79,9 +92,9 @@
   </div>
 </div>
 
-<ZModal bind:open={addOpen} zTitle="Add skill source" zWidth="480px" zBodyClass="py-3" zOkText="Add source" zCancelText="Cancel" zOkDisabled={!isUrl || catalog.refreshing} zLoading={adding} onOk={() => void add()}>
+<ZModal bind:open={addOpen} zTitle="Add skill source" zWidth="480px" zBodyClass="min-h-0! py-3" zOkText="Add source" zCancelText="Cancel" zOkDisabled={!isUrl || catalog.refreshing} zLoading={adding} onOk={() => void add()}>
   <div class="flex flex-col gap-3 text-xs">
-    <ZInput bind:value={address} zLabel="Git repository URL (HTTPS)" zPlaceholder="https://github.com/owner/skills" onkeydown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void add(); } }} />
+    <ZInput bind:value={address} autofocus zLabel="Git repository URL (HTTPS)" zPlaceholder="https://github.com/owner/skills" onkeydown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void add(); } }} />
     <p class="m-0 text-muted-foreground">Discover refreshes after adding the source. Choose a skill there and press Install.</p>
   </div>
 </ZModal>

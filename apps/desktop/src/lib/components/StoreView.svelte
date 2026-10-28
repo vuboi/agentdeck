@@ -215,7 +215,7 @@
                       </ZButton>
                     {:else if skill.origin === 'user' && skill.assignable}
                       <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! p-0 text-muted-foreground hover:!bg-primary/10 hover:!text-primary" zDisabled={busy(`import:${skill.name}`)} aria-label="Add to library" {@attach zTooltip({ content: 'Add to library', position: 'top' })} onclick={() => importSkill(skill.name, skill.agents[0])}>
-                        <ZIcon zType={icon(busy(`import:${skill.name}`) ? 'lucideLoaderCircle' : 'lucideLibrary')} class="size-3.5 {busy(`import:${skill.name}`) ? 'animate-spin' : ''}" />
+                        <ZIcon zType={icon(busy(`import:${skill.name}`) ? 'lucideLoaderCircle' : 'lucideFolderPlus')} class="size-3.5 {busy(`import:${skill.name}`) ? 'animate-spin' : ''}" />
                       </ZButton>
                     {/if}
                   </div>
