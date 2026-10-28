@@ -816,8 +816,10 @@ pub async fn connector_login(app: AppHandle, id: String) -> Result<(), String> {
         let mut tasks = LOGIN_TASKS
             .lock()
             .map_err(|_| "could not access connector sign-in state".to_string())?;
-        if tasks.contains_key(&id) {
-            return Err("sign-in is already running".to_string());
+        // A sign-in still listed is one nobody is waiting for any more (its page was closed, or the window was reloaded while
+        // the CLI waited for the browser). Signing in again ends it and starts over, instead of refusing until it times out.
+        if let Some(old) = tasks.remove(&id) {
+            old.abort.abort();
         }
         let task_id = id.clone();
         let task = tokio::spawn(async move { connector_login_inner(app, task_id).await });

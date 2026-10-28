@@ -65,7 +65,7 @@
 <li class="relative flex min-w-0 items-center gap-2.5 overflow-hidden rounded-lg border border-border px-3 py-2 text-xs">
   <span class="grid size-5 shrink-0 place-items-center"><AgentLogo agent="claude" class="size-4" /></span>
   <span class="min-w-0 flex-1">
-    <span class="block text-sm font-medium">Claude Console</span>
+    <span class="flex min-w-0 items-center gap-1.5 text-sm font-medium"><span class="truncate">Claude Console</span><span class="shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400" title="Paid with API credit: a grant or a top-up">Credit</span></span>
     <span class="block truncate text-muted-foreground" title={claudeCreditState.error ?? undefined}>
       {#if !connectors.claudeCredit.apiKey}API credit (a grant or a top-up)
       {:else if credit}{usd(credit.balance)} left{expires ? ` · expires ${expires}` : ''}

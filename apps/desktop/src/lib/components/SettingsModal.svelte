@@ -7,8 +7,8 @@
   import { appInfo, runUpdateCheck, updateUi } from '../updater.svelte';
   import { ENDPOINTS } from '../endpoints';
   import SecretInput from './SecretInput.svelte';
-  import { ZButton, ZIcon, ZInput, ZModal, ZSelect, ZSlider, ZSwitch, zSortable } from '@shival99/z-ui-svelte';
-  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZInput, ZModal, ZSelect, ZSlider, ZSwitch, ZTabs, zSortable } from '@shival99/z-ui-svelte';
+  import type { ZIconName, ZTab } from '@shival99/z-ui-svelte';
   import { testSystemNotification } from '../system-notifications';
   import { toast } from '../toast';
   import { ticker } from '../clock.svelte';
@@ -221,6 +221,16 @@
   const busyOf = (...keys: string[]) => keys.map((key) => connectors.busy[key]).find(Boolean);
   const lastLog = (id: string) => connectors.logs[id]?.slice(-4) ?? [];
   const urlIn = (lines: string[]) => lines.map((line) => line.match(/https?:\/\/\S+/)?.[0]).filter(Boolean).pop();
+  /** The one-time code a device sign-in asks for (GitHub prints `ABCD-1234`). */
+  const codeIn = (lines: string[]) => lines.map((line) => /one-time code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})/i.exec(line)?.[1]).filter(Boolean).pop();
+  // The connectors are shown one at a time, as tabs along the top, instead of one long list to scroll.
+  let connectorTab = $state('');
+  const activeCard = $derived(CARDS.some((card) => card.id === connectorTab) ? connectorTab : CARDS[0]?.id);
+  /** How many accounts a connector has saved (none to count for OpenCode). */
+  const accountCount = (card: Card): number | undefined => (card.accounts ? connectors.accounts[card.accounts]?.accounts.length : card.id === 'agy' ? connectors.accounts.agy.length : undefined);
+  // The tab says the short name; the card under it keeps the full one.
+  const TAB_NAME: Record<string, string> = { claude: 'Claude', copilot: 'Copilot' };
+  const cardTabs = $derived<ZTab[]>(CARDS.map((card) => ({ value: card.id, label: TAB_NAME[card.id] ?? card.label, iconTemplate: tabIcon, badge: accountCount(card) || undefined })));
 
   function countdown(resetsAt: number | null, now: number): string {
     if (resetsAt === null) return 'No reset scheduled';
@@ -514,6 +524,11 @@
 
 <svelte:window onkeydowncapture={onKey} />
 
+{#snippet tabIcon(tab: ZTab)}
+  {@const card = CARDS.find((item) => item.id === tab.value)}
+  {#if card?.svg}<ZIcon zSvg={card.svg} class="size-3.5" />{:else if card}<ZIcon zType={icon(card.brand)} class="size-3.5" />{/if}
+{/snippet}
+
 {#if settings.open}
   <div class="fixed inset-0 z-[49] grid place-items-center p-4 sm:p-8" role="presentation">
     <button type="button" class="absolute inset-0 cursor-default bg-black/45 backdrop-blur-[2px]" aria-label="Close settings" tabindex="-1" onclick={close} transition:fade={{ duration: 140 }}></button>
@@ -524,7 +539,7 @@
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
-      class="relative flex h-[min(680px,100%)] w-[min(980px,100%)] overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl outline-none"
+      class="relative flex h-[min(680px,100%)] w-[min(1000px,100%)] overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl outline-none"
       transition:scale={{ duration: 160, start: 0.97 }}
     >
       <!-- Navigation -->
@@ -568,7 +583,7 @@
           </ZButton>
         </header>
 
-        <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        <div class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-5 py-4 [scrollbar-gutter:stable] max-[700px]:px-3">
           {#if !inTauri()}
             <p class="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">Connectors need the desktop app: open AgentDeck, not the browser preview.</p>
 
@@ -593,10 +608,15 @@
             {:else}
             <!-- Placeholders and the real cards share one grid cell: the cards fade in over the placeholders as they fade
                  out, so nothing is pushed down or jumps while they swap. -->
-            <div class="grid">
+            <!-- One column that may shrink below its content: a wide child (the tab strip, a usage row) cannot widen the page. -->
+            <div class="grid min-w-0 grid-cols-[minmax(0,1fr)]">
             {#if !connectors.detected}
               <div class="col-start-1 row-start-1 flex flex-col gap-4" out:fade={{ duration: 180 }} aria-busy="true" aria-label="Loading connectors">
-                {#each CARDS as card (card.id)}
+                <!-- Like the real page: a strip of tabs and one card, so nothing is taller than it will be (no scrollbar that goes away). -->
+                <div class="flex gap-2" aria-hidden="true">
+                  {#each CARDS as tab (tab.id)}<span class="h-8 w-24 animate-pulse rounded-lg bg-muted/60"></span>{/each}
+                </div>
+                {#each CARDS.slice(0, 1) as card (card.id)}
                   <div class="animate-pulse rounded-xl border border-border bg-card/40">
                     <div class="flex items-start gap-3 p-4">
                       <span class="size-10 shrink-0 rounded-lg bg-muted"></span>
@@ -617,8 +637,12 @@
                 {/each}
               </div>
             {:else}
-            <div class="col-start-1 row-start-1 flex flex-col gap-4" in:fade={{ duration: 220, delay: 60 }}>
-              {#each CARDS as card (card.id)}
+            <div class="col-start-1 row-start-1 flex min-w-0 flex-col gap-4" in:fade={{ duration: 220, delay: 60 }}>
+              <!-- The strip folds the tabs that do not fit into its own menu, so it holds on a narrow window. -->
+              <div class="min-w-0 max-w-full">
+                <ZTabs zTabs={cardTabs} zType="bar" zSize="sm" zTabsOnly zShowNavWrapper zCache={false} activeTab={activeCard} onTabChange={(value) => (connectorTab = value)} />
+              </div>
+              {#each CARDS.filter((item) => item.id === activeCard) as card (card.id)}
                 {@const info = loginOf(card.id)}
                 {@const path = tool(card.binary)?.path}
                 {@const version = tool(card.binary)?.version}
@@ -626,7 +650,8 @@
                 {@const working = busyOf(`install:${card.id}`, `login:${card.id}`, `add:${card.id}`)}
                 {@const log = lastLog(card.id)}
                 {@const link = urlIn(connectors.logs[card.id] ?? [])}
-                <section class="rounded-xl border border-border bg-card/40" aria-label={card.label}>
+                {@const code = codeIn(connectors.logs[card.id] ?? [])}
+                <section class="min-w-0 rounded-xl border border-border bg-card/40" aria-label={card.label}>
                   <div class="flex items-start gap-3 p-4">
                     <span class="grid size-10 shrink-0 place-items-center rounded-lg {card.tone}">{#if card.svg}<ZIcon zSvg={card.svg} class="size-5" />{:else}<ZIcon zType={icon(card.brand)} class="size-5" />{/if}</span>
                     <div class="min-w-0 flex-1">
@@ -671,10 +696,14 @@
                   {#if working || log.length > 0 || connectors.errors[`install:${card.id}`] || connectors.errors[`login:${card.id}`] || connectors.errors[`add:${card.id}`]}
                     <div class="mx-4 mb-4 rounded-lg bg-muted/60 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground" role="status">
                       {#if working}<div class="mb-1 font-sans text-xs text-foreground">{working}…</div>{/if}
-                      {#each log as line, index (index)}<div class="truncate">{line}</div>{/each}
+                      <!-- A long line (an address with its query) wraps instead of widening the card. -->
+                      {#each log as line, index (index)}<div class="break-all whitespace-pre-wrap">{line}</div>{/each}
                       {#each [`install:${card.id}`, `login:${card.id}`, `add:${card.id}`] as key (key)}
                         {#if connectors.errors[key]}<div class="font-sans text-xs text-destructive" role="alert">{connectors.errors[key]}</div>{/if}
                       {/each}
+                      {#if code && working}
+                        <button type="button" class="mt-1 mr-3 cursor-pointer font-sans text-xs text-primary underline underline-offset-2" onclick={() => void navigator.clipboard.writeText(code).then(() => toast.success('Code copied'))}>Copy the code {code}</button>
+                      {/if}
                       {#if link && working}
                         <button type="button" class="mt-1 cursor-pointer font-sans text-xs text-primary underline underline-offset-2" onclick={() => void openExternal(link)}>Browser did not open? Open the sign-in page</button>
                       {/if}
@@ -942,6 +971,7 @@
                 <h3 class="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Cloud providers</h3>
                 <p class="mb-2 text-xs text-muted-foreground">Claude Console API credit, and official APIs with a free tier for small jobs (an email, a summary, a quick search). The key button opens the page where you create a key; then press + , paste it and Save. Free limits change often.</p>
                 <ul class="grid gap-2 sm:grid-cols-2">
+                  <ClaudeCreditCard />
                   {#each FREE_CLOUD as preset (preset.name)}
                     <li class="flex min-w-0 items-center gap-2.5 rounded-lg border border-border px-3 py-2 text-xs">
                       <img src={brandLogoFor(preset.base)} alt="" class="size-5 shrink-0 rounded-sm object-contain" />
@@ -961,9 +991,6 @@
                       {/if}
                     </li>
                   {/each}
-                </ul>
-                <ul class="mt-2 flex flex-col gap-2">
-                  <ClaudeCreditCard />
                 </ul>
               </section>
 
@@ -1118,16 +1145,21 @@
                     <h3 class="text-sm font-semibold">OfficeCLI</h3>
                     <p class="mt-1 text-xs text-muted-foreground">Lets agents create, read and edit Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files, with no Office installed. Downloaded once from its GitHub release, then given to Claude, Codex, Antigravity and Copilot as an MCP server and a skill.</p>
                   </div>
-                  <ZButton zWave={false} zSize="sm" class="h-8 shrink-0 px-3 text-xs" disabled={officeBusy || !office?.supported || !inTauri()} onclick={() => void installOffice()}>
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 shrink-0 gap-1.5 px-3 text-xs" disabled={officeBusy || !office?.supported || !inTauri()} onclick={() => void installOffice()}>
+                    <ZIcon zType={icon(officeBusy ? 'lucideLoaderCircle' : office?.installed ? 'lucideRefreshCw' : 'lucideDownload')} class="size-3.5 {officeBusy ? 'animate-spin' : ''}" />
                     {officeBusy ? 'Installing…' : office?.installed ? 'Update' : 'Install'}
                   </ZButton>
                 </div>
-                <p class="mt-3 text-[11px] text-muted-foreground">
+                <p class="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
                   {#if !inTauri()}Needs the desktop app.
                   {:else if office === null}Checking…
                   {:else if !office.supported}No OfficeCLI release for this system.
-                  {:else if office.installed}Installed: {office.version}
-                  {:else}Not installed.{/if}
+                  {:else if office.installed}
+                    <span class="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-px text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                      <ZIcon zType={icon('lucideCheck')} class="size-3" /> Installed
+                    </span>
+                    {#if office.version}<span class="rounded bg-muted px-1.5 py-px font-mono text-[11px] text-foreground/80">{office.version}</span>{/if}
+                  {:else}<span class="rounded bg-muted px-1.5 py-px text-[11px] font-medium">Not installed</span>{/if}
                 </p>
                 {#if officeNote}<p class="mt-2 text-xs text-muted-foreground">{officeNote}</p>{/if}
               </section>

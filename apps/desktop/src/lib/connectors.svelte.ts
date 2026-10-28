@@ -154,7 +154,20 @@ async function listenToLogs() {
     const lines = (connectors.logs[payload.id] ??= []);
     lines.push(payload.line);
     if (lines.length > 60) lines.splice(0, lines.length - 60);
+    openSignInPage(payload.id, payload.line);
   });
+}
+
+// Claude, Codex and Antigravity open the browser themselves. OpenCode and `gh auth login --web` run here without a terminal,
+// so they only print the address: the first one printed during a sign-in is opened for them (once per sign-in).
+const OPENS_ITSELF_NOT = new Set<string>(['opencode', 'copilot']);
+const signInPageOpened = new Set<string>();
+function openSignInPage(id: string, line: string) {
+  if (!OPENS_ITSELF_NOT.has(id) || !activeLoginRuns.has(id as ConnectorId) || signInPageOpened.has(id)) return;
+  const url = line.match(/https?:\/\/[^\s"'<>]+/)?.[0]?.replace(/[.,;:)]+$/, '');
+  if (!url) return;
+  signInPageOpened.add(id);
+  void import('./browser.svelte').then(({ openExternal }) => openExternal(url));
 }
 
 export async function refreshDetect() {
@@ -270,6 +283,7 @@ export async function login(id: ConnectorId, label: string): Promise<boolean> {
   if (connectors.busy[`login:${id}`]) return false;
   const run = ++loginSequence;
   activeLoginRuns.set(id, run);
+  signInPageOpened.delete(id);
   connectors.logs[id] = [];
   const ok = await task(`login:${id}`, `Waiting for ${label} sign-in`, () => call('connector_login', { id }));
   const cancelled = cancelledLoginRuns.delete(run);
