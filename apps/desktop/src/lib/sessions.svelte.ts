@@ -96,7 +96,7 @@ import { agentHasRoom, connectors, limitResetAt, roomLine } from './connectors.s
 import { classifyFailure, continuePrompt, planRecovery, recoveryNote, type FailureKind, type Recovery } from './turn-failure';
 import { parseResetAt } from './limit-reset';
 import { requestSystemNotificationPermission, sendSystemNotification } from './system-notifications';
-import { dequeue, enqueue } from './queue';
+import { dequeue, dequeueAll, enqueue } from './queue';
 import { accountEpoch } from './account-epoch.svelte';
 import { needsContext } from './context-need';
 import { sessionMark } from './chat-dividers';
@@ -404,7 +404,17 @@ function localSessions(): SessionItem[] {
 }
 
 /** Save the local sessions, their messages and the open session to IndexedDB. Call after any change. */
+let persistTimer: ReturnType<typeof setTimeout> | undefined;
+/** Saves the local chats. Copying every chat is heavy, so calls close together become one save a moment later. */
 export function persistLocal() {
+  if (persistTimer !== undefined) return;
+  persistTimer = setTimeout(persistLocalNow, 600);
+}
+if (typeof window !== 'undefined') window.addEventListener('pagehide', () => persistTimer !== undefined && persistLocalNow());
+
+function persistLocalNow() {
+  clearTimeout(persistTimer);
+  persistTimer = undefined;
   rememberParents();
   const sessions = localSessions();
   const messages = Object.fromEntries(
@@ -1907,8 +1917,17 @@ function sendNextQueued(sessionId: string) {
   // remove it from the queue, then `send` would reject it because the priority turn is now running.
   setTimeout(() => {
     if (hasOutstandingSessionWork(sessionId)) return;
-    // One at a time, whatever the agent: after a stop the next message goes out and the rest stay in line.
-    const next = dequeue(queued, sessionId);
+    // Everything the user wrote while the agent was busy goes out as one message: one turn, one model, one reply.
+    const waiting = dequeueAll(queued, sessionId);
+    const next: Queued | undefined = waiting.length
+      ? {
+          text: waiting.map((item) => item.text.trim()).filter(Boolean).join('\n\n'),
+          images: waiting.flatMap((item) => item.images),
+          elements: waiting.flatMap((item) => item.elements),
+          mentions: waiting.flatMap((item) => item.mentions ?? []),
+          files: waiting.flatMap((item) => item.files ?? []),
+        }
+      : undefined;
     if (next) {
       send(sessionId, next.text, next.images, next.elements, next.mentions, {
         files: next.files,
@@ -4474,99 +4493,10 @@ function runBeside(
   return true;
 }
 
-// ---------- a message sent while the chat is busy ----------
-// Instead of waiting for the running turn, the message is answered at once in a turn beside it. That turn is told what
-// the running one is doing and which files it is editing, so the two do not write over each other; and when it is done,
-// the chat's own agent is told what it answered at the start of its next turn, so its conversation does not miss it.
-
-/** Most turns a chat runs beside its own at once: more is a queue, not a conversation. */
-const BESIDE_MAX = 2;
-const EDIT_TOOL = /^(Edit|MultiEdit|Write|NotebookEdit|apply_patch)$/;
-/** What the user asked beside a busy turn and what was answered, until the chat's agent has been told. */
-const besideNotes: Record<string, string[]> = {};
-
 const clipText = (text: string, max: number) => {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 };
-
-/** The files the running turn of a chat has edited so far, from its steps. */
-function filesInUse(sessionId: string): string[] {
-  const blocks = (liveReplies[sessionId] ?? replies[sessionId])?.blocks ?? [];
-  const files = blocks.flatMap((block) =>
-    block.kind === 'command' && EDIT_TOOL.test(toolOf(block.command))
-      ? [argOf(block.command).split(/\s+/, 1)[0] ?? '']
-      : [],
-  );
-  return [...new Set(files.filter(Boolean))].slice(0, 20);
-}
-
-/** Whether a message can be answered beside the busy turn now (else it waits in the queue). Codex and OpenCode never
- * do it: a side answer would land in the middle of their reply, so their messages wait in line, one turn each. */
-export function canRunBeside(sessionId: string, item: Pick<Queued, 'images' | 'mentions'>): boolean {
-  const session = workspace.sessions.find((entry) => entry.id === sessionId);
-  return (
-    inTauri() &&
-    !!session &&
-    session.agent !== 'custom' &&
-    session.agent !== 'codex' &&
-    session.agent !== 'opencode' &&
-    Boolean(replies[sessionId]) &&
-    !needsUserInput(sessionId) &&
-    !presetOf(sessionId) &&
-    item.images.length === 0 &&
-    !(item.mentions ?? []).some((mention) => mention.kind === 'ai') &&
-    sideTurnsOf(sessionId) < BESIDE_MAX
-  );
-}
-
-/** Answers a message beside the busy turn of its chat. False when it cannot (then queue it). */
-export function sendBeside(sessionId: string, item: Queued): boolean {
-  if (!canRunBeside(sessionId, item)) return false;
-  const list = messagesOf(sessionId);
-  const running = [...list].reverse().find((message) => message.role === 'user');
-  const runningAsk = running?.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : [])).join(' ') ?? '';
-  const context = forkDigest(list);
-  const files = item.files ?? [];
-  list.push(userMessage(item.text.trim(), [], item.elements, files));
-  const busy = filesInUse(sessionId);
-  const note = agentdeckLead(
-    `Another turn of this same chat is still running${runningAsk ? ` on: "${clipText(runningAsk, 300)}"` : ''}.`,
-    busy.length ? `It is editing: ${busy.join(', ')}.` : '',
-    'Work beside it: do not edit the files it is editing and do not undo or reformat its changes. If this request needs those files, do the rest, then say which change has to wait for it. Answer only the message below.',
-  );
-  const attached = files.length ? `\n\nAttached files: ${files.map((file) => file.path).join(', ')}` : '';
-  const prompt = note + mentionContext(item.mentions ?? []) + withElements(item.text.trim(), item.elements) + attached;
-  const started = runBeside(sessionId, context, prompt, 'beside', (reply, failed) => {
-    const answer = reply.blocks.flatMap((block) => (block.kind === 'response' ? [block.text] : [])).join('\n');
-    besideNotes[sessionId] = [
-      ...(besideNotes[sessionId] ?? []),
-      `- The user asked: "${clipText(item.text, 400)}" ${failed ? '(that turn failed or was stopped)' : `It was answered: "${clipText(answer, 1200)}"`}`,
-    ];
-  });
-  if (!started) list.pop();
-  persistLocal();
-  return started;
-}
-
-/** Runs a queued message beside the busy turn now; false (and it stays queued) when that is not possible. */
-export function runQueuedBeside(sessionId: string, item: Queued): boolean {
-  if (!sendBeside(sessionId, item)) return false;
-  const rest = (queued[sessionId] ?? []).filter((entry) => entry !== item);
-  if (rest.length) queued[sessionId] = rest;
-  else delete queued[sessionId];
-  return true;
-}
-
-/** What the chat's agent is told at the start of its next turn about the messages answered beside it; taken once. */
-function takeBesideNotes(sessionId: string): string {
-  const notes = besideNotes[sessionId];
-  if (!notes?.length) return '';
-  delete besideNotes[sessionId];
-  return agentdeckLead(
-    `While your previous turn was running, the user sent other messages and they were answered in parallel turns of this chat (separate conversations you did not see). Take them into account:\n${notes.join('\n')}`,
-  );
-}
 
 /** One event of a turn running beside its chat: it fills that reply, and ends it. */
 function handleSideEvent(id: string, event: AgentEvent, turn: string) {
@@ -4599,8 +4529,7 @@ function handleSideEvent(id: string, event: AgentEvent, turn: string) {
 }
 
 /**
- * Send from the message box. While the agent is busy: answered beside it at once (Enter), wait in line (Alt+Enter), or
- * stop it and go first (Ctrl+Enter).
+ * Send from the message box. While the agent is busy: wait in line (Enter), or stop it and go first (Ctrl+Enter).
  */
 /** The picture of each picked element, sent with the message as an image next to its markup. */
 const elementPictures = (elements: PageElement[]): Attachment[] =>
@@ -4622,7 +4551,7 @@ export function sendMessage(
   images: Attachment[] = [],
   elements: PageElement[] = [],
   mentions: Mention[] = [],
-  whileRunning: 'beside' | 'queue' | 'interrupt' = 'beside',
+  whileRunning: 'queue' | 'interrupt' = 'queue',
   files: FileAttachment[] = [],
 ) {
   const session = activeSession();
@@ -4658,9 +4587,6 @@ export function sendMessage(
     isRunning(session.id) ||
     needsUserInput(session.id)
   ) {
-    // Answered at once beside the running turn when it can be; else it waits in line like a queued message.
-    if (whileRunning === 'beside' && sendBeside(session.id, { text, images, elements, mentions, files }))
-      return;
     if (whileRunning !== 'interrupt') {
       enqueue(queued, session.id, {
         text,
@@ -4925,7 +4851,7 @@ function send(
       extra.prompt,
       [],
       [],
-      takeBesideNotes(sessionId) + (extra.preface ?? ''),
+      (extra.preface ?? ''),
       [],
       extra.silent,
     );
@@ -4943,7 +4869,7 @@ function send(
   messages.push(userMessage(body, images, elements, files));
   // A new request from the user: retries and agents tried are counted again from here.
   delete recoveries[sessionId];
-  const preface = takeBesideNotes(sessionId) + (extra.preface ?? '') + mentionContext(mentions);
+  const preface = (extra.preface ?? '') + mentionContext(mentions);
   const targets = mentions.filter((mention) => mention.kind === 'ai');
   const preset = presetOf(sessionId);
   if (inTauri() && targets.length > 0 && body)

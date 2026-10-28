@@ -1,7 +1,6 @@
 <script lang="ts">
   // A draggable divider. Reports the pointer movement along its axis; the owner clamps and stores it.
-  let { axis, onDelta, label }: { axis: 'x' | 'y'; onDelta: (px: number) => void; label: string } = $props();
-  let dragging = $state(false);
+  let { axis, onDelta, label, dragging = $bindable(false) }: { axis: 'x' | 'y'; onDelta: (px: number) => void; label: string; dragging?: boolean } = $props();
 
   function startDrag(event: PointerEvent) {
     event.preventDefault();

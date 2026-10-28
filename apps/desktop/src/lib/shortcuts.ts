@@ -33,9 +33,8 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     title: 'Message box',
     items: [
-      { label: 'Send', keys: [k('Enter')] }, // Composer.svelte
+      { label: 'Send (queued while the agent works)', keys: [k('Enter')] }, // Composer.svelte
       { label: 'New line', keys: [k('Shift+Enter')] },
-      { label: 'Queue it while the agent works', keys: [k('Alt+Enter')] },
       { label: 'Stop the agent and send', keys: [k('Mod+Enter')] },
     ],
   },

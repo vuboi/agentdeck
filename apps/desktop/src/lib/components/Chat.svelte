@@ -20,7 +20,7 @@
   import { openWithItem, openWithOptions, type OpenWithOption } from '../open-with';
   import { openInViewer } from '../file-viewer.svelte';
   import type { PickerItem } from './PickerPopover.svelte';
-  import { activeSession, AGENTS, answerPermission, delegateTasks, answerQuestions, cancelPending, attachmentsOf, chat, editMessage, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, prewarmChat, projectOf, releaseReplyRender, replyBlockRendered, replyRendering, resumes, workspace } from '../sessions.svelte';
+  import { activeSession, AGENTS, answerPermission, delegateTasks, answerQuestions, cancelPending, attachmentsOf, chat, editMessage, turnOptions, forkSession, isRunning, loadOlder, needsApproval, openTranscript, pendingProject, prewarmChat, projectOf, releaseReplyRender, replyBlockRendered, replyRendering, resumes, workspace } from '../sessions.svelte';
   import { ticker } from '../clock.svelte';
   import { agentDisplayName } from '../provider-registry';
   import AgentLogo from './AgentLogo.svelte';
@@ -67,7 +67,6 @@
     return () => clearTimeout(timer);
   });
 
-  let computerApprovals = $state<ComputerApproval[]>([]);
   onMount(() => {
     const openAndFocusNewChat = () => {
       const id = workspace.activeId;
@@ -78,20 +77,6 @@
     window.addEventListener('agentdeck:new-chat-requested', openAndFocusNewChat);
     return () => window.removeEventListener('agentdeck:new-chat-requested', openAndFocusNewChat);
   });
-  $effect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void listen<ComputerApproval>('computer-use-approval', (event) => {
-      computerApprovals = [...computerApprovals, event.payload];
-    }).then((stop) => { if (disposed) stop(); else unlisten = stop; });
-    return () => { disposed = true; unlisten?.(); };
-  });
-  async function answerComputerApproval(request: ComputerApproval, allow: boolean) {
-    computerApprovals = computerApprovals.filter((item) => item.id !== request.id);
-    const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('computer_use_approval', { id: request.id, allow }).catch(() => {});
-  }
-
   // Editing one of your messages in place (ChatGPT-style): Send replaces it and what came after it.
   let editingId = $state<string | null>(null);
   let editText = $state('');
@@ -1119,21 +1104,6 @@
         <!-- A pending approval sits right above the input, where the eye already is. -->
         <!-- The chat stopped at a usage limit: it carries on by itself when the limit resets. -->
         {#if resumes[workspace.activeId]}<ResumeCard resume={resumes[workspace.activeId]} />{/if}
-        {#each computerApprovals as request (request.id)}
-          <section class="mb-2 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3" aria-label="Computer use approval request">
-            <div class="flex items-start gap-2">
-              <ZIcon zType="lucideMonitor" class="mt-0.5 size-4 shrink-0 text-amber-500" />
-              <div class="min-w-0 flex-1">
-                <div class="text-xs font-semibold">{request.tool} · {request.chat === workspace.activeId ? 'This chat' : 'Another chat'}</div>
-                <p class="mt-1 break-words text-xs text-muted-foreground">{request.summary}</p>
-              </div>
-            </div>
-            <div class="mt-2 flex justify-end gap-2">
-              <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 px-3 text-xs" onclick={() => void answerComputerApproval(request, false)}>Deny</ZButton>
-              <ZButton zWave={false} zType="default" zSize="sm" class="h-7 px-3 text-xs" onclick={() => void answerComputerApproval(request, true)}>Approve once</ZButton>
-            </div>
-          </section>
-        {/each}
         {#if pendingApproval}
           <div class="mb-2">
             <PermissionCard block={pendingApproval.block} agent={pendingApproval.agent} onanswer={(answer) => answerPermission(pendingApproval.messageId, pendingApproval.index, answer)} />

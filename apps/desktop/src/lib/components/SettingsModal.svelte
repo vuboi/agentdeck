@@ -681,14 +681,16 @@
                         <ZButton zWave={false} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={Boolean(working)} onclick={() => void install(card.id, card.label)}>
                           <ZIcon zType={icon(working ? 'lucideLoaderCircle' : 'lucideDownload')} class="size-3.5 {working ? 'animate-spin' : ''}" /> Install
                         </ZButton>
-                      {:else if path && connectors.busy[`login:${card.id}`]}
-                        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs" onclick={() => void cancelLogin(card.id)}>
-                          Cancel
-                        </ZButton>
-                      {:else if path && (card.id !== 'agy' || info?.logged_in !== true)}
-                        <ZButton zWave={false} zType={info?.logged_in || card.id === 'agy' ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={Boolean(working)} onclick={() => void login(card.id, card.label)}>
-                          <ZIcon zType={icon(connectors.busy[`login:${card.id}`] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy[`login:${card.id}`] ? 'animate-spin' : ''}" />
-                          {connectors.busy[`login:${card.id}`] ? 'Waiting…' : info?.logged_in ? 'Sign in again' : 'Sign in'}
+                      {:else if path && (card.id !== 'agy' || info?.logged_in !== true || connectors.busy[`login:${card.id}`])}
+                        {@const waiting = Boolean(connectors.busy[`login:${card.id}`])}
+                        {#if waiting}
+                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs" onclick={() => void cancelLogin(card.id)}>
+                            Cancel
+                          </ZButton>
+                        {/if}
+                        <ZButton zWave={false} zType={info?.logged_in || card.id === 'agy' ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={waiting || Boolean(working)} onclick={() => void login(card.id, card.label)}>
+                          <ZIcon zType={icon(waiting ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {waiting ? 'animate-spin' : ''}" />
+                          {waiting ? 'Waiting for login…' : info?.logged_in ? 'Sign in again' : 'Sign in'}
                         </ZButton>
                       {/if}
                     </div>
@@ -722,8 +724,11 @@
                           </ZButton>
                         {/if}
                         {#if info?.logged_in === true}
+                          {#if connectors.busy['login:agy']}
+                            <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" onclick={() => void cancelLogin('agy')}>Cancel</ZButton>
+                          {/if}
                           <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={!path || Boolean(connectors.busy['login:agy'])} title="Open Antigravity to sign in with another Google account" onclick={() => void login('agy', card.label)}>
-                            <ZIcon zType={icon(connectors.busy['login:agy'] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy['login:agy'] ? 'animate-spin' : ''}" /> Sign in another account
+                            <ZIcon zType={icon(connectors.busy['login:agy'] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy['login:agy'] ? 'animate-spin' : ''}" /> {connectors.busy['login:agy'] ? 'Waiting for login…' : 'Sign in another account'}
                           </ZButton>
                         {/if}
                       </div>
@@ -1186,7 +1191,7 @@
                 </div>
                 <ZSwitch zVariant="dot" checked={computerUseEnabled} zSize="sm" zDisabled={isPreviewCopy() || !inTauri()} onChange={(value) => void setComputerUse(value)} />
               </section>
-              <p class="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">Every screenshot, click, scroll, key press and text entry pauses for approval in the chat before it runs. Turning this off immediately blocks future computer-use calls. Antigravity must also have the AgentDeck MCP server enabled in the MCP settings.</p>
+              <p class="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">Unless full access is on, every screenshot, click, scroll, key press and text entry pauses for approval in the chat before it runs. Turning this off immediately blocks future computer-use calls. Antigravity must also have the AgentDeck MCP server enabled in the MCP settings.</p>
               {#if computerUseEnabled && !inTauri()}<p class="text-xs text-destructive">This feature is available in the Windows desktop app.</p>{/if}
             </div>
 

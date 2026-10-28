@@ -41,6 +41,8 @@ $effect.root(() => {
 /** Opens (or focuses) a file in the Files tool and shows the tool. `root` is the folder the file must stay inside. */
 export function openInViewer(path: string, root: string, view?: 'file' | 'changes') {
   const id = viewerId(path);
+  // With no file open the tree is the only thing shown: the first file opens beside it, not in its place.
+  const treeWasAlone = viewer.tabs.length === 0;
   const open = viewer.tabs.find((tab) => tab.id === id);
   if (!open) viewer.tabs.push({ id, kind: 'file', name: path.split(/[\\/]/).pop() ?? path, path, root, view });
   else if (view) open.view = view;
@@ -48,7 +50,7 @@ export function openInViewer(path: string, root: string, view?: 'file' | 'change
   viewer.opened++;
   // A file opened as its changes (the diff) shows the side panel from the start, so the list it came from is there.
   // A plain file leaves the panel as it is (closed by default).
-  if (view === 'changes') viewer.side.open = true;
+  if (view === 'changes' || treeWasAlone) viewer.side.open = true;
   layout.activeTool = 'Explore';
   setToolsOpen(true);
 }

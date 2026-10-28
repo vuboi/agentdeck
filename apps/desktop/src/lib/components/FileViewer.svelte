@@ -110,8 +110,11 @@
   // Keep a user-sized tree width, clamped so the file preview retains useful space.
   const treeWidth = $derived(Math.max(140, Math.min(viewer.side.width, Math.min(480, width - 180))));
   function resizeTree(delta: number) {
-    viewer.side.width = Math.max(140, Math.min(480, viewer.side.width - delta));
+    // From the width on screen (clamped), so a drag past a limit does not leave the line behind the pointer.
+    viewer.side.width = Math.max(140, Math.min(480, treeWidth - delta));
   }
+  // While the line is dragged the tree follows the pointer at once; the slide is only for opening and closing.
+  let resizing = $state(false);
   // A tree that narrow shows its Files / Changes switch as icons only.
   const tightTree = $derived(active !== undefined && !narrow && treeWidth < 200);
   // A narrow panel has no room for both: the tree is hidden, and shown on demand in place of the file.
@@ -261,8 +264,8 @@
       <!-- The tree sits beside the file view and stays mounted: opening and closing slide its width, like a drawer, instead
            of removing it. The inner width is fixed, so the content does not squeeze while the wrapper moves. -->
       <!-- `inert` while shut: the tree stays mounted, so without it Tab would still walk into the invisible list. -->
-      <div class="flex min-h-0 shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none" style:width="{sideShown ? treeWidth + 1 : 0}px" aria-hidden={!sideShown} inert={!sideShown}>
-        <Splitter axis="x" label="Resize file explorer" onDelta={resizeTree} />
+      <div class="flex min-h-0 shrink-0 overflow-hidden {resizing ? '' : 'transition-[width] duration-200 ease-out motion-reduce:transition-none'}" style:width="{sideShown ? treeWidth + 1 : 0}px" aria-hidden={!sideShown} inert={!sideShown}>
+        <Splitter axis="x" label="Resize file explorer" onDelta={resizeTree} bind:dragging={resizing} />
         <div class="flex min-h-0 shrink-0 flex-col bg-sidebar" style:width="{treeWidth}px" aria-label={sideLabel}>
           {@render sidePane()}
         </div>

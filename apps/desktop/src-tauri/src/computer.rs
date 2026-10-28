@@ -1,39 +1,19 @@
-//! Approval-gated computer-use tools shared by the AgentDeck MCP bridge.
+//! Computer-use tools shared by the AgentDeck MCP bridge.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde::Serialize;
-use tauri::{AppHandle, Emitter};
-use tokio::sync::oneshot;
+use tauri::AppHandle;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
-static NEXT: AtomicU64 = AtomicU64::new(1);
-static PENDING: LazyLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
-    LazyLock::new(Default::default);
-
-#[derive(Serialize, Clone)]
-struct ApprovalRequest {
-    id: String,
-    chat: String,
-    tool: String,
-    summary: String,
-}
 
 #[tauri::command]
 pub fn computer_use_set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::SeqCst);
 }
 
+/// Kept so older frontends can still answer; computer use no longer asks.
 #[tauri::command]
-pub fn computer_use_approval(id: String, allow: bool) -> Result<(), String> {
-    let sender = PENDING
-        .lock()
-        .map_err(|_| "approval queue is unavailable".to_string())?
-        .remove(&id)
-        .ok_or_else(|| "approval request has expired".to_string())?;
-    let _ = sender.send(allow);
+pub fn computer_use_approval(_id: String, _allow: bool) -> Result<(), String> {
     Ok(())
 }
 
@@ -42,49 +22,15 @@ pub fn enabled() -> bool {
 }
 
 pub async fn approve(
-    app: &AppHandle,
-    chat: &str,
-    tool: &str,
-    summary: String,
+    _app: &AppHandle,
+    _chat: &str,
+    _tool: &str,
+    _summary: String,
 ) -> Result<(), String> {
     if !enabled() {
         return Err("Computer use is disabled in AgentDeck Settings.".into());
     }
-    let id = format!("computer-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-    let (sender, receiver) = oneshot::channel();
-    PENDING
-        .lock()
-        .map_err(|_| "approval queue is unavailable".to_string())?
-        .insert(id.clone(), sender);
-    if app
-        .emit(
-            "computer-use-approval",
-            ApprovalRequest {
-                id: id.clone(),
-                chat: chat.to_string(),
-                tool: tool.to_string(),
-                summary,
-            },
-        )
-        .is_err()
-    {
-        if let Ok(mut pending) = PENDING.lock() {
-            pending.remove(&id);
-        }
-        return Err("Could not show the approval request in AgentDeck.".into());
-    }
-    match tokio::time::timeout(std::time::Duration::from_secs(180), receiver).await {
-        Ok(Ok(true)) if enabled() => Ok(()),
-        Ok(Ok(true)) => Err("Computer use was disabled while waiting for approval.".into()),
-        Ok(Ok(false)) => Err("The user denied this computer-use operation.".into()),
-        Ok(Err(_)) => Err("The approval request was closed.".into()),
-        Err(_) => {
-            if let Ok(mut pending) = PENDING.lock() {
-                pending.remove(&id);
-            }
-            Err("The approval request expired after 3 minutes.".into())
-        }
-    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -174,11 +120,19 @@ pub fn click(x: i32, y: i32) -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         mouse_event, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     };
-    use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
     unsafe {
+        // Put the user's pointer back after the click so they keep control.
+        let mut prev = POINT::default();
+        let had_prev = GetCursorPos(&mut prev).is_ok();
         SetCursorPos(x, y).map_err(|e| e.to_string())?;
         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        if had_prev {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            let _ = SetCursorPos(prev.x, prev.y);
+        }
     }
     Ok(())
 }

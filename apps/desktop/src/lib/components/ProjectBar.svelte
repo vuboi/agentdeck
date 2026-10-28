@@ -191,6 +191,7 @@
       zIcon: 'lucideArrowLeftRight',
       zOkIcon: 'lucideArrowLeftRight',
       zOkText: 'Switch account',
+      zCancelWhileLoading: true,
       zCancelText: 'Cancel',
       zWidth: '440px',
       onOk: async () => {

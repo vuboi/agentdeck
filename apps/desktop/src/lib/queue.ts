@@ -3,6 +3,13 @@ export function enqueue<T>(queue: Record<string, T[]>, sessionId: string, messag
   queue[sessionId] = [...(queue[sessionId] ?? []), message];
 }
 
+/** Take every waiting message at once, oldest first, leaving the queue empty. */
+export function dequeueAll<T>(queue: Record<string, T[]>, sessionId: string): T[] {
+  const waiting = queue[sessionId] ?? [];
+  delete queue[sessionId];
+  return waiting;
+}
+
 /** Take the next waiting message without mutating the array held by a reactive consumer. */
 export function dequeue<T>(queue: Record<string, T[]>, sessionId: string): T | undefined {
   const waiting = queue[sessionId];

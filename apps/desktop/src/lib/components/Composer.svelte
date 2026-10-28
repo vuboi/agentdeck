@@ -37,8 +37,6 @@
     projectOf,
     queued,
     steerQueued,
-    runQueuedBeside,
-    canRunBeside,
     type Queued,
     sendMessage,
     prewarmChat,
@@ -919,7 +917,7 @@
     void addFiles(files);
   }
 
-  function submit(whileRunning: 'beside' | 'queue' | 'interrupt' = 'beside') {
+  function submit(whileRunning: 'queue' | 'interrupt' = 'queue') {
     if (!hasInput) return;
     // Handing work to an agent needs words that say what the work is.
     if (mentions.some((entry) => entry.kind === 'ai') && !draft.trim()) return;
@@ -964,9 +962,9 @@
       });
     } else if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      // While the agent works: Enter is answered beside it at once, Alt+Enter waits in line, Ctrl+Enter (Cmd+Enter on a
-      // Mac) stops it and goes first.
-      submit(event.ctrlKey || event.metaKey ? 'interrupt' : event.altKey ? 'queue' : 'beside');
+      // While the agent works: Enter waits in line (what waits goes out as one message when the reply is done),
+      // Ctrl+Enter (Cmd+Enter on a Mac) stops it and goes first.
+      submit(event.ctrlKey || event.metaKey ? 'interrupt' : 'queue');
     }
   }
 </script>
@@ -1029,17 +1027,6 @@
                   : 'Element')}</span
           >
           <span class="flex shrink-0 items-center gap-0.5">
-            {#if canRunBeside(sessionId, item)}
-              <button
-                type="button"
-                class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-                {@attach zTooltip({ content: 'Answer it now, beside the running turn', position: 'top' })}
-                onclick={() => runQueuedBeside(sessionId, item)}
-              >
-                <ZIcon zType={'lucideSplit' as ZIconName} class="size-3" />
-                <span>Beside</span>
-              </button>
-            {/if}
             <button
               type="button"
               class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -1257,7 +1244,7 @@
     wrap="soft"
     aria-label="Message"
     placeholder={running
-      ? `Enter runs beside · ${mac ? '⌥' : 'Alt'}+Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt`
+      ? `Enter queues (sent together when done) · ${mac ? '⌘' : 'Ctrl'}+Enter to interrupt`
       : 'Do anything…'}
     class="max-h-45 min-h-10 w-[calc(100%+0.5rem)] resize-none overflow-x-hidden break-words border-0 bg-transparent pt-0 pr-0 pb-1 pl-0.5 text-sm leading-normal outline-none placeholder:text-muted-foreground"
   ></textarea>
@@ -1346,10 +1333,10 @@
         zSize="default"
         class="size-7! shrink-0 rounded-full p-0"
         disabled={!hasInput}
-        aria-label={running ? 'Send beside the running turn' : 'Send message'}
+        aria-label={running ? 'Queue the message' : 'Send message'}
         {@attach zTooltip({
           content: running
-            ? `Answer beside the running turn · ${mac ? '⌥' : 'Alt'}+Enter to queue · ${mac ? '⌘' : 'Ctrl'}+Enter to stop and send now`
+            ? `Queue: sent together when the reply is done · ${mac ? '⌘' : 'Ctrl'}+Enter to stop and send now`
             : 'Send',
           position: 'top',
         })}
@@ -1394,7 +1381,7 @@
         10
           ? 'bg-destructive'
           : quota.remaining <= 30
-            ? 'bg-warning'
+            ? 'bg-amber-500'
             : 'bg-primary'}"
         class:quota-low={quota.remaining > 0 && quota.remaining <= 20}
         style:width="{quota.remaining}%"
@@ -1413,7 +1400,7 @@
             10
               ? 'text-destructive'
               : quota.remaining <= 30
-                ? 'text-warning'
+                ? 'text-amber-500'
                 : 'text-primary'}"
           >
             <!-- The tip glows on and off, like a pulse, so the end of the bar reads as live; a change pings it once more. -->
