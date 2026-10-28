@@ -448,13 +448,21 @@ impl PermissionHandler for CopilotPermissions {
             .find_map(|key| data.extra.get(*key).and_then(Value::as_str))
             .unwrap_or("Copilot requested permission to use a tool")
             .to_string();
-        // A guard can only refuse and runs before the mode and before any earlier "always allow".
+        // The guard only makes a call stricter and runs before the mode and before any earlier "always allow": a heavy command is
+        // refused in every mode, a risky one is asked about each time (plan mode still refuses every command).
+        let mut careful = None;
         if kind == "shell" {
             let command = data.extra.get("fullCommandText").and_then(Value::as_str).unwrap_or(&summary);
-            if let Some(reason) = ag_adapters::agent::permission::guard_shell(command) {
-                return PermissionResult::reject(Some(reason.to_string()));
+            match ag_adapters::agent::guard::assess(command) {
+                Some(ag_adapters::agent::guard::Risk::Block(reason)) => return PermissionResult::reject(Some(reason.to_string())),
+                Some(ag_adapters::agent::guard::Risk::Confirm(reason)) if self.mode != Mode::Plan => careful = Some(reason),
+                _ => {}
             }
         }
+        let summary = match careful {
+            Some(reason) => format!("⚠ {reason} {summary}"),
+            None => summary,
+        };
         let permission_key = format!("{kind}\0{tool}\0{summary}");
         let digest = sha2::Sha256::digest(permission_key.as_bytes());
         let digest = digest
@@ -462,10 +470,10 @@ impl PermissionHandler for CopilotPermissions {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let allow = format!("copilot:{kind}:{digest}");
-        if self.allowed.contains(&allow) {
+        if careful.is_none() && self.allowed.contains(&allow) {
             return PermissionResult::approve_once();
         }
-        match verdict(self.mode, action_of(&kind)) {
+        match if careful.is_some() { Verdict::Ask } else { verdict(self.mode, action_of(&kind)) } {
             Verdict::Approve => return PermissionResult::approve_once(),
             Verdict::Refuse => {
                 return PermissionResult::reject(Some(

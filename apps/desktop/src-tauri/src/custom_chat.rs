@@ -1131,6 +1131,9 @@ async fn browser_call(app: &AppHandle, chat: &str, name: &str, args: &Value) -> 
 
 enum Decision {
     Allow,
+    /// Asked every time, whatever the mode and whatever was allowed before: a command that is risky but has real uses
+    /// (see `ag_adapters::agent::guard`). The text says what to look at.
+    Careful(&'static str),
     Deny(&'static str),
     Ask,
 }
@@ -1155,13 +1158,16 @@ fn decide(turn: &Turn, name: &str, args: &Value, external: bool) -> Decision {
             return Decision::Deny("the call holds a secret, an environment variable or an internal address: blocked for this provider.");
         }
     }
-    // A guard can only refuse and runs before the mode and before any earlier "always allow".
+    let mode = Mode::parse(turn.permission_mode.as_deref());
+    // The guard only makes a call stricter and runs before the mode and before any earlier "always allow": a heavy command
+    // is refused in every mode, a risky one is asked about each time (plan mode still refuses every command).
     if name == "Bash" {
-        if let Some(reason) = ag_adapters::agent::permission::guard_shell(args["command"].as_str().unwrap_or_default()) {
-            return Decision::Deny(reason);
+        match ag_adapters::agent::guard::assess(args["command"].as_str().unwrap_or_default()) {
+            Some(ag_adapters::agent::guard::Risk::Block(reason)) => return Decision::Deny(reason),
+            Some(ag_adapters::agent::guard::Risk::Confirm(reason)) if mode != Mode::Plan => return Decision::Careful(reason),
+            _ => {}
         }
     }
-    let mode = Mode::parse(turn.permission_mode.as_deref());
     let approved = turn
         .allowed
         .iter()
@@ -1699,6 +1705,10 @@ pub async fn run_turn(
                         denied.push(PermissionRequest { id: id.clone(), tool: call.name.clone(), summary: summarize_tool_input(&call.name, &args), allow: allow_entry(&call.name, &args) });
                         failed("this needs the user's approval; it was not run")
                     }
+                    Decision::Careful(reason) => {
+                        denied.push(PermissionRequest { id: id.clone(), tool: call.name.clone(), summary: format!("⚠ {reason} {}", summarize_tool_input(&call.name, &args)), allow: allow_entry(&call.name, &args) });
+                        failed("this is risky and needs the user's approval each time; it was not run")
+                    }
                     Decision::Allow => match call.name.as_str() {
                         "Bash" => {
                             checked = true;
@@ -1886,7 +1896,7 @@ mod tests {
                 &json!({}),
                 false
             ),
-            Decision::Allow | Decision::Ask
+            Decision::Allow | Decision::Ask | Decision::Careful(_)
         ));
     }
 
@@ -2009,14 +2019,28 @@ mod tests {
     #[test]
     fn the_guard_refuses_what_cannot_be_undone_in_every_mode_and_after_an_approval() {
         let wipe = json!({ "command": "rm -rf /" });
-        let build = json!({ "command": "rm -rf target" });
+        let drop = json!({ "command": "psql -c \"DROP DATABASE shop\"" });
+        let ordinary = json!({ "command": "cargo build" });
         for mode in [None, Some("acceptEdits"), Some("auto"), Some("bypassPermissions")] {
             assert!(matches!(decide(&turn(mode, &[]), "Bash", &wipe, false), Decision::Deny(_)), "{mode:?}");
+            assert!(matches!(decide(&turn(mode, &[]), "Bash", &drop, false), Decision::Deny(_)), "{mode:?}");
         }
         // Not even a command the user allowed before.
         assert!(matches!(decide(&turn(None, &["Bash(rm -rf /)"]), "Bash", &wipe, false), Decision::Deny(_)));
         // An ordinary command is still the mode's business.
-        assert!(matches!(decide(&turn(Some("bypassPermissions"), &[]), "Bash", &build, false), Decision::Allow));
+        assert!(matches!(decide(&turn(Some("bypassPermissions"), &[]), "Bash", &ordinary, false), Decision::Allow));
+    }
+
+    #[test]
+    fn a_risky_command_is_asked_about_each_time_in_every_mode_but_plan() {
+        let risky = json!({ "command": "git push --force origin main" });
+        for mode in [None, Some("acceptEdits"), Some("auto"), Some("bypassPermissions")] {
+            assert!(matches!(decide(&turn(mode, &[]), "Bash", &risky, false), Decision::Careful(_)), "{mode:?}");
+        }
+        // An earlier "always allow" does not count for it.
+        assert!(matches!(decide(&turn(Some("auto"), &["Bash(git push --force origin main)"]), "Bash", &risky, false), Decision::Careful(_)));
+        // Plan mode still refuses every command.
+        assert!(matches!(decide(&turn(Some("plan"), &[]), "Bash", &risky, false), Decision::Deny(_)));
     }
 
     #[test]

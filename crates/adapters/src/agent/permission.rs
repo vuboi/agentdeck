@@ -105,68 +105,6 @@ pub fn verdict(mode: Mode, action: Action) -> Verdict {
     }
 }
 
-/// A guard sees every shell command whatever the mode and may only refuse: it never approves anything, so no mode and no
-/// earlier "always allow" can widen what it stops (the monotonic guards of DeepSeek Harness's tool pipeline,
-/// https://github.com/deepseek-ai/deepseek-harness). It stops only what cannot be undone: erasing the root, the home folder or a
-/// whole drive, writing to a disk device, formatting, a fork bomb. A command that merely looks risky is the mode's business.
-/// The reason is told to the agent. `None`: the guard abstains.
-pub fn guard_shell(command: &str) -> Option<&'static str> {
-    let lowered = command.to_lowercase();
-    let flat: String = lowered.split_whitespace().collect::<Vec<_>>().join(" ");
-    // A fork bomb is written in one piece, with the pipes and `&` that segments are split on.
-    if flat.replace(' ', "").contains(":(){:|:&};:") {
-        return Some("blocked: this is a fork bomb.");
-    }
-    for segment in flat.split([';', '&', '|', '\n']).map(str::trim).filter(|part| !part.is_empty()) {
-        let words: Vec<&str> = segment.split(' ').collect();
-        // `sudo rm`, `command rm`, `env rm`: the command is the first word that is not one of these.
-        let start = words.iter().position(|word| !matches!(*word, "sudo" | "command" | "env" | "doas" | "nohup" | "time")).unwrap_or(0);
-        let words = &words[start..];
-        let Some(first) = words.first().copied() else { continue };
-        let rest = &words[1..];
-        let unquote = |word: &str| word.trim_matches(['"', '\'']).to_string();
-        match first {
-            "rm" | "rmdir" | "del" | "erase" | "rd" => {
-                let flags: String = rest.iter().filter(|word| word.starts_with('-') || word.starts_with('/')).flat_map(|word| word.chars().skip(1)).collect();
-                let recursive = flags.contains('r') || flags.contains('s') || rest.contains(&"--recursive");
-                // `/s` and `/q` of `del` and `rd` are switches, not the root.
-                let is_switch = |word: &str| word.starts_with('-') || (first != "rm" && word.starts_with('/') && word.len() <= 3);
-                if recursive && rest.iter().filter(|word| !is_switch(word)).any(|word| is_whole_place(&unquote(word))) {
-                    return Some("blocked: this would erase the root, the home folder or a whole drive.");
-                }
-                if rest.contains(&"--no-preserve-root") {
-                    return Some("blocked: --no-preserve-root removes the root folder.");
-                }
-            }
-            "remove-item" | "ri" => {
-                let recursive = rest.iter().any(|word| word.starts_with("-r"));
-                let target = rest.iter().filter(|word| !word.starts_with('-')).map(|word| unquote(word)).find(|word| !word.is_empty());
-                if recursive && target.as_deref().is_some_and(is_whole_place) {
-                    return Some("blocked: this would erase a whole drive or the home folder.");
-                }
-            }
-            "format" if rest.first().is_some_and(|word| word.len() == 2 && word.ends_with(':')) => return Some("blocked: this formats a drive."),
-            word if word.starts_with("mkfs") => return Some("blocked: this formats a disk."),
-            "dd" if rest.iter().any(|word| is_device(word.strip_prefix("of=").unwrap_or(""))) => return Some("blocked: this writes straight to a disk device."),
-            _ => {}
-        }
-    }
-    None
-}
-
-/// The root of a disk, the home folder, or what holds every user's folder.
-fn is_whole_place(target: &str) -> bool {
-    let target = target.trim_end_matches(['/', '\\']);
-    matches!(target, "" | "~" | "$home" | "${home}" | "%userprofile%" | "$env:userprofile" | "/home" | "/users" | "/root" | "/*" | "~/*" | "$home/*")
-        || (target.len() == 2 && target.ends_with(':') && target.chars().next().is_some_and(|c| c.is_ascii_alphabetic()))
-        || (target.len() == 4 && target.ends_with(":\\*") && target.chars().next().is_some_and(|c| c.is_ascii_alphabetic()))
-}
-
-/// `/dev/sda`, `/dev/nvme0n1`, `/dev/disk2`: a whole disk or a partition, not `/dev/null` or a terminal.
-fn is_device(path: &str) -> bool {
-    ["/dev/sd", "/dev/hd", "/dev/vd", "/dev/xvd", "/dev/nvme", "/dev/disk", "/dev/mmcblk"].iter().any(|prefix| path.starts_with(prefix))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,43 +149,5 @@ mod tests {
         assert_eq!(verdict(Mode::Plan, Shell), Verdict::Refuse);
     }
 
-    #[test]
-    fn the_guard_stops_what_cannot_be_undone_in_any_mode() {
-        for command in [
-            "rm -rf /",
-            "rm -rf /*",
-            "sudo rm -fr ~",
-            "rm -r -f $HOME",
-            "rm -rf \"$HOME/\"",
-            "ls && rm -rf / --no-preserve-root",
-            "Remove-Item -Recurse -Force C:\\",
-            "Remove-Item C:\\ -Recurse",
-            "rd /s /q C:\\",
-            "format C:",
-            "mkfs.ext4 /dev/sda1",
-            "dd if=/dev/zero of=/dev/sda bs=1M",
-            ":(){ :|:& };:",
-        ] {
-            assert!(guard_shell(command).is_some(), "{command}");
-        }
-    }
-
-    #[test]
-    fn the_guard_leaves_ordinary_commands_to_the_mode() {
-        for command in [
-            "rm -rf node_modules",
-            "rm -rf ./target",
-            "rm file.txt",
-            "rm -rf /tmp/build",
-            "git reset --hard",
-            "Remove-Item -Recurse .\\dist",
-            "dd if=/dev/zero of=./disk.img bs=1M count=10",
-            "dd if=a of=/dev/null",
-            "echo format C: is dangerous",
-            "ls /home",
-            "cargo clean",
-        ] {
-            assert_eq!(guard_shell(command), None, "{command}");
-        }
-    }
 }
+

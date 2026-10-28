@@ -84,6 +84,14 @@ export const BUILTIN: SlashItem[] = [
       'Review the changes in this working tree (git diff, including staged and untracked files). $ARGUMENTS\n\nLook for real bugs first: wrong logic, missed cases, broken error handling, security problems, races. Then tests that are missing. Skip style. For each finding give the file and line, what goes wrong with a concrete input, and the fix. If there is nothing, say so.',
   },
   {
+    name: 'security',
+    description: 'Audit security across every language and app layer',
+    kind: 'builtin',
+    origin: 'AgentDeck',
+    template:
+      'Perform a read-only security audit of this application.\n\nFirst inventory every language, runtime, framework, build tool and deployment format actually present. Cover the whole repository, including mixed-language code, native modules, scripts, SQL and migrations, infrastructure/configuration, generated code where it affects runtime behavior, manifests and lockfiles. Do not skip a language because it is uncommon or lacks a preconfigured scanner. For each ecosystem, use its existing suitable static analyzer, linter, dependency auditor or security checks when available; state when a check is unavailable instead of implying coverage.\n\nTrace trust boundaries, entry points and sensitive data across layers. Check language-specific risks as relevant, including memory and concurrency safety, unsafe APIs, injection and output encoding, authentication and authorization, input validation, SSRF, path traversal, deserialization, file uploads, cryptography and secret handling. Also review desktop/mobile boundaries (IPC, filesystem/process access and update integrity) and DevOps/build/release configuration (exposed secrets, excessive CI permissions, unsafe workflows and insecure deployment defaults). Include dependency advisories only when a suitable audit command is already available.\n\nUse read-only inspection and safe, local checks already configured in the project. Do not attack external systems, access real secrets, install tools or dependencies, modify files, or claim a check passed unless you actually ran it. Report only actionable findings, ordered Critical / High / Medium / Low. For each include the severity, exact file:line evidence, a realistic attack path and impact, confidence, and a concrete remediation. Distinguish confirmed vulnerabilities from areas that need runtime verification. End with languages and layers inspected, checks actually run, and important coverage gaps. If no issue is confirmed, say so and summarize what you inspected.\n\nAudit focus: $ARGUMENTS (when provided)',
+  },
+  {
     name: 'refactor',
     description: 'Restructure without changing behaviour',
     kind: 'builtin',

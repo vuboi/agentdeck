@@ -163,6 +163,11 @@ impl Provider for Claude {
             args.push("--allowedTools".to_string());
             args.push(tool.clone());
         }
+        // Claude runs its own commands, so the guard cannot look at them: its CLI refuses the heaviest ones by their start.
+        for tool in super::guard::claude_denied_tools() {
+            args.push("--disallowedTools".to_string());
+            args.push(tool);
+        }
         args
     }
 

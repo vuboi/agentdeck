@@ -6,6 +6,7 @@
 pub mod antigravity;
 pub mod claude;
 pub mod codex;
+pub mod guard;
 mod codex_server;
 pub mod interrupt;
 pub mod opencode;
