@@ -14,7 +14,7 @@ run on that system.
    starts, so it ends with the app even when the app is killed.
 2. End a process and what it started → `process_guard::kill_tree(pid)`, never `child.kill()` alone.
 3. Start a unix process → `process_group(0)` so the group can be ended; on Windows add `CREATE_NO_WINDOW` (`0x0800_0000`).
-4. Paths: use `path_links.rs` (`open_launch`, `reveal_launch`) and `src/lib/path-links.ts`; do not cut paths by hand.
+4. Paths: use `path_links.rs` (`open_launch`, `reveal_launch`) and `src/lib/files/path-links.ts`; do not cut paths by hand.
 5. Home folder: `USERPROFILE` on Windows, `HOME` elsewhere (see `path_links.rs` `home()`).
 6. A branch that exists for one system only gets a line in the table below, with what the others do.
 

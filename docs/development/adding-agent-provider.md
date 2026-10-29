@@ -24,7 +24,7 @@ Checklist for the next coding agent. Read `AGENTS.md` and `PLAN.md` before editi
 
 ### 1. ID, logo, and agent information
 
-- Add the profile to `apps/desktop/src/lib/provider-registry.ts` (`BuiltInAgent`, `BUILT_IN_AGENTS`). This is the shared source for logos, names, icons, and colors in chat, workflows, and pickers.
+- Add the profile to `apps/desktop/src/lib/agents/provider-registry.ts` (`BuiltInAgent`, `BUILT_IN_AGENTS`). This is the shared source for logos, names, icons, and colors in chat, workflows, and pickers.
 - Add the agent to any independent unions/types: `sessions.svelte.ts`, `mock.ts`, slash-command types, and connector types as needed.
 - Review handwritten color maps in `Chat.svelte`, `Sidebar.svelte`, `SettingsModal.svelte`, and the MCP view. Prefer `AgentLogo`/the registry over adding generic icons.
 - AgentDeck stores the provider on each chat session; check labels and logos in recent chats, the header, tabs, and task cards. Do not confuse new AgentDeck sessions with CLI history imports.
@@ -32,7 +32,7 @@ Checklist for the next coding agent. Read `AGENTS.md` and `PLAN.md` before editi
 ### 2. Login, accounts, and Settings
 
 - Backend connector in `apps/desktop/src-tauri/src/connectors.rs`: binary detection, `Login`, login status, login/cancel, account list/add/switch, and clear error messages.
-- Frontend in `apps/desktop/src/lib/connectors.svelte.ts`: update `ConnectorId`, `AccountProvider`, `Detected`, state, refresh, and switching actions. Never put tokens or token-bearing output in the UI/log.
+- Frontend in `apps/desktop/src/lib/agents/connectors.svelte.ts`: update `ConnectorId`, `AccountProvider`, `Detected`, state, refresh, and switching actions. Never put tokens or token-bearing output in the UI/log.
 - Add a connector card in `components/SettingsModal.svelte` with binary, logo, description, login, and an account manager when the provider supports multiple accounts.
 - When the account changes, call `accountSwitched(providerId)` so chat does not resume with stale credentials; reload the model list if the catalog depends on the account.
 - If the CLI is the chosen login method, read credentials from the CLI only when needed, pass them directly to the SDK, and never store tokens in preferences, source, or logs.
@@ -59,7 +59,7 @@ Checklist for the next coding agent. Read `AGENTS.md` and `PLAN.md` before editi
 
 ### 5. MCP and Store
 
-- Update `McpAgent` in `src/lib/mcp.svelte.ts`, the provider list in `components/McpView.svelte`, and the `AGENTS` allowlist in `src-tauri/src/mcp_manage.rs`.
+- Update `McpAgent` in `src/lib/agents/mcp.svelte.ts`, the provider list in `components/settings/McpView.svelte`, and the `AGENTS` allowlist in `src-tauri/src/mcp_manage.rs`.
 - If the provider uses an SDK, pass shared MCP through the SDK session configuration; add separate config read/write when Store needs to enable/disable servers for that provider. Preserve other entries and never overwrite a malformed config file.
 - Confirm that `servers_for(project)` returns only MCP servers matching the project/provider and that the SDK receives the correct stdio/http, env, and header schema.
 - Review AgentDeck's internal browser MCP: if the provider needs browser tools, pass the bridge into the session and update the corresponding agent list; do not assume the user's MCP config already contains the bridge.
@@ -99,5 +99,5 @@ Every provider maps what its CLI prints onto the same `AgentEvent`s (`crates/ada
 - **Child work** (sub-agent, delegated thread): wrap each event in `Scoped { parent, event }`, `parent` being the id of the tool call that started the child. The chat draws it under that call's card (`agent-reply.ts`, `CommandGroup.svelte`); it never joins the main answer. A provider that cannot tell child output from the main answer must at least not append it to the answer (see `copilot.rs`, `codex_server.rs`).
 - **Where a child stands:** `Task { id, tool_use_id, status, label, summary, tools }` (`Started`/`Progress`/`Done`/`Failed`). `tool_use_id` links it to the call that started it.
 - **A CLI that goes on by itself** when background work ends (Claude, Copilot's shell notification): the turn still ends at its result. Implement `Provider::tail_provider` (Claude) so `tail.rs` keeps reading the kept process and sends the unsolicited answer as `AutoTurn { reason }` followed by its events; the frontend opens a new reply for it (`beginAutoTurn`). Never hold the chat lock or swallow the result while background work is open: a dev server never ends.
-- **Capabilities:** declare `Provider::chat_capabilities` (mid-turn injection, parallel messages, auto background turn). New providers extend this and the event mapping; the reducer and cards stay as they are.
+- **Response contract:** override `Provider::chat_capabilities(&TurnRequest)` with `ChatResponseCapabilities`, which describes integrated delivery, answer association, interruption, turn end, background work and child-output semantics for that request. Keep provider behavior overridable; use the `custom()` app-queue profile when behavior is unknown. The coordinator keeps one user message per reply and uses a native mid-turn path only when the provider can preserve that message/reply association. `agent_inject` is gated by this guarantee; do not infer support from the provider name or a CLI feature list.
 - Probe the real CLI first (`docs/development/probe-reports/`): how a turn ends, what a message sent mid-turn does, how an interrupt ends, how child events are linked.

@@ -108,3 +108,27 @@ Chưa làm / chưa kiểm chứng:
 - Bước phân loại tin "liên quan hay độc lập" (`classifyMessage`) mới là hàm, chưa nối vào luồng gửi.
 - Bọc provider chỉ có chat thường (OpenRouter) chưa làm.
 - Hiệu năng: `applyAgentEvent` lọc `loading` mỗi delta (O(số block)); chưa đo xem có đáng tối ưu không.
+
+## 8. Cập nhật UX hàng đợi (2026-10-29)
+
+Ảnh test cho thấy một lỗi nhóm phản hồi: provider có thể nhận tin giữa lượt (`turn/steer` với Codex, replay với Claude), nhưng UI thêm message user xuống cuối transcript trong khi text assistant vẫn nối vào bubble cũ. Ngoài ra `sendNextQueued()` từng lấy hết queue, nối nội dung bằng hai dòng mới rồi gọi `send()` một lần. Kết quả là nhiều user message thành một prompt và một assistant bubble nằm sai ngữ cảnh.
+
+Hợp đồng UX hiện tại:
+- Enter thêm message vào cuối queue. Khi lượt trước kết thúc và render xong, mỗi message chạy thành một turn riêng; câu trả lời nằm ngay dưới message tương ứng.
+- Alt+Enter đặt draft lên đầu queue (chạy kế sau lượt hiện tại, không ngắt nó).
+- Ctrl+Enter (Cmd+Enter trên macOS) dừng câu trả lời hiện tại và gửi draft ngay; nút `Send now` trên queue làm tương tự với message đã chọn.
+- UI không tự inject message thường vào lượt đang chạy. Probe chứng minh Codex/Claude có primitive mid-turn riêng, nhưng dùng chúng không phù hợp với cách hiển thị mỗi câu trả lời dưới message của nó.
+
+## 9. Provider response contract và liên kết message (2026-10-29)
+
+Đã chốt và triển khai phần nền cho hợp đồng chung, giữ adapter riêng cho từng provider:
+
+- `ChatResponseCapabilities` không còn là ba boolean. `Provider::chat_capabilities(&TurnRequest)` trả policy có kiểu cho mid-turn delivery, cách quy câu trả lời về message, interrupt, turn end, background work và child output. Vì nhận `TurnRequest`, provider có thể chọn policy theo session/request; connector không biết thì dùng `custom()` và queue của AgentDeck.
+- `agent_runs::Run` giữ policy của lượt đang chạy. `agent_inject` chỉ chuyển message vào process khi policy cam kết steer có một reply riêng cho message đó. Các profile hiện tại đều không thỏa điều kiện này; composer tiếp tục dùng queue riêng từng message.
+- Adapter profiles hiện khai báo riêng: Claude result + graceful interrupt + tail auto-turn; Codex thread turn completion + graceful interrupt; Antigravity result + kill + native next-message queue; OpenCode process exit + kill + parallel semantics chưa có association; Copilot session idle + abort/drain + shell notification auto-turn; custom provider dùng app queue.
+- Mỗi user message được giữ một `messageId` từ queue đến dispatch. Assistant reply lưu `replyTo`; event envelope của agent, custom provider và Copilot mang `message_id`, và reducer bỏ event không thuộc reply đang mở. Reply do background tạo là `autoTurn` riêng, giữ link về message kích hoạt và cùng `runGroup`; auto-turn marker của tail vẫn được nhận dù có `auto-*` turn riêng, nhưng marker đến muộn sau một lượt mới không được mở lại chat cũ.
+- `joinContinuations` không còn gộp reply gắn với user message hoặc auto-turn vào một bubble. Các lượt có cùng `runGroup` vẫn được trình bày như một mạch; `runGroup` không thay thế message/reply identity.
+
+Kiểm chứng lượt này: `cargo check -p agentdeck-desktop`, `cargo clippy -p agentdeck-desktop -- -D warnings`, `cargo test -p ag-adapters` (134 pass; real account tests ignored), `pnpm --filter desktop check` và sáu Node tests cho queue/continuations đều pass. Trên Windows, adapter tests cần Git `usr/bin` trên PATH để tìm `sh.exe`.
+
+Chưa xác nhận bằng live app/provider trong lượt này. Zed và connector chưa được probe vẫn ở app-managed queue; profile mới là nền mở rộng, không phải tuyên bố mọi connector đã chạy cùng một cách. Copilot native steering vẫn có thể được probe nội bộ, nhưng đường chat thường không inject tin vào reply đang chạy.

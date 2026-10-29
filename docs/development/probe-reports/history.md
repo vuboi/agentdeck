@@ -251,6 +251,13 @@ Each line: `{type, id, parentId, timestamp, data:{...}}`. Sub-agent events also 
 
 ---
 
+## 5.1 Zed editor (metadata-only check, 2026-10-29)
+
+- `C:\Users\boi.vn\AppData\Local\Zed\db\0-stable\db.sqlite` has editor/workspace metadata; no obvious conversation transcript table was found.
+- `C:\Users\boi.vn\AppData\Local\Zed\threads\threads.db` has 3 thread rows. Each `data_type` is `zstd`, with compressed payloads of 906–6,927 bytes.
+- Thread summaries and compressed payloads were not read. Zed response/interrupt/child-task semantics remain unknown from this probe. No decompression package or CLI was available, and none was installed.
+
+---
 ## 6. Cross-provider differences to handle
 
 - Pairing key: Claude uses tool_use.id with tool_result.tool_use_id. Codex uses call_id. OpenCode uses callID in the part, or item id in session_message. Antigravity has no id in the transcript (adjacency only). Copilot uses toolCallId.
