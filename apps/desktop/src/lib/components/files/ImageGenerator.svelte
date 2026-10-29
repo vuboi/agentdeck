@@ -5,6 +5,7 @@
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
   import { ZIcon, ZPopover, ZSwitch, ZTabs, zTooltip } from '@shival99/z-ui-svelte';
+  import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
   import { OPENAI_SVG, OPENCODE_SVG } from '../../agents/brand-icons';
   import { activeSession, workspace } from '../../chat/sessions.svelte';
   import { saveAttachment, type ImageSettings, type SuggestedKeyword } from '../../chat/agent';
@@ -16,6 +17,8 @@
   import { toast } from '../../app/platform/toast';
   import SectionTitle from '../ui/SectionTitle.svelte';
   import TextEditContextMenu from '../ui/TextEditContextMenu.svelte';
+  import AttachmentMenu from '../chat/AttachmentMenu.svelte';
+  import { pictureMenuItems } from '../../chat/content/attachment-menu';
   import ImageHistoryDrawer from './ImageHistoryDrawer.svelte';
   import ImageResults from './ImageResults.svelte';
   import {
@@ -72,6 +75,7 @@
   let prompt = $state(draft.prompt);
   let promptArea = $state<HTMLTextAreaElement | undefined>();
   let textEditMenu = $state<{ openAt: (event: MouseEvent, textarea: HTMLTextAreaElement) => void } | undefined>();
+  let attachmentMenu = $state<{ openAt: (event: MouseEvent, items: ZDropdownMenuItem[]) => void } | undefined>();
   // Ctrl+Z / Ctrl+Y also bring back a prompt that code changed (a suggestion, a keyword, a cleared field).
   const promptHistory = createTextHistory(draft.prompt);
   $effect(() => promptHistory.note(prompt));
@@ -380,7 +384,19 @@
         {#if references.length > 0}
           <div class="mb-2 flex flex-wrap gap-2" aria-label="Reference images">
             {#each references as reference (reference.id)}
-              <div class="group/ref relative">
+              <div
+                class="group/ref relative"
+                role="group"
+                aria-label={reference.name}
+                oncontextmenu={(event) =>
+                  attachmentMenu?.openAt(
+                    event,
+                    pictureMenuItems(reference, {
+                      preview: () => openImages(references, references.indexOf(reference)),
+                      remove: () => (references = references.filter((item) => item !== reference)),
+                    }),
+                  )}
+              >
                 <button type="button" class="block size-12 cursor-zoom-in overflow-hidden rounded-lg border border-border outline-none transition hover:ring-2 hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-ring" aria-label="Preview {reference.name}" onclick={() => openImages(references, references.indexOf(reference))}>
                   <img src={reference.src} alt={reference.name} class="size-full object-cover" />
                 </button>
@@ -410,6 +426,7 @@
           class="max-h-45 min-h-6 w-[calc(100%+0.5rem)] resize-none overflow-x-hidden break-words border-0 bg-transparent p-0 pr-2 text-sm leading-normal outline-none placeholder:text-muted-foreground"
         ></textarea>
         <TextEditContextMenu bind:this={textEditMenu} />
+        <AttachmentMenu bind:this={attachmentMenu} />
 
         <div class="flex min-w-0 items-center justify-between gap-2">
           <div class="flex min-w-0 items-center gap-0.5">

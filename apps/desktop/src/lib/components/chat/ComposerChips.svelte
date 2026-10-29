@@ -1,9 +1,11 @@
 <script lang="ts">
   import AgentLogo from '../ui/AgentLogo.svelte';
   import { ZIcon } from '@shival99/z-ui-svelte';
-  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import { openAttachment, openImages } from '../../browser/preview.svelte';
   import type { Attachment, FileAttachment, Mention } from '../../chat/sessions.svelte';
+  import { documentMenuItems, pictureMenuItems } from '../../chat/content/attachment-menu';
+  import AttachmentMenu from './AttachmentMenu.svelte';
   import FileChip from './FileChip.svelte';
 
   // The picture, file and mention chips above the message box. Changes go back through the callbacks.
@@ -28,12 +30,26 @@
     project: 'lucideFolder' as ZIconName,
     ai: 'lucideBot' as ZIconName,
   };
+
+  let attachmentMenu = $state<{ openAt: (event: MouseEvent, items: ZDropdownMenuItem[]) => void } | undefined>();
 </script>
 
   {#if images.length > 0}
     <div class="mb-2 flex flex-wrap gap-2" aria-label="Attached images">
       {#each images as image (image.id)}
-        <div class="group/img relative">
+        <div
+          class="group/img relative"
+          role="group"
+          aria-label={image.name}
+          oncontextmenu={(event) =>
+            attachmentMenu?.openAt(
+              event,
+              pictureMenuItems(image, {
+                preview: () => openImages(images, images.indexOf(image)),
+                remove: () => setImages(images.filter((entry) => entry !== image)),
+              }),
+            )}
+        >
           <button
             type="button"
             class="block size-12 cursor-zoom-in overflow-hidden rounded-lg border border-border outline-none transition hover:ring-2 hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-ring"
@@ -65,16 +81,28 @@
   {#if attached.length > 0}
     <div class="mb-2 flex flex-wrap gap-2" aria-label="Attached files">
       {#each attached as file (file.id)}
-        <FileChip
-          name={file.name}
-          path={file.path}
-          size={file.size}
-          onclick={() => void openAttachment(file.path, file.name, file.size)}
-          onremove={() => setFiles(attached.filter((entry) => entry !== file))}
-        />
+        <div
+          class="contents"
+          role="group"
+          aria-label={file.name}
+          oncontextmenu={(event) =>
+            attachmentMenu?.openAt(
+              event,
+              documentMenuItems(file, () => setFiles(attached.filter((entry) => entry !== file))),
+            )}
+        >
+          <FileChip
+            name={file.name}
+            path={file.path}
+            size={file.size}
+            onclick={() => void openAttachment(file.path, file.name, file.size)}
+            onremove={() => setFiles(attached.filter((entry) => entry !== file))}
+          />
+        </div>
       {/each}
     </div>
   {/if}
+  <AttachmentMenu bind:this={attachmentMenu} />
   {#if mentions.length > 0}
     <div class="mb-2 flex flex-wrap gap-1.5" aria-label="Mentions">
       {#each mentions as mention (mention.kind + mention.id)}

@@ -16,7 +16,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ag-adapters"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -27,11 +27,11 @@ dependencies = [
 
 [[package]]
 name = "ag-cdp"
-version = "0.1.40"
+version = "0.1.41"
 
 [[package]]
 name = "ag-cli"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "ag-core"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "anyhow",
  "tracing",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "ag-orchestrator"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -57,7 +57,7 @@ dependencies = [
 
 [[package]]
 name = "ag-protocol"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "serde",
  "serde_json",
@@ -68,11 +68,11 @@ dependencies = [
 
 [[package]]
 name = "ag-quota"
-version = "0.1.40"
+version = "0.1.41"
 
 [[package]]
 name = "ag-store"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "ag-protocol",
  "hex",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "agentdeck-desktop"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "ag-adapters",
  "async-trait",

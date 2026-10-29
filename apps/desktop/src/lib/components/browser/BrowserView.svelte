@@ -6,6 +6,7 @@
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
   import { toast } from '../../app/platform/toast';
+  import { logFlow } from '../../tasks/flow-log';
   import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import {
     activeTab,
@@ -26,6 +27,7 @@
     forward,
     goTo,
     capturePageIfPossible,
+    screenshot,
     selectCaptureRegion,
     hideBrowser,
     listenToPage,
@@ -548,35 +550,44 @@
   async function addMarksToChat() {
     busy = 'sending';
     browser.error = '';
+    const id = workspace.activeId;
+    logFlow(id, 'marks to chat start', `annotating=${browser.annotating} count=${browser.annotateCount}`);
+    console.info('[marks to chat] start', { annotating: browser.annotating, count: browser.annotateCount, id });
+    toast.info(`Adding notes to chat… (${browser.annotateCount} marks)`);
     try {
       const notes = await annotationNotes();
-      // The page as it is now, marks included, straight from the engine: one quick capture.
-      // No picture when the page cannot be captured: the marks still go to the chat, as text and elements.
-      const picture = await capturePageIfPossible();
+      logFlow(id, 'marks to chat notes', JSON.stringify(notes.map((note) => ({ n: note.n, text: note.text, element: !!note.element }))));
+      // What was written goes into the message at once: the words, and each marked element with its note. They do
+      // not wait for the picture, which can be slow or fail (then the page's own capture is tried, below).
       // What was written on an element goes with that element, as its note. The rest, drawn on the picture, are
       // numbered lines in the message.
       const words = notes
         .filter((note) => note.text && !note.element)
         .map((note) => `${note.n}. ${note.text}`)
         .join('\n');
-      const id = workspace.activeId;
       if (words) drafts[id] = [drafts[id], words].filter(Boolean).join('\n');
-      // An element that was marked travels as an element too (its markup and look), next to the picture.
       const marked = notes.flatMap((note) => (note.element ? [{ element: note.element, note: note.text ? `${note.n}. ${note.text}` : `${note.n}.` }] : []));
-      if (marked.length) {
-        draftElements[id] = [
-          ...(draftElements[id] ?? []),
-          ...marked.map(({ element, note }, index) => ({ id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url: tab.url, title: tab.title, note, ...(index === 0 && picture ? { picture } : {}) })),
-        ];
-      }
+      // An element that was marked travels as an element too (its markup and look), next to the picture.
+      const chips = marked.map(({ element, note }) => ({ id: crypto.randomUUID(), tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url: tab.url, title: tab.title, note }));
+      if (chips.length) draftElements[id] = [...(draftElements[id] ?? []), ...chips];
+      // The page as it is now, marks included: the engine's capture, else the page's own (the one the agent's screenshot
+      // uses). Without a picture the words and elements above are still in the message.
+      logFlow(id, 'marks to chat capture', `words=${words.length} chips=${chips.length}`);
+      const picture = (await capturePageIfPossible()) ?? (await screenshot().then((shot) => shot.data).catch(() => undefined));
+      logFlow(id, 'marks to chat picture', picture ? `length=${picture.length}` : 'none');
+      if (!picture && !words && !chips.length) throw new Error('Could not take the picture of the page to add it to the chat. Try again.');
+      if (picture && chips.length) draftElements[id] = (draftElements[id] ?? []).map((item) => (item.id === chips[0].id ? { ...item, picture } : item));
       // Keep the full marked-page capture with its element chip, like an Inspect capture. Freehand-only marks have
       // no element chip, so their screenshot stays in the regular image attachments.
-      if (picture && !marked.length) draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'page-notes.png', mime: 'image/png', src: picture }];
+      if (picture && !chips.length) draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'page-notes.png', mime: 'image/png', src: picture }];
       await stopAnnotating();
-      toast.success('Added to the message');
+      if (!picture) browser.error = 'The picture of the page could not be taken: the notes went to the message as text.';
+      else toast.success('Added to the message');
     } catch (error) {
+      logFlow(id, 'marks to chat error', String(error));
       browser.error = String(error);
     } finally {
+      logFlow(id, 'marks to chat end', `busy was ${busy}`);
       busy = '';
     }
   }

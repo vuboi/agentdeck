@@ -41,7 +41,10 @@ const LIMIT = 1000;
 const headersOf = (value: unknown): Header[] =>
   Object.entries((value ?? {}) as Record<string, unknown>).map(([name, item]) => ({ name, value: String(item) }));
 
-const listOf = (tab: string) => (net.byTab[tab] ??= []);
+const listOf = (tab: string) => {
+  net.byTab[tab] ??= [];
+  return net.byTab[tab];
+};
 const find = (tab: string, id: string) => listOf(tab).find((item) => item.id === id);
 
 function blank(id: string, url: string, at: number): NetRequest {
