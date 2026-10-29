@@ -18,6 +18,7 @@
     type Section,
   } from '../../agents/connectors.svelte';
   import AboutSection from './sections/AboutSection.svelte';
+  import DebugSection from './sections/DebugSection.svelte';
   import AlertsSection from './sections/AlertsSection.svelte';
   import ComputerSection from './sections/ComputerSection.svelte';
   import ConnectorsSection from './sections/ConnectorsSection.svelte';
@@ -40,6 +41,7 @@
     { id: 'alerts', label: 'Limit alerts', icon: 'lucideBell', hint: 'Warn before a limit' },
     { id: 'sync', label: 'Sync', icon: 'lucideCloudUpload', hint: 'History backup (planned)' },
     { id: 'computer', label: 'Computer use', icon: 'lucideMonitor', hint: 'Windows screen and input via MCP or CLI' },
+    { id: 'debug', label: 'Debug', icon: 'lucideBug', hint: 'Trace where the app hangs' },
     { id: 'about', label: 'About', icon: 'lucideInfo', hint: 'Version and links' },
   ];
 
@@ -173,6 +175,9 @@
 
           {:else if settings.section === 'providers'}
             <ProvidersSection form={providerForm} />
+
+          {:else if settings.section === 'debug'}
+            <DebugSection />
 
           {:else if settings.section === 'about'}
             <AboutSection />

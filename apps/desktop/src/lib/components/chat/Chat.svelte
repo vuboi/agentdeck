@@ -19,6 +19,7 @@
   import FileView from '../files/FileView.svelte';
   import ChatHeader from './ChatHeader.svelte';
   import SubChatBar from './SubChatBar.svelte';
+  import DelegateList from '../tasks/DelegateList.svelte';
   import JumpButton from './JumpButton.svelte';
   import UserMessage from './UserMessage.svelte';
   import AssistantMessage from './AssistantMessage.svelte';
@@ -616,6 +617,14 @@
                   <AssistantMessage {message} index={row.index + from} {agent} questionMessageId={pendingQuestion?.messageId} />
                 {/if}
               </article>
+              <!-- The hand-offs Claude made for this message (@agent mentions) are Claude's replies: their own row, apart from
+                   the user's bubble, so hovering one does not light up the other. -->
+              {#if mine && message.blocks.some((block) => block.kind === 'delegate')}
+                {@const handed = message.blocks.filter((block) => block.kind === 'delegate')}
+                <div class="mx-auto flex w-full min-w-0 max-w-[52rem] flex-col items-start px-3 pb-2.5 min-[720px]:px-8">
+                  <DelegateList blocks={handed} />
+                </div>
+              {/if}
               {/if}
             </div>
             {#snippet failed()}

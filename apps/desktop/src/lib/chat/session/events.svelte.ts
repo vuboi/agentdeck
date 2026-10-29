@@ -7,7 +7,7 @@ import { getPref, setPref } from '../../app/platform/prefs';
 import { parseResetAt } from '../recovery/limit-reset';
 import { type AgentEvent, listenAgentEvents } from '../agent';
 import { logError } from '../../app/platform/error-log.svelte';
-import { logFlow } from '../../tasks/flow-log';
+import { hangTraceOn, logFlow, markStep } from '../../tasks/flow-log';
 import { trackActivity } from '../runs/activity.svelte';
 import { guide } from '../../app/ui/guide.svelte';
 import { addUsage, applyAgentEvent } from '../agent-reply';
@@ -361,7 +361,49 @@ function beginAutoTurn(sessionId: string, turn: string, messageId?: string) {
   advanceRun(sessionId, { type: 'turnStarted', epoch });
 }
 
+// Streamed text and tool output come as many small events, and each one used to redraw the whole reply on its own: a
+// turn of a few thousand events froze the page. They are applied together every COALESCE_MS, in their order; any other
+// event first applies what came before it, so a stop or a finished turn never overtakes the text it follows.
+const COALESCE_MS = 100;
+const STREAMED = new Set<AgentEvent['kind']>(['delta', 'thinking', 'tool_output_delta']);
+const streamQueue = new Map<string, { event: AgentEvent; turn?: string; messageId?: string }[]>();
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Applies the queued events of one chat, or of every chat. */
+function flushQueued(onlySession?: string) {
+  for (const [sessionId, items] of [...streamQueue]) {
+    if (onlySession !== undefined && sessionId !== onlySession) continue;
+    streamQueue.delete(sessionId);
+    const started = performance.now();
+    markStep(`apply ${items.length} streamed event(s) of ${sessionId}`);
+    for (const item of items) handleEventNow(sessionId, item.event, item.turn, item.messageId);
+    const ms = Math.round(performance.now() - started);
+    if (ms >= 50 || hangTraceOn()) logFlow(sessionId, 'applied', `${items.length} event(s) in ${ms} ms, last=${items.at(-1)?.event.kind}`);
+  }
+}
+if (typeof window !== 'undefined') window.addEventListener('pagehide', () => flushQueued());
+
 export function handleAgentEvent(
+  sessionId: string,
+  event: AgentEvent,
+  turn?: string,
+  messageId?: string,
+) {
+  if (STREAMED.has(event.kind)) {
+    const items = streamQueue.get(sessionId) ?? [];
+    items.push({ event, turn, messageId });
+    streamQueue.set(sessionId, items);
+    flushTimer ??= setTimeout(() => {
+      flushTimer = undefined;
+      flushQueued();
+    }, COALESCE_MS);
+    return;
+  }
+  flushQueued(sessionId);
+  handleEventNow(sessionId, event, turn, messageId);
+}
+
+function handleEventNow(
   sessionId: string,
   event: AgentEvent,
   turn?: string,

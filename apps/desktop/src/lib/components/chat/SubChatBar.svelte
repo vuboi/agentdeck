@@ -42,7 +42,9 @@
         <span class="shrink-0 text-foreground">{agentDisplayName(parentOfActive.agent)}</span>
         <span class="shrink-0">from</span>
       {:else}
-        <span class="shrink-0">Started from</span>
+        <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md outline-none hover:bg-primary/10 hover:text-primary" aria-label="Back to {parentOfActive.title}" title="Back to parent chat" onclick={() => onback(parentOfActive.id)}>
+          <ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-3.5" />
+        </button>
       {/if}
       <button type="button" class="min-w-0 cursor-pointer truncate rounded-sm font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-2 outline-none hover:text-primary hover:decoration-primary" aria-label="Back to {parentOfActive.title}" onclick={() => onback(parentOfActive.id)}>{parentOfActive.title}</button>
       {#if taskOfActive}

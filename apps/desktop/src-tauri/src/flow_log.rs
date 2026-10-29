@@ -34,6 +34,10 @@ const HEARTBEAT: Duration = Duration::from_secs(20);
 
 static WRITER: OnceLock<SyncSender<String>> = OnceLock::new();
 static PATH: OnceLock<PathBuf> = OnceLock::new();
+/// When the page last wrote, and its last line (cut): a page that stops writing has stopped answering.
+static PAGE_LAST: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+/// Past this long without a page line the heartbeat says the page is silent (a hidden window may slow the page's timers).
+const PAGE_SILENT: Duration = Duration::from_secs(45);
 
 /// A turn that is running: what the heartbeat reports of it.
 struct Live {
@@ -317,12 +321,27 @@ fn heartbeat() {
             .collect();
         format!("running={} [{}] {}", turns.len(), parts.join("; "), ag_adapters::agent::trace::stats())
     };
-    note("rust", "-", "heartbeat", &report);
+    let page = PAGE_LAST.lock().ok().and_then(|seen| seen.as_ref().map(|(at, text)| (at.elapsed(), text.clone())));
+    match page {
+        Some((silent, last)) if silent >= PAGE_SILENT => {
+            note("rust", "-", "page silent", &format!("no page line for {}s; page last wrote: {last}", silent.as_secs()));
+            note("rust", "-", "heartbeat", &format!("{report} page_silent={}s", silent.as_secs()));
+        }
+        Some((silent, _)) => note("rust", "-", "heartbeat", &format!("{report} page_silent={}s", silent.as_secs())),
+        None => note("rust", "-", "heartbeat", &format!("{report} page_silent=no page line yet")),
+    }
 }
 
 /// Lines from the page (already JSON, one per entry).
 #[tauri::command]
 pub fn flow_log_append(lines: Vec<String>) {
+    if let Some(last) = lines.last() {
+        // The page writes at least every 20 s (5 s with the hang trace on): a long silence is a page that stopped.
+        let text: String = last.chars().take(160).collect();
+        if let Ok(mut seen) = PAGE_LAST.lock() {
+            *seen = Some((Instant::now(), text));
+        }
+    }
     if let Some(writer) = WRITER.get() {
         for entry in lines {
             let _ = writer.try_send(entry);

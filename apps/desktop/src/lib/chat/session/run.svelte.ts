@@ -20,7 +20,7 @@ import { setPref } from '../../app/platform/prefs';
 import { type RunLane, deliveryFor } from '../runs/run-lanes';
 import { parseQuestions, type Question } from '../recovery/questions';
 import { dequeue } from '../runs/queue';
-import { MODELS, activeSession, advanceRun, localMessages, nextId, persistLocal, runEpochs, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type SessionItem } from './state.svelte';
+import { MODELS, activeSession, advanceRun, localMessages, nextId, persistLocal, runEpochs, sessionCwd, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type SessionItem } from './state.svelte';
 import { AGENTDECK_HINT, KNOWS_PREVIEW, NATIVE_DELEGATION, NATIVE_DELEGATION_HINT, NO_DELEGATE_HINT, OPEN_WORDS, PERMISSION_MODE, agentLabel, approved, continuationGroups, delegateHinted, hasOutstandingSessionWork, hiddenPrompt, isRunning, lastPrompt, missedTurns, modelFor, nativeDelegationHinted, notifySessionWorkDone, orchestrateTold, priorDelegateHinted, queuePaused, queued, rememberDelegateHint, rememberLastChat, rememberNativeDelegationHint, turnOptions, turns } from './turns.svelte';
 import { handleAgentEvent, lastEventAt, lastEventKind, recoveryChain } from './events.svelte';
 import { backlog, flushReports, isWorkerChat } from './delegate-task.svelte';
@@ -92,7 +92,7 @@ export function prewarmChat(sessionId: string) {
     cliId = own?.id || null;
     resume = cliId !== null && Boolean(own?.started);
   }
-  const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
+  const cwd = sessionCwd(session);
   void prewarmAgent({
     session: session.id,
     agent: session.agent,
@@ -120,7 +120,7 @@ function prewarmFallback(session: SessionItem) {
   const now = Date.now();
   if (now - (prewarmedAt.get(throttle) ?? 0) < 300_000) return;
   prewarmedAt.set(throttle, now);
-  const cwd = workspace.projects.find((project) => project.id === session.projectId)?.path ?? null;
+  const cwd = sessionCwd(session);
   void prewarmAgent({
     session: session.id,
     agent: target,
@@ -333,9 +333,7 @@ export function startTurn(
   const epoch = (runEpochs[session.id] = (runEpochs[session.id] ?? 0) + 1);
   advanceRun(session.id, { type: 'spawn', epoch });
   advanceRun(session.id, { type: 'turnStarted', epoch });
-  const cwd =
-    workspace.projects.find((project) => project.id === session.projectId)
-      ?.path ?? null;
+  const cwd = sessionCwd(session);
   void (async () => {
     // Nothing before the CLI starts may wait for ever: a call that never answers would leave the chat on "Thinking" with
     // no event to end it.

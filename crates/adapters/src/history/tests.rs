@@ -487,3 +487,51 @@ fn load_page_windows_the_transcript_from_the_end_backwards() {
         .collect();
     assert_eq!(all, load(&roots, Source::Claude, &path).unwrap());
 }
+
+#[test]
+fn history_classifies_projects_without_promoting_ordinary_chat_folders() {
+    let home = Home::new("project-classification");
+    for (name, marker, expected) in [
+        ("plain", "AGENTS.md", false),
+        ("node", "package.json", true),
+        ("rust", "Cargo.toml", true),
+        ("worktree", ".git", true),
+        ("dotnet", "App.csproj", true),
+    ] {
+        let cwd = home.0.join(name);
+        fs::create_dir_all(&cwd).unwrap();
+        fs::write(cwd.join(marker), "").unwrap();
+        home.write(
+            &format!(".codex/sessions/{name}.jsonl"),
+            &[
+                json!({"type": "session_meta", "payload": {
+                    "id": name, "cwd": cwd, "timestamp": "2026-01-01T00:00:00Z"
+                }}),
+                json!({"type": "response_item", "payload": {
+                    "type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": "Hello"}]
+                }}),
+            ],
+        );
+        assert_eq!(is_project_directory(&cwd), expected, "{name}");
+    }
+    let sessions = list_all(&home.roots());
+    assert_eq!(sessions.len(), 5);
+    for session in sessions {
+        assert_eq!(
+            session.is_project,
+            session.id != "codex:plain",
+            "{}",
+            session.id
+        );
+        assert_eq!(
+            serde_json::to_value(&session).unwrap()["is_project"],
+            session.is_project
+        );
+    }
+    assert!(!is_project_directory(Path::new("")));
+    assert!(!is_project_directory(&home.0.join("missing")));
+    let child = home.0.join("node/ordinary-chat");
+    fs::create_dir_all(&child).unwrap();
+    assert!(!is_project_directory(&child));
+}

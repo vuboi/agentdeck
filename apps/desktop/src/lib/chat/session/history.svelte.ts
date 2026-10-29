@@ -39,7 +39,8 @@ export async function conversationForExport(sessionId: string): Promise<{ title:
 
 export const history = $state({ imported: false, loading: inTauri() });
 
-const CACHE_KEY = 'agentdeck.history.index';
+// Older indexes treated every cwd as a project; never paint those classifications during startup.
+const CACHE_KEY = 'agentdeck.history.index.v2';
 
 /** Last folder of a path, for either separator: `C:\work\demo` and `/home/me/demo` both give `demo`. */
 export const folderName = (cwd: string) =>
@@ -128,6 +129,7 @@ function applyHistory(all: HistorySession[]) {
   const projectIds = new Map<string, string>();
   const projects: Project[] = [];
   for (const item of found) {
+    if (!item.is_project && !addedProjects.some((path) => samePath(path, item.cwd))) continue;
     if (!projectIds.has(item.cwd)) {
       const id = `dir:${item.cwd}`;
       projectIds.set(item.cwd, id);
@@ -142,7 +144,8 @@ function applyHistory(all: HistorySession[]) {
     // A saved chat continued with another agent: which agents it has had, and their own conversation ids.
     ...(mixed[item.id] ?? {}),
     id: item.id,
-    projectId: projectIds.get(item.cwd)!,
+    projectId: projectIds.get(item.cwd) ?? NO_PROJECT,
+    workingDirectory: item.cwd || undefined,
     title: item.title,
     agent: mixed[item.id]?.agents?.at(-1) ?? item.source,
     // Sonnet unless the chat was changed: the first model of the list is the biggest one.
@@ -203,6 +206,12 @@ function applyHistory(all: HistorySession[]) {
     return Object.assign(existing, item, { status: existing.status });
   });
 
+  // Local chats saved under the old cwd-based projects survive reclassification too.
+  for (const item of local) {
+    if (projects.some((project) => project.id === item.projectId)) continue;
+    item.workingDirectory ??= workspace.projects.find((project) => project.id === item.projectId)?.path;
+    item.projectId = NO_PROJECT;
+  }
   workspace.projects = projects;
   workspace.sessions = [
     ...merged,
@@ -210,7 +219,7 @@ function applyHistory(all: HistorySession[]) {
       projects.some((project) => project.id === item.projectId),
     ),
   ];
-  workspace.activeId = keepActive ?? sessions[0].id;
+  workspace.activeId = keepActive ?? sessions[0]?.id ?? '';
 }
 
 let transcriptToken = 0;

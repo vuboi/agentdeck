@@ -9,6 +9,7 @@
   import Logo from '../ui/Logo.svelte';
   import { toast } from '../../app/platform/toast';
   import AgentStack from './AgentStack.svelte';
+  import AgentLogo from '../ui/AgentLogo.svelte';
   import { contentTabs, openNewChatTab, showSession } from '../../app/ui/content-tabs.svelte';
   import SearchPalette from './SearchPalette.svelte';
   import DockZone from '../ui/DockZone.svelte';
@@ -666,6 +667,7 @@
               data-section
               data-pending={key === 'computer' && pending === NO_PROJECT ? '' : undefined}
             >
+              {#if data.provider}<AgentLogo agent={data.provider.agent} model={data.provider.model} class="size-3.5 shrink-0" />{/if}
               <span class="truncate">{ctx.node.label}</span>
               {#if data.count}
                 <ZIcon zType="lucideChevronDown" class="size-3.5 shrink-0 transition-transform {collapsed.includes(key) ? '-rotate-90' : ''}" />

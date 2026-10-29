@@ -2551,6 +2551,8 @@ fn parse_models(kind: &str, json: &Value) -> Vec<String> {
         .map(|items| {
             items
                 .iter()
+                // A gateway may list image and video models beside the chat ones (muse2api's `kind`): the chat picker takes chat only.
+                .filter(|item| !matches!(item["kind"].as_str(), Some(item_kind) if item_kind != "chat"))
                 .filter_map(|item| item[key].as_str().map(str::to_owned))
                 .collect()
         })
@@ -3001,6 +3003,13 @@ mod tests {
         assert_eq!(parse_models("ollama", &tags), ["llama3"]);
         let data: Value = serde_json::json!({"data": [{"id": "m1"}, {"id": "m2"}]});
         assert_eq!(parse_models("openai", &data), ["m1", "m2"]);
+        // muse2api lists its image and video models with a `kind`: only the chat ones reach the picker.
+        let gateway: Value = serde_json::json!({"data": [
+            {"id": "muse-chat", "kind": "chat"},
+            {"id": "muse-image", "kind": "image"},
+            {"id": "gpt-4o", "kind": "chat", "alias_of": "muse-chat"},
+        ]});
+        assert_eq!(parse_models("openai", &gateway), ["muse-chat", "gpt-4o"]);
     }
 
     #[test]

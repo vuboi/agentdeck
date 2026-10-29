@@ -1,5 +1,6 @@
 import type { ZTreeNode } from '@shival99/z-ui-svelte';
 import { samePath } from '../../files/paths';
+import { agentDisplayName, customProviderOf } from '../../agents/provider-registry';
 import { NO_PROJECT, activeSession, hiddenProjects, isEmptyDraft, isPinnedSession, pinned, workspace, type Project, type SessionItem } from './state.svelte';
 
 // ---------- tree: Project > Session > Fork ----------
@@ -10,6 +11,8 @@ export type TreeData = {
    * one; `more` is the "Show more / Show less" row at the end of a long list.
    */
   kind: 'project' | 'session' | 'section' | 'more';
+  /** Provider identity for a plain-chat heading and its brand logo. */
+  provider?: { agent: SessionItem['agent']; model: string };
   session?: SessionItem;
   path?: string;
   /** The last fork under its chat: its branch line ends there. */
@@ -263,6 +266,24 @@ export function buildTree(
   const computer = chats.filter(
     (item) => item.projectId === NO_PROJECT && !item.parentId,
   );
+  // Use provider ids as keys: two custom providers may share a display name.
+  const providers = new Map<string, SessionItem[]>();
+  for (const item of ordered(computer)) {
+    const key = item.agent === 'custom'
+      ? `custom:${customProviderOf(item.model)?.id ?? 'unknown'}`
+      : item.agent;
+    const list = providers.get(key);
+    if (list) list.push(item);
+    if (!list) providers.set(key, [item]);
+  }
+  const providerRows = [...providers].flatMap(([id, items]) => {
+    const key = `provider:${id}`;
+    const first = items[0];
+    const rows = section(key, agentDisplayName(first.agent, first.model),
+      limited(key, items, LIST_LIMIT, (item) => sessionNode(item)));
+    if (rows[0]?.data) rows[0].data.provider = { agent: first.agent, model: first.model };
+    return rows;
+  });
   const projects = visibleProjects.filter(
     (project) => !pinnedProjects.includes(project),
   );
@@ -282,9 +303,7 @@ export function buildTree(
     ...section(
       'computer',
       'This computer',
-      limited('computer', ordered(computer), LIST_LIMIT, (item) =>
-        flatNode(item),
-      ),
+      providerRows,
       true,
     ),
     ...section(

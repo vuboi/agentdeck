@@ -6,7 +6,7 @@
   import { openExternal } from '../../../browser/browser.svelte';
   import { brandLogoFor, providerLogo } from '../../../agents/brand-icons';
   import { connectors, scanLocal } from '../../../agents/connectors.svelte';
-  import { FREE_CLOUD, KINDS, samePreset, type ProviderForm } from './provider-form.svelte';
+  import { FREE_CLOUD, GATEWAYS, KINDS, samePreset, type ProviderForm } from './provider-form.svelte';
 
   let { form }: { form: ProviderForm } = $props();
 
@@ -59,6 +59,31 @@
                         <span class="grid size-7 shrink-0 place-items-center text-primary" title="Added"><ZIcon zType={icon('lucideCheck')} class="size-3.5" /></span>
                       {:else}
                         <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Add {preset.name}" title="Add {preset.name}" onclick={() => form.useFreeCloud(preset)}>
+                          <ZIcon zType={icon('lucidePlus')} class="size-3.5" />
+                        </ZButton>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </section>
+
+              <section aria-label="Self-hosted gateways">
+                <h3 class="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Self-hosted gateways</h3>
+                <ul class="grid gap-2 sm:grid-cols-2">
+                  {#each GATEWAYS as preset (preset.name)}
+                    <li class="flex min-w-0 items-center gap-2.5 rounded-lg border border-border px-3 py-2 text-xs">
+                      <span class="grid size-5 shrink-0 place-items-center text-muted-foreground"><ZIcon zType={icon('lucideServer')} class="size-4" /></span>
+                      <span class="min-w-0 flex-1">
+                        <span class="block truncate text-sm font-medium">{preset.name}</span>
+                        <span class="block truncate text-muted-foreground" title={preset.note}>{preset.note}</span>
+                      </span>
+                      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Open the {preset.name} dashboard for its key" title="Get a {preset.name} key ({preset.keyUrl.replace('http://', '')})" onclick={() => void openExternal(preset.keyUrl)}>
+                        <ZIcon zType={icon('lucideKeyRound')} class="size-3.5" />
+                      </ZButton>
+                      {#if connectors.custom.some((item) => samePreset(preset.base, item.baseUrl))}
+                        <span class="grid size-7 shrink-0 place-items-center text-primary" title="Added"><ZIcon zType={icon('lucideCheck')} class="size-3.5" /></span>
+                      {:else}
+                        <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Add {preset.name}" title="Add {preset.name}" onclick={() => form.useGateway(preset)}>
                           <ZIcon zType={icon('lucidePlus')} class="size-3.5" />
                         </ZButton>
                       {/if}

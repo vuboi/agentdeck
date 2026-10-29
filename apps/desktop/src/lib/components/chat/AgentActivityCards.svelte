@@ -65,7 +65,7 @@
       <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
         <div class="min-h-0 overflow-hidden" inert={!isOpen}>
           <div class="border-t border-border/70 bg-muted/20">
-            <div class="max-h-[min(60vh,32rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+            <div class="max-h-[min(60vh,32rem)] overflow-y-auto overscroll-contain">
               <div class="flex flex-col gap-2 px-4 py-3 text-[11px]">
           {#if task.summary}<p class="m-0 whitespace-pre-wrap break-words text-muted-foreground">{task.summary}</p>{/if}
           {#if info.task && info.task !== task.summary}<p class="m-0 whitespace-pre-wrap break-words text-foreground/90">{info.task}</p>{/if}
@@ -91,7 +91,7 @@
                     <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {logExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
                       <div class="min-h-0 overflow-hidden" inert={!logExpanded}>
                       <div class="border-t border-border/70 bg-muted/20">
-                        <div class="max-h-[min(40vh,20rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+                        <div class="max-h-[min(40vh,20rem)] overflow-y-auto overscroll-contain">
                           <div class="flex flex-col gap-1.5 px-3 py-2">
                             <pre class="m-0 whitespace-pre-wrap break-all font-mono text-[10px] text-muted-foreground">{child.command}</pre>
                             {#if child.output}<pre class="m-0 whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-[10px] text-foreground/90">{child.output}</pre>{:else if child.status === 'running'}<p class="m-0 text-[10px] text-muted-foreground">Waiting for tool output…</p>{/if}

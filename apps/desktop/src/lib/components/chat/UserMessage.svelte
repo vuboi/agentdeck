@@ -8,7 +8,6 @@
   import { openAttachment, openImages } from '../../browser/preview.svelte';
   import FileChip from './FileChip.svelte';
   import ChatBlock from './ChatBlock.svelte';
-  import DelegateList from '../tasks/DelegateList.svelte';
   import MessageFooter from './MessageFooter.svelte';
   import { edit, startEdit, cancelEdit, finishEdit, resizeEditTextarea } from './chat-edit.svelte';
   import type { Message } from '../../chat/mock';
@@ -31,7 +30,6 @@
   const pictures = $derived(message.blocks.flatMap((block) => (block.kind === 'image' ? [block] : [])));
   const words = $derived(message.blocks.filter((block) => block.kind !== 'image' && block.kind !== 'delegate' && block.kind !== 'file'));
   const documents = $derived(message.blocks.flatMap((block) => (block.kind === 'file' ? [block] : [])));
-  const handed = $derived(message.blocks.filter((block) => block.kind === 'delegate'));
 </script>
 
 <!-- Pictures sit apart from the bubble as small tiles; click one to see it large. -->
@@ -97,6 +95,5 @@
       {/each}
     </div>
   {/if}
-  {#if handed.length > 0}<div class="mt-3 w-full"><DelegateList blocks={handed} /></div>{/if}
   <MessageFooter {message} end={theme.chatLayout === 'split'} onfork={() => forkSession(workspace.activeId)} onedit={() => startEdit(message)} oncopyall={pictures.length + documents.length + message.blocks.filter((block) => block.kind === 'element').length > 0 ? () => copyAll(message) : undefined} />
 {/if}

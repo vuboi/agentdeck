@@ -472,7 +472,7 @@ fn server_log(port: u16, lines: usize) -> String {
     }
 }
 
-/// Sessions Claude Code and Codex already saved on this machine. Read-only.
+/// Indexes the conversations saved by Claude Code and Codex. `is_project` is decided by the indexer (one check per folder).
 #[tauri::command]
 async fn history_list() -> Result<Vec<HistorySession>, String> {
     let roots = roots()?;

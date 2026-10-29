@@ -26,6 +26,8 @@ export type Project = { id: string; name: string; path: string };
 export type SessionItem = {
   id: string;
   projectId: string;
+  /** Original CLI cwd, retained when an imported conversation is classified as a plain chat. */
+  workingDirectory?: string;
   title: string;
   agent: Agent;
   /** Every agent that took part when an orchestrated chat mixes several; falls back to `[agent]`. */
@@ -205,6 +207,10 @@ export const activeSession = () =>
   workspace.sessions.find((item) => item.id === workspace.activeId);
 export const projectOf = (session: SessionItem) =>
   workspace.projects.find((item) => item.id === session.projectId);
+
+/** Working folder for a continued chat, independent of its sidebar classification. */
+export const sessionCwd = (session: SessionItem): string | null =>
+  projectOf(session)?.path || session.workingDirectory || null;
 
 export type Mention = {
   kind: 'session' | 'project' | 'ai';

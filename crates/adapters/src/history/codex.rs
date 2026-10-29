@@ -96,6 +96,7 @@ fn index_file(path: &Path) -> Option<HistorySession> {
         title: title.unwrap_or_else(|| "Untitled session".to_owned()),
         model,
         cwd: str_of(payload, "cwd").to_owned(),
+        is_project: false,
         started_at: Some(str_of(payload, "timestamp").to_owned()).filter(|stamp| !stamp.is_empty()),
         updated_at: updated,
         message_count: count,
