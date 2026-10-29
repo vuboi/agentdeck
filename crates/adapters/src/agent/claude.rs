@@ -198,6 +198,10 @@ impl Provider for Claude {
         serde_json::json!({ "type": "control_request", "request_id": request_id, "request": { "subtype": "set_model", "model": model } }).to_string()
     }
 
+    fn chat_capabilities(&self) -> super::ChatResponseCapabilities {
+        super::ChatResponseCapabilities::claude()
+    }
+
     fn parse_line(&self, line: &str) -> Vec<AgentEvent> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return Vec::new();

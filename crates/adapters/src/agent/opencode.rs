@@ -306,6 +306,10 @@ impl Provider for OpenCode {
             cost_usd: (cost > 0.0).then_some(cost),
         })
     }
+
+    fn chat_capabilities(&self) -> super::ChatResponseCapabilities {
+        super::ChatResponseCapabilities::opencode()
+    }
 }
 
 #[cfg(test)]

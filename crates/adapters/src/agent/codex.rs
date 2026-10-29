@@ -499,6 +499,10 @@ impl Provider for Codex {
         }
         events
     }
+
+    fn chat_capabilities(&self) -> super::ChatResponseCapabilities {
+        super::ChatResponseCapabilities::codex()
+    }
 }
 
 #[cfg(test)]

@@ -194,9 +194,45 @@ pub trait Provider: Send + Sync {
     fn live_model(&self) -> bool {
         false
     }
+    /// Chat response capabilities for UI abstraction (how to handle mid-turn messages, auto-turns, etc.).
+    fn chat_capabilities(&self) -> ChatResponseCapabilities {
+        ChatResponseCapabilities::custom()
+    }
     /// The line (without its newline) that switches a kept process to `model`; only used when `live_model` is true.
     fn model_switch_line(&self, _request_id: &str, _model: &str) -> String {
         String::new()
+    }
+}
+
+/// What this provider can do for turn/message handling (foundation for UI abstraction).
+#[derive(Debug, Clone, Copy)]
+pub struct ChatResponseCapabilities {
+    /// Mid-turn message injection: `true` = inject/replay (Claude, Codex), `false` = queue for next turn.
+    pub mid_turn_injection: bool,
+    /// Messages sent while text streams: `true` = parallel (OpenCode), `false` = queued until turn end.
+    pub parallel_messages: bool,
+    /// Auto-generated turn on background task completion: rendered as new answer with indicator.
+    pub auto_background_turn: bool,
+}
+
+impl ChatResponseCapabilities {
+    pub fn claude() -> Self {
+        Self { mid_turn_injection: true, parallel_messages: false, auto_background_turn: true }
+    }
+    pub fn codex() -> Self {
+        Self { mid_turn_injection: true, parallel_messages: false, auto_background_turn: true }
+    }
+    pub fn opencode() -> Self {
+        Self { mid_turn_injection: false, parallel_messages: true, auto_background_turn: false }
+    }
+    pub fn antigravity() -> Self {
+        Self { mid_turn_injection: false, parallel_messages: false, auto_background_turn: true }
+    }
+    pub fn copilot() -> Self {
+        Self { mid_turn_injection: false, parallel_messages: false, auto_background_turn: true }
+    }
+    pub fn custom() -> Self {
+        Self { mid_turn_injection: false, parallel_messages: false, auto_background_turn: false }
     }
 }
 

@@ -262,6 +262,10 @@ impl Provider for Antigravity {
             _ => Vec::new(),
         }
     }
+
+    fn chat_capabilities(&self) -> super::ChatResponseCapabilities {
+        super::ChatResponseCapabilities::antigravity()
+    }
 }
 
 /// The output of `agy models` (it asks the server, so it can take a few seconds). Empty when `agy` is missing,
