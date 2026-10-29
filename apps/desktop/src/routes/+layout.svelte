@@ -13,7 +13,9 @@
 
   // In the desktop app, replace the mock workspace with the Claude Code / Codex history on this machine.
   onMount(() => {
-    if (isTrayMenu) return;
+    // The Preview's copy of this app starts nothing: no history import, no page listeners, no shortcuts. Two copies
+    // doing that at once fought over the same chats and froze both.
+    if (isTrayMenu || isPreviewCopy()) return;
     let reloading = false;
     const stopAgents = () => inTauri() && !isPreviewCopy() ? invoke('agent_stop_all').catch(() => {}) : Promise.resolve();
     const beforeUnload = () => {

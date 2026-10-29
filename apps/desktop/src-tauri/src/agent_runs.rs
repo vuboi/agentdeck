@@ -99,7 +99,9 @@ fn forget(session: &str, turn: &str) {
 
 fn emit(app: &AppHandle, session: &str, turn: &str, message_id: Option<&str>, event: AgentEvent) {
     crate::flow_log::tap(session, turn, &event);
-    let _ = app.emit(
+    // Only the main window: a Preview page is a copy of this app and must not replay the chats' events.
+    let _ = app.emit_to(
+        "main",
         "agent-event",
         AgentEnvelope {
             session: session.to_owned(),

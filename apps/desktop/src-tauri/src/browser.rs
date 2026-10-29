@@ -154,7 +154,7 @@ pub fn handle_report(app: &AppHandle, body: &[u8]) {
                 fallback::network_events(app, &report);
             }
         }
-        let _ = app.emit("browser-report", report);
+        let _ = app.emit_to("main", "browser-report", report);
     }
 }
 
@@ -474,7 +474,8 @@ pub async fn browser_show(
                 } else {
                     url
                 };
-                let _ = view.app_handle().emit(
+                let _ = view.app_handle().emit_to(
+                    "main",
                     "browser-load",
                     serde_json::json!({
                         "label": view.label(),

@@ -624,7 +624,9 @@ impl PermissionHandler for CopilotPermissions {
 }
 
 fn emit(app: &AppHandle, session: &str, turn: &str, message_id: Option<&str>, event: AgentEvent) {
-    let _ = app.emit(
+    // Only the main window: a Preview page is a copy of this app and must not replay the chats' events.
+    let _ = app.emit_to(
+        "main",
         "agent-event",
         AgentEnvelope {
             session: session.to_string(),

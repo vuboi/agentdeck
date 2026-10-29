@@ -1,6 +1,6 @@
 import { connectors, agentHasRoom, limitResetAt } from '../../agents/connectors.svelte';
 import { type FailureKind, type Recovery, classifyFailure, planRecovery, continuePrompt, recoveryNote } from '../recovery/turn-failure';
-import { inTauri, clock } from '../../app/platform/history';
+import { inTauri, isPreviewCopy, clock } from '../../app/platform/history';
 import { type Message, type Block } from '../mock';
 import { modelLabel } from '../../agents/models.svelte';
 import { getPref, setPref } from '../../app/platform/prefs';
@@ -714,7 +714,7 @@ function handleEventNow(
   }
 }
 
-if (inTauri()) {
+if (inTauri() && !isPreviewCopy()) {
   // A fast stream sends dozens of deltas a second; each one re-rendered the chat. Apply them once per frame.
   let queue: { session: string; turn: string; message_id?: string; event: AgentEvent }[] = [];
   const flush = () => {

@@ -105,7 +105,7 @@ let listening = false;
 let regionSelectionResolve: ((selection: { box: Rect; viewport: { w: number; h: number } } | null) => void) | null = null;
 
 export async function listenToPage() {
-  if (listening || !inTauri()) return;
+  if (listening || !inTauri() || isPreviewCopy()) return;
   listening = true;
   const { listen } = await import('../app/platform/tauri-event');
   void listenToNetwork();
