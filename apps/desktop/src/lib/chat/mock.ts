@@ -9,12 +9,13 @@ export type Block =
   | { kind: 'response'; text: string; streaming?: boolean }
   | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; /** A delegate_task call: the task it started (see delegate-task.ts). */ taskId?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string; /** Work done under this call by a sub-agent: its steps and what it wrote. */ children?: Block[]; /** A sub-agent or background job this call started, and how far it is. */ task?: { status: 'started' | 'progress' | 'done' | 'failed'; label?: string; summary?: string; tools?: number } }
   | { kind: 'loading'; label: string }
-  /** Part of the user's message handed to another agent in a chat of its own; `state` follows that chat. */
-  | { kind: 'delegate'; childId: string; agent: Agent; model: string; state: 'queued' | 'running' | 'asking' | 'done' | 'failed' | 'skipped'; note?: string; /** The workflow step it runs, when it comes from a flow. */ step?: string; /** Questions the step asked the user (state 'asking'). */ questions?: import('./recovery/questions').Question[]; /** The earlier step it is asking something right now, and what. */ talking?: string; talkText?: string }
-  | { kind: 'image'; src: string; name: string }
+  /** A sub-agent running in its own child chat; `state` follows that chat. */
+  | { kind: 'delegate'; childId: string; agent: Agent; model: string; state: 'queued' | 'running' | 'asking' | 'done' | 'failed' | 'skipped'; note?: string }
+  /** A picture in the message: `path` (its file, WebP) once it is kept there; `src` only for one that was not. */
+  | { kind: 'image'; src: string; name: string; path?: string }
   /** A document attached to the message: it stays on disk, the agent is given its path. */
   | { kind: 'file'; name: string; path: string; size?: number }
-  | { kind: 'element'; tag: string; text: string; selector: string; /** What the chat keeps of the element: for its card, and to send it again when the message is edited. */ url?: string; title?: string; note?: string; html?: string; around?: string; box?: { x?: number; y?: number; w: number; h: number }; style?: Record<string, string>; /** A PNG of the element, for its chip. */ picture?: string }
+  | { kind: 'element'; tag: string; text: string; selector: string; /** What the chat keeps of the element: for its card, and to send it again when the message is edited. */ url?: string; title?: string; note?: string; html?: string; around?: string; box?: { x?: number; y?: number; w: number; h: number }; style?: Record<string, string>; /** A PNG of the element, for its chip (its file's URL), and that file's path. */ picture?: string; picturePath?: string }
   | { kind: 'permission'; requests: { id: string; tool: string; summary: string; allow: string }[]; state: 'pending' | 'allowed' | 'denied' | 'expired' };
 
 export type Message = {

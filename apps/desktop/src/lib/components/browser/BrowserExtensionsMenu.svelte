@@ -85,7 +85,7 @@
 </button>
 <ZPopover anchor={extButton} bind:open zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth={320}>
   {#snippet children()}
-    <div class="flex flex-col text-xs">
+    <div class="flex flex-col text-sm">
       <div class="flex items-center gap-2 px-3 pt-2.5 pb-2">
         <ZIcon zType={'lucidePuzzle' as ZIconName} class="size-3.5 text-muted-foreground" />
         <span class="font-medium">Extensions</span>
@@ -106,12 +106,12 @@
               </span>
               <span class="min-w-0 flex-1">
                 <span class="block truncate font-medium {item.enabled ? 'text-foreground' : 'text-muted-foreground'}" {@attach zTooltip({ content: item.name, position: 'top', autoDetect: true })}>{item.name}</span>
-                <span class="mt-0.5 block truncate text-[11px] text-muted-foreground">{!item.id ? 'Loads when a page opens' : item.enabled ? (item.popup ? 'On · click to open its page' : 'On') : 'Off'}</span>
+                <span class="mt-0.5 block truncate text-[0.6875rem] text-muted-foreground">{!item.id ? 'Loads when a page opens' : item.enabled ? (item.popup ? 'On · click to open its page' : 'On') : 'Off'}</span>
               </span>
             </button>
             <div class="flex items-center gap-1 border-t border-border/60 px-2.5 py-1.5">
               <ZSwitch zVariant="dot" zSize="sm" checked={item.enabled} zLoading={busyRow} zDisabled={!item.id || busyRow} onChange={(on) => void onExtension(item, () => enableBrowserExtension(tab.id, item.id, on), on ? `${item.name} turned on` : `${item.name} turned off`)} />
-              <span class="ml-1.5 text-[11px] text-muted-foreground">{item.enabled ? 'On' : 'Off'}</span>
+              <span class="ml-1.5 text-[0.6875rem] text-muted-foreground">{item.enabled ? 'On' : 'Off'}</span>
               <span class="flex-1"></span>
               <button type="button" class="inline-flex h-5 shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 text-[10px] text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40" aria-label="Reload {item.name}" disabled={!item.id || !item.enabled || busyRow} onclick={() => void onExtension(item, () => reloadBrowserExtension(tab.id, item.id), `${item.name} reloaded`)}>
                 <ZIcon zType={'lucideRefreshCw' as ZIconName} class="size-2.5" /> Reload
@@ -124,10 +124,10 @@
         {/each}
       </div>
       {#if extensions.some((item) => !item.id)}
-        <p class="m-0 px-3 pb-2 text-[11px] text-muted-foreground">Open a page to turn them on or off, reload or remove them.</p>
+        <p class="m-0 px-3 pb-2 text-[0.6875rem] text-muted-foreground">Open a page to turn them on or off, reload or remove them.</p>
       {/if}
       <div class="border-t border-border p-2">
-        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 w-full gap-1.5 px-3 text-xs" onclick={() => void addExtension()}>
+        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 w-full gap-1.5 px-3 text-sm" onclick={() => void addExtension()}>
           <ZIcon zType={'lucidePlus' as ZIconName} class="size-3.5" /> Add unpacked extension…
         </ZButton>
       </div>

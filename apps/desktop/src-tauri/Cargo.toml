@@ -13,7 +13,7 @@ tauri-build = { version = "2", features = [] }
 serde_json.workspace = true
 
 [dependencies]
-tauri = { version = "2", features = ["unstable", "tray-icon"] }
+tauri = { version = "2", features = ["unstable", "tray-icon", "protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance.workspace = true
 ag-adapters.workspace = true
@@ -29,6 +29,9 @@ base64 = "0.22"
 unicode-normalization = "0.1"
 portable-pty = "0.9"
 png = "0.17"
+# Pictures (screenshots, attachments) are kept as WebP files: decode PNG/JPEG, encode lossy WebP (lib.rs `to_webp`).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+webp = "0.3"
 toml = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 futures-util = "0.3"

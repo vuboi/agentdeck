@@ -15,11 +15,22 @@ export type LogEntry = {
   /** Where: chat id, agent, model, step, run id… */
   ctx?: Record<string, string | number | boolean | undefined>;
 };
+type DisplayLogEntry = LogEntry & { _rowId?: string };
 
 /** Entries of this run of the app, newest last, for the drawer to show at once (the file holds the older ones). */
-export const errorLog = $state<{ entries: LogEntry[]; loaded: boolean; count: number }>({ entries: [], loaded: false, count: 0 });
+export type ErrorLogCursor = { file: 'current' | 'rotated'; offset: number };
+export const errorLog = $state<{
+  entries: DisplayLogEntry[];
+  loaded: boolean;
+  count: number;
+  cursor: ErrorLogCursor | null;
+  hasMore: boolean;
+  loading: boolean;
+  areas: LogArea[];
+}>({ entries: [], loaded: false, count: 0, cursor: null, hasMore: false, loading: false, areas: [] });
 
-const SHOWN = 500;
+let pageGeneration = 0;
+let liveEntryId = 0;
 let pending: string[] = [];
 let timer: ReturnType<typeof setTimeout> | undefined;
 // The same error repeating (a retry loop) is written once a minute with a count, not hundreds of times.
@@ -55,9 +66,8 @@ export function logError(area: LogArea, event: string, detail?: unknown, ctx?: L
     const entry: LogEntry = { at: new Date(now).toISOString(), area, event, ...(text ? { detail: text } : {}), ...(ctx ? { ctx: { ...ctx, ...(seen?.skipped ? { repeated: seen.skipped } : {}) } } : seen?.skipped ? { ctx: { repeated: seen.skipped } } : {}) };
     recent.set(key, { at: now, skipped: 0 });
     if (recent.size > 200) recent.delete(recent.keys().next().value as string);
-    errorLog.entries.push(entry);
+    errorLog.entries.push({ ...entry, _rowId: `live:${++liveEntryId}` });
     errorLog.count++;
-    if (errorLog.entries.length > SHOWN) errorLog.entries.splice(0, errorLog.entries.length - SHOWN);
     pending.push(JSON.stringify(entry));
     timer ??= setTimeout(() => void flush(), 800);
   } catch {
@@ -82,32 +92,57 @@ export function demoEntries(): LogEntry[] {
   ];
 }
 
-/** Reads the log from disk into the drawer (the end of it), parsed. */
+type ErrorLogPage = { entries: { file: 'current' | 'rotated'; offset: number; line: string }[]; cursor: ErrorLogCursor | null; hasMore: boolean; count: number | null; areas: LogArea[] | null };
+
+/** Reads one bounded page. Older pages are prepended so the drawer can keep scrolling toward history. */
+async function readErrorLogPage(cursor: ErrorLogCursor | null, reset = false) {
+  if (errorLog.loading || (!reset && errorLog.loaded && cursor === null)) return;
+  const generation = pageGeneration;
+  errorLog.loading = true;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await flush();
+    const page = await invoke<ErrorLogPage>('error_log_read', { cursor, limit: 50 });
+    if (generation !== pageGeneration) return;
+    const entries: DisplayLogEntry[] = [];
+    for (const item of page.entries) {
+      try {
+        entries.push({ ...(JSON.parse(item.line) as LogEntry), _rowId: `${item.file}:${item.offset}` });
+      } catch {
+        entries.push({ at: '', area: 'app', event: 'unreadable line', detail: item.line.slice(0, 200), _rowId: `${item.file}:${item.offset}` });
+      }
+    }
+    if (reset) errorLog.entries = entries;
+    else errorLog.entries.unshift(...entries);
+    if (page.count !== null) errorLog.count = page.count;
+    if (page.areas) errorLog.areas = page.areas;
+    errorLog.cursor = page.cursor;
+    errorLog.hasMore = page.hasMore;
+    errorLog.loaded = true;
+  } catch (error) {
+    if (generation === pageGeneration) {
+      if (reset || !errorLog.loaded) errorLog.entries = [{ at: new Date().toISOString(), area: 'app', event: 'the log could not be read', detail: String(error) }];
+      errorLog.loaded = true;
+      errorLog.hasMore = false;
+    }
+  } finally {
+    if (generation === pageGeneration) errorLog.loading = false;
+  }
+}
+
+/** Reads the newest page on first open; already loaded pages remain in place on later opens. */
 export async function loadErrorLog() {
   if (!inTauri()) {
     errorLog.loaded = true;
     return;
   }
-  try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    await flush();
-    const text = await invoke<string>('error_log_read');
-    const entries: LogEntry[] = [];
-    for (const line of text.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        entries.push(JSON.parse(line) as LogEntry);
-      } catch {
-        entries.push({ at: '', area: 'app', event: 'unreadable line', detail: line.slice(0, 200) });
-      }
-    }
-    errorLog.entries = entries.slice(-SHOWN);
-    errorLog.count = entries.length;
-  } catch (error) {
-    errorLog.entries = [{ at: new Date().toISOString(), area: 'app', event: 'the log could not be read', detail: String(error) }];
-  } finally {
-    errorLog.loaded = true;
-  }
+  await readErrorLogPage(null, !errorLog.loaded);
+}
+
+/** Fetches the next older page when the drawer scroll reaches its end. */
+export function loadMoreErrorLog() {
+  if (!errorLog.hasMore || errorLog.loading || !errorLog.cursor) return;
+  void readErrorLogPage(errorLog.cursor);
 }
 
 /** Saves the whole log where the user picks. Answers the path, or null when cancelled. */
@@ -119,11 +154,17 @@ export async function saveErrorLog(): Promise<string | null> {
 }
 
 export async function clearErrorLog() {
+  pageGeneration++;
+  errorLog.loading = false;
   const { invoke } = await import('@tauri-apps/api/core');
   pending = [];
   await invoke('error_log_clear');
   errorLog.entries = [];
   errorLog.count = 0;
+  errorLog.cursor = null;
+  errorLog.hasMore = false;
+  errorLog.areas = [];
+  errorLog.loaded = true;
 }
 
 // The count on the Tasks view's button is right from the start: the log of earlier runs is read once the app is up.

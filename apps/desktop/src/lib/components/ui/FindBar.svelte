@@ -207,7 +207,7 @@
         aria-label="Find in the app"
         spellcheck="false"
       />
-      <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-xs font-semibold outline-none hover:bg-muted {matchCase ? 'bg-primary/15! text-primary!' : 'text-muted-foreground'}" aria-pressed={matchCase} title="Match case" onclick={() => ((matchCase = !matchCase), search(0))}>Aa</button>
+      <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-sm font-semibold outline-none hover:bg-muted {matchCase ? 'bg-primary/15! text-primary!' : 'text-muted-foreground'}" aria-pressed={matchCase} title="Match case" onclick={() => ((matchCase = !matchCase), search(0))}>Aa</button>
       <button type="button" class="-mr-1 grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground" aria-label="Close" title="Close (Esc)" onclick={() => (open = false)}>
         <ZIcon zType={'lucideX' as ZIconName} class="size-4" />
       </button>
@@ -219,7 +219,7 @@
       <button type="button" class="grid size-7 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground disabled:opacity-40" aria-label="Next match" title="Next (Enter)" disabled={!count} onclick={() => next(1)}>
         <ZIcon zType={'lucideArrowDown' as ZIconName} class="size-4" />
       </button>
-      <span class="mr-1.5 ml-auto text-xs text-muted-foreground tabular-nums" role="status">
+      <span class="mr-1.5 ml-auto text-sm text-muted-foreground tabular-nums" role="status">
         {#if !supported}This window cannot mark matches{:else if !query}Type to find{:else if count === 0}No results{:else}{current + 1} / {count >= MAX ? `${MAX}+` : count} results{/if}
       </span>
     </div>

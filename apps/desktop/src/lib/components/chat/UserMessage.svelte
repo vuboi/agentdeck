@@ -83,8 +83,8 @@
       class="-mr-4 w-[calc(100%+1rem)] resize-none border-0 bg-transparent p-0 pr-3 text-sm leading-relaxed outline-none {edit.files.length ? 'min-h-40 overflow-y-auto' : ''}"
     ></textarea>
     <div class="flex justify-end gap-2">
-      <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-3 text-xs" onclick={cancelEdit}>Cancel</ZButton>
-      <ZButton zWave={false} zSize="sm" class="h-7 px-3 text-xs" disabled={!edit.text.trim() || edit.loading} onclick={() => finishEdit(message.id)}>Send</ZButton>
+      <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-3 text-sm" onclick={cancelEdit}>Cancel</ZButton>
+      <ZButton zWave={false} zSize="sm" class="h-7 px-3 text-sm" disabled={!edit.text.trim() || edit.loading} onclick={() => finishEdit(message.id)}>Send</ZButton>
     </div>
   </div>
 {:else}

@@ -24,7 +24,7 @@ function blockText(block: Block): string {
       if (block.change) parts.push(`**File change:** \`${block.change.path}\` (+${block.change.added} / −${block.change.removed})`);
       return parts.join('\n\n');
     }
-    case 'delegate': return `**Delegated to ${block.agent} (${block.state}):** ${block.note ?? block.talkText ?? ''}`;
+    case 'delegate': return `**Delegated to ${block.agent} (${block.state}):** ${block.note ?? ''}`;
     case 'image': return `**Image:** ${block.name}`;
     case 'file': return `**File:** ${block.name} — \`${block.path}\``;
     case 'element': return `**Page element:** ${block.tag}${block.text ? ` — ${block.text}` : ''}${block.url ? ` (${block.url})` : ''}${block.note ? `\n\n${block.note}` : ''}`;

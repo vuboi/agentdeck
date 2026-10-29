@@ -53,7 +53,8 @@
     stop,
     tabsFull,
     zoomBrowser,
-    captureElement,
+    captureElementFile,
+    capturePageFileIfPossible,
     type Device,
     type Rect,
   } from '../../browser/browser.svelte';
@@ -72,6 +73,7 @@
   import { devtoolsOpen, layout, setDevtools } from '../../app/ui/layout.svelte';
   import { runInTerminal, showTerminalTab, stopTerminalRun, terminal, terminalRuns } from '../../terminal/terminal.svelte';
   import { activeSession, draftElements, draftImages, drafts, projectOf, workspace } from '../../chat/sessions.svelte';
+  import { keepPicture, keepPictureUrl, pictureUrl } from '../../chat/agent';
 
   // The AgentDeck browser: tabs, an address bar, device sizes, an element picker, devtools, and a markup view
   // whose result goes to the chat. The pages themselves are native webviews placed over the stage below.
@@ -271,12 +273,23 @@
     editing = false;
     dirty = false;
     address = url;
+    const navigatingTab = tab;
+    navigatingTab.loading = true;
+    // Paint both spinners before the native webview starts opening the address.
+    await painted();
+    if (tab.id !== navigatingTab.id || !navigatingTab.loading) {
+      navigatingTab.loading = false;
+      return;
+    }
     // The address is set before the page opens, so the first open never uses a stale one.
-    if (tab.opened) await goTo(url);
-    else {
-      tab.url = url;
+    try {
+      await goTo(url);
+      if (navigatingTab.opened) return;
       await tick();
       await sync();
+    } catch (error) {
+      navigatingTab.loading = false;
+      browser.error = String(error);
     }
   }
 
@@ -503,8 +516,9 @@
         const { element, url, title } = picked;
         const id = workspace.activeId;
         // A picture of the element alone, so the agent sees it next to its markup.
-        const picture = await captureElement(browser.activeId, element.box);
-        draftElements[id] = [...(draftElements[id] ?? []), { id: crypto.randomUUID(), picture, tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url, title }];
+        const path = await captureElementFile(browser.activeId, element.box);
+        const picture = path ? { url: await pictureUrl(path), path } : undefined;
+        draftElements[id] = [...(draftElements[id] ?? []), { id: crypto.randomUUID(), picture: picture?.url, picturePath: picture?.path, tag: element.tag, text: clip(element.text, 80), selector: element.selector, html: clip(element.html, 2500), around: element.around, box: element.box, style: element.style, url, title }];
         toast.success('Element added to the message');
       }
     } catch (error) {
@@ -573,13 +587,19 @@
       // The page as it is now, marks included: the engine's capture, else the page's own (the one the agent's screenshot
       // uses). Without a picture the words and elements above are still in the message.
       logFlow(id, 'marks to chat capture', `words=${words.length} chips=${chips.length}`);
-      const picture = (await capturePageIfPossible()) ?? (await screenshot().then((shot) => shot.data).catch(() => undefined));
-      logFlow(id, 'marks to chat picture', picture ? `length=${picture.length}` : 'none');
-      if (!picture && !words && !chips.length) throw new Error('Could not take the picture of the page to add it to the chat. Try again.');
-      if (picture && chips.length) draftElements[id] = (draftElements[id] ?? []).map((item) => (item.id === chips[0].id ? { ...item, picture } : item));
+      // The page is saved as a WebP file at once (its path); the page's own screenshot is the fallback, kept as a file too.
+      const file = await capturePageFileIfPossible();
+      const picture = file ? undefined : await screenshot().then((shot) => shot.data).catch(() => undefined);
+      logFlow(id, 'marks to chat picture', file ? `file=${file}` : picture ? `length=${picture.length}` : 'none');
+      if (!file && !picture && !words && !chips.length) throw new Error('Could not take the picture of the page to add it to the chat. Try again.');
+      if ((file || picture) && chips.length) {
+        const kept = file ? { url: await pictureUrl(file), path: file } : await keepPictureUrl(picture!);
+        draftElements[id] = (draftElements[id] ?? []).map((item) => (item.id === chips[0].id ? { ...item, picture: kept.url, picturePath: kept.path } : item));
+      }
       // Keep the full marked-page capture with its element chip, like an Inspect capture. Freehand-only marks have
       // no element chip, so their screenshot stays in the regular image attachments.
-      if (picture && !chips.length) draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'page-notes.png', mime: 'image/png', src: picture }];
+      if (file && !chips.length) draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'page-notes.webp', mime: 'image/webp', src: '', path: file }];
+      else if (picture && !chips.length) draftImages[id] = [...(draftImages[id] ?? []), await keepPicture({ id: crypto.randomUUID(), name: 'page-notes.png', mime: 'image/png', src: picture })];
       await stopAnnotating();
       if (!picture) browser.error = 'The picture of the page could not be taken: the notes went to the message as text.';
       else toast.success('Added to the message');
@@ -628,31 +648,37 @@
   let barWidth = $state(1000);
   const compact = $derived(barWidth < 420);
   let toolsWidth = $state(0);
+  let captureToolsWidth = $state(0);
+  let menuToolsWidth = $state(0);
   const alive = $derived({ length: servers.list.filter((item) => item.running).length + terminalRuns.list.length });
   let processOpen = $state(false);
-  const pageTools = $derived<(ZDropdownMenuItem & { separatorBefore?: boolean })[]>([
+  const mainTools = $derived<ZDropdownMenuItem[]>([
     { label: browser.picking ? 'Stop inspecting' : 'Inspect an element', icon: 'lucideMousePointerClick', iconSize: 12, checked: browser.picking, disabled: !started, onClick: () => void pick() },
     { label: browser.annotating ? 'Stop marking up' : 'Mark up the page', icon: 'lucideMousePointer2', iconSize: 12, checked: browser.annotating, disabled: !started, onClick: () => void toggleMarkup() },
     { label: 'Create guide', icon: 'lucideClipboardList', iconSize: 12, disabled: !started, onClick: () => (guide.open = true) },
     { label: errors > 0 ? `Developer tools (${errors} errors)` : 'Developer tools', icon: 'lucideSquareTerminal', iconSize: 12, checked: devtoolsOpen(), onClick: () => setDevtools(!devtoolsOpen()) },
     { label: alive.length > 0 ? `Running in the background (${alive.length})` : 'Running in the background', icon: 'lucideServer', iconSize: 12, checked: processOpen, onClick: () => (processOpen = !processOpen) },
+  ]);
+  const noteTools = $derived<(ZDropdownMenuItem & { separatorBefore?: boolean })[]>([
     ...(browser.annotating
       ? [
           ...MARK_TOOLS.map((item, index) => ({ label: item.label, icon: item.icon, iconSize: 12, checked: browser.annotateTool === item.tool, separatorBefore: index === 0, onClick: () => void useTool(item.tool) })),
           { label: 'Undo', icon: 'lucideUndo2' as ZIconName, iconSize: 12, separatorBefore: true, disabled: !browser.annotateUndo, onClick: () => void markHistory('undo') },
           { label: 'Redo', icon: 'lucideRedo2' as ZIconName, iconSize: 12, disabled: !browser.annotateRedo, onClick: () => void markHistory('redo') },
           { label: browser.annotateSelected ? 'Delete selected note' : 'Delete all notes', icon: 'lucideTrash2' as ZIconName, iconSize: 12, class: 'text-destructive!', disabled: browser.annotateCount === 0, onClick: () => void markHistory('remove') },
-          ...(browser.annotateCount > 0 ? [{ label: 'Add notes to chat', icon: 'lucidePlus' as ZIconName, iconSize: 12, disabled: busy !== '', onClick: () => void addMarksToChat() }] : []),
+          ...(browser.annotateCount > 0 ? [{ label: 'Add notes to chat', icon: 'lucidePlus' as ZIconName, iconSize: 12, class: 'z-button-shimmer border border-transparent rounded-md text-primary! font-medium', disabled: busy !== '', onClick: () => void addMarksToChat() }] : []),
         ]
       : []),
   ]);
-  // Each toolbar button is 28px with a 2px gap; reserve padding and the always-visible menu trigger.
+  const pageTools = $derived<(ZDropdownMenuItem & { separatorBefore?: boolean })[]>([...mainTools, ...noteTools]);
+  // Measure the fixed groups too: capture, extensions and More must never squeeze the tool buttons.
   const visibleToolCount = $derived.by(() => {
     let used = 0;
     let count = 0;
+    const available = Math.max(0, toolsWidth - captureToolsWidth - menuToolsWidth - 12);
     for (const item of pageTools) {
-      const next = 30 + (item.separatorBefore ? 8 : 0);
-      if (used + next > Math.max(0, toolsWidth - 76)) break;
+      const next = 30 + (item.separatorBefore ? 7 : 0);
+      if (used + next > available) break;
       used += next;
       count += 1;
     }
@@ -666,37 +692,30 @@
   const menuItems = $derived<ZDropdownMenuItem[]>([
     ...(compact
       ? [
-          ...DEVICE_BUTTONS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, class: `text-xs! py-1 ${browser.device === item.value ? 'bg-primary/10 text-primary' : ''}`, checked: browser.device === item.value, onClick: () => (browser.device = item.value) })),
-          { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${browser.landscape && browser.device !== 'desktop' ? 'bg-primary/10 text-primary' : ''}`, disabled: browser.device === 'desktop', checked: browser.landscape && browser.device !== 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
-          { label: browser.picking ? 'Stop inspecting' : 'Inspect an element', icon: 'lucideMousePointerClick' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${browser.picking ? 'bg-primary/10 text-primary' : ''}`, checked: browser.picking, disabled: !started, onClick: () => void pick() },
-          { label: browser.annotating ? 'Stop marking up' : 'Mark up the page', icon: 'lucideMousePointer2' as ZIconName, iconSize: 12, class: `text-xs! py-1 ${browser.annotating ? 'bg-primary/10 text-primary' : ''}`, checked: browser.annotating, disabled: !started, onClick: () => void toggleMarkup() },
-          { label: 'Create guide', icon: 'lucideClipboardList' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !started, onClick: () => (guide.open = true) },
-        ]
-      : []),
-    ...(compact && browser.annotating
-      ? [
-          ...MARK_TOOLS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, class: `text-xs! py-1 ${browser.annotateTool === item.tool ? 'bg-primary/10 text-primary' : ''}`, checked: browser.annotateTool === item.tool, onClick: () => void useTool(item.tool) })),
-          { label: 'Undo', icon: 'lucideUndo2' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !browser.annotateUndo, onClick: () => void markHistory('undo') },
-          { label: 'Redo', icon: 'lucideRedo2' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !browser.annotateRedo, onClick: () => void markHistory('redo') },
-          { label: browser.annotateSelected ? 'Delete selected note' : 'Delete all notes', icon: 'lucideTrash2' as ZIconName, iconSize: 12, class: 'text-xs! py-1 text-destructive!', disabled: browser.annotateCount === 0, onClick: () => void markHistory('remove') },
-          ...(browser.annotateCount > 0 ? [{ label: 'Add notes to chat', icon: 'lucidePlus' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: busy !== '', onClick: () => void addMarksToChat() }] : []),
+          ...DEVICE_BUTTONS.map((item) => ({ label: item.label, icon: item.icon, iconSize: 12, class: `text-sm! py-1 ${browser.device === item.value ? 'bg-primary/10 text-primary' : ''}`, checked: browser.device === item.value, onClick: () => (browser.device = item.value) })),
+          { label: 'Rotate', icon: 'lucideRotateCw' as ZIconName, iconSize: 12, class: `text-sm! py-1 ${browser.landscape && browser.device !== 'desktop' ? 'bg-primary/10 text-primary' : ''}`, disabled: browser.device === 'desktop', checked: browser.landscape && browser.device !== 'desktop', onClick: () => (browser.landscape = !browser.landscape) },
         ]
       : []),
     // Always offered (on Windows): with no page open the extension is put in place and loads with the next one.
-    { label: canExtend ? 'Add unpacked extension…' : 'Extensions require Windows', icon: 'lucidePuzzle' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: 'before', disabled: !canExtend, onClick: () => void extMenu?.addExtension() },
-    { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: compact ? 'before' : undefined, disabled: !tab.url, onClick: () => void openExternal(tab.url) },
-    { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: 12, class: 'text-xs! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url).then(() => toast.success('Address copied')) },
-    { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
+    { label: canExtend ? 'Add unpacked extension…' : 'Extensions require Windows', icon: 'lucidePuzzle' as ZIconName, iconSize: 12, class: 'text-sm! py-1', divide: 'before', disabled: !canExtend, onClick: () => void extMenu?.addExtension() },
+    { label: 'Open in external browser', icon: 'lucideExternalLink' as ZIconName, iconSize: 12, class: 'text-sm! py-1', divide: compact ? 'before' : undefined, disabled: !tab.url, onClick: () => void openExternal(tab.url) },
+    { label: 'Copy address', icon: 'lucideCopy' as ZIconName, iconSize: 12, class: 'text-sm! py-1', disabled: !tab.url, onClick: () => void navigator.clipboard.writeText(tab.url).then(() => toast.success('Address copied')) },
+    { label: 'Close tab', icon: 'lucideX' as ZIconName, iconSize: 12, class: 'text-sm! py-1', divide: 'before', onClick: () => void closeTab(tab.id) },
   ]);
-  const moreItems = $derived([
-    ...pageTools.slice(visibleToolCount).map((item) => ({ ...item, class: `text-xs! py-1 ${item.class ?? ''} ${item.checked ? 'bg-primary/10 text-primary' : ''}` })),
+  const moreItems = $derived<ZDropdownMenuItem[]>([
+    ...mainTools.slice(visibleToolCount),
     ...menuItems,
+    // Overflow notes belong together at the bottom, once, using Menu's actual section API.
+    ...noteTools.slice(Math.max(0, visibleToolCount - mainTools.length)).map((item, index) => ({
+      ...item,
+      divide: index === 0 || item.separatorBefore ? 'before' as const : undefined,
+    })),
   ]);
 
   let extOpen = $state(false);
   let extMenu = $state<{ addExtension: () => Promise<void> } | undefined>();
 
-  const icon = 'grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
+  const icon = 'grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40';
   const tabTitle = (item: { title: string; url: string }) => item.title || (item.url ? item.url.replace(/^https?:\/\//, '') : 'New tab');
 </script>
 
@@ -704,7 +723,7 @@
 
 <div class="flex h-full w-full min-h-0 flex-1 flex-col" aria-label="Browser">
   {#if !inTauri()}
-    <div class="grid flex-1 place-items-center p-6 text-center text-xs text-muted-foreground">The browser runs in the AgentDeck desktop app.</div>
+    <div class="grid flex-1 place-items-center p-6 text-center text-sm text-muted-foreground">The browser runs in the AgentDeck desktop app.</div>
   {:else}
     <BrowserTabStrip />
 
@@ -741,7 +760,7 @@
         <input
           bind:this={addressInput}
           bind:value={address}
-          class="h-8 w-full border bg-muted/40 pr-3 pl-9 text-xs outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:bg-background {suggestOpen ? 'rounded-t-md rounded-b-none border-primary border-b-border bg-background' : 'rounded-md border-border'}"
+          class="h-8 w-full border bg-muted/40 pr-3 pl-9 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:bg-background {suggestOpen ? 'rounded-t-md rounded-b-none border-primary border-b-border bg-background' : 'rounded-md border-border'}"
           placeholder="Search or enter an address"
           aria-label="Address"
           role="combobox"
@@ -790,9 +809,11 @@
       </div>
     </div>
     <div bind:clientWidth={toolsWidth} class="flex min-h-9 shrink-0 items-center justify-between gap-1 border-b border-border px-1 py-1" role="toolbar" aria-label="Page tools">
-      <div class="flex min-w-0 items-center gap-0.5 overflow-hidden">
-        <MenuButton items={screenshotItems} icon="lucideScan" label="Capture screenshot" width={220} />
-        <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+      <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+        <div bind:clientWidth={captureToolsWidth} class="flex shrink-0 items-center gap-0.5">
+          <MenuButton items={screenshotItems} icon="lucideScan" label="Capture screenshot" width={220} />
+          <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        </div>
         {#each pageTools.slice(0, visibleToolCount) as item (`${item.label}:${item.icon}`)}
           {#if item.separatorBefore}<span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>{/if}
           <button type="button" class="{icon} relative {item.checked ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : ''} {item.class ?? ''}" aria-label={item.label} title={item.label} aria-pressed={item.checked} disabled={item.disabled ?? false} onclick={() => item.onClick?.()}>
@@ -802,7 +823,7 @@
           </button>
         {/each}
       </div>
-      <div data-page-menu class="flex shrink-0 items-center gap-1">
+      <div bind:clientWidth={menuToolsWidth} data-page-menu class="flex shrink-0 items-center gap-1">
         {#if canExtend}
           <BrowserExtensionsMenu bind:this={extMenu} bind:open={extOpen} buttonClass={icon} />
         {/if}
@@ -810,21 +831,21 @@
       </div>
     </div>
     {#if browser.error}
-      <div class="shrink-0 border-b border-border px-3 py-1 text-xs text-destructive" role="status">{browser.error}</div>
+      <div class="shrink-0 border-b border-border px-3 py-1 text-sm text-destructive" role="status">{browser.error}</div>
     {/if}
     <ScreenshotEditor
       bind:open={screenshotOpen}
       imageUrl={screenshotImage}
       filename={`screenshot-${new Date().toISOString().slice(0, 10)}.png`}
-      onadd={(src) => {
+      onadd={async (src) => {
         const id = workspace.activeId;
-        draftImages[id] = [...(draftImages[id] ?? []), { id: crypto.randomUUID(), name: 'screenshot.png', mime: 'image/png', src }];
+        draftImages[id] = [...(draftImages[id] ?? []), await keepPicture({ id: crypto.randomUUID(), name: 'screenshot.png', mime: 'image/png', src })];
         toast.success('Added to the message');
       }}
     />
     {#if browser.problem}
       {@const problem = browser.problem}
-      <div class="flex max-h-64 shrink-0 flex-col gap-1.5 overflow-hidden border-b border-border px-3 py-2 text-xs" role="alert">
+      <div class="flex max-h-64 shrink-0 flex-col gap-1.5 overflow-hidden border-b border-border px-3 py-2 text-sm" role="alert">
         <div class="flex items-start gap-2">
           <p class="m-0 min-w-0 flex-1 wrap-break-word font-medium text-destructive">{problem.message}</p>
           <button type="button" class="grid size-5 shrink-0 cursor-pointer place-items-center rounded outline-none hover:bg-accent" aria-label="Dismiss" onclick={() => (browser.problem = null)}><ZIcon zType={'lucideX' as ZIconName} zSize="12" /></button>

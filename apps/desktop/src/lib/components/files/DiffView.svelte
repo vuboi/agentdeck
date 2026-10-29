@@ -23,10 +23,10 @@
     toast.success('Added to chat');
   }
   const items = $derived<ZDropdownMenuItem[]>([
-    { label: 'Copy selection', icon: 'lucideCopy', iconSize: 12, class: 'text-xs! py-1', onClick: () => copy(picked || asText(rows)) },
-    { label: 'Copy all changes', icon: 'lucideCopy', iconSize: 12, class: 'text-xs! py-1', onClick: () => copy(asText(rows)) },
-    { label: 'Add selection to chat', icon: 'lucideMessageSquarePlus', iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => addToChat(picked || asText(rows), 'Selected changes:') },
-    { label: 'Add all changes to chat', icon: 'lucideMessageSquarePlus', iconSize: 12, class: 'text-xs! py-1', onClick: () => addToChat(asText(rows), 'Changes:') },
+    { label: 'Copy selection', icon: 'lucideCopy', iconSize: 12, class: 'text-sm! py-1', onClick: () => copy(picked || asText(rows)) },
+    { label: 'Copy all changes', icon: 'lucideCopy', iconSize: 12, class: 'text-sm! py-1', onClick: () => copy(asText(rows)) },
+    { label: 'Add selection to chat', icon: 'lucideMessageSquarePlus', iconSize: 12, class: 'text-sm! py-1', divide: 'before', onClick: () => addToChat(picked || asText(rows), 'Selected changes:') },
+    { label: 'Add all changes to chat', icon: 'lucideMessageSquarePlus', iconSize: 12, class: 'text-sm! py-1', onClick: () => addToChat(asText(rows), 'Changes:') },
   ]);
 
   // The change of one file, line by line: removed lines in red, added lines in green, a hunk heading between the
@@ -100,7 +100,7 @@
   });
 </script>
 
-<div bind:this={scroller} bind:clientHeight={viewHeight} onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)} oncontextmenu={(event) => { event.preventDefault(); picked = window.getSelection()?.toString() ?? ''; menu = { x: event.clientX, y: event.clientY }; menuOpen = true; }} class="h-full min-h-0 select-text overflow-auto bg-background font-mono text-xs leading-5" role="document" aria-label="Changes of the file">
+<div bind:this={scroller} bind:clientHeight={viewHeight} onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)} oncontextmenu={(event) => { event.preventDefault(); picked = window.getSelection()?.toString() ?? ''; menu = { x: event.clientX, y: event.clientY }; menuOpen = true; }} class="h-full min-h-0 select-text overflow-auto bg-background font-mono text-sm leading-5" role="document" aria-label="Changes of the file">
   <div class="w-max min-w-full" style:height="{rows.length * ROW}px" style:padding-top="{first * ROW}px" style:box-sizing="border-box">
     {#each slice as row, index (first + index)}
       {@const line = version >= 0 && row.kind !== 'hunk' ? tokens.get(first + index) : undefined}

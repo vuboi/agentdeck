@@ -175,7 +175,7 @@
       />
     </span>
     <span
-      class="min-w-0 flex-1 truncate text-xs font-medium text-foreground"
+      class="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
       title={file.name}>{file.name}</span
     >
     <span
@@ -185,7 +185,7 @@
     {#if error}
       <button
         type="button"
-        class="inline-flex h-7 items-center gap-1 rounded px-2 text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary"
+        class="inline-flex h-7 items-center gap-1 rounded px-2 text-sm text-muted-foreground hover:bg-primary/10 hover:text-primary"
         onclick={() => attempt++}
       >
         <ZIcon zType={icon('lucideRotateCw')} zSize="12" /> Try again
@@ -211,7 +211,7 @@
               data-tab-id={sheet.name}
               role="tab"
               aria-selected={activeSheet === sheet.name}
-              class="max-w-48 shrink-0 truncate rounded-md px-2.5 py-1 text-xs transition-colors {activeSheet ===
+              class="max-w-48 shrink-0 truncate rounded-md px-2.5 py-1 text-sm transition-colors {activeSheet ===
               sheet.name
                 ? 'bg-primary font-medium text-primary-foreground'
                 : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
@@ -238,7 +238,7 @@
         </div>
       {/if}
       {#if selectedSheet}
-        <span class="ml-auto shrink-0 pl-1 text-[11px] tabular-nums text-muted-foreground">
+        <span class="ml-auto shrink-0 pl-1 text-[0.6875rem] tabular-nums text-muted-foreground">
           {selectedSheet.rowCount} rows · {selectedSheet.columnCount} columns
         </span>
       {/if}
@@ -254,9 +254,9 @@
       <div
         class="w-max min-w-full bg-white dark:bg-black"
       >
-        <table class="border-collapse text-left text-xs">
+        <table class="border-collapse text-left text-sm">
           <thead
-            class="sticky top-0 z-10 bg-zinc-100 text-[11px] font-medium text-zinc-600 dark:bg-black dark:text-white"
+            class="sticky top-0 z-10 bg-zinc-100 text-[0.6875rem] font-medium text-zinc-600 dark:bg-black dark:text-white"
           >
             <tr
               ><th
@@ -289,14 +289,14 @@
           </tbody>
         </table>
         {#if selectedSheet.truncated}<div
-            class="border-t border-border bg-muted/50 px-3 py-2 text-[11px] text-muted-foreground"
+            class="border-t border-border bg-muted/50 px-3 py-2 text-[0.6875rem] text-muted-foreground"
           >
             Showing the first 250 rows and 32 columns for a smooth preview.
           </div>{/if}
       </div>
     {:else if format === 'xlsx' && !loading && !error}
       <div
-        class="flex h-full min-h-40 items-center justify-center text-xs text-muted-foreground"
+        class="flex h-full min-h-40 items-center justify-center text-sm text-muted-foreground"
       >
         This workbook has no visible sheets.
       </div>
@@ -309,7 +309,7 @@
     ></div>
     {#if loading}
       <div
-        class="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-background/75 text-xs text-muted-foreground backdrop-blur-[2px]"
+        class="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-background/75 text-sm text-muted-foreground backdrop-blur-[2px]"
       >
         <ZIcon
           zType={icon('lucideLoaderCircle')}
@@ -331,7 +331,7 @@
           <p class="m-0 text-sm font-medium text-foreground">
             Preview unavailable
           </p>
-          <p class="m-0 text-xs leading-relaxed text-muted-foreground">
+          <p class="m-0 text-sm leading-relaxed text-muted-foreground">
             {error}
           </p>
         </div>
@@ -340,7 +340,7 @@
   </div>
 
   <div
-    class="flex h-7 shrink-0 items-center gap-2 border-t border-border px-3 text-[11px] text-muted-foreground"
+    class="flex h-7 shrink-0 items-center gap-2 border-t border-border px-3 text-[0.6875rem] text-muted-foreground"
   >
     <span class="min-w-0 flex-1 truncate font-mono" title={shortPath}
       >{shortPath}</span

@@ -12,5 +12,5 @@
 </script>
 
 <span class="min-w-0 {className}">
-  <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zOptions={options} {value} onValueChange={(next) => (value = String(next ?? 'all'))} zPlaceholder="All categories" zShowSearch zPlaceholderSearch="Find category…" zDropdownWidth={230} />
+  <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-sm" zOptions={options} {value} onValueChange={(next) => (value = String(next ?? 'all'))} zPlaceholder="All categories" zShowSearch zPlaceholderSearch="Find category…" zDropdownWidth={230} />
 </span>

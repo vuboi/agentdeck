@@ -302,7 +302,7 @@
   function pickProject(id: string) {
     if (session) moveDraftToProject(session.id, id);
     projectOpen = false;
-    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('main[aria-label="Conversation"] form textarea')?.focus());
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('main[aria-label="Conversation"] form [data-composer-editor]')?.focus());
   }
 
   // ---- git branch ----
@@ -361,7 +361,7 @@
 </script>
 
 {#if session}
-  <div class="mx-auto mt-1.5 flex min-w-0 max-w-full items-center gap-1 px-1 text-xs text-muted-foreground">
+  <div class="mx-auto mt-1.5 flex min-w-0 max-w-full items-center gap-1 px-1 text-sm text-muted-foreground">
     <!-- Project -->
     {#if canMove}
       <button
@@ -427,8 +427,8 @@
 
   <ZPopover anchor={accountTrigger} bind:open={accountOpen} zTrigger="manual" zPosition="top-right" zOffset={6} zWidth={280}>
     {#snippet children()}
-      <div class="flex w-full flex-col text-xs" role="listbox" aria-label="{labelFor(accountProvider ?? 'agy')} accounts">
-        <div class="flex items-center gap-2 border-b border-border px-3 py-2 text-[11px] font-medium text-muted-foreground">
+      <div class="flex w-full flex-col text-sm" role="listbox" aria-label="{labelFor(accountProvider ?? 'agy')} accounts">
+        <div class="flex items-center gap-2 border-b border-border px-3 py-2 text-[0.6875rem] font-medium text-muted-foreground">
           <AgentLogo agent={accountProvider === 'agy' ? 'antigravity' : accountProvider ?? 'antigravity'} class="size-3.5 shrink-0" />
           <span class="min-w-0 flex-1">{labelFor(accountProvider ?? 'agy')} accounts</span>
           {#if canQuickAdd}

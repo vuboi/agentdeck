@@ -23,14 +23,14 @@
 
   const copy = (text: string, done: string) => void navigator.clipboard.writeText(text).then(() => toast.success(done), () => toast.error('Could not copy'));
 
-  const copyItem: ZDropdownMenuItem = { label: 'Copy', icon: 'lucideCopy', iconSize: '12', shortcut: 'Ctrl+C', class: 'text-xs! py-1', onClick: () => copy(selectionMenu.selected, 'Copied') };
-  const imageItem: ZDropdownMenuItem = { label: 'Copy image', icon: 'lucideImage', iconSize: '12', class: 'text-xs! py-1', onClick: () => void copyImage(selectionMenu.image).then((done) => (done ? toast.success('Image copied') : toast.error('Could not copy the image'))) };
+  const copyItem: ZDropdownMenuItem = { label: 'Copy', icon: 'lucideCopy', iconSize: '12', shortcut: 'Ctrl+C', class: 'text-sm! py-1', onClick: () => copy(selectionMenu.selected, 'Copied') };
+  const imageItem: ZDropdownMenuItem = { label: 'Copy image', icon: 'lucideImage', iconSize: '12', class: 'text-sm! py-1', onClick: () => void copyImage(selectionMenu.image).then((done) => (done ? toast.success('Image copied') : toast.error('Could not copy the image'))) };
   const lead = $derived(selectionMenu.image || selectionMenu.selected);
   const items = $derived<ZDropdownMenuItem[]>([
     ...(selectionMenu.image ? [imageItem] : []),
     ...(selectionMenu.selected ? [copyItem] : []),
-    { label: 'Copy message', icon: 'lucideClipboard', iconSize: '12', class: 'text-xs! py-1', divide: lead ? 'before' : undefined, onClick: () => copy(selectionMenu.plain, 'Message copied') },
-    { label: 'Copy message as Markdown', icon: 'lucideFileText', iconSize: '12', class: 'text-xs! py-1', onClick: () => copy(selectionMenu.markdown || selectionMenu.plain, 'Markdown copied') },
+    { label: 'Copy message', icon: 'lucideClipboard', iconSize: '12', class: 'text-sm! py-1', divide: lead ? 'before' : undefined, onClick: () => copy(selectionMenu.plain, 'Message copied') },
+    { label: 'Copy message as Markdown', icon: 'lucideFileText', iconSize: '12', class: 'text-sm! py-1', onClick: () => copy(selectionMenu.markdown || selectionMenu.plain, 'Markdown copied') },
   ]);
 </script>
 

@@ -11,8 +11,8 @@ import { startPageMemoryBridge } from '../../browser/page-memory-bridge';
 import { MODELS, persistLocal, workspace, type Agent, type SessionItem } from './state.svelte';
 import { agentLabel, failSessionWork, hiddenPrompt, stopTurn } from './turns.svelte';
 import { NO_HANDOUT, askText, liveReplies, messagesOf, replies } from './run.svelte';
-import { delegateRuns, firstLineOf, needsApproval } from './delegation.svelte';
-import { LANGUAGE_RULE, shorten, stepWaiters } from './workflow.svelte';
+import { addWorkflowWorker, delegateRuns, firstLineOf, needsApproval, updateWorkflowWorker } from './delegation.svelte';
+import { LANGUAGE_RULE, shorten, taskWaiters } from './orchestration.svelte';
 import { handbackPrompt, send } from './sending.svelte';
 
 // ---------- delegate_task: an agent hands a task to another agent during its own turn ----------
@@ -70,7 +70,7 @@ $effect.root(() => {
 const isTaskChild = (id: string) =>
   Object.values(delegateTasks).some((item) => item.childId === id);
 /**
- * A chat that only works for another one: a delegated task's worker or a step of a flow. A fork also sits under its
+ * A chat that only works for another one: a delegated task's worker. A fork also sits under its
  * parent in the tree (`parentId`), but it is a chat of its own: it opens pages and delegates like any other, and its
  * state is its own.
  */
@@ -293,6 +293,7 @@ function startTask(
     task,
     startedAt: Date.now(),
   };
+  delegateTasks[taskId].workflowRunId = addWorkflowWorker(caller.id, id, agent, model, label, task, true);
   const run: {
     callId?: string;
     timer?: ReturnType<typeof setTimeout>;
@@ -311,12 +312,12 @@ function startTask(
   bindTasks(caller.id);
 
   // The worker's end: its report, or why there is none. A worker stopped on an approval card waits for the user's yes.
-  const settle = (answer: string, error: string | null) => {
+  const settle = (answer: string, error: string | null, workerReply?: import('../mock').Message) => {
     const record = delegateTasks[taskId];
     if (!record || !taskRuns.has(taskId)) return;
     if (!run.ending && !error && needsApproval(id)) {
       record.state = 'approval';
-      stepWaiters.set(id, settle);
+      taskWaiters.set(id, settle);
       return;
     }
     const verdict: Verdict = run.ending
@@ -328,9 +329,9 @@ function startTask(
         : error || !answer
           ? 'failed'
           : 'done';
-    finishTask(taskId, verdict, run.ending ? '' : (error ?? ''), answer);
+    finishTask(taskId, verdict, run.ending ? '' : (error ?? ''), answer, workerReply);
   };
-  stepWaiters.set(id, settle);
+  taskWaiters.set(id, settle);
   const brief = `You were asked by another agent (${agentLabel(caller.agent, caller.model)}), who is working for the user in this project, to do the task below on your own. Answer fully, as you would for the user. ${REPORT_RULE} ${LANGUAGE_RULE}`;
   // At most MAX_PARALLEL_WORKERS run at once (delegate.rs keeps the line); the rest wait as `queued`. A free place
   // starts the worker at once, so three calls of one turn run side by side.
@@ -339,6 +340,7 @@ function startTask(
     if (!record || record.state !== 'queued' || !taskRuns.has(taskId)) return;
     record.state = 'running';
     record.startedAt = Date.now();
+    updateWorkflowWorker(record.workflowRunId, record.childId, 'running');
     send(id, task, [], [], [], { preface: `${brief}\n\n` });
     persistLocal();
   });
@@ -374,6 +376,7 @@ function finishTask(
   verdict: Verdict,
   detail: string,
   answer: string,
+  workerReply?: import('../mock').Message,
 ) {
   const record = delegateTasks[taskId];
   const run = taskRuns.get(taskId);
@@ -386,7 +389,7 @@ function finishTask(
   // Its place goes to the next one in line (a task that never started leaves the line).
   logFlow(record.childId, 'worker slot', `task=${taskId} released (${verdict})`);
   void releaseWorkerSlot(taskId).catch(() => undefined);
-  stepWaiters.delete(record.childId);
+  taskWaiters.delete(record.childId);
   record.endedAt = Date.now();
   record.state =
     verdict === 'done' ? 'done' : verdict === 'stopped' ? 'stopped' : 'failed';
@@ -400,6 +403,7 @@ function finishTask(
     verdict === 'done' ? reportDigest(answer) : reasonLine(verdict, detailOf);
   if (verdict === 'done') record.digest = body;
   else record.note = body;
+  updateWorkflowWorker(record.workflowRunId, record.childId, verdict === 'done' ? 'done' : 'failed', body, workerReply);
   const text = formatTaskResult(
     {
       taskId,

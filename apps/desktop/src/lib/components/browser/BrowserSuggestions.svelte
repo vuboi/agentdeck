@@ -13,7 +13,7 @@
       role="option"
       tabindex="-1"
       aria-selected={index === picked}
-      class="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs {index === picked ? 'bg-primary/15 text-primary' : 'hover:bg-primary/10'}"
+      class="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm {index === picked ? 'bg-primary/15 text-primary' : 'hover:bg-primary/10'}"
       onmousemove={() => (picked = index)}
       onclick={() => onchoose(item)}
       onkeydown={(event) => event.key === 'Enter' && onchoose(item)}

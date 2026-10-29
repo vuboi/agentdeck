@@ -131,12 +131,12 @@
   zLoading={busy}
   onOk={() => (step === 'source' ? check() : step === 'scanned' ? review() : install())}
 >
-  <div class="flex flex-col gap-3 text-xs">
+  <div class="flex flex-col gap-3 text-sm">
     {#if step === 'source'}
       <ZTabs zTabs={KIND_TABS} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={kind} onTabChange={(next) => (kind = next as typeof kind)} />
       <ZInput bind:value autofocus zPlaceholder={PLACEHOLDER[kind]} />
       {#if kind === 'folder'}
-        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 w-fit gap-1.5 px-2.5 text-xs" onclick={() => void browse()}>
+        <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 w-fit gap-1.5 px-2.5 text-sm" onclick={() => void browse()}>
           <ZIcon zType={icon('lucideFolderOpen')} class="size-3.5" /> Browse
         </ZButton>
       {/if}
@@ -151,7 +151,7 @@
       {#if job.scan.findings.length > 0}
         <ul class="m-0 flex max-h-56 list-none flex-col gap-1 overflow-y-auto p-0">
           {#each job.scan.findings.slice(0, 50) as finding, index (index)}
-            <li class="rounded-md border border-border p-2 font-mono text-[11px]">
+            <li class="rounded-md border border-border p-2 font-mono text-[0.6875rem]">
               <span class={finding.severity === 'block' ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'}>[{finding.severity}] {finding.rule}</span>
               <span class="text-muted-foreground">{finding.file}{finding.line ? `:${finding.line}` : ''}</span>
             </li>
@@ -171,7 +171,7 @@
       {#if outcome.review}
         <p class="m-0 leading-snug text-foreground">{outcome.review.summary}</p>
         {#each outcome.review.findings as finding, index (index)}
-          <p class="m-0 font-mono text-[11px] text-muted-foreground">{finding.file}{finding.line ? `:${finding.line}` : ''}: {finding.reason}</p>
+          <p class="m-0 font-mono text-[0.6875rem] text-muted-foreground">{finding.file}{finding.line ? `:${finding.line}` : ''}: {finding.reason}</p>
         {/each}
       {:else}
         <p class="m-0 text-amber-600 dark:text-amber-400">Review failed: {outcome.review_error}. Counted as caution.</p>

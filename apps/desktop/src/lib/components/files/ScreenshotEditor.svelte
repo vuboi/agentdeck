@@ -762,28 +762,28 @@
             <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! shrink-0 p-0 {numbered ? ACTIVE_ON : ''}" title="Step number badge" aria-label="Step number badge" aria-pressed={numbered} onclick={() => (numbered = !numbered)}>
               <ZIcon zType="lucideListOrdered" class="size-3.5" />
             </ZButton>
-            <ZButton bind:ref={fontTrigger} zWave={false} zType="ghost" zSize="sm" class="h-8! shrink-0 gap-1 px-1.5 text-xs tabular-nums {fontOpen ? TRIGGER_ON : ''}" title="Text size" aria-label="Text size" aria-haspopup="listbox" aria-expanded={fontOpen} onclick={() => (fontOpen = !fontOpen)}>
+            <ZButton bind:ref={fontTrigger} zWave={false} zType="ghost" zSize="sm" class="h-8! shrink-0 gap-1 px-1.5 text-sm tabular-nums {fontOpen ? TRIGGER_ON : ''}" title="Text size" aria-label="Text size" aria-haspopup="listbox" aria-expanded={fontOpen} onclick={() => (fontOpen = !fontOpen)}>
               <ZIcon zType="lucideType" class="size-3.5" />{noteFontSize}px<ZIcon zType="lucideChevronDown" class="size-3 text-muted-foreground" />
             </ZButton>
           </div>
           <PickerPopover anchor={fontTrigger} bind:open={fontOpen} items={fontItems} local fitContent keys size="sm" width={120} label="Text size" initialActive={false} onpick={(item) => { noteFontSize = item.data; fontOpen = false; }} />
         {:else if tool === 'pan'}
-          <span class="text-xs text-muted-foreground">Drag the image to scroll it. Zoom in first with + or the mouse wheel.</span>
+          <span class="text-sm text-muted-foreground">Drag the image to scroll it. Zoom in first with + or the mouse wheel.</span>
         {:else if tool === 'erase'}
-          <span class="text-xs text-muted-foreground">Click or drag over a mark to remove it.</span>
+          <span class="text-sm text-muted-foreground">Click or drag over a mark to remove it.</span>
         {:else if tool === 'blur'}
-          <span class="text-xs text-muted-foreground">Drag over the area to hide.</span>
+          <span class="text-sm text-muted-foreground">Drag over the area to hide.</span>
         {/if}
 
         <div class="ml-auto flex items-center gap-1.5">
           <ZButtonGroup>
             <ZButtonGroupItem zWave={false} zType="outline" zSize="sm" class="size-8! p-0" title="Zoom out" aria-label="Zoom out" disabled={zoom <= 0.25} onclick={() => setZoom(zoom - 0.25)}><ZIcon zType="lucideMinus" class="size-3.5" /></ZButtonGroupItem>
-            <ZButtonGroupItem zWave={false} zType="outline" zSize="sm" class="h-8! w-12 px-0 text-[11px] tabular-nums text-muted-foreground" title="Reset to 100%" aria-label="Reset zoom" onclick={() => setZoom(1)}>{Math.round(zoom * 100)}%</ZButtonGroupItem>
+            <ZButtonGroupItem zWave={false} zType="outline" zSize="sm" class="h-8! w-12 px-0 text-[0.6875rem] tabular-nums text-muted-foreground" title="Reset to 100%" aria-label="Reset zoom" onclick={() => setZoom(1)}>{Math.round(zoom * 100)}%</ZButtonGroupItem>
             <ZButtonGroupItem zWave={false} zType="outline" zSize="sm" class="size-8! p-0" title="Zoom in" aria-label="Zoom in" disabled={zoom >= 3} onclick={() => setZoom(zoom + 0.25)}><ZIcon zType="lucidePlus" class="size-3.5" /></ZButtonGroupItem>
           </ZButtonGroup>
           <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! shrink-0 p-0" title="Fit to window" aria-label="Fit to window" onclick={() => setZoom(1)}><ZIcon zType="lucideMinimize2" class="size-3.5" /></ZButton>
           {#if onadd}
-            <ZButton zWave={false} zType="ghost" zSize="sm" class="h-8! shrink-0 gap-1.5 border border-primary/30 bg-primary/10! px-2.5 text-xs text-primary! hover:bg-primary/20!" title="Add to chat" aria-label="Add the screenshot to the chat message" onclick={addToChat}><ZIcon zType="lucideMessageSquarePlus" class="size-3.5" />Add to chat</ZButton>
+            <ZButton zWave={false} zType="ghost" zSize="sm" class="h-8! shrink-0 gap-1.5 border border-primary/30 bg-primary/10! px-2.5 text-sm text-primary! hover:bg-primary/20!" title="Add to chat" aria-label="Add the screenshot to the chat message" onclick={addToChat}><ZIcon zType="lucideMessageSquarePlus" class="size-3.5" />Add to chat</ZButton>
           {/if}
           <ZButton zWave={false} zType="ghost" zSize="sm" class="size-8! shrink-0 p-0" title="Save as…" aria-label="Save screenshot as PNG" onclick={download}><ZIcon zType="lucideDownload" class="size-3.5" /></ZButton>
           <span class="h-5 w-px bg-border"></span>

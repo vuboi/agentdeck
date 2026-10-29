@@ -38,7 +38,7 @@
 </script>
 
 <section class="block-in w-full max-w-full overflow-hidden rounded-lg border border-border bg-background" aria-label="Agent and background activity">
-  <header class="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 text-xs">
+  <header class="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 text-sm">
     <ZIcon zType="lucideGitBranch" class="size-3.5 text-muted-foreground" />
     <span class="font-medium">Agent activity</span>
     <span class="ml-auto text-muted-foreground">{items.length} {items.length === 1 ? 'task' : 'tasks'}</span>
@@ -50,7 +50,7 @@
     {@const info = identity(item)}
     {@const children = logs(item)}
     <div class="{index > 0 ? 'border-t border-border' : ''}">
-      <button type="button" class="flex min-h-9 w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/60" aria-expanded={isOpen} onclick={() => (expanded[key] = !isOpen)}>
+      <button type="button" class="flex min-h-9 w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/60" aria-expanded={isOpen} onclick={() => (expanded[key] = !isOpen)}>
         <AgentLogo agent={info.agent} model={info.model} class="size-3.5 shrink-0" />
         <span class="min-w-0 max-w-[40%] truncate font-medium" title={info.name}>
           {#if live(item)}<ZShimmerText zBase="var(--primary)" zPeak="var(--foreground)" zText={info.name} />{:else}{info.name}{/if}
@@ -66,7 +66,7 @@
         <div class="min-h-0 overflow-hidden" inert={!isOpen}>
           <div class="border-t border-border/70 bg-muted/20">
             <div class="max-h-[min(60vh,32rem)] overflow-y-auto overscroll-contain">
-              <div class="flex flex-col gap-2 px-4 py-3 text-[11px]">
+              <div class="flex flex-col gap-2 px-4 py-3 text-[0.6875rem]">
           {#if task.summary}<p class="m-0 whitespace-pre-wrap break-words text-muted-foreground">{task.summary}</p>{/if}
           {#if info.task && info.task !== task.summary}<p class="m-0 whitespace-pre-wrap break-words text-foreground/90">{info.task}</p>{/if}
           {#if task.tools && !children.length}<p class="m-0 text-muted-foreground">Ran {task.tools} tool{task.tools === 1 ? '' : 's'}</p>{/if}

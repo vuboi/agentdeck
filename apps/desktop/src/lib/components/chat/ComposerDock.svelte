@@ -12,11 +12,12 @@
 
   type Approval = { block: Extract<Block, { kind: 'permission' }>; messageId: string; index: number; agent: Agent | undefined };
   type Pending = { messageId: string; questions: Question[]; agent: Agent | undefined };
-  let { pendingApproval, pendingQuestion, stepApprovals }: {
+  let { pendingApproval, pendingQuestion, agentApprovals }: {
     pendingApproval: Approval | null;
     pendingQuestion: Pending | null;
-    stepApprovals: { childId: string; step: string; agent: string }[];
+    agentApprovals: { childId: string; agent: string }[];
   } = $props();
+
 </script>
 
 <!-- A pending approval sits right above the input, where the eye already is. -->
@@ -32,12 +33,12 @@
     <QuestionCard questions={pendingQuestion.questions} from={pendingQuestion.agent ? agentName(pendingQuestion.agent) : ''} onsubmit={(text) => answerQuestions(workspace.activeId, text)} oncancel={() => cancelPending(workspace.activeId)} />
   </div>
 {/if}
-<!-- A flow step that needs approval waits in its own chat: say which, and take the user there. -->
-{#each stepApprovals as item (item.childId)}
-  <div class="mb-2 flex items-center gap-2 rounded-xl border border-warning/50 bg-warning/5 px-3 py-2 text-xs" role="status">
+<!-- A delegated agent that needs approval waits in its own chat. -->
+{#each agentApprovals as item (item.childId)}
+  <div class="mb-2 flex items-center gap-2 rounded-xl border border-warning/50 bg-warning/5 px-3 py-2 text-sm" role="status">
     <ZIcon zType="lucideShieldAlert" class="size-3.5 shrink-0 text-warning" />
-    <span class="min-w-0 flex-1 truncate"><span class="font-medium">{item.step}</span> ({item.agent}) needs your approval to continue</span>
-    <ZButton zWave={false} zType="default" zSize="sm" class="h-7 shrink-0 px-3 text-xs" onclick={() => showSession(item.childId)}>Open step</ZButton>
+    <span class="min-w-0 flex-1 truncate"><span class="font-medium">{item.agent}</span> needs your approval to continue</span>
+    <ZButton zWave={false} zType="default" zSize="sm" class="h-7 shrink-0 px-3 text-sm" onclick={() => showSession(item.childId)}>Open agent</ZButton>
   </div>
 {/each}
 <Composer />

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-element-capture-file"
+description = "Enables the browser_element_capture_file command without any pre-configured scope."
+commands.allow = ["browser_element_capture_file"]
+
+[[permission]]
+identifier = "deny-browser-element-capture-file"
+description = "Denies the browser_element_capture_file command without any pre-configured scope."
+commands.deny = ["browser_element_capture_file"]

@@ -31,6 +31,7 @@ mod mcp_manage;
 mod mcp_providers;
 mod notify;
 mod page_memory;
+mod picture_store;
 mod path_links;
 mod officecli;
 mod process_guard;
@@ -141,30 +142,39 @@ async fn attachment_save(mime: String, data: String) -> Result<String, String> {
     use base64::Engine;
     const MAX_BYTES: usize = 15 * 1024 * 1024;
     tauri::async_runtime::spawn_blocking(move || {
-        let extension = match mime.as_str() {
-            "image/png" => "png",
-            "image/jpeg" => "jpg",
-            "image/gif" => "gif",
-            "image/webp" => "webp",
-            other => return Err(format!("{other} is not a supported image type")),
-        };
+        if !matches!(mime.as_str(), "image/png" | "image/jpeg" | "image/gif" | "image/webp") {
+            return Err(format!("{mime} is not a supported image type"));
+        }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data.as_bytes())
             .map_err(|error| error.to_string())?;
         if bytes.len() > MAX_BYTES {
             return Err("the image is larger than 15 MB".to_string());
         }
-        let folder = home_folder()?.join(".agentdeck").join("attachments");
-        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_nanos());
-        let path = folder.join(format!("image-{stamp:x}.{extension}"));
-        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
-        Ok(path.to_string_lossy().into_owned())
+        write_attachment(&mime, bytes)
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// A picture already in memory (the browser's capture), stored like an attachment: WebP when it can be, the path back.
+pub(crate) async fn save_attachment_bytes(mime: &str, bytes: Vec<u8>) -> Result<String, String> {
+    let mime = mime.to_string();
+    tauri::async_runtime::spawn_blocking(move || write_attachment(&mime, bytes))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn write_attachment(mime: &str, bytes: Vec<u8>) -> Result<String, String> {
+    let (extension, bytes) = picture_store::stored_picture(mime, bytes);
+    let folder = home_folder()?.join(".agentdeck").join("attachments");
+    std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let path = folder.join(format!("image-{stamp:x}.{extension}"));
+    std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Saves a picked file (any type: document, spreadsheet, code) under `~/.agentdeck/attachments` so the agent CLI can
@@ -830,16 +840,17 @@ async fn audit_image_save(image: String) -> Result<String, String> {
     use base64::Engine;
     tauri::async_runtime::spawn_blocking(move || {
         let (head, data) = image.split_once(',').ok_or("not a data URL")?;
-        let extension = match head {
-            "data:image/png;base64" => "png",
-            "data:image/jpeg;base64" => "jpg",
-            "data:image/webp;base64" => "webp",
-            "data:image/gif;base64" => "gif",
-            other => return Err(format!("{other} is not a supported picture")),
-        };
+        let mime = head
+            .strip_prefix("data:")
+            .and_then(|rest| rest.strip_suffix(";base64"))
+            .ok_or_else(|| format!("{head} is not a supported picture"))?;
+        if !matches!(mime, "image/png" | "image/jpeg" | "image/gif" | "image/webp") {
+            return Err(format!("{mime} is not a supported picture"));
+        }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data.as_bytes())
             .map_err(|error| error.to_string())?;
+        let (extension, bytes) = picture_store::stored_picture(mime, bytes);
         let folder = audit_images()?;
         std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
         let stamp = std::time::SystemTime::now()
@@ -851,6 +862,19 @@ async fn audit_image_save(image: String) -> Result<String, String> {
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// The full path of a saved picture, for the asset protocol (no bytes cross IPC). Only a bare file name of that folder.
+#[tauri::command]
+fn audit_image_path(name: String) -> Result<String, String> {
+    if name.is_empty() || name.contains(['/', '\\']) || name.contains("..") {
+        return Err("not a picture of the audit log".to_string());
+    }
+    let path = audit_images()?.join(&name);
+    if !path.is_file() {
+        return Err("not a picture of the audit log".to_string());
+    }
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// A saved picture as a data URL. Only a bare file name of that folder is read.
@@ -2324,6 +2348,7 @@ pub fn run() {
             audit_clear,
             audit_image_save,
             audit_image_read,
+            audit_image_path,
             folder_list,
             reveal_path,
             path_links::path_resolve,
@@ -2372,6 +2397,7 @@ pub fn run() {
             awake::keep_awake_set,
             agent_runs::custom_send,
             agent_runs::agent_stop,
+            agent_runs::agent_stop_all,
             agent_runs::agent_inject,
             delegate::delegate_reply,
             delegate::delegate_ready,
@@ -2415,6 +2441,8 @@ pub fn run() {
             browser::browser_close,
             browser::browser_capture,
             browser::browser_element_capture,
+        browser::browser_capture_file,
+        browser::browser_element_capture_file,
             browser::browser_press,
             browser::open_external,
             browser::browser_favicon,

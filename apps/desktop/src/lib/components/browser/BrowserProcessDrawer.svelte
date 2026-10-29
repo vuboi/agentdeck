@@ -69,7 +69,7 @@
   <span class="flex w-full min-w-0 items-center gap-2 text-base font-semibold">
     <ZIcon zType={'lucideServer' as ZIconName} class="size-4 shrink-0 text-primary" />
     <span class="truncate">Running in the background</span>
-    <span class="rounded-full bg-muted px-1.5 text-[11px] font-normal text-muted-foreground tabular-nums">{rowCount}</span>
+    <span class="rounded-full bg-muted px-1.5 text-[0.6875rem] font-normal text-muted-foreground tabular-nums">{rowCount}</span>
     <span class="flex-1"></span>
     <button type="button" class="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md border border-border bg-muted/60 outline-none hover:bg-accent" aria-label="Close" onclick={() => (open = false)}><ZIcon zType={'lucideX' as ZIconName} class="size-4" /></button>
   </span>
@@ -77,7 +77,7 @@
 
 {#snippet processFooter()}
   {#if rowCount > 1}
-    <button type="button" class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-destructive/10 px-2 py-2 text-xs text-destructive outline-none hover:bg-destructive/20" onclick={() => { stopAll(); open = false; }}>
+    <button type="button" class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-destructive/10 px-2 py-2 text-sm text-destructive outline-none hover:bg-destructive/20" onclick={() => { stopAll(); open = false; }}>
       <svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="currentColor" /></svg> Stop all
     </button>
   {/if}
@@ -86,19 +86,19 @@
 <ZDrawer bind:open zPlacement="right" zWidth="380px" zFloating zClosable={false} header={processHeader} footer={processFooter} zScrollMode="inner" zBodyClass="p-0">
 <div class="flex min-h-0 flex-1 flex-col gap-2 p-2">
     {#if rowCount === 0}
-      <div class="flex min-h-38 flex-1 flex-col items-center justify-center gap-2 self-stretch text-xs text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="24" /> Nothing is running in the background</div>
+      <div class="flex min-h-38 flex-1 flex-col items-center justify-center gap-2 self-stretch text-sm text-muted-foreground"><ZIcon zType={'lucideServerOff' as ZIconName} zSize="24" /> Nothing is running in the background</div>
     {/if}
     {#each terminalRuns.list as run (run.id)}
       <div class="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
-        <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left text-xs outline-none" onclick={() => { if (run.url) openInPreview(run.url, 'auto'); else showTerminalTab(run.id); open = false; }}>
+        <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left text-sm outline-none" onclick={() => { if (run.url) openInPreview(run.url, 'auto'); else showTerminalTab(run.id); open = false; }}>
           <ZIcon zType={(run.url ? 'lucideExternalLink' : 'lucideSquareTerminal') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground" />
           <span class="flex min-w-0 flex-1 flex-col leading-tight">
-            <span class="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span class="flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
               <span class="truncate" title={run.cwd}>{run.cwd ? projectNameOf(run.cwd) : terminalName(run.id)}</span>
               <span class="shrink-0 rounded bg-muted px-1 text-[10px] leading-4">Terminal</span>
             </span>
             <span class="mt-0.5 truncate" title={run.command}>{run.command.length > 34 ? `${run.command.slice(0, 34)}…` : run.command}{portOf(run) ? ` · :${portOf(run)}` : ''}</span>
-            <span class="mt-1 truncate text-[11px] {terminalState(run).tone}">{terminalState(run).label}</span>
+            <span class="mt-1 truncate text-[0.6875rem] {terminalState(run).tone}">{terminalState(run).label}</span>
           </span>
           <span class="shrink-0 whitespace-nowrap text-muted-foreground tabular-nums">{runningFor(terminalAge(run))}</span>
         </button>
@@ -114,12 +114,12 @@
     {#each servers.list as item, index (`${item.key}:${item.pid}`)}
       <!-- One line each, cut short when long; a line between rows. -->
       <div class="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border bg-card/40 px-3 py-2.5 transition-colors hover:border-primary/40">
-        <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left text-xs outline-none" onclick={() => { if (item.url && item.running) { openInPreview(item.url, 'auto'); open = false; } else toast.info(serverState(item).hint); }}>
+        <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left text-sm outline-none" onclick={() => { if (item.url && item.running) { openInPreview(item.url, 'auto'); open = false; } else toast.info(serverState(item).hint); }}>
           <ZIcon zType={(item.running ? (item.url ? 'lucideExternalLink' : 'lucideLoaderCircle') : 'lucideCircleOff') as ZIconName} zSize="15" class="shrink-0 text-muted-foreground {item.running && !item.url ? 'animate-spin' : ''}" />
           <span class="flex min-w-0 flex-1 flex-col leading-tight">
-            <span class="truncate text-[11px] text-muted-foreground" title={item.cwd}>{projectNameOf(item.cwd)}</span>
+            <span class="truncate text-[0.6875rem] text-muted-foreground" title={item.cwd}>{projectNameOf(item.cwd)}</span>
             <span class="mt-0.5 truncate">{processName(item)}</span>
-            <span class="mt-1 truncate text-[11px] {serverState(item).tone}">{serverState(item).label}</span>
+            <span class="mt-1 truncate text-[0.6875rem] {serverState(item).tone}">{serverState(item).label}</span>
           </span>
           <span class="shrink-0 whitespace-nowrap text-muted-foreground tabular-nums">{runningFor(ageOf(item))}</span>
         </button>

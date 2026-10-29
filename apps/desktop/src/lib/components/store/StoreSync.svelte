@@ -47,12 +47,12 @@
   }
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col text-xs">
+<div class="flex min-h-0 flex-1 flex-col text-sm">
   <StoreHeader>
     <div class="w-40 min-w-0 max-w-48 shrink">
-      <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zOptions={[{ label: 'Global · all projects', value: '' }, { label: 'All projects', value: '::all' }, ...projects.map((path) => ({ label: workspace.projects.find((p) => p.path === path)?.name ?? path, value: path }))]} value={target ?? '::all'} onValueChange={(value) => (target = value === '::all' ? null : String(value ?? ''))} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
+      <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-sm" zOptions={[{ label: 'Global · all projects', value: '' }, { label: 'All projects', value: '::all' }, ...projects.map((path) => ({ label: workspace.projects.find((p) => p.path === path)?.name ?? path, value: path }))]} value={target ?? '::all'} onValueChange={(value) => (target = value === '::all' ? null : String(value ?? ''))} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
     </div>
-    <ZButton zSize="sm" zType="outline" class="h-8 shrink-0 px-2 text-xs" zLoading={runningAll} zDisabled={runningAll || (target === null && projects.length === 0)} onclick={() => void sync()}><ZIcon zType="lucideRefreshCw" class="size-3.5 shrink-0" />Sync all skills & MCP</ZButton>
+    <ZButton zSize="sm" zType="outline" class="h-8 shrink-0 px-2 text-sm" zLoading={runningAll} zDisabled={runningAll || (target === null && projects.length === 0)} onclick={() => void sync()}><ZIcon zType="lucideRefreshCw" class="size-3.5 shrink-0" />Sync all skills & MCP</ZButton>
   </StoreHeader>
   <div class="flex min-h-0 flex-1 flex-col overflow-y-auto {GUTTER}">
   <div class="flex shrink-0 flex-col gap-3 p-3">
@@ -64,7 +64,7 @@
   {#each names as name (name)}
     <li class="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card p-2.5 {ROW.plugin}">
       <span class="min-w-0 flex-1 truncate font-medium text-foreground" title={name}>{name}</span>
-      <ZButton zSize="sm" zType="outline" class="h-8 shrink-0 px-2 text-xs" zLoading={running.includes(name)} zDisabled={runningAll || running.includes(name)} onclick={() => void sync(name)}><ZIcon zType="lucideRefreshCw" class="size-3.5 shrink-0" />Sync / update</ZButton>
+      <ZButton zSize="sm" zType="outline" class="h-8 shrink-0 px-2 text-sm" zLoading={running.includes(name)} zDisabled={runningAll || running.includes(name)} onclick={() => void sync(name)}><ZIcon zType="lucideRefreshCw" class="size-3.5 shrink-0" />Sync / update</ZButton>
     </li>
   {/each}
   </ul>
@@ -74,9 +74,9 @@
       <div class="flex min-h-9 items-center gap-2 border-b border-border px-2.5 py-1.5">
         <span class="shrink-0 font-medium">Sync log</span>
         <span class="min-w-0 flex-1 truncate text-muted-foreground" title={runLabel}>{runLabel}</span>
-        <span class="shrink-0 text-[11px] {results.some((result) => !result.ok) ? 'text-destructive' : 'text-muted-foreground'}">{busy ? 'Syncing…' : results.some((result) => !result.ok) ? 'Completed with errors' : 'Completed'}</span>
+        <span class="shrink-0 text-[0.6875rem] {results.some((result) => !result.ok) ? 'text-destructive' : 'text-muted-foreground'}">{busy ? 'Syncing…' : results.some((result) => !result.ok) ? 'Completed with errors' : 'Completed'}</span>
       </div>
-      <div class="max-h-64 overflow-y-auto p-2.5 font-mono text-[11px] leading-relaxed [overflow-wrap:anywhere]" role="log" aria-live="polite" aria-busy={busy} aria-label="Sync output">
+      <div class="max-h-64 overflow-y-auto p-2.5 font-mono text-[0.6875rem] leading-relaxed [overflow-wrap:anywhere]" role="log" aria-live="polite" aria-busy={busy} aria-label="Sync output">
         {#if busy && results.length === 0}<p class="m-0 text-muted-foreground">Syncing {runLabel}…</p>{/if}
         {#each results as result}
           <p class="m-0 whitespace-pre-wrap {result.ok ? 'text-muted-foreground' : 'text-destructive'}">[{result.ok ? 'OK' : 'ERROR'}] {result.item} · {result.target}: {result.message}</p>

@@ -989,33 +989,22 @@ pub async fn browser_capture(
     scale: Option<f64>,
     full_page: Option<bool>,
 ) -> Result<String, String> {
-    let view = webview(&app, &tab)?;
-    if full_page.unwrap_or(false) {
-        let bytes = crate::cdp::screenshot_full_page(&view).await?;
-        use base64::Engine;
-        return Ok(format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        ));
-    }
-    if scale.unwrap_or(1.0) > 1.0 {
-        let bytes = crate::cdp::screenshot_scaled(&view, scale.unwrap_or(1.0)).await?;
-        use base64::Engine;
-        return Ok(format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        ));
-    }
-    let (sender, receiver) = tokio::sync::oneshot::channel::<Result<Vec<u8>, String>>();
-    capture(&view, sender)?;
-    let bytes = receiver
-        .await
-        .map_err(|_| "the capture was dropped".to_string())??;
+    let bytes = capture_png(&app, &tab, scale, full_page.unwrap_or(false)).await?;
     use base64::Engine;
-    Ok(format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes)
-    ))
+    Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+/// The same picture as `browser_capture`, saved straight to a WebP file (see picture_store.rs): only its path goes back,
+/// so no base64 crosses to the page. Returns the path under `~/.agentdeck/attachments`.
+#[tauri::command]
+pub async fn browser_capture_file(
+    app: AppHandle,
+    tab: String,
+    scale: Option<f64>,
+    full_page: Option<bool>,
+) -> Result<String, String> {
+    let bytes = capture_png(&app, &tab, scale, full_page.unwrap_or(false)).await?;
+    crate::save_attachment_bytes("image/png", bytes).await
 }
 
 /// A picture of one element of a tab, cut from the page at its box (CSS pixels), as a PNG data URL. Only the
@@ -1030,12 +1019,43 @@ pub async fn browser_element_capture(
     h: f64,
 ) -> Result<String, String> {
     use base64::Engine;
-    let view = webview(&app, &tab)?;
-    let bytes = crate::cdp::screenshot_clip(&view, x, y, w.max(1.0), h.max(1.0)).await?;
-    Ok(format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes)
-    ))
+    let bytes = element_png(&app, &tab, x, y, w, h).await?;
+    Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+/// `browser_element_capture`, saved to a WebP file: returns its path.
+#[tauri::command]
+pub async fn browser_element_capture_file(
+    app: AppHandle,
+    tab: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<String, String> {
+    let bytes = element_png(&app, &tab, x, y, w, h).await?;
+    crate::save_attachment_bytes("image/png", bytes).await
+}
+
+/// The PNG bytes of a tab: the whole page (`full_page`), a scaled capture (`scale` above 1), or the visible page.
+async fn capture_png(app: &AppHandle, tab: &str, scale: Option<f64>, full_page: bool) -> Result<Vec<u8>, String> {
+    let view = webview(app, tab)?;
+    if full_page {
+        return crate::cdp::screenshot_full_page(&view).await;
+    }
+    if scale.unwrap_or(1.0) > 1.0 {
+        return crate::cdp::screenshot_scaled(&view, scale.unwrap_or(1.0)).await;
+    }
+    let (sender, receiver) = tokio::sync::oneshot::channel::<Result<Vec<u8>, String>>();
+    capture(&view, sender)?;
+    receiver
+        .await
+        .map_err(|_| "the capture was dropped".to_string())?
+}
+
+async fn element_png(app: &AppHandle, tab: &str, x: f64, y: f64, w: f64, h: f64) -> Result<Vec<u8>, String> {
+    let view = webview(app, tab)?;
+    crate::cdp::screenshot_clip(&view, x, y, w.max(1.0), h.max(1.0)).await
 }
 
 #[cfg(windows)]

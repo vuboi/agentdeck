@@ -16,6 +16,11 @@ const SHELLS = new Set(['bash', 'sh', 'shell', 'zsh', 'powershell', 'pwsh', 'ps1
 const COPY_ICON =
   svg('ic-copy', '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>') +
   svg('ic-check', '<path d="M20 6 9 17l-5-5"/>');
+const KIND_ICON = {
+  code: svg('ic-kind', '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>'),
+  table: svg('ic-kind', '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>'),
+};
+const PREVIEW_ICON = svg('ic-preview', '<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/>');
 
 // Settings > Replies. A change drops the cached HTML, which was made under the old setting.
 let linkPaths = true;
@@ -84,7 +89,7 @@ marked.use({
       const language = (lang ?? '').trim().split(/\s+/)[0];
       return (
         `<div class="md-code" data-lang="${escapeHtml(language)}">` +
-        `<div class="md-code-head"><span>${escapeHtml(language || 'text')}</span><span class="md-code-actions">` +
+        `<div class="md-code-head"><span class="md-code-kind" title="${escapeHtml(language || 'text')}" aria-label="${escapeHtml(language || 'text')}">${KIND_ICON.code}</span><span class="md-code-actions">` +
         (SHELLS.has(language.toLowerCase()) ? `<button type="button" data-run title="Run in terminal" aria-label="Run in terminal">${RUN_ICON}</button>` : '') +
         `<button type="button" data-copy title="Copy" aria-label="Copy code">${COPY_ICON}</button></span></div>` +
         `<pre><code>${escapeHtml(text)}</code></pre>` +
@@ -121,7 +126,7 @@ export function renderMarkdown(source: string, keep = true): string {
   // Tables sit in a rounded, scrollable card like the code blocks.
   // Each table has a head bar with a copy button (as a code block has), which copies it as tab-separated rows.
   const framed = html
-    .replaceAll('<table>', `<div class="md-table"><div class="md-code-head"><span>table</span><span class="md-code-actions"><button type="button" data-copy-table title="Copy table" aria-label="Copy table">${COPY_ICON}</button></span></div><table>`)
+    .replaceAll('<table>', `<div class="md-table"><div class="md-code-head"><span class="md-code-kind" title="Table" aria-label="Table">${KIND_ICON.table}</span><span class="md-code-actions"><button type="button" data-preview-table title="Preview table" aria-label="Preview table">${PREVIEW_ICON}</button><button type="button" data-copy-table title="Copy table" aria-label="Copy table">${COPY_ICON}</button></span></div><table>`)
     .replaceAll('</table>', '</table></div>')
     // A cell's content in a box of its own: a table cell ignores `max-width`, a box does not, so no column takes the
     // whole width and squeezes the others (see .md-cell).

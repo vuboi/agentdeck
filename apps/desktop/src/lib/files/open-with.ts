@@ -57,18 +57,18 @@ export function openWithItem(
             label: 'Open with',
             icon: 'lucideExternalLink',
             iconSize: '12',
-            class: 'text-xs! py-1',
+            class: 'text-sm! py-1',
             submenu: [
                 ...options.map((option) => ({
                     label: option.label,
                     icon: 'lucideAppWindow',
                     iconSrc: option.icon ?? undefined,
-                    class: 'text-xs! py-1',
+                    class: 'text-sm! py-1',
                     onClick: () => void openWithApp(path, option.id),
                 } as ZDropdownMenuItem & { iconSrc?: string })),
                 {
                     label: 'Choose another app…',
-                    class: 'text-xs! py-1',
+                    class: 'text-sm! py-1',
                     divide: options.length > 0 ? 'before' : undefined,
                     onClick: () => void chooseApp(path),
                 },

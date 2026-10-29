@@ -7,7 +7,7 @@
 import { getPref, setPref } from './prefs';
 import { connectors } from '../../agents/connectors.svelte';
 
-export const automation = $state({ compress: false, orchestrate: true });
+export const automation = $state({ compress: true, orchestrate: true });
 
 const KEY = 'chat.automation';
 let hydrated = false;

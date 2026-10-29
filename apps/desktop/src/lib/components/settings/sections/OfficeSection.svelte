@@ -39,24 +39,24 @@
                 <div class="flex items-start gap-3">
                   <div class="min-w-0 flex-1">
                     <h3 class="text-sm font-semibold">OfficeCLI</h3>
-                    <p class="mt-1 text-xs text-muted-foreground">Lets agents create, read and edit Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files, with no Office installed. Downloaded once from its GitHub release, then given to Claude, Codex, Antigravity and Copilot as an MCP server and a skill.</p>
+                    <p class="mt-1 text-[0.75rem] text-muted-foreground">Lets agents create, read and edit Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files, with no Office installed. Downloaded once from its GitHub release, then given to Claude, Codex, Antigravity and Copilot as an MCP server and a skill.</p>
                   </div>
-                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 shrink-0 gap-1.5 px-3 text-xs" disabled={officeBusy || !office?.supported || !inTauri()} onclick={() => void installOffice()}>
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 shrink-0 gap-1.5 px-3 text-sm" disabled={officeBusy || !office?.supported || !inTauri()} onclick={() => void installOffice()}>
                     <ZIcon zType={icon(officeBusy ? 'lucideLoaderCircle' : office?.installed ? 'lucideRefreshCw' : 'lucideDownload')} class="size-3.5 {officeBusy ? 'animate-spin' : ''}" />
                     {officeBusy ? 'Installing…' : office?.installed ? 'Update' : 'Install'}
                   </ZButton>
                 </div>
-                <p class="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                <p class="mt-3 flex flex-wrap items-center gap-1.5 text-[0.75rem] text-muted-foreground">
                   {#if !inTauri()}Needs the desktop app.
                   {:else if office === null}Checking…
                   {:else if !office.supported}No OfficeCLI release for this system.
                   {:else if office.installed}
-                    <span class="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-px text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                    <span class="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-px text-[0.6875rem] font-medium text-emerald-600 dark:text-emerald-400">
                       <ZIcon zType={icon('lucideCheck')} class="size-3" /> Installed
                     </span>
-                    {#if office.version}<span class="rounded bg-muted px-1.5 py-px font-mono text-[11px] text-foreground/80">{office.version}</span>{/if}
-                  {:else}<span class="rounded bg-muted px-1.5 py-px text-[11px] font-medium">Not installed</span>{/if}
+                    {#if office.version}<span class="rounded bg-muted px-1.5 py-px font-mono text-[0.6875rem] text-foreground/80">{office.version}</span>{/if}
+                  {:else}<span class="rounded bg-muted px-1.5 py-px text-[0.6875rem] font-medium">Not installed</span>{/if}
                 </p>
-                {#if officeNote}<p class="mt-2 text-xs text-muted-foreground">{officeNote}</p>{/if}
+                {#if officeNote}<p class="mt-2 text-[0.75rem] text-muted-foreground">{officeNote}</p>{/if}
               </section>
             </div>

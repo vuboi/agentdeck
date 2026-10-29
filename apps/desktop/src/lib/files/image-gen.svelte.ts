@@ -2,7 +2,8 @@
 // right panel is folded, and the run must go on (and be there again when the panel returns). A run is also an entry
 // of the Tasks panel while it works, and of the Audit log once it ends.
 
-import { generateImages, listImageHistory, readImageDataUrl, stopImageGeneration, suggestImagePrompts, type GeneratedImage, type ImageHistoryRun, type ImageModelChoice, type ImageSettings, type SuggestedKeyword } from '../chat/agent';
+import { pictureSrc } from '../chat/agent';
+import { generateImages, listImageHistory, stopImageGeneration, suggestImagePrompts, type GeneratedImage, type ImageHistoryRun, type ImageModelChoice, type ImageSettings, type SuggestedKeyword } from '../chat/agent';
 import { trackImageRun } from '../chat/runs/activity.svelte';
 import { inTauri } from '../app/platform/history';
 import { toast } from '../app/platform/toast';
@@ -57,7 +58,7 @@ export async function withPreviews(images: GeneratedImage[]): Promise<Preview[]>
   const loaded = await Promise.all(
     images.map(async (image) => {
       try {
-        return { ...image, src: await readImageDataUrl(image.path) };
+        return { ...image, src: pictureSrc({ path: image.path }) };
       } catch {
         return null;
       }

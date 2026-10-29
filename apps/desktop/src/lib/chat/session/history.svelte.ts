@@ -2,7 +2,7 @@ import { messages as mockMessages, type Message, type Block } from '../mock';
 import { loadHistory, inTauri, type HistorySession, listHistory, type HistoryMessage, clock, toBlocks, loadHistoryPage, renameHistory, deleteHistory } from '../../app/platform/history';
 import { restoreCommandImages, stripCommandImageData, deleteCommandImages } from '../content/command-images';
 import { samePath } from '../../files/paths';
-import { getPref, setPref } from '../../app/platform/prefs';
+import { getPref, setPref, setPrefs } from '../../app/platform/prefs';
 import { splitAttachments, attachmentBlocks } from '../content/attachments';
 import { isHandbackPrompt, stripLead } from '../runs/handback';
 import { joinContinuations } from '../runs/continuations';
@@ -40,7 +40,8 @@ export async function conversationForExport(sessionId: string): Promise<{ title:
 export const history = $state({ imported: false, loading: inTauri() });
 
 // Older indexes treated every cwd as a project; never paint those classifications during startup.
-const CACHE_KEY = 'agentdeck.history.index.v2';
+/** The chat history index, kept in IndexedDB (prefs.ts `index.` collection). */
+const HISTORY_INDEX = 'index.history';
 
 /** Last folder of a path, for either separator: `C:\work\demo` and `/home/me/demo` both give `demo`. */
 export const folderName = (cwd: string) =>
@@ -59,9 +60,7 @@ export async function importHistory({ refresh = false } = {}) {
   // Show the last known index at once, then refresh it: indexing every file takes a moment.
   if (!refresh)
     try {
-      const cached = JSON.parse(
-        localStorage.getItem(CACHE_KEY) ?? '[]',
-      ) as HistorySession[];
+      const cached = (await getPref<HistorySession[]>(HISTORY_INDEX)) ?? [];
       if (cached.length > 0) {
         // A stale cache must not replace the restored active id with its first row. That used to make the
         // subsequent full import preserve the wrong session even when it found the session the user had open.
@@ -97,9 +96,10 @@ export async function importHistory({ refresh = false } = {}) {
       window.requestIdleCallback(warm, { timeout: 3000 });
     else setTimeout(warm, 800);
     try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify(found));
+      // The index lives in IndexedDB (no size limit like localStorage): the next start shows it at once.
+      void setPref(HISTORY_INDEX, JSON.parse(JSON.stringify(found)));
     } catch {
-      // Quota or private mode: the cache is only an optimisation.
+      // Only an optimisation.
     }
   } catch (error) {
     chat.error = String(error);
@@ -491,15 +491,17 @@ function remember(session: SessionItem, messages: Message[], start: number) {
   const persist = () =>
     void getPref<string[]>('transcripts.keys').then((keys = []) => {
       const next = [session.id, ...keys.filter((key) => key !== session.id)];
-      for (const old of next.slice(MAX_SAVED))
-        setPref(`transcript.${old}`, null);
-      setPref('transcripts.keys', next.slice(0, MAX_SAVED));
       const tail = {
         stamp: '',
         messages: stripCommandImageData(messages.slice(-SAVED_TAIL)),
         start: start + Math.max(0, messages.length - SAVED_TAIL),
       };
-      setPref(`transcript.${session.id}`, JSON.parse(JSON.stringify(tail)));
+      // The key list, the new tail and the removal of the chats that fell out go in one batch (one transaction).
+      setPrefs([
+        ...next.slice(MAX_SAVED).map((old): [string, null] => [`transcript.${old}`, null]),
+        ['transcripts.keys', next.slice(0, MAX_SAVED)],
+        [`transcript.${session.id}`, tail],
+      ]);
     });
   if (typeof requestIdleCallback === 'function')
     requestIdleCallback(persist, { timeout: 3000 });
@@ -599,12 +601,10 @@ export async function openTranscript(session: SessionItem | undefined) {
 }
 
 /** The cached index mirrors the files on disk, so a rename or delete has to reach it too. */
-function patchCache(change: (list: HistorySession[]) => HistorySession[]) {
+async function patchCache(change: (list: HistorySession[]) => HistorySession[]) {
   try {
-    const list = JSON.parse(
-      localStorage.getItem(CACHE_KEY) ?? '[]',
-    ) as HistorySession[];
-    localStorage.setItem(CACHE_KEY, JSON.stringify(change(list)));
+    const list = (await getPref<HistorySession[]>(HISTORY_INDEX)) ?? [];
+    void setPref(HISTORY_INDEX, change(list));
   } catch {
     // Only an optimisation.
   }

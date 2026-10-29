@@ -46,8 +46,8 @@
     <!-- The tool lives in the modal right now; docking brings it back here. -->
     <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
       <ZIcon zType="lucideAppWindow" class="size-8 opacity-60" />
-      <p class="m-0 text-xs">{current.label} is open in a window or docked elsewhere.</p>
-      <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 text-xs" onclick={() => dockTool(layout.activeTool)}>
+      <p class="m-0 text-sm">{current.label} is open in a window or docked elsewhere.</p>
+      <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 text-sm" onclick={() => dockTool(layout.activeTool)}>
         <ZIcon zType="lucideMinimize2" class="size-3.5" />
         Dock back
       </ZButton>

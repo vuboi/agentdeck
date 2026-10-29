@@ -4,7 +4,8 @@
   import { closeOnScroll } from '../../app/ui/close-on-scroll';
   import { customProviderName } from '../../agents/models.svelte';
   import { tick, untrack } from 'svelte';
-  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZPopover, ZTree, zModalService } from '@shival99/z-ui-svelte';
+  import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZPopover, zModalService } from '@shival99/z-ui-svelte';
+  import Tree from '../ui/Tree.svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import Logo from '../ui/Logo.svelte';
   import { toast } from '../../app/platform/toast';
@@ -152,8 +153,11 @@
   }
   const pending = $derived(pendingProject());
   let selected = $state<string[]>([]);
+  // The highlight of the open chat. ZTree moves `selected` to the row clicked first; a folder click puts this back.
+  let highlight: string[] = [];
   $effect(() => {
-    selected = selection();
+    highlight = selection();
+    selected = highlight;
   });
 
   function onSelect(node: ZTreeNode<TreeData>) {
@@ -165,7 +169,7 @@
     }
     else if (node.data?.kind === 'section' && node.data.count) toggleSection(sectionKey(node.id));
     else if (node.data?.kind === 'more' && node.data.group) toggleMore(node.data.group, node.data.done);
-    if (node.data?.kind !== 'session') selected = selection();
+    if (node.data?.kind !== 'session') selected = highlight;
   }
 
   // ---------- add a project: pick a folder, trust it, then a new session opens in it ----------
@@ -207,15 +211,6 @@
   // (Keys keep their focus: only a real mouse click, which has a detail, lets go.)
   function blurAfterClick(event: MouseEvent) {
     if (event.detail === 0) return;
-    requestAnimationFrame(() => {
-      const active = document.activeElement;
-      if (active instanceof HTMLElement && active.getAttribute('role') === 'treeitem') active.blur();
-    });
-  }
-  function toggleNode(id: string) {
-    const next = sidebarTree.expanded.includes(id) ? sidebarTree.expanded.filter((item) => item !== id) : [...sidebarTree.expanded, id];
-    sidebarTree.expanded = next;
-    // A click leaves the row focused, and a focused row keeps its hover buttons on after the mouse has gone.
     requestAnimationFrame(() => {
       const active = document.activeElement;
       if (active instanceof HTMLElement && active.getAttribute('role') === 'treeitem') active.blur();
@@ -314,7 +309,7 @@
     });
   }
 
-  const ITEM = 'text-xs! py-1';
+  const ITEM = 'text-sm! py-1';
   const projectItems = $derived<ZDropdownMenuItem[]>([
     { label: 'New session', icon: 'lucidePlus', iconSize: '12', class: ITEM, onClick: () => menu && addSession(menu.id) },
     {
@@ -355,20 +350,20 @@
       icon: (menu && isPinnedSession(menu.id) ? 'lucidePinOff' : 'lucidePin') as ZIconName,
       iconSize: '12',
       shortcut: 'P',
-      class: 'text-xs! py-1 [&_svg:first-child]:rotate-45',
+      class: 'text-sm! py-1 [&_svg:first-child]:rotate-45',
       onClick: () => menu && togglePinSession(menu.id),
     },
-    { label: 'Rename', icon: 'lucideSquarePen' as ZIconName, iconSize: '12', shortcut: 'R', class: 'text-xs! py-1', onClick: () => askRename() },
-    { label: 'Fork', icon: 'lucideGitFork', iconSize: '12', shortcut: 'F', class: 'text-xs! py-1', onClick: () => menu && fork(menu.id) },
+    { label: 'Rename', icon: 'lucideSquarePen' as ZIconName, iconSize: '12', shortcut: 'R', class: 'text-sm! py-1', onClick: () => askRename() },
+    { label: 'Fork', icon: 'lucideGitFork', iconSize: '12', shortcut: 'F', class: 'text-sm! py-1', onClick: () => menu && fork(menu.id) },
     {
       label: 'Notify when done',
       icon: 'lucideBell' as ZIconName,
       iconSize: '12',
       checked: Boolean(menu && notifiesWhenDone(menu.id)),
-      class: 'text-xs! py-1',
+      class: 'text-sm! py-1',
       onClick: () => menu && toggleNotifyDone(menu.id),
     },
-    { label: 'Delete', icon: 'lucideTrash2', iconSize: '12', shortcut: 'D', divide: 'before', class: 'text-xs! py-1 text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive! [&_.ml-auto]:text-destructive!', onClick: () => askDelete() },
+    { label: 'Delete', icon: 'lucideTrash2', iconSize: '12', shortcut: 'D', divide: 'before', class: 'text-sm! py-1 text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive! [&_.ml-auto]:text-destructive!', onClick: () => askDelete() },
   ]);
   // The view menu of the headings: like the list options of Claude's own sidebar.
   const viewItems = $derived<ZDropdownMenuItem[]>([
@@ -500,7 +495,7 @@
   let tipText = $state('');
   const clipTip = (content: string) => (node: HTMLElement) => {
     // The trigger is the whole row; the label only decides whether there is anything to show.
-    const row = node.closest<HTMLElement>('.z-tree-row');
+    const row = node.closest<HTMLElement>('.tree-row');
     if (!row) return;
     const show = () => {
       if (node.scrollWidth <= node.clientWidth) {
@@ -537,7 +532,7 @@
   const limitWarnings = $derived(warnings(ticker.min));
 </script>
 
-<ZPopover anchor={tipRow} bind:open={tipOpen} zTrigger="manual" zPosition="right" zOffset={6} zWidth={200}>
+<ZPopover anchor={tipRow} bind:open={tipOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={200}>
   {#snippet children()}
     <div class="max-w-[200px] px-2 py-1.5 text-xs leading-snug break-words whitespace-normal">{tipText}</div>
   {/snippet}
@@ -557,7 +552,7 @@
 {#snippet renameField(id: string)}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (keys handled on the field) -->
   <input
-    class="h-5 min-w-0 flex-1 bg-transparent p-0 text-xs text-foreground outline-none"
+    class="h-5 min-w-0 flex-1 bg-transparent p-0 [font:inherit] text-foreground outline-none"
     data-rename
     maxlength={TITLE_MAX}
     aria-label="Chat name"
@@ -604,7 +599,7 @@
   <!-- Header row shared with the other panes: same height, one continuous bottom line. -->
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 pl-3" {@attach windowDrag}>
     <Logo class="size-5" />
-    <span class="text-xs font-semibold">AgentDeck</span>
+    <span class="text-sm font-semibold">AgentDeck</span>
     <ZButton zWave={false} zType="ghost" zSize="sm" class="ml-auto size-8! shrink-0 p-0" aria-label="Hide sidebar (Ctrl+B)" title="Hide sidebar (Ctrl+B)" onclick={() => (layout.sidebarHidden ? (layout.sidebarDrawer = false) : layout.sidebarCollapsed && layout.sidebarDrawer ? pinSidebar() : setSidebarCollapsed(true))}>
       <ZIcon zType={'lucidePanelLeft' as ZIconName} class="size-3.5" />
     </ZButton>
@@ -613,7 +608,7 @@
   <div class="border-b border-border px-2 py-2">
     <div class="flex gap-1">
       <!-- Lit while the open chat is a new one nobody wrote in yet; the message box is focused, ready to type. -->
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-8 min-w-0 flex-1 justify-start gap-2 px-2 text-xs {pending ? 'bg-[color-mix(in_oklab,var(--color-primary)_16%,var(--color-background))]! text-foreground!' : ''}" onclick={() => openNewChatTab()}>
+      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-8 min-w-0 flex-1 justify-start gap-2 px-2 text-sm {pending ? 'bg-[color-mix(in_oklab,var(--color-primary)_16%,var(--color-background))]! text-foreground!' : ''}" onclick={() => openNewChatTab()}>
         <ZIcon zType="lucidePlus" class="size-3.5" />
         New session
       </ZButton>
@@ -631,19 +626,19 @@
   <div bind:clientHeight={treeHeight} bind:this={treeBox} class="relative min-h-0 flex-1" oncontextmenu={onTreeContextMenu}>
     {#if history.loading && workspace.sessions.length === 0}
       <!-- First load: centred in the list, where the chats will appear. -->
-      <div class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center text-xs text-muted-foreground" role="status">
+      <div class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground" role="status">
         <ZIcon zType={'lucideLoaderCircle' as ZIconName} class="size-5 animate-spin text-primary" />
         <span>Scanning AI agents on this machine…</span>
       </div>
     {/if}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="contents" onclick={blurAfterClick}>
-    <ZTree
+    <Tree
       {nodes}
-      zSize="sm"
-      zSelectable
-      zMaxHeight={treeHeight}
-      zLabel="Projects and sessions"
+      rowHeight={28}
+      class="text-sm"
+      maxHeight={treeHeight}
+      label="Projects and sessions"
       bind:expanded={sidebarTree.expanded}
       bind:selected
       {onSelect}
@@ -656,14 +651,13 @@
           data-session={data?.kind === 'session' ? data.session?.id : undefined}
           data-project={data?.kind === 'project' ? projectId(ctx.node.id) : undefined}
           data-pending={data?.kind === 'project' && pending === projectId(ctx.node.id) ? '' : undefined}
-          onclick={() => data?.kind === 'project' && toggleNode(ctx.node.id)}
           onpointerenter={() => data?.kind === 'session' && prefetchTranscript(data.session)}
         >
           {#if data?.kind === 'section'}
             {@const key = sectionKey(ctx.node.id)}
             <!-- A heading, not a folder: it starts where the arrows are; the chevron after it folds the whole group. -->
             <span
-              class="-ml-5 flex min-w-0 flex-1 items-center gap-1 text-[13px] font-medium text-muted-foreground group-hover/tree-row:text-foreground"
+              class="-ml-5 flex min-w-0 flex-1 items-center gap-1 text-[0.8125rem] font-medium text-muted-foreground group-hover/tree-row:text-foreground"
               data-section
               data-pending={key === 'computer' && pending === NO_PROJECT ? '' : undefined}
             >
@@ -702,7 +696,7 @@
             {#if ctx.level > 1}
               <span class="pointer-events-none absolute top-0 bottom-0 -left-[29px] w-px bg-[var(--z-tree-guide)]" aria-hidden="true"></span>
             {/if}
-            <span class="{ctx.level > 1 ? '' : '-ml-5'} flex min-w-0 flex-1 items-center gap-1.5 text-[11px] font-medium text-primary/75 group-hover/tree-row:text-primary">
+            <span class="{ctx.level > 1 ? '' : '-ml-5'} flex min-w-0 flex-1 items-center gap-1.5 text-[0.6875rem] font-medium text-primary/75 group-hover/tree-row:text-primary">
               <ZIcon zType={data.open ? 'lucideChevronDown' : 'lucideEllipsis'} class="size-3.5 shrink-0 {data.open ? 'rotate-180' : ''}" />
               <span class="truncate">{ctx.node.label}</span>
             </span>
@@ -756,7 +750,7 @@
           {/if}
         </span>
       {/snippet}
-    </ZTree>
+    </Tree>
     </div>
   </div>
 
@@ -765,8 +759,8 @@
     <div class="flex shrink-0" style:height="{layout.sizes.sidebarZone}px"><DockZone zone="sidebar" /></div>
   {/if}
 
-  <div class="flex h-11 shrink-0 items-center gap-2 border-t border-border px-3 text-xs">
-    {#if appInfo.version}<span class="truncate rounded-sm bg-primary/15 px-1.5 py-0.5 text-[11px] font-medium text-primary tabular-nums">Version {appInfo.version}</span>{/if}
+  <div class="flex h-11 shrink-0 items-center gap-2 border-t border-border px-3 text-sm">
+    {#if appInfo.version}<span class="truncate rounded-sm bg-primary/15 px-1.5 py-0.5 text-[0.6875rem] font-medium text-primary tabular-nums">Version {appInfo.version}</span>{/if}
     <ZButton zWave={false} zType="ghost" zSize="sm" class="relative ml-auto h-6 w-6" aria-label={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} title={updater.status === 'available' ? `Update to ${updater.version}` : 'Check for updates'} onclick={onUpdateClick}>
       <ZIcon zType={(turning ? 'lucideLoaderCircle' : 'lucideArrowDownToLine') as ZIconName} class="size-3.5 {turning ? 'animate-spin' : ''}" />
       {#if updater.status === 'available' || updater.status === 'downloading'}<span class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"></span>{/if}
@@ -788,7 +782,7 @@
 <SearchPalette bind:open={searchOpen} />
 
 <ZModal bind:open={updateUi.open} zTitle={updater.status === 'error' ? 'Update failed' : `AgentDeck ${updater.version} is available`} zWidth="620px" zBodyClass="min-h-0! p-0" zOkText={updater.status === 'downloading' ? 'Downloading…' : updater.status === 'error' ? 'Try again' : 'Download and restart'} zCancelText="Later" onOk={installUpdate}>
-  <div class="flex flex-col text-xs">
+  <div class="flex flex-col text-sm">
     {#if updater.status === 'error'}
       <p class="m-0 px-6 py-3 text-destructive">{updater.error}</p>
     {:else}
@@ -807,7 +801,7 @@
 </ZModal>
 
 <ZModal bind:open={trustOpen} zTitle="Trust this folder?" zWidth="460px" zBodyClass="min-h-0! py-3" zOkText="Trust folder" zCancelText="Cancel" onOk={trustAndAdd}>
-  <div class="flex flex-col gap-3 text-xs">
+  <div class="flex flex-col gap-3 text-sm">
     <div class="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
       <ZIcon zType="lucideFolder" class="size-3.5 shrink-0 text-muted-foreground" />
       <span class="min-w-0 truncate font-mono" title={trustPath}>{trustPath}</span>
@@ -822,7 +816,7 @@
 
 <style>
   /* The scrollbar has its own lane, so rows do not shift sideways when it appears or goes. */
-  aside :global(.z-tree) {
+  aside :global(.tree) {
     scrollbar-gutter: stable;
     padding-top: 4px;
     /* The empty lane is 10px on the right: a little on the left keeps the rows from looking pushed to one side. */
@@ -830,18 +824,18 @@
   }
   /* Where a new session will go: its project (or "This computer") keeps a tinted row until the first message. */
   /* Opaque (mixed with the sidebar), so the fading overlay of the row's buttons uses the very same colour. */
-  :global(.z-tree-row:has([data-pending])) {
+  :global(.tree-row:has([data-pending])) {
     --row-bg: color-mix(in oklab, var(--color-primary) 16%, var(--color-background));
   }
-  :global(.z-tree-row:has([data-pending]))::before {
+  :global(.tree-row:has([data-pending]))::before {
     background: var(--row-bg);
   }
   /* The row being renamed, or whose menu is open, stays lit while the mouse is elsewhere. */
-  :global(.z-tree-row:has([data-rename]))::before,
-  :global(.z-tree-row[data-menu-row])::before {
+  :global(.tree-row:has([data-rename]))::before,
+  :global(.tree-row[data-menu-row])::before {
     background: var(--color-muted);
   }
-  :global(.z-tree-row:has([data-pending])) {
+  :global(.tree-row:has([data-pending])) {
     color: var(--color-foreground);
   }
 </style>

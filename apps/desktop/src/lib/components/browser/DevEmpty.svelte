@@ -10,6 +10,6 @@
   <span class="grid size-11 place-items-center rounded-full {tone === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground'}">
     <ZIcon zType={icon as ZIconName} zSize="22" class="size-5.5" />
   </span>
-  <p class="m-0 text-xs font-medium {tone === 'error' ? 'text-destructive' : 'text-foreground'}">{title}</p>
-  {#if hint}<p class="m-0 max-w-64 text-[11px] text-muted-foreground">{hint}</p>{/if}
+  <p class="m-0 text-sm font-medium {tone === 'error' ? 'text-destructive' : 'text-foreground'}">{title}</p>
+  {#if hint}<p class="m-0 max-w-64 text-[0.6875rem] text-muted-foreground">{hint}</p>{/if}
 </div>

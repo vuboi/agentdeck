@@ -42,6 +42,7 @@
   import { highlightHtml } from '../../files/highlight';
   import { isLocalUrl, linkMenu, openExternal, openInPreview, terminalCommand } from '../../browser/browser.svelte';
   import { inTauri } from '../../app/platform/history';
+  import { openTablePreview } from '../../browser/preview.svelte';
   import { colourFinished, colourStarted, eagerColour, markdownBlocks, renderMarkdown } from '../../app/text/markdown';
   import { runInTerminal } from '../../terminal/terminal.svelte';
   import { theme } from '../../app/ui/theme.svelte';
@@ -518,6 +519,16 @@
       // Run in the folder of the chat's project, not wherever that shell happens to be (often the home folder).
       const folder = workspace.projects.find((project) => project.id === activeSession()?.projectId)?.path ?? '';
       if (command?.trim()) runInTerminal(terminalCommand(command, folder));
+      return;
+    }
+    const preview = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-preview-table]');
+    if (preview) {
+      // The table as Markdown, in the lightbox (wide, with its own scroll).
+      const lines = [...(preview.closest('.md-table')?.querySelectorAll('tr') ?? [])].map((row) =>
+        `| ${[...row.children].map((cell) => (cell.textContent ?? '').trim().replace(/\|/g, '\\|').replace(/\n/g, ' ')).join(' | ')} |`,
+      );
+      if (lines.length > 1) lines.splice(1, 0, `|${lines[0].split('|').slice(1, -1).map(() => ' --- ').join('|')}|`);
+      openTablePreview(lines.join('\n'));
       return;
     }
     const table = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-copy-table]');

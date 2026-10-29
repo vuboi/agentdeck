@@ -25,7 +25,7 @@
     line.startsWith('+') ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : line.startsWith('-') ? 'bg-red-500/10 text-red-600 dark:text-red-400' : line.startsWith('@@') ? 'text-sky-500' : '';
 </script>
 
-<div bind:this={scroller} class="overflow-auto bg-background/60 font-mono text-[11px] leading-[18px]" style:height="{height}px">
+<div bind:this={scroller} class="overflow-auto bg-background/60 font-mono text-[0.6875rem] leading-[18px]" style:height="{height}px">
   <div class="relative min-w-full" style:height="{$virtualizer.getTotalSize()}px">
     {#each $virtualizer.getVirtualItems() as item (item.key)}
       {@const line = lines[item.index] ?? ''}

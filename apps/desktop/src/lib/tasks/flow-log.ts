@@ -32,26 +32,9 @@ export function logFlow(chat: string, kind: string, detail?: string) {
   }
 }
 
-// Hang trace: the Settings → Debug switch. On, the page writes its own timings every few seconds and each step it
-// takes that is slow; off, it still writes a short heartbeat so a freeze is visible in the log either way.
-const HANG_KEY = 'agentdeck.debug.hangTrace';
-let hangTrace = (() => {
-  try {
-    return localStorage.getItem(HANG_KEY) === '1';
-  } catch {
-    return false;
-  }
-})();
-export const hangTraceOn = () => hangTrace;
-export function setHangTrace(on: boolean) {
-  hangTrace = on;
-  try {
-    localStorage.setItem(HANG_KEY, on ? '1' : '0');
-  } catch {
-    // Browser storage can be blocked: the switch then lasts until the app restarts.
-  }
-  logFlow('-', 'trace', on ? 'hang trace on' : 'hang trace off');
-}
+// Hang trace: always on. The page writes its own timings every few seconds and each step that is slow, so a freeze is
+// always visible in the log.
+export const hangTraceOn = () => true;
 
 // The page cannot write while its main thread is stuck, so the last step it started is kept here: a watchdog that runs
 // after the freeze names where it was. Set by the steps that do the heavy work.
@@ -92,9 +75,9 @@ if (typeof window !== 'undefined' && inTauri()) {
   };
   const beat = () => {
     vitals();
-    setTimeout(beat, hangTrace ? 5_000 : 20_000);
+    setTimeout(beat, 5_000);
   };
-  setTimeout(beat, hangTrace ? 5_000 : 20_000);
+  setTimeout(beat, 5_000);
   document.addEventListener('visibilitychange', () => logFlow('-', 'window', document.visibilityState));
   window.addEventListener('pagehide', () => logFlow('-', 'page unloading', stepNote()));
   logFlow('-', 'page started', navigator.userAgent.slice(0, 120));
@@ -111,4 +94,16 @@ export async function saveDebugBundle(): Promise<string | null> {
   const { invoke } = await import('@tauri-apps/api/core');
   const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
   return invoke<string | null>('debug_bundle_save', { name: `agentdeck-debug-${stamp}.log` });
+}
+
+/** The folder the debug log is written to automatically (logs/ in the app data folder). Answers '' outside Tauri. */
+export async function debugLogFolder(): Promise<string> {
+  if (!inTauri()) return '';
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const file = await invoke<string>('debug_log_path');
+    return file.replace(/[\\/]debug\.log$/, '');
+  } catch {
+    return '';
+  }
 }

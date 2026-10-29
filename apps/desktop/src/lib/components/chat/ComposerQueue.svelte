@@ -41,7 +41,7 @@
   >
     <!-- Outside the sortable list, so the status and clear action are not queue rows. -->
     <div
-      class="flex items-center justify-between border-b border-border px-4 py-1 text-[11px] text-muted-foreground"
+      class="flex items-center justify-between border-b border-border px-4 py-1 text-[0.6875rem] text-muted-foreground"
     >
       <span>{queuePaused[sessionId] === 'interrupted' ? 'Queue paused because you interrupted' : queuePaused[sessionId] ? 'Queue paused' : `${waiting.length} queued`}{waitingForUser ? ' · waiting for your answer' : ''}</span>
       <span class="flex items-center gap-1">
@@ -71,7 +71,7 @@
     >
       {#each waiting as item (item)}
         <div
-          class="flex items-center gap-2.5 border-t border-border bg-card px-4 py-1 text-xs first:border-t-0"
+          class="flex items-center gap-2.5 border-t border-border bg-card px-4 py-1 text-sm first:border-t-0"
           role="listitem"
         >
           <!-- The list icon turns into a drag handle while the pointer is on it. -->
@@ -100,7 +100,7 @@
           <span class="flex shrink-0 items-center gap-0.5">
             <button
               type="button"
-              class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
               onclick={() => steerQueued(sessionId, item)}
             >
               <ZIcon zType={'lucideArrowRight' as ZIconName} class="size-3" />

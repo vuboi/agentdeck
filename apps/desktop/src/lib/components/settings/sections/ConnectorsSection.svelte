@@ -172,9 +172,9 @@
 {/snippet}
 
             {#if connectors.errors.detect && connectors.detected}
-              <div class="mb-4 flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs" role="alert">
+              <div class="mb-4 flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm" role="alert">
                 <p class="min-w-0 flex-1 text-destructive">Could not check installed connectors: {connectors.errors.detect}</p>
-                <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2 text-xs" disabled={refreshingDetect} onclick={() => void refreshDetect()}>
+                <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2 text-sm" disabled={refreshingDetect} onclick={() => void refreshDetect()}>
                   Retry
                 </ZButton>
               </div>
@@ -182,8 +182,8 @@
             {#if !connectors.detected && connectors.errors.detect}
               <div class="rounded-xl border border-destructive/30 bg-destructive/5 p-5" role="alert">
                 <h3 class="text-sm font-semibold text-destructive">Connectors could not be loaded</h3>
-                <p class="mt-2 break-words text-xs text-muted-foreground">{connectors.errors.detect}</p>
-                <ZButton zWave={false} zSize="sm" class="mt-4 h-8 gap-1.5 px-3 text-xs" disabled={refreshingDetect} onclick={() => void refreshDetect()}>
+                <p class="mt-2 break-words text-[0.75rem] text-muted-foreground">{connectors.errors.detect}</p>
+                <ZButton zWave={false} zSize="sm" class="mt-4 h-8 gap-1.5 px-3 text-sm" disabled={refreshingDetect} onclick={() => void refreshDetect()}>
                   <ZIcon zType={icon(refreshingDetect ? 'lucideLoaderCircle' : 'lucideRefreshCw')} class="size-3.5 {refreshingDetect ? 'animate-spin' : ''}" />
                   {refreshingDetect ? 'Retrying…' : 'Try again'}
                 </ZButton>
@@ -241,36 +241,36 @@
                       <div class="flex flex-wrap items-center gap-2">
                         <h3 class="text-sm font-semibold">{card.label}</h3>
                         {#if !connectors.detected}
-                          <span class="text-xs text-muted-foreground">checking…</span>
+                          <span class="text-sm text-muted-foreground">checking…</span>
                         {:else if !path}
-                          <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">Not installed</span>
+                          <span class="rounded-full bg-muted px-2 py-0.5 text-[0.75rem] text-muted-foreground">Not installed</span>
                         {:else if info?.logged_in === true}
-                          <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400"><span class="size-1.5 rounded-full bg-emerald-500"></span>Signed in</span>
+                          <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[0.6875rem] text-emerald-600 dark:text-emerald-400"><span class="size-1.5 rounded-full bg-emerald-500"></span>Signed in</span>
                         {:else if info?.logged_in === false}
-                          <span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">Not signed in</span>
+                          <span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.6875rem] text-amber-600 dark:text-amber-400">Not signed in</span>
                         {:else}
-                          <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">Installed</span>
+                          <span class="rounded-full bg-muted px-2 py-0.5 text-[0.75rem] text-muted-foreground">Installed</span>
                         {/if}
-                        {#if version}<span class="text-[11px] text-muted-foreground tabular-nums">{version}</span>{/if}
+                        {#if version}<span class="text-[0.75rem] text-muted-foreground tabular-nums">{version}</span>{/if}
                       </div>
-                      <p class="mt-0.5 text-xs text-muted-foreground">
+                      <p class="mt-0.5 text-[0.75rem] text-muted-foreground">
                         {#if info?.email}Account: <span class="text-foreground">{info.email}</span>{#if info.plan}{" · " + info.plan}{/if}{#if info.detail}{" · " + info.detail}{/if}{:else}{card.note}{/if}
                       </p>
-                      {#if path}<p class="mt-0.5 truncate text-[11px] text-muted-foreground/70" title={path}>{path}</p>{/if}
+                      {#if path}<p class="mt-0.5 truncate text-[0.75rem] text-muted-foreground/70" title={path}>{path}</p>{/if}
                     </div>
                     <div class="flex shrink-0 items-center gap-1.5">
                       {#if connectors.detected && !path}
-                        <ZButton zWave={false} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={Boolean(working)} onclick={() => void install(card.id, card.label)}>
+                        <ZButton zWave={false} zSize="sm" class="h-8 gap-1.5 px-3 text-sm" disabled={Boolean(working)} onclick={() => void install(card.id, card.label)}>
                           <ZIcon zType={icon(working ? 'lucideLoaderCircle' : 'lucideDownload')} class="size-3.5 {working ? 'animate-spin' : ''}" /> Install
                         </ZButton>
                       {:else if path && (card.id !== 'agy' || info?.logged_in !== true || connectors.busy[`login:${card.id}`])}
                         {@const waiting = Boolean(connectors.busy[`login:${card.id}`])}
                         {#if waiting}
-                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs" onclick={() => void cancelLogin(card.id)}>
+                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-sm" onclick={() => void cancelLogin(card.id)}>
                             Cancel
                           </ZButton>
                         {/if}
-                        <ZButton zWave={false} zType={info?.logged_in || card.id === 'agy' ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-xs" disabled={waiting || Boolean(working)} onclick={() => void login(card.id, card.label)}>
+                        <ZButton zWave={false} zType={info?.logged_in || card.id === 'agy' ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-sm" disabled={waiting || Boolean(working)} onclick={() => void login(card.id, card.label)}>
                           <ZIcon zType={icon(waiting ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {waiting ? 'animate-spin' : ''}" />
                           {waiting ? 'Waiting for login…' : info?.logged_in ? 'Sign in again' : 'Sign in'}
                         </ZButton>
@@ -279,18 +279,18 @@
                   </div>
 
                   {#if working || log.length > 0 || connectors.errors[`install:${card.id}`] || connectors.errors[`login:${card.id}`] || connectors.errors[`add:${card.id}`]}
-                    <div class="mx-4 mb-4 rounded-lg bg-muted/60 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground" role="status">
-                      {#if working}<div class="mb-1 font-sans text-xs text-foreground">{working}…</div>{/if}
+                    <div class="mx-4 mb-4 rounded-lg bg-muted/60 p-3 font-mono text-[0.6875rem] leading-relaxed text-muted-foreground" role="status">
+                      {#if working}<div class="mb-1 font-sans text-sm text-foreground">{working}…</div>{/if}
                       <!-- A long line (an address with its query) wraps instead of widening the card. -->
                       {#each log as line, index (index)}<div class="break-all whitespace-pre-wrap">{line}</div>{/each}
                       {#each [`install:${card.id}`, `login:${card.id}`, `add:${card.id}`] as key (key)}
-                        {#if connectors.errors[key]}<div class="font-sans text-xs text-destructive" role="alert">{connectors.errors[key]}</div>{/if}
+                        {#if connectors.errors[key]}<div class="font-sans text-sm text-destructive" role="alert">{connectors.errors[key]}</div>{/if}
                       {/each}
                       {#if code && working}
-                        <button type="button" class="mt-1 mr-3 cursor-pointer font-sans text-xs text-primary underline underline-offset-2" onclick={() => void navigator.clipboard.writeText(code).then(() => toast.success('Code copied'))}>Copy the code {code}</button>
+                        <button type="button" class="mt-1 mr-3 cursor-pointer font-sans text-sm text-primary underline underline-offset-2" onclick={() => void navigator.clipboard.writeText(code).then(() => toast.success('Code copied'))}>Copy the code {code}</button>
                       {/if}
                       {#if link && working}
-                        <button type="button" class="mt-1 cursor-pointer font-sans text-xs text-primary underline underline-offset-2" onclick={() => void openExternal(link)}>Browser did not open? Open the sign-in page</button>
+                        <button type="button" class="mt-1 cursor-pointer font-sans text-sm text-primary underline underline-offset-2" onclick={() => void openExternal(link)}>Browser did not open? Open the sign-in page</button>
                       {/if}
                     </div>
                   {/if}
@@ -298,31 +298,31 @@
                   {#if card.id === 'agy'}
                     <div class="border-t border-border/70 px-4 py-3">
                       <div class="mb-2 flex items-center gap-2">
-                        <h4 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Antigravity accounts</h4>
+                        <h4 class="text-sm font-semibold tracking-wide text-muted-foreground uppercase">Antigravity accounts</h4>
                         <span class="ml-auto"></span>
                         {#if connectors.errors['login:agy'] && info?.logged_in && info.email}
-                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2.5 text-xs" disabled={Boolean(connectors.busy['save:agy'])} onclick={() => void retrySaveAgyAccount()}>
+                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2.5 text-sm" disabled={Boolean(connectors.busy['save:agy'])} onclick={() => void retrySaveAgyAccount()}>
                             {connectors.busy['save:agy'] ? 'Saving…' : 'Retry save'}
                           </ZButton>
                         {/if}
                         <!-- While a sign-in waits, its Cancel and "Waiting for login…" are the card's own (above), as for Claude and Codex: one set of buttons. -->
                         {#if info?.logged_in === true && !connectors.busy['login:agy']}
-                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={!path} title="Open Antigravity to add another Google account" onclick={() => void login('agy', card.label)}>
+                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-sm" disabled={!path} title="Open Antigravity to add another Google account" onclick={() => void login('agy', card.label)}>
                             <ZIcon zType={icon('lucideLogIn')} class="size-3.5" /> Add account
                           </ZButton>
                         {/if}
                       </div>
                       {#if !info?.logged_in || !info.email}
-                        <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">Sign in to Antigravity to save this account automatically.</p>
+                        <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-[0.75rem] text-muted-foreground">Sign in to Antigravity to save this account automatically.</p>
                       {:else if connectors.accounts.agy.length === 0}
-                        <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">The signed-in account is being saved to Windows Credential Manager…</p>
+                        <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-[0.75rem] text-muted-foreground">The signed-in account is being saved to Windows Credential Manager…</p>
                       {:else}
                         <ul class="mb-3 divide-y divide-border overflow-hidden rounded-lg border border-border">
                           {#each connectors.accounts.agy as account (account.id)}
                             <li class="flex min-h-12 min-w-0 items-center gap-2.5 px-3 py-2">
                               <span class="min-w-0 flex-1 truncate text-sm font-medium" title={account.email}>{account.email}</span>
                               {#if account.active}<span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">IN USE</span>{/if}
-                              {#if account.expired}<span class="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive" title={account.status ?? 'Sign in again required'}>Needs sign-in</span>{:else if account.status}<span class="max-w-36 truncate text-[11px] text-muted-foreground" title={account.status}>{account.status}</span>{/if}
+                              {#if account.expired}<span class="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive" title={account.status ?? 'Sign in again required'}>Needs sign-in</span>{:else if account.status}<span class="max-w-36 truncate text-[0.75rem] text-muted-foreground" title={account.status}>{account.status}</span>{/if}
                               {#if !account.active}
                                 {@const switching = Boolean(connectors.busy['switch:agy']?.endsWith(account.email))}
                                 <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Use {account.email}" title="Use this account" disabled={Boolean(connectors.busy['switch:agy'])} onclick={() => void switchAgyAccount(account)}>
@@ -334,18 +334,18 @@
                         </ul>
                       {/if}
                       {#if connectors.errors['accounts:agy'] || connectors.errors['switch:agy']}
-                        <div class="mb-3 flex items-center gap-2 text-xs text-destructive" role="alert">
+                        <div class="mb-3 flex items-center gap-2 text-sm text-destructive" role="alert">
                           <p class="min-w-0 flex-1">{connectors.errors['accounts:agy'] ?? connectors.errors['switch:agy'] ?? ''}</p>
                         </div>
                       {/if}
-                      <h4 class="mt-4 mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                      <h4 class="mt-4 mb-2 flex items-center gap-2 text-sm font-semibold tracking-wide text-muted-foreground uppercase">
                         Usage
                         {#if connectors.agyQuota?.observed_at}
                           <span class="font-normal tracking-normal normal-case">{observedAgo(connectors.agyQuota.observed_at, ticker.min)}</span>
                         {/if}
                       </h4>
                       {#if !connectors.agyQuota || connectors.agyQuota.groups.length === 0}
-                        <p class="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">
+                        <p class="rounded-lg border border-dashed border-border p-3 text-[0.75rem] text-muted-foreground">
                           No usage figures yet. agy only reports its limits to its status line, and AgentDeck does not change that setting. A tool that saves them (such as AI Usage Meter) fills this in.
                         </p>
                       {:else}
@@ -360,7 +360,7 @@
                                 {#each group.windows as window (window.label)}
                                   {@const pct = shown(window, ticker.min)}
                                   <div>
-                                    <div class="mb-1 flex items-baseline justify-between gap-2 text-[11px]">
+                                    <div class="mb-1 flex items-baseline justify-between gap-2 text-[0.6875rem]">
                                       <span class="text-muted-foreground">{window.label} window</span>
                                       <span class="tabular-nums {pct >= 90 ? 'font-medium text-destructive' : ''}">{Math.round(pct)}% used</span>
                                     </div>
@@ -368,7 +368,7 @@
                                       <div class="h-full rounded-full transition-[width] duration-500 {barColor(pct)}" style:width="{pct}%"></div>
                                     </div>
                                     {#if countdown(window.resets_at, ticker.min)}
-                                      <div class="mt-1 text-[11px] text-muted-foreground tabular-nums">{countdown(window.resets_at, ticker.min)}</div>
+                                      <div class="mt-1 text-[0.75rem] text-muted-foreground tabular-nums">{countdown(window.resets_at, ticker.min)}</div>
                                     {/if}
                                   </div>
                                 {/each}
@@ -377,7 +377,7 @@
                           {/each}
                         </div>
                         {#if connectors.agyQuota.observed_at && ticker.min / 1000 - connectors.agyQuota.observed_at > 15 * 60}
-                          <p class="mt-1.5 text-[11px] text-muted-foreground">Figures are older than 15 minutes.</p>
+                          <p class="mt-1.5 text-[0.75rem] text-muted-foreground">Figures are older than 15 minutes.</p>
                         {/if}
                       {/if}
                     </div>
@@ -389,13 +389,13 @@
                     {@const managerInstalled = installed(manager.id)}
                     <div class="border-t border-border/70 px-4 py-3">
                       <div class="mb-2 flex flex-wrap items-center gap-2">
-                        <h4 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Accounts</h4>
+                        <h4 class="text-sm font-semibold tracking-wide text-muted-foreground uppercase">Accounts</h4>
                         {#if managerInstalled}
-                          <span class="text-[11px] text-muted-foreground">via {tool(manager.id)?.version ?? manager.label}</span>
+                          <span class="text-[0.75rem] text-muted-foreground">via {tool(manager.id)?.version ?? manager.label}</span>
                         {/if}
                         <span class="ml-auto"></span>
                         {#if managerInstalled}
-                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" onclick={() => busyOf(`add:${provider}`) ? void cancelAccountAdd(provider) : void addAccount(provider, card.label)}>
+                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-sm" onclick={() => busyOf(`add:${provider}`) ? void cancelAccountAdd(provider) : void addAccount(provider, card.label)}>
                             <ZIcon zType={icon(busyOf(`add:${provider}`) ? 'lucideX' : 'lucideUserPlus')} class="size-3.5" />
                             {busyOf(`add:${provider}`) ? 'Cancel' : 'Add account'}
                           </ZButton>
@@ -404,21 +404,21 @@
 
                       {#if !managerInstalled}
                         <div class="flex items-center gap-3 rounded-lg border border-dashed border-border p-3">
-                          <div class="min-w-0 flex-1 text-xs text-muted-foreground">
+                          <div class="min-w-0 flex-1 text-sm text-muted-foreground">
                             <span class="text-foreground">Switch between accounts</span> needs <b>{manager.label}</b>. {manager.why}
                             {#if connectors.errors[`install:${manager.id}`]}<div class="mt-1 text-destructive" role="alert">{connectors.errors[`install:${manager.id}`]}</div>{/if}
-                            {#each lastLog(manager.id) as line, index (index)}<div class="truncate font-mono text-[11px]">{line}</div>{/each}
+                            {#each lastLog(manager.id) as line, index (index)}<div class="truncate font-mono text-[0.6875rem]">{line}</div>{/each}
                           </div>
-                          <ZButton zWave={false} zSize="sm" class="h-8 shrink-0 gap-1.5 px-3 text-xs" disabled={Boolean(busyOf(`install:${manager.id}`))} onclick={() => void install(manager.id, manager.label)}>
+                          <ZButton zWave={false} zSize="sm" class="h-8 shrink-0 gap-1.5 px-3 text-sm" disabled={Boolean(busyOf(`install:${manager.id}`))} onclick={() => void install(manager.id, manager.label)}>
                             <ZIcon zType={icon(connectors.busy[`install:${manager.id}`] ? 'lucideLoaderCircle' : 'lucideDownload')} class="size-3.5 {connectors.busy[`install:${manager.id}`] ? 'animate-spin' : ''}" /> Install {manager.label}
                           </ZButton>
                         </div>
                       {:else if list?.error}
-                        <p class="rounded-lg bg-destructive/10 p-3 text-xs text-destructive" role="alert">{list.error}</p>
+                        <p class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive" role="alert">{list.error}</p>
                       {:else if connectors.errors[`accounts:${provider}`]}
-                        <p class="rounded-lg bg-destructive/10 p-3 text-xs text-destructive" role="alert">{connectors.errors[`accounts:${provider}`]}</p>
+                        <p class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive" role="alert">{connectors.errors[`accounts:${provider}`]}</p>
                       {:else if !list || list.accounts.length === 0}
-                        <p class="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">
+                        <p class="rounded-lg border border-dashed border-border p-3 text-[0.75rem] text-muted-foreground">
                           {#if list}No saved accounts yet. Sign in above, then use “Add account” to save it, or add another one.{:else}Reading accounts<span class="loading-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>{/if}
                         </p>
                       {:else}
@@ -432,10 +432,10 @@
                                     {#if account.plan}<span class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase {planClass(account.plan)}">{account.plan}</span>{/if}
                                     {#if account.active}<span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">IN USE</span>{/if}
                                   </span>
-                                  {#if account.alias}<span class="block truncate text-[11px] text-muted-foreground">{account.email}</span>{/if}
+                                  {#if account.alias}<span class="block truncate text-[0.75rem] text-muted-foreground">{account.email}</span>{/if}
                                 </span>
                                 {#if account.expired}
-                                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 gap-1 px-2 text-[11px]" disabled={Boolean(working)} aria-label="Sign in again for {account.email}" onclick={() => void login(provider, card.label)}>
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 gap-1 px-2 text-[0.6875rem]" disabled={Boolean(working)} aria-label="Sign in again for {account.email}" onclick={() => void login(provider, card.label)}>
                                     <ZIcon zType={icon(connectors.busy[`login:${card.id}`] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3 {connectors.busy[`login:${card.id}`] ? 'animate-spin' : ''}" />
                                     {connectors.busy[`login:${card.id}`] ? 'Waiting…' : 'Sign in again'}
                                   </ZButton>
@@ -458,7 +458,7 @@
                                   {#each account.usage as window (window.label)}
                                     {@const pct = shown(window, ticker.min)}
                                     <div>
-                                      <div class="mb-1 flex items-baseline justify-between gap-2 text-[11px]">
+                                      <div class="mb-1 flex items-baseline justify-between gap-2 text-[0.6875rem]">
                                         <span class="text-muted-foreground">{window.label} window</span>
                                         <span class="tabular-nums {pct >= 90 ? 'font-medium text-destructive' : ''}">{Math.round(pct)}%</span>
                                       </div>
@@ -466,23 +466,23 @@
                                         <div class="h-full rounded-full transition-[width] duration-500 {barColor(pct)}" style:width="{pct}%"></div>
                                       </div>
                                       {#if countdown(window.resets_at, ticker.min)}
-                                        <div class="mt-1 text-[11px] text-muted-foreground tabular-nums">{countdown(window.resets_at, ticker.min)}</div>
+                                        <div class="mt-1 text-[0.75rem] text-muted-foreground tabular-nums">{countdown(window.resets_at, ticker.min)}</div>
                                       {/if}
                                     </div>
                                   {/each}
                                 </div>
-                                {#if stale(account, ticker.min)}<p class="mt-1.5 text-[11px] text-muted-foreground">Figures are older than 15 minutes. Use Refresh.</p>{/if}
-                                {#if account.status}<p class="mt-1.5 text-[11px] text-muted-foreground" role="status">{account.status}</p>{/if}
+                                {#if stale(account, ticker.min)}<p class="mt-1.5 text-[0.75rem] text-muted-foreground">Figures are older than 15 minutes. Use Refresh.</p>{/if}
+                                {#if account.status}<p class="mt-1.5 text-[0.75rem] text-muted-foreground" role="status">{account.status}</p>{/if}
                               {:else if account.expired}
-                                <p class="mt-1.5 text-[11px] text-destructive" role="alert">Signed out: the login expired (401). Sign in again to use this account; it cannot be switched to until then.</p>
+                                <p class="mt-1.5 text-[0.6875rem] text-destructive" role="alert">Signed out: the login expired (401). Sign in again to use this account; it cannot be switched to until then.</p>
                               {:else if account.status}
-                                <p class="mt-1.5 text-[11px] text-muted-foreground">{account.status}</p>
+                                <p class="mt-1.5 text-[0.75rem] text-muted-foreground">{account.status}</p>
                               {/if}
                               {#if provider === 'codex'}
                                 {@const resetCredits = account.reset_credits_available}
                                 {@const resetBusy = Boolean(connectors.busy[`reset:${account.email}`])}
                                 {@const resetError = connectors.errors[`reset:${account.email}`]}
-                                <div class="mt-2.5 flex items-center gap-2 border-t border-border/60 pt-2.5 text-[11px]">
+                                <div class="mt-2.5 flex items-center gap-2 border-t border-border/60 pt-2.5 text-[0.6875rem]">
                                   <ZIcon zType={icon('lucideRotateCcw')} class="size-3 shrink-0 text-muted-foreground" />
                                   <span class="min-w-0 flex-1 truncate text-muted-foreground">
                                     {#if resetBusy}Redeeming reset…{:else if resetCredits !== undefined}Available resets: <b class="text-foreground tabular-nums">{resetCredits}</b>{:else}Reset count unavailable{/if}
@@ -490,31 +490,31 @@
                                   <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Refresh usage" title="Reload usage and reset credits" disabled={Boolean(busyOf('accounts:codex'))} onclick={() => { refreshing = account.email; void refreshAccounts('codex', true).finally(() => (refreshing = '')); }}>
                                     <ZIcon zType={icon('lucideRefreshCw')} class="size-3 {refreshing === account.email ? 'animate-spin' : ''}" />
                                   </ZButton>
-                                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 gap-1 px-2 text-[11px] {resetBusy ? 'border-primary/40 text-primary' : ''}" aria-busy={resetBusy} disabled={resetCredits === undefined || resetCredits < 1 || resetBusy} onclick={() => (resetAsk = account.email)}>
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-6 shrink-0 gap-1 px-2 text-[0.6875rem] {resetBusy ? 'border-primary/40 text-primary' : ''}" aria-busy={resetBusy} disabled={resetCredits === undefined || resetCredits < 1 || resetBusy} onclick={() => (resetAsk = account.email)}>
                                     {#if resetBusy}<ZIcon zType={icon('lucideLoaderCircle')} class="size-3 animate-spin" />Resetting…{:else}Reset limit{/if}
                                   </ZButton>
                                 </div>
-                                {#if resetError}<p class="mt-1 text-[11px] text-destructive" role="alert">{resetError}</p>{/if}
+                                {#if resetError}<p class="mt-1 text-[0.6875rem] text-destructive" role="alert">{resetError}</p>{/if}
                               {/if}
                             </li>
                           {/each}
                         </ul>
                         {@const removeError = Object.entries(connectors.errors).find(([key]) => key.startsWith(`remove:${provider}:`))?.[1]}
                         {#if connectors.errors[`switch:${provider}`] || removeError}
-                          <p class="mt-2 text-xs text-destructive" role="alert">{connectors.errors[`switch:${provider}`] ?? removeError}</p>
+                          <p class="mt-2 text-sm text-destructive" role="alert">{connectors.errors[`switch:${provider}`] ?? removeError}</p>
                         {/if}
-                        <p class="mt-2 text-[11px] text-muted-foreground">A chat that is already running keeps its account; the next message uses the new one.</p>
+                        <p class="mt-2 text-[0.75rem] text-muted-foreground">A chat that is already running keeps its account; the next message uses the new one.</p>
 
                         {#if provider === 'codex' && list.auto_switch}
                           {@const auto = list.auto_switch}
                           <div class="mt-3 mb-3 flex items-center gap-3 rounded-lg bg-muted/50 p-3">
-                            <div class="min-w-0 flex-1 text-xs">
+                            <div class="min-w-0 flex-1 text-sm">
                               <div class="mb-1 font-medium">Switch automatically</div>
                               <div class="text-muted-foreground">When the account in use has under {auto.five_hour}% (5h) or {auto.weekly}% (weekly) left, codex-auth moves to the next one in the background.</div>
                             </div>
                             <ZSwitch zVariant="dot" checked={auto.enabled} zSize="sm" zDisabled={Boolean(connectors.busy['auto:codex'])} onChange={(value) => void setCodexAutoSwitch(value, auto.five_hour, auto.weekly)} />
                           </div>
-                          {#if connectors.errors['auto:codex']}<p class="mt-1 text-xs text-destructive" role="alert">{connectors.errors['auto:codex']}</p>{/if}
+                          {#if connectors.errors['auto:codex']}<p class="mt-1 text-sm text-destructive" role="alert">{connectors.errors['auto:codex']}</p>{/if}
                         {/if}
                       {/if}
                     </div>

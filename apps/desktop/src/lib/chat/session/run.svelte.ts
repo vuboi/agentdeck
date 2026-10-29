@@ -1,6 +1,6 @@
 import { inTauri, clock } from '../../app/platform/history';
 import { accountEpoch } from '../runs/account-epoch.svelte';
-import { prewarmAgent, saveAttachment, sendCustomTurn, sendAgentTurn, answerCopilotPermission } from '../agent';
+import { pictureData, prewarmAgent, saveAttachment, sendCustomTurn, sendAgentTurn, answerCopilotPermission } from '../agent';
 import { connectors } from '../../agents/connectors.svelte';
 import { type Message, messages as mockMessages } from '../mock';
 import { guide } from '../../app/ui/guide.svelte';
@@ -24,7 +24,7 @@ import { MODELS, activeSession, advanceRun, localMessages, nextId, persistLocal,
 import { AGENTDECK_HINT, KNOWS_PREVIEW, NATIVE_DELEGATION, NATIVE_DELEGATION_HINT, NO_DELEGATE_HINT, OPEN_WORDS, PERMISSION_MODE, agentLabel, approved, continuationGroups, delegateHinted, hasOutstandingSessionWork, hiddenPrompt, isRunning, lastPrompt, missedTurns, modelFor, nativeDelegationHinted, notifySessionWorkDone, orchestrateTold, priorDelegateHinted, queuePaused, queued, rememberDelegateHint, rememberLastChat, rememberNativeDelegationHint, turnOptions, turns } from './turns.svelte';
 import { handleAgentEvent, lastEventAt, lastEventKind, recoveryChain } from './events.svelte';
 import { backlog, flushReports, isWorkerChat } from './delegate-task.svelte';
-import { LANGUAGE_RULE } from './workflow.svelte';
+import { LANGUAGE_RULE } from './orchestration.svelte';
 import { COMPACT_COMMAND, MODEL_LEAD, handoffDigest, liveModel, send } from './sending.svelte';
 import { chat, history } from './history.svelte';
 
@@ -100,7 +100,7 @@ export function prewarmChat(sessionId: string) {
     resume,
     model: selectedModel,
     permissionMode: PERMISSION_MODE[turnOptions.permission],
-    effort: (session.stepEffort ?? turnOptions.effort) as Effort,
+    effort: turnOptions.effort as Effort,
     allowedTools: [...(approved[session.id] ?? [])],
     cwd,
   }).catch(() => {});
@@ -128,7 +128,7 @@ function prewarmFallback(session: SessionItem) {
     resume: false,
     model,
     permissionMode: PERMISSION_MODE[turnOptions.permission],
-    effort: (session.stepEffort ?? turnOptions.effort) as Effort,
+    effort: turnOptions.effort as Effort,
     allowedTools: [...(approved[session.id] ?? [])],
     cwd,
   }).catch(() => {});
@@ -171,7 +171,7 @@ export function startTurn(
   rememberLastChat(
     session.agent,
     selectedModel,
-    (session.stepEffort ?? turnOptions.effort) as Effort,
+    turnOptions.effort as Effort,
   );
   if (listener) {
     // Never resume the background conversation: this lane gets an independent provider conversation.
@@ -340,7 +340,7 @@ export function startTurn(
     const paths = await within(
       Promise.all(
         images.map((image) =>
-          saveAttachment(image.mime, image.src.slice(image.src.indexOf(',') + 1)),
+          image.path ? image.path : saveAttachment(image.mime, image.src.slice(image.src.indexOf(',') + 1)),
         ),
       ),
       PREPARE_LIMIT_MS,
@@ -389,14 +389,14 @@ export function startTurn(
           {
             role: 'user',
             content: body,
-            images: images.map((image) => image.src),
+            images: await Promise.all(images.map((image) => pictureData(image))),
             files: files.map((file) => file.path),
           },
         ],
         permissionMode: PERMISSION_MODE[turnOptions.permission],
         allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
         cwd: provider.restricted ? null : cwd,
-        effort: (session.stepEffort ?? turnOptions.effort) as Effort,
+        effort: turnOptions.effort as Effort,
         restricted: Boolean(provider.restricted),
       });
       return;
@@ -410,7 +410,7 @@ export function startTurn(
         ? AGENTDECK_HINT
         : '';
     // How to delegate (DELEGATE_HINT): said when the conversation starts, and once for a chat this app never told (an
-    // imported one), not with every turn: the agent keeps it in its history. Sub chats (workers, flow steps) do not delegate.
+    // imported one), not with every turn: the agent keeps it in its history. Sub chats do not delegate.
     const hintKey = `${session.id}|${session.agent}`;
     // Auto-orchestrate (model popover): when it is off, the agent is told once not to hand work out by itself; when it
     // is switched on again, the delegation note is given again.
@@ -465,7 +465,7 @@ export function startTurn(
       agentLabel(session.agent, selectedModel ?? undefined),
       selectedModel,
       [
-        `Effort: ${session.stepEffort ?? turnOptions.effort}`,
+        `Effort: ${turnOptions.effort}`,
         `Permission: ${turnOptions.permission}`,
         `Conversation: ${resume ? `continues ${cliId}` : cliId ? `new (${cliId})` : 'new'}`,
         `Folder: ${cwd ?? 'none'}`,
@@ -486,7 +486,7 @@ export function startTurn(
         // A model of another agent (left over from a switch) is never sent: the agent's own first model goes instead.
         model: selectedModel,
         permissionMode: PERMISSION_MODE[turnOptions.permission],
-        effort: (session.stepEffort ?? turnOptions.effort) as Effort,
+        effort: turnOptions.effort as Effort,
         allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
         cwd,
       }),

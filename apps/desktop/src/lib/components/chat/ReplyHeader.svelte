@@ -14,7 +14,7 @@
   let { message, agent, usage }: { message: Message; agent: string; usage: RunUsage | undefined } = $props();
 </script>
 
-<div class="mb-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs">
+<div class="mb-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-sm">
   <span class="inline-flex items-center gap-1 font-semibold {agentText[agent as keyof typeof agentText]}">
     <AgentLogo agent={agent} model={message.model} class="size-3 shrink-0" />
     {agent === 'custom' ? agentDisplayName(agent, message.model) : agentName(agent)}
@@ -30,7 +30,7 @@
     {@const tokens = usage.tokens}
     {@const parts = costParts(tokens, message.model)}
     {#snippet usageTip()}
-      <div class="flex min-w-44 flex-col gap-1 py-0.5 text-[11px] tabular-nums">
+      <div class="flex min-w-44 flex-col gap-1 py-0.5 text-[0.6875rem] tabular-nums">
         {#each [
           { label: 'Input', count: tokens.input, cost: parts?.input, icon: 'lucideArrowDownToLine', tone: 'text-sky-500' },
           { label: 'Cache read', count: tokens.cacheRead, cost: parts?.cacheRead, icon: 'lucideDatabase', tone: 'text-violet-500' },
@@ -56,7 +56,7 @@
     <!-- The figures roll only while the reply is being written; a loaded chat shows them plainly. -->
     {@const rolling = Boolean(message.live) && isRunning(workspace.activeId)}
     <!-- Tokens and cost, quiet and on the right; hover for the breakdown. -->
-    <span class="ml-auto flex items-baseline gap-1.5 text-[11px] tabular-nums" {@attach zTooltip({ content: usageTip, position: 'top' })}>
+    <span class="ml-auto flex items-baseline gap-1.5 text-[0.6875rem] tabular-nums" {@attach zTooltip({ content: usageTip, position: 'top' })}>
       <span class="text-muted-foreground">{#if rolling}<ZNumberTicker zValue={totalTokens(usage.tokens)} zFormat="compact" zDuration={600} />{:else}{shortCount(totalTokens(usage.tokens))}{/if} tokens</span>
       {#if cost != null}
         <span class="text-muted-foreground/40" aria-hidden="true">·</span>

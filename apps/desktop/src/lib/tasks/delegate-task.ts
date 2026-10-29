@@ -291,6 +291,8 @@ export function pickTask(args: CallArgs, free: { id: string; agent: string; task
 /** A task as the app keeps it while it runs and after (sessions.svelte.ts holds these). */
 export type TaskRecord = {
   id: string;
+  /** The model-led flow history entry this task belongs to, when one is active. */
+  workflowRunId?: string;
   /** The chat that called delegate_task. */
   caller: string;
   childId: string;

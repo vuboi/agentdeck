@@ -61,7 +61,7 @@
   <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
        editing…), as in Claude and Codex; the steps above stay plain, finished lines. -->
   {#if message.stoppedAfter !== undefined && !message.live}
-    <p class="m-0 text-xs text-muted-foreground">You stopped after {elapsed(message.stoppedAfter)}</p>
+    <p class="m-0 text-sm text-muted-foreground">You stopped after {elapsed(message.stoppedAfter)}</p>
   {/if}
 </div>
 <!-- The status line and the footer share one fixed-height slot, so the row does not jump when the reply ends. -->

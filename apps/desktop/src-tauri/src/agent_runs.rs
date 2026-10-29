@@ -365,3 +365,19 @@ pub(crate) fn agent_stop(session: String, turn: Option<String>) {
         }
     }
 }
+
+/// Stops every active agent turn and warm CLI when the desktop WebView reloads.
+#[tauri::command]
+pub(crate) fn agent_stop_all() {
+    let runs = RUNNING
+        .lock()
+        .map(|mut running| std::mem::take(&mut *running))
+        .unwrap_or_default();
+    for ((session, turn), run) in runs {
+        if turn.starts_with("auto-") {
+            ag_adapters::agent::tail::interrupt(&session);
+        }
+        stop_run(run);
+    }
+    ag_adapters::agent::warm::reset(None);
+}

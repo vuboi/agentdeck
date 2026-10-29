@@ -8,7 +8,7 @@
 <ZPopover {anchor} bind:open zTrigger="manual" zPosition="bottom-left" zOffset={6} zWidth={280}>
   {#snippet children()}
     {#if security}
-      <div class="grid gap-2 p-3 text-xs">
+      <div class="grid gap-2 p-3 text-sm">
         <div class="flex items-center gap-2 font-medium {security.kind === 'secure' ? 'text-emerald-600 dark:text-emerald-400' : security.kind === 'insecure' ? 'text-amber-600 dark:text-amber-400' : ''}">
           {security.kind === 'secure' ? 'Connection is secure' : security.kind === 'local' ? 'Local address (not encrypted)' : 'Connection is not secure'}
         </div>
@@ -20,7 +20,7 @@
           <dt class="text-muted-foreground">Host</dt><dd class="m-0 truncate" title={security.host}>{security.host}</dd>
           <dt class="text-muted-foreground">Port</dt><dd class="m-0">{security.port}</dd>
         </dl>
-        {#if security.kind === 'secure'}<p class="m-0 text-[11px] text-muted-foreground">Certificate details are not available in the embedded browser.</p>{/if}
+        {#if security.kind === 'secure'}<p class="m-0 text-[0.6875rem] text-muted-foreground">Certificate details are not available in the embedded browser.</p>{/if}
       </div>
     {/if}
   {/snippet}

@@ -123,17 +123,17 @@
 <div class="flex min-h-0 flex-1 flex-col">
   <StoreBar bind:query placeholder="Search plugins, MCP servers, skills">
     {#snippet filters()}
-      <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zPlaceholder="Choose project" zOptions={[{ label: 'Global · all projects', value: '' }, ...projects.map((path) => ({ label: workspace.projects.find((p) => p.path === path)?.name ?? path, value: path }))]} value={project ?? ''} onValueChange={(value) => (project = String(value ?? '') || null)} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
+      <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-sm" zPlaceholder="Choose project" zOptions={[{ label: 'Global · all projects', value: '' }, ...projects.map((path) => ({ label: workspace.projects.find((p) => p.path === path)?.name ?? path, value: path }))]} value={project ?? ''} onValueChange={(value) => (project = String(value ?? '') || null)} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
     {/snippet}
   </StoreBar>
   <StoreHeader>
     <div class="grid w-full min-w-0 grid-cols-4 items-center gap-1">
       <StoreCategoryFilter class="w-full" bind:value={category} />
       <div class="min-w-0">
-        <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zPlaceholder="All kinds" zOptions={KINDS.map((option) => ({ label: option.label, value: option.value }))} value={kind} onValueChange={(value) => (kind = String(value ?? 'all') as Kind)} zShowSearch={false} zDropdownWidth={170} />
+        <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-sm" zPlaceholder="All kinds" zOptions={KINDS.map((option) => ({ label: option.label, value: option.value }))} value={kind} onValueChange={(value) => (kind = String(value ?? 'all') as Kind)} zShowSearch={false} zDropdownWidth={170} />
       </div>
       <div class="min-w-0">
-        <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zPlaceholder="Any agent" zOptions={AGENTS.map((option) => ({ label: option.label, value: option.value }))} value={agent} onValueChange={(value) => (agent = String(value ?? 'all') as AgentFilter)} zShowSearch zPlaceholderSearch="Find provider…" zDropdownWidth={210}>
+        <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-sm" zPlaceholder="Any agent" zOptions={AGENTS.map((option) => ({ label: option.label, value: option.value }))} value={agent} onValueChange={(value) => (agent = String(value ?? 'all') as AgentFilter)} zShowSearch zPlaceholderSearch="Find provider…" zDropdownWidth={210}>
           {#snippet option(item)}
             <span class="flex min-w-0 items-center gap-2">{#if item.value !== 'all'}<AgentLogo agent={item.value} class="size-3.5 shrink-0" />{/if}<span class="truncate">{item.label}</span></span>
           {/snippet}
@@ -143,7 +143,7 @@
         </ZSelect>
       </div>
       <div class="min-w-0">
-        <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-xs" zPlaceholder="All sources" zOptions={sourceOptions} value={source} onValueChange={(value) => (source = String(value ?? ''))} zShowSearch zPlaceholderSearch="Search skill sources…" zDropdownWidth={260}>
+        <ZSelect zPosition="bottom-right" zSize="sm" class="h-8 min-w-0 text-sm" zPlaceholder="All sources" zOptions={sourceOptions} value={source} onValueChange={(value) => (source = String(value ?? ''))} zShowSearch zPlaceholderSearch="Search skill sources…" zDropdownWidth={260}>
           {#snippet option(item)}<span class="block truncate" title={String(item.value || 'All sources')}>{item.label}</span>{/snippet}
           {#snippet selection(item)}<span class="block truncate" title={String(item.value || 'All sources')}>{item.label}</span>{/snippet}
         </ZSelect>
@@ -155,12 +155,12 @@
     <p class="m-0 mx-1.5 mt-1.5 rounded-md border border-destructive/30 bg-destructive/10 p-2 text-destructive">{catalog.error}</p>
   {/if}
   {#if catalog.errors.length > 0}
-    <ul class="m-0 list-none px-3 pt-2 text-[11px] text-amber-600 dark:text-amber-400">
+    <ul class="m-0 list-none px-3 pt-2 text-[0.6875rem] text-amber-600 dark:text-amber-400">
       {#each catalog.errors as problem (problem)}<li>{problem}</li>{/each}
     </ul>
   {/if}
 
-  <div bind:this={scroller} class="flex min-h-0 flex-1 flex-col overflow-y-auto text-xs {GUTTER}">
+  <div bind:this={scroller} class="flex min-h-0 flex-1 flex-col overflow-y-auto text-sm {GUTTER}">
     {#if catalog.items.length === 0 && (catalog.refreshing || filtering || catalog.loading)}
       <StoreSkeleton />
     {:else if catalog.items.length === 0}
@@ -181,7 +181,7 @@
                 <span class="truncate">{item.publisher}</span>
               </div>
             </div>
-            <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2.5 text-xs" zLoading={store.busy === `catalog:${item.key}`} onclick={() => void install(item)}>
+            <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 shrink-0 px-2.5 text-sm" zLoading={store.busy === `catalog:${item.key}`} onclick={() => void install(item)}>
               <ZIcon zType="lucideDownload" class="size-3.5" /> Install
             </ZButton>
           </li>

@@ -64,7 +64,7 @@
           <span class="grid size-12 shrink-0 place-items-center rounded-xl bg-primary/12 text-primary"><ZIcon zType={'lucideAudioLines' as ZIconName} class="size-6" /></span>
           <span class="min-w-0 flex-1">
             <span class="block truncate text-sm font-semibold" title={name}>{name}</span>
-            <span class="block text-xs text-muted-foreground">{ext} audio{sizeLabel ? ` · ${sizeLabel}` : ''}</span>
+            <span class="block text-sm text-muted-foreground">{ext} audio{sizeLabel ? ` · ${sizeLabel}` : ''}</span>
           </span>
           <button type="button" class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground" title="Show in folder" aria-label="Show {name} in its folder" onclick={() => void revealFile(path)}>
             <ZIcon zType={'lucideFolderOpen' as ZIconName} class="size-4" />
@@ -77,7 +77,7 @@
       <video src={url} controls class="max-h-full max-w-full rounded-xl bg-black shadow-lg" in:fade={{ duration: 180 }}></video>
     {/if}
   </div>
-  <div class="flex h-7 shrink-0 items-center gap-3 border-t border-border px-3 text-[11px] text-muted-foreground">
+  <div class="flex h-7 shrink-0 items-center gap-3 border-t border-border px-3 text-[0.6875rem] text-muted-foreground">
     <span class="min-w-0 flex-1 truncate font-mono" title={shortPath}>{shortPath}</span>
     {#if sizeLabel}<span class="shrink-0 whitespace-nowrap tabular-nums">{ext} · {sizeLabel}</span>{/if}
   </div>

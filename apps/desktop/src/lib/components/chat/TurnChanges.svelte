@@ -42,7 +42,7 @@
 </script>
 
 {#if files.length}
-  <section class="mt-2 overflow-hidden rounded-lg border border-border bg-muted/25 text-xs" aria-label="Files changed in this reply">
+  <section class="mt-2 overflow-hidden rounded-lg border border-border bg-muted/25 text-sm" aria-label="Files changed in this reply">
     <button type="button" class="flex min-h-10 w-full cursor-pointer items-center gap-2 px-3 py-2 text-left outline-none hover:bg-muted/50" aria-expanded={open} onclick={() => (open = !open)}>
       <ZIcon zType="lucideGitCompare" class="size-4 shrink-0 text-muted-foreground" />
       <span class="font-semibold">Edited {files.length} {files.length === 1 ? 'file' : 'files'}</span>
@@ -66,7 +66,7 @@
             </div>
             {#if selected === file.change.path}
               <div class="overflow-hidden" transition:slide={{ duration: 180 }}>
-              <div class="max-h-72 overflow-auto border-t border-border/60 bg-background py-1 font-mono text-[11px] leading-relaxed">
+              <div class="max-h-72 overflow-auto border-t border-border/60 bg-background py-1 font-mono text-[0.6875rem] leading-relaxed">
                 {#if !file.change.before && !file.change.after}
                   <div class="px-3 py-2 text-muted-foreground">The provider reported the file change without preview content.</div>
                 {:else}

@@ -30,9 +30,9 @@
 </script>
 
 <div class="flex flex-col gap-1.5">
-  <div class="rounded-xl bg-muted px-3 py-2 font-mono text-xs leading-5 break-all whitespace-pre-wrap text-foreground select-text"><span class="text-muted-foreground select-none">$ </span>{command}</div>
+  <div class="rounded-xl bg-muted px-3 py-2 font-mono text-sm leading-5 break-all whitespace-pre-wrap text-foreground select-text"><span class="text-muted-foreground select-none">$ </span>{command}</div>
   <div class="relative rounded-xl border border-border">
-    <div bind:this={box} {onscroll} class="max-h-60 min-h-8 overflow-auto px-3 py-2 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-muted-foreground select-text">
+    <div bind:this={box} {onscroll} class="max-h-60 min-h-8 overflow-auto px-3 py-2 font-mono text-sm leading-5 break-words whitespace-pre-wrap text-muted-foreground select-text">
       {#if segments.length === 0}<span class="italic">{live ? 'Waiting for output…' : 'No output.'}</span>{/if}
       {#each segments as segment, index (index)}<span style:color={segment.color} class:font-semibold={segment.bold} class:opacity-60={segment.dim}>{segment.text}</span>{/each}
     </div>

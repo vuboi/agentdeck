@@ -10,9 +10,6 @@ export const KINDS = [
 /** Official APIs with a free tier, all OpenAI-compatible. The key is read from the named environment variable when none is typed. */
 export const FREE_CLOUD = ENDPOINTS.freeCloud;
 
-/** Self-hosted OpenAI-compatible gateways (muse2api). The key is typed in: the gateway's dashboard creates it. */
-export const GATEWAYS = ENDPOINTS.gateways;
-
 /** A preset's address against a saved one. A preset with `{account_id}` (Cloudflare) matches any account. */
 export function samePreset(base: string, url: string) {
   const clean = url.trim().replace(/\/+$/, '');
@@ -99,15 +96,6 @@ export class ProviderForm {
     this.account = '';
     this.providerModal = true;
     this.probeNote = { ok: true, text: `Paste your ${preset.name} key (or set ${preset.keyEnv}), then Load models.` };
-  }
-
-  /** Opens the provider form filled in for a self-hosted gateway: paste its key, Load models, Save. */
-  useGateway(preset: (typeof GATEWAYS)[number]) {
-    this.draft = { ...blank(), name: preset.name, kind: 'openai', baseUrl: preset.base, defaultModel: preset.model, restricted: true };
-    this.keptKey = '';
-    this.account = '';
-    this.providerModal = true;
-    this.probeNote = { ok: true, text: `Paste the ${preset.name} key from its dashboard (${preset.keyUrl}), then Load models.` };
   }
 
   useLocal(server: { kind: CustomProvider['kind']; label: string; base_url: string; models: string[] }) {

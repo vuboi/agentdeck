@@ -109,7 +109,7 @@
   onSelect={select}
 >
   {#snippet empty(text)}
-    <span class="text-xs text-muted-foreground">No chat matches “{text}”</span>
+    <span class="text-sm text-muted-foreground">No chat matches “{text}”</span>
   {/snippet}
 </ZCommand>
 

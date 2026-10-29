@@ -3,48 +3,41 @@
   import { ZButton, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { workspace } from '../../../chat/sessions.svelte';
-  import { allPresets, assignPreset, createFlow, deletePreset, duplicatePreset, editFlow, flowKind, normalizeGraph, stepGroups, workflows, type WorkflowPreset } from '../../../tasks/workflows.svelte';
+  import { allPresets, assignPreset, createFlow, deletePreset, duplicatePreset, editFlow, workflows, type WorkflowPreset } from '../../../tasks/workflows.svelte';
 
-  // The flows a chat can use: the built-in templates and the user's own. "Use" puts one on the open chat; Edit opens
-  // the full-screen editor (a built-in one is copied first).
   const icon = (name: string) => name as ZIconName;
   const active = $derived(workspace.activeId);
-  const KIND = { sequential: 'Sequential', parallel: 'Parallel', mixed: 'Stages' } as const;
-  const stagesOf = (preset: WorkflowPreset) => stepGroups(normalizeGraph(preset.steps));
+  const strategyLabel: Record<WorkflowPreset['strategy'], string> = { adaptive: 'Adaptive', parallel: 'Parallel', sequential: 'Sequential' };
 </script>
 
 <section class="flex max-h-[48%] min-h-0 shrink-0 flex-col border-b border-border" aria-label="Flows">
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-1.5">
     <ZIcon zType={icon('lucideWorkflow')} class="size-3.5 text-muted-foreground" />
-    <h2 class="m-0 flex-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Flows</h2>
-    <ZButton zWave={false} zType="outline" zSize="sm" class="h-7! gap-1 px-2.5! text-xs" onclick={createFlow}><ZIcon zType={icon('lucidePlus')} class="size-3.5" />New flow</ZButton>
+    <h2 class="m-0 flex-1 text-sm font-semibold tracking-wide text-muted-foreground uppercase">Flows</h2>
+    <ZButton zWave={false} zType="outline" zSize="sm" class="h-7! gap-1 px-2.5! text-sm" onclick={createFlow}><ZIcon zType={icon('lucidePlus')} class="size-3.5" />New flow</ZButton>
   </div>
   <div class="min-h-0 overflow-y-auto p-1.5">
     <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr))">
       {#each allPresets() as preset (preset.id)}
         {@const used = workflows.assigned[active] === preset.id}
-        {@const stages = stagesOf(preset)}
         <article class="group flex min-w-0 flex-col gap-2 rounded-xl border bg-card p-3 transition-colors {used ? 'border-primary/60 ring-2 ring-primary/15' : 'border-border hover:border-primary/30'}">
           <div class="flex min-w-0 items-start gap-2">
             <div class="min-w-0 flex-1">
               <div class="truncate text-[13px] font-semibold">{preset.name}</div>
-              <div class="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{preset.description || `${preset.steps.length} steps`}</div>
+              <div class="mt-0.5 line-clamp-2 text-[0.71875rem] leading-snug text-muted-foreground">{preset.description || `${preset.agents.length} sub-agents`}</div>
             </div>
-            <span class="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium {preset.builtin ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary'}">{preset.builtin ? 'Template' : KIND[flowKind(preset.steps)]}</span>
+            <span class="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{strategyLabel[preset.strategy]}</span>
           </div>
-          <div class="flex min-w-0 flex-wrap items-center gap-1" aria-label="Steps">
-            {#each stages as stage, at (at)}
-              {#if at > 0}<ZIcon zType={icon('lucideArrowRight')} class="size-3 shrink-0 text-muted-foreground/60" />{/if}
-              <span class="inline-flex items-center gap-0.5 rounded-lg {stage.length > 1 ? 'bg-muted px-1 py-0.5' : ''}" title={stage.map((step) => step.name).join(' + ')}>
-                {#each stage as step (step.id)}
-                  <span class="grid size-6 place-items-center rounded-md border border-border bg-background"><AgentLogo agent={step.agent} model={step.model} class="size-3.5" /></span>
-                {/each}
+          <div class="flex min-w-0 flex-wrap items-center gap-1.5" aria-label="Sub-agent roster">
+            {#each preset.agents as agent (agent.id)}
+              <span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-background px-1.5 py-1 text-[10px]" title={`${agent.name} · ${agent.prompt}`}>
+                <AgentLogo agent={agent.agent} model={agent.model} class="size-3 shrink-0" />
+                <span class="max-w-32 truncate">{agent.name}</span>
               </span>
             {/each}
           </div>
-          <!-- One grouped control: use it in this chat (filled while it is in use), edit, copy, delete. -->
           <div class="flex items-center gap-2">
-            {#if used}<span class="flex items-center gap-1 text-[11px] font-medium text-primary"><span class="size-1.5 rounded-full bg-primary"></span>In use</span>{/if}
+            {#if used}<span class="flex items-center gap-1 text-[0.6875rem] font-medium text-primary"><span class="size-1.5 rounded-full bg-primary"></span>In use</span>{/if}
             <span class="flex-1"></span>
             <div class="inline-flex overflow-hidden rounded-lg border border-border bg-background" role="group" aria-label="{preset.name} actions">
               {#snippet action(label: string, glyph: string, run: () => void, tone: string, disabled = false)}
@@ -55,9 +48,7 @@
               {@render action(used ? 'Stop using in this chat' : 'Use in this chat', used ? 'lucideCircleCheck' : 'lucidePlay', () => assignPreset(active, used ? null : preset.id), used ? 'bg-primary text-primary-foreground hover:bg-primary/85' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary', !active)}
               {@render action(preset.builtin ? 'Edit a copy' : 'Edit', 'lucideSquarePen', () => editFlow(preset), 'text-muted-foreground hover:bg-primary/10 hover:text-primary')}
               {@render action('Duplicate', 'lucideCopyPlus', () => duplicatePreset(preset.id), 'text-muted-foreground hover:bg-primary/10 hover:text-primary')}
-              {#if !preset.builtin}
-                {@render action('Delete', 'lucideTrash2', () => deletePreset(preset.id), 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive')}
-              {/if}
+              {#if !preset.builtin}{@render action('Delete', 'lucideTrash2', () => deletePreset(preset.id), 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive')}{/if}
             </div>
           </div>
         </article>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ZIcon } from '@shival99/z-ui-svelte';
   import { activeSession, draftImages, type Attachment } from '../../chat/sessions.svelte';
-  import { revealFile } from '../../chat/agent';
+  import { mimeOfPath, revealFile } from '../../chat/agent';
   import { openImages } from '../../browser/preview.svelte';
   import { gen, type Preview } from '../../files/image-gen.svelte';
   import { modelLabel } from '../../agents/models.svelte';
@@ -24,10 +24,11 @@
     );
   }
 
-  function useInChat(image: Preview) {
+  async function useInChat(image: Preview) {
     const session = activeSession();
     if (!session) return;
-    const attachment: Attachment = { id: crypto.randomUUID(), name: `generated-${image.model}-${image.variant}.png`, mime: 'image/png', src: image.src };
+    // The candidate is already a file: the message box takes its path (no copy in memory).
+    const attachment: Attachment = { id: crypto.randomUUID(), name: `generated-${image.model}-${image.variant}.png`, mime: mimeOfPath(image.path), src: '', path: image.path };
     draftImages[session.id] = [...(draftImages[session.id] ?? []), attachment];
     toast.success('Image added to the composer');
   }
@@ -66,7 +67,7 @@
   {/if}
 
   {#if failureLines.length && !working}
-    <div class="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[11px] text-destructive">
+    <div class="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[0.6875rem] text-destructive">
       <button type="button" class="flex w-full cursor-pointer items-center gap-1.5 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-expanded={failuresOpen} onclick={() => (failuresOpen = !failuresOpen)}>
         <ZIcon zType="lucideChevronDown" class="size-3.5 shrink-0 transition-transform duration-300 ease-out motion-reduce:transition-none {failuresOpen ? '' : '-rotate-90'}" />
         {failureLines.length} candidate{failureLines.length === 1 ? '' : 's'} failed

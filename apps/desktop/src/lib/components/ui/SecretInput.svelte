@@ -30,8 +30,8 @@
 {#if showingKept}
   <div class="flex h-9 min-w-0 items-center gap-1 rounded-md border border-border bg-muted/40 pr-1 pl-3">
     <ZIcon zType={'lucideKeyRound' as ZIconName} class="size-3.5 shrink-0 text-muted-foreground" />
-    <span class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground select-none" aria-label="Saved key, hidden">{maskSecret(kept)}</span>
-    <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 shrink-0 px-2 text-xs" onclick={() => (replacing = true)}>Replace</ZButton>
+    <span class="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground select-none" aria-label="Saved key, hidden">{maskSecret(kept)}</span>
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="h-7 shrink-0 px-2 text-sm" onclick={() => (replacing = true)}>Replace</ZButton>
   </div>
 {:else}
   <ZInput zType="password" autocomplete="off" bind:value={typed} zPlaceholder={kept ? 'Paste the new key' : placeholder} />

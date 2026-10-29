@@ -4,7 +4,7 @@ import { modelCatalog } from '../../agents/models.svelte';
 import { inTauri, isPreviewCopy } from '../../app/platform/history';
 import { type RunState, IDLE, type RunEvent, step } from '../runs/run-state';
 import { type Message } from '../mock';
-import { getPref, setPref } from '../../app/platform/prefs';
+import { getPref, listPrefs, setPref, setPrefs } from '../../app/platform/prefs';
 import { applyAgentEvent } from '../agent-reply';
 import { answerCopilotPermission } from '../agent';
 import { samePath } from '../../files/paths';
@@ -13,6 +13,7 @@ import { lastChat } from './turns.svelte';
 import { prewarmChat } from './run.svelte';
 import { hidden } from './sending.svelte';
 import { folderName } from './history.svelte';
+import { restoreCommandImages, stripCommandImageData } from '../content/command-images';
 
 // Mock workspace. Real data arrives from agentd (M2); the shapes follow crates/protocol.
 export type Agent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot' | 'custom';
@@ -33,8 +34,6 @@ export type SessionItem = {
   /** Every agent that took part when an orchestrated chat mixes several; falls back to `[agent]`. */
   agents?: Agent[];
   model: string;
-  /** Effort a workflow step asks for; it replaces the chat's own level for this chat's turns. */
-  stepEffort?: string;
   /** Git branch the session works on, if any. A conversation branch is `parentId`, not this. */
   gitBranch?: string;
   status: Status;
@@ -49,6 +48,8 @@ export type SessionItem = {
   messageCount?: number;
   /** Created in the app and still empty. */
   draft?: boolean;
+  /** Started in AgentDeck itself, not imported from Claude / Codex history (the sidebar's "This computer" vs "Other"). */
+  made?: boolean;
   /** The agent CLI's conversation id: sent with `--session-id` on the first turn, `--resume` after. */
   agentSession?: string;
   /** The CLI already has this conversation (first turn sent): later turns resume it. */
@@ -213,7 +214,7 @@ export const sessionCwd = (session: SessionItem): string | null =>
   projectOf(session)?.path || session.workingDirectory || null;
 
 export type Mention = {
-  kind: 'session' | 'project' | 'ai';
+  kind: 'session' | 'project' | 'ai' | 'workflow';
   id: string;
   label: string;
 };
@@ -236,7 +237,10 @@ export type Attachment = {
   id: string;
   name: string;
   mime: string;
+  /** The picture as a data URL (only while it is still in memory: see keepPicture in agent.ts). */
   src: string;
+  /** Its file on disk (WebP): what is saved and sent, and what the page draws from. */
+  path?: string;
 };
 export const draftImages = $state<Record<string, Attachment[]>>({});
 
@@ -264,14 +268,15 @@ export type PageElement = {
   url: string;
   title: string;
   /** What was written about it while marking up the page. */ note?: string;
-  /** A PNG of the element alone (a data URL), taken when it was picked. */ picture?: string;
+  /** A PNG of the element alone, taken when it was picked: the URL it is shown by (its file, see keepPictureUrl). */ picture?: string;
+  /** That PNG's file on disk: what is sent with the message and saved. */ picturePath?: string;
 };
 export const draftElements = $state<Record<string, PageElement[]>>({});
 /** Messages of sessions that live only in this app (new chats), by session id. */
 export const localMessages: Record<string, Message[]> = {};
 
 /**
- * Which chat each sub chat belongs to (a flow step, a delegated task, a fork), by the sub chat's id. The chat files
+ * Which chat each sub chat belongs to (a delegated task or fork), by the sub chat's id. The chat files
  * do not hold it, so when the history is read again (a chat finishing, a reload) a sub chat would come back as a
  * chat of its own; this map puts it back under its parent.
  */
@@ -291,7 +296,7 @@ export function rememberParents() {
       changed = true;
     }
   }
-  // A chat that delegated work or ran a flow holds a card for each sub chat it started: that names the parent of
+  // A chat that delegated work holds a card for each sub chat it started: that names the parent of
   // sub chats made before this map existed (their own files, once read back, do not say).
   for (const [parentId, list] of Object.entries(localMessages)) {
     for (const message of list) {
@@ -324,31 +329,83 @@ export function localSessions(): SessionItem[] {
 /** Save the local sessions, their messages and the open session to IndexedDB. Call after any change. */
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
 /** Saves the local chats. Copying every chat is heavy, so calls close together become one save a moment later. */
-export function persistLocal() {
+// Which chats changed since the last save: a call that names its chat marks only that one. A call without a name (and
+// the close of the page) marks every chat, so a change that was not named is never missed.
+const dirtyChats = new Set<string>();
+let allDirty = true;
+export function persistLocal(sessionId?: string) {
+  if (sessionId === undefined) allDirty = true;
+  else dirtyChats.add(sessionId);
   if (persistTimer !== undefined) return;
   persistTimer = setTimeout(persistLocalNow, 600);
 }
-if (typeof window !== 'undefined') window.addEventListener('pagehide', () => persistTimer !== undefined && persistLocalNow());
+if (typeof window !== 'undefined')
+  window.addEventListener('pagehide', () => {
+    allDirty = true;
+    if (persistTimer !== undefined) persistLocalNow();
+  });
+
+// Local chats are stored as an index (their rows and the open chat) plus one record per chat's messages. A save writes
+// only the chats whose messages changed, so a long chat does not make every save heavier, and a reload reads them back
+// at once.
+const LOCAL_INDEX = 'local.index';
+const LOCAL_FOLDER = 'local.folder.';
+const LOCAL_ACTIVE = 'local.active';
+const LOCAL_MESSAGES = 'local.messages.';
+/** The last JSON written for each chat and folder: unchanged ones are not written again. */
+const savedMessages = new Map<string, string>();
+const savedFolders = new Map<string, string>();
+let savedActive: string | undefined;
 
 function persistLocalNow() {
   clearTimeout(persistTimer);
   persistTimer = undefined;
   rememberParents();
   const sessions = localSessions();
-  const messages = Object.fromEntries(
-    sessions.map((item) => [item.id, localMessages[item.id] ?? []]),
-  );
-  // Plain copies: the store holds proxies that IndexedDB cannot store.
-  setPref(
-    'local.state',
-    JSON.parse(
-      JSON.stringify({
-        sessions,
-        messages,
-        activeId: workspace.activeId,
-      }),
-    ),
-  );
+  const live = new Set(sessions.map((item) => item.id));
+  // Every write of this save goes in one batch: one transaction, run by the prefs worker (see prefs.ts).
+  const writes: [string, unknown][] = [];
+  for (const item of sessions) {
+    // Only the chats that changed are copied and serialised; the rest keep what was saved last time.
+    if (!allDirty && !dirtyChats.has(item.id) && savedMessages.has(item.id)) continue;
+    // Screenshots are kept as files (their path is in the screenshot index), never as base64 in this state.
+    // Plain copies: the store holds proxies that IndexedDB cannot store.
+    const text = JSON.stringify(stripCommandImageData(localMessages[item.id] ?? []));
+    if (savedMessages.get(item.id) === text) continue;
+    savedMessages.set(item.id, text);
+    writes.push([`${LOCAL_MESSAGES}${item.id}`, JSON.parse(text)]);
+  }
+  dirtyChats.clear();
+  allDirty = false;
+  for (const id of [...savedMessages.keys()]) {
+    if (live.has(id)) continue;
+    savedMessages.delete(id);
+    writes.push([`${LOCAL_MESSAGES}${id}`, null]);
+  }
+  // The rows, one record per folder: "This computer", each project. A change writes only its folder's record.
+  const folders = new Map<string, SessionItem[]>();
+  for (const item of sessions) {
+    const list = folders.get(item.projectId);
+    if (list) list.push(item);
+    else folders.set(item.projectId, [item]);
+  }
+  for (const [folder, rows] of folders) {
+    const text = JSON.stringify(rows);
+    if (savedFolders.get(folder) === text) continue;
+    savedFolders.set(folder, text);
+    writes.push([`${LOCAL_FOLDER}${folder}`, JSON.parse(text)]);
+  }
+  for (const folder of [...savedFolders.keys()]) {
+    if (folders.has(folder)) continue;
+    savedFolders.delete(folder);
+    writes.push([`${LOCAL_FOLDER}${folder}`, null]);
+  }
+  const active = JSON.stringify(workspace.activeId ?? '');
+  if (savedActive !== active) {
+    savedActive = active;
+    writes.push([LOCAL_ACTIVE, workspace.activeId ?? null]);
+  }
+  void setPrefs(writes);
 }
 
 /** The Gemini placeholder became Antigravity: chats saved under the old name move to the new one. */
@@ -377,12 +434,36 @@ function renamedSession(item: SessionItem): SessionItem {
 }
 
 /** Read the saved local sessions back. Runs once at start-up, before the history import merges them. */
-const localReady = getPref<{
-  sessions: SessionItem[];
-  messages: Record<string, Message[]>;
-  activeId?: string;
-}>('local.state').then(
-  (saved) => {
+type LocalState = { sessions: SessionItem[]; messages: Record<string, Message[]>; activeId?: string };
+
+/** The saved local chats: the index and every chat's messages. A save from before the per-chat records is read once. */
+async function loadLocalState(): Promise<{ saved: LocalState | null; legacy: boolean }> {
+  // Folder records ("This computer", each project); saves from before them keep one index, or one blob.
+  // The reads of start-up go out together, not one after another.
+  const [folders, active, index, records, legacyState] = await Promise.all([
+    listPrefs<SessionItem[]>(LOCAL_FOLDER),
+    getPref<string>(LOCAL_ACTIVE),
+    getPref<{ sessions: SessionItem[]; activeId?: string }>(LOCAL_INDEX),
+    listPrefs<Message[]>(LOCAL_MESSAGES),
+    getPref<LocalState>('local.state'),
+  ]);
+  if (!folders.length && !index) return { saved: legacyState ?? null, legacy: true };
+  const sessions = folders.length ? folders.flatMap(([, rows]) => rows) : (index?.sessions ?? []);
+  const activeId = folders.length ? (active ?? undefined) : index?.activeId;
+  const messages: Record<string, Message[]> = {};
+  const listed = new Set(sessions.map((item) => item.id));
+  const stale: [string, null][] = [];
+  for (const [key, list] of records) {
+    const id = key.slice(LOCAL_MESSAGES.length);
+    if (listed.has(id)) messages[id] = list;
+    else stale.push([key, null]); // a chat that was removed: its messages go too
+  }
+  if (stale.length) void setPrefs(stale);
+  return { saved: { sessions, messages, activeId }, legacy: !folders.length };
+}
+
+const localReady = loadLocalState().then(
+  async ({ saved, legacy }) => {
     if (!saved) return;
     // A reply that was still running when the app closed is not running any more: its open blocks are closed (as a
     // stopped turn closes them), and its chat is idle, or the send button would stay a stop button after a reload.
@@ -414,6 +495,15 @@ const localReady = getPref<{
     }
     if (saved.activeId && !workspace.activeId)
       workspace.activeId = saved.activeId;
+    // Screenshots of these chats: their files are drawn again from the screenshot index (the saved copy has none).
+    for (const id of Object.keys(saved.messages ?? {}))
+      localMessages[id] = await restoreCommandImages(id, localMessages[id] ?? []);
+    if (legacy) {
+      // The one-blob save (or the single index) is moved to the folder records; the old keys go.
+      persistLocalNow();
+      void setPref('local.state', null);
+      void setPref(LOCAL_INDEX, null);
+    }
   },
   () => {
     // Nothing saved, or no IndexedDB: start empty.
@@ -643,6 +733,7 @@ export function newSession(projectId = NO_PROJECT) {
     gitBranch: projectId === NO_PROJECT ? undefined : base?.gitBranch,
     status: 'idle',
     draft: true,
+    made: true,
   });
   workspace.activeId = id;
   persistLocal();

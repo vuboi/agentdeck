@@ -302,7 +302,7 @@
   const visible = $derived(rows.filter((row) => !filter.trim() || `${row.key} ${row.value}`.toLowerCase().includes(filter.trim().toLowerCase())));
   const current = $derived(visible.find((row) => row.key === chosen) ?? null);
   const title = $derived(section.kind === 'local' ? 'Local storage' : section.kind === 'session' ? 'Session storage' : section.kind === 'cookies' ? 'Cookies' : section.kind === 'idb' ? `${section.db} › ${section.store}` : section.name);
-  const item = (active: boolean) => `flex h-7 w-full shrink-0 cursor-pointer items-center gap-1.5 rounded px-2 text-left font-sans text-xs leading-none outline-none ${active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}`;
+  const item = (active: boolean) => `flex h-7 w-full shrink-0 cursor-pointer items-center gap-1.5 rounded px-2 text-left font-sans text-sm leading-none outline-none ${active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}`;
 </script>
 
 {#snippet entry(label: string, icon: string, target: Section)}
@@ -311,7 +311,7 @@
   </button>
 {/snippet}
 
-<div class="flex min-h-0 flex-1 text-[11px]">
+<div class="flex min-h-0 flex-1 text-[0.6875rem]">
   <nav class="flex w-44 shrink-0 flex-col gap-1 overflow-auto border-r border-border p-1.5" aria-label="Storage">
     <div class="px-2 pt-1 pb-1.5 font-sans text-[10px] leading-none font-semibold tracking-wide text-muted-foreground uppercase">Storage</div>
     {@render entry('Local storage', 'lucideDatabase', { kind: 'local' })}
@@ -319,34 +319,34 @@
     {@render entry('Cookies', 'lucideCookie', { kind: 'cookies' })}
     <div class="mt-3 px-2 pb-1.5 font-sans text-[10px] leading-none font-semibold tracking-wide text-muted-foreground uppercase">IndexedDB</div>
     {#each databases as db (db.name)}
-      <div class="truncate px-2 pt-1 font-sans text-xs leading-4 text-foreground/80" title={db.name}>{db.name}</div>
+      <div class="truncate px-2 pt-1 font-sans text-sm leading-4 text-foreground/80" title={db.name}>{db.name}</div>
       {#each db.stores as store (store)}
         <div class="pl-3">{@render entry(store, 'lucideTable2', { kind: 'idb', db: db.name, store })}</div>
       {/each}
     {:else}
-      <div class="px-2 font-sans text-xs leading-5 text-muted-foreground">None</div>
+      <div class="px-2 font-sans text-sm leading-5 text-muted-foreground">None</div>
     {/each}
     <div class="mt-3 px-2 pb-1.5 font-sans text-[10px] leading-none font-semibold tracking-wide text-muted-foreground uppercase">Cache storage</div>
     {#each caches as cache (cache.id)}
       {@render entry(cache.name, 'lucideArchive', { kind: 'cache', id: cache.id, name: cache.name })}
     {:else}
-      <div class="px-2 font-sans text-xs leading-5 text-muted-foreground">None</div>
+      <div class="px-2 font-sans text-sm leading-5 text-muted-foreground">None</div>
     {/each}
     <div class="mt-auto grid gap-1.5 border-t border-border pt-2">
-      <button type="button" class="inline-flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded border border-input px-2 font-sans text-xs outline-none hover:border-primary/60 disabled:pointer-events-none disabled:opacity-40 " disabled={!ready} onclick={() => run(clearCache)}><ZIcon zType={'lucideEraser' as ZIconName} zSize="14" /> Clear browser cache</button>
-      <button type="button" class="inline-flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded border border-input px-2 font-sans text-xs outline-none hover:border-primary/60 disabled:pointer-events-none disabled:opacity-40 " disabled={!ready} onclick={() => run(clearSite)}><ZIcon zType={'lucideTrash2' as ZIconName} zSize="14" /> Clear site data</button>
+      <button type="button" class="inline-flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded border border-input px-2 font-sans text-sm outline-none hover:border-primary/60 disabled:pointer-events-none disabled:opacity-40 " disabled={!ready} onclick={() => run(clearCache)}><ZIcon zType={'lucideEraser' as ZIconName} zSize="14" /> Clear browser cache</button>
+      <button type="button" class="inline-flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded border border-input px-2 font-sans text-sm outline-none hover:border-primary/60 disabled:pointer-events-none disabled:opacity-40 " disabled={!ready} onclick={() => run(clearSite)}><ZIcon zType={'lucideTrash2' as ZIconName} zSize="14" /> Clear site data</button>
     </div>
   </nav>
 
   <div class="flex min-h-0 min-w-0 flex-1 flex-col">
     <div class="flex h-7 shrink-0 items-center gap-1 border-b border-border px-2">
-      <span class="truncate font-sans text-xs font-medium">{title}</span>
+      <span class="truncate font-sans text-sm font-medium">{title}</span>
       <span class="text-muted-foreground">{visible.length}{more ? '+' : ''}</span>
       <span class="ml-auto"></span>
       <button type="button" class="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40" aria-label="Refresh" title="Refresh" disabled={!ready} onclick={() => { void lists(); void load(); }}>
         <ZIcon zType={'lucideRefreshCw' as ZIconName} class="size-3 {loading ? 'animate-spin' : ''}" />
       </button>
-      <button type="button" class="h-5 cursor-pointer rounded px-1.5 font-sans text-xs outline-none hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40 text-muted-foreground hover:text-destructive" disabled={!ready || (rows.length === 0 && section.kind !== 'cache')} onclick={() => run(clearSection)}>{section.kind === 'cache' ? 'Delete cache' : 'Clear all'}</button>
+      <button type="button" class="h-5 cursor-pointer rounded px-1.5 font-sans text-sm outline-none hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40 text-muted-foreground hover:text-destructive" disabled={!ready || (rows.length === 0 && section.kind !== 'cache')} onclick={() => run(clearSection)}>{section.kind === 'cache' ? 'Delete cache' : 'Clear all'}</button>
     </div>
     <div class="flex min-h-0 flex-1">
       <div class="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-auto font-mono" role="table" aria-label={title}>

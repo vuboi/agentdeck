@@ -178,7 +178,7 @@
       <span class="grid size-6 place-items-center rounded-md bg-primary/15 text-primary" aria-hidden="true">
         <ZIcon zType={current.icon} class="size-3.5" />
       </span>
-      <span class="truncate text-xs font-medium">{current.label}</span>
+      <span class="truncate text-sm font-medium">{current.label}</span>
       <span class="ml-auto"></span>
       <!-- Drag handle: press and move to carry the window; release over a zone to dock it there. -->
       <span class="{headerButton} cursor-grab active:cursor-grabbing" role="presentation" title="Drag to move or dock" onpointerdown={(event) => startDrag(event, win)}>

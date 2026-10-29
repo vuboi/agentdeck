@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -64,7 +64,34 @@ fn log_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 /// The time as `2026-10-29T04:12:09.123Z` (UTC), like the page writes it.
 fn now() -> String {
+    time_at(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default())
+}
+
+/// How long the log keeps its lines: older ones are dropped at start-up.
+const KEEP: Duration = Duration::from_secs(2 * 24 * 3600);
+
+/// Drops the lines older than `KEEP` from the log and its older file. Each line starts with its time (`"at"`), in the
+/// same UTC form, so the lines compare as text. A line that does not say its time is kept.
+fn prune_old(path: &Path) {
     let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let cutoff = time_at(since.saturating_sub(KEEP));
+    for file in [path.with_file_name("debug.1.log"), path.to_path_buf()] {
+        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        let kept: String = text
+            .lines()
+            .filter(|line| match line.split("\"at\":\"").nth(1).and_then(|rest| rest.split('"').next()) {
+                Some(at) => at >= cutoff.as_str(),
+                None => true,
+            })
+            .map(|line| format!("{line}\n"))
+            .collect();
+        if kept.len() != text.len() {
+            let _ = std::fs::write(&file, kept);
+        }
+    }
+}
+
+fn time_at(since: std::time::Duration) -> String {
     let (secs, millis) = (since.as_secs() as i64, since.subsec_millis());
     let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Days since 1970-01-01 to a calendar date (Howard Hinnant's civil_from_days).
@@ -111,6 +138,7 @@ pub fn install(app: &AppHandle) {
     if WRITER.set(sender).is_err() || PATH.set(path.clone()).is_err() {
         return;
     }
+    prune_old(&path);
     std::thread::spawn(move || {
         // Whatever is waiting goes out in one write.
         while let Ok(first) = receiver.recv() {

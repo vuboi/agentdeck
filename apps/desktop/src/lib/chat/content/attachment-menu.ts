@@ -2,15 +2,15 @@ import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
 import { openAttachment } from '../../browser/preview.svelte';
 import { toast } from '../../app/platform/toast';
 import { hostPlatform, nativePath } from '../../files/path-links';
-import { saveAttachment } from '../agent';
+import { pictureData, saveAttachment } from '../agent';
 import { copyImage } from './attachments';
 
 // The right-click menu of a picture or document waiting in a message box (chat and image generator alike).
-const row = 'text-xs! py-1';
+const row = 'text-sm! py-1';
 const removeRow = `${row} text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive!`;
 const TEXT_FILE = /\.(txt|md|mdx|log|json|ya?ml|toml|xml|csv|tsv|[jt]sx?|svelte|vue|py|rs|go|java|c|cpp|h|cs|rb|php|sh|ps1|sql|html|css|scss)$/i;
 
-export type Picture = { id: string; name: string; mime: string; src: string };
+export type Picture = { id: string; name: string; mime: string; src: string; path?: string };
 export type Document = { name: string; path: string; size: number };
 export type AttachmentActions = { preview: () => void; remove: () => void };
 
@@ -47,6 +47,7 @@ async function copyFileContents(path: string): Promise<void> {
 // A pasted picture lives only in the message box until it is sent: it is written to disk once, on the first path request.
 const savedPictures = new Map<string, Promise<string>>();
 function picturePath(picture: Picture): Promise<string> {
+  if (picture.path) return Promise.resolve(picture.path);
   let saved = savedPictures.get(picture.id);
   if (!saved) {
     saved = saveAttachment(picture.mime, picture.src.slice(picture.src.indexOf(',') + 1));
@@ -64,7 +65,7 @@ export function pictureMenuItems(picture: Picture, actions: AttachmentActions): 
       icon: 'lucideImage',
       iconSize: '12',
       class: row,
-      onClick: () => void copyImage(picture.src).then((done) => (done ? toast.success('Image copied') : toast.error('Could not copy the image'))),
+      onClick: () => void pictureData(picture).then(copyImage).then((done) => (done ? toast.success('Image copied') : toast.error('Could not copy the image'))),
     },
     { label: 'Copy path', icon: 'lucideCopy', iconSize: '12', class: row, onClick: () => void picturePath(picture).then(copyPath, failed('Could not save the image')) },
     { label: 'Show in folder', icon: 'lucideFolder', iconSize: '12', class: row, onClick: () => void picturePath(picture).then(showInFolder, failed('Could not save the image')) },

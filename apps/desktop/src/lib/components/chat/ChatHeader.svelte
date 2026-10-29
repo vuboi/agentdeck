@@ -111,27 +111,27 @@
   const menuTab = $derived(tabMenu ? contentTabs.tabs.find((tab) => tab.id === tabMenu?.id) : undefined);
   const tabContextItems = $derived<ZDropdownMenuItem[]>([
     ...(menuTab?.kind === 'file' && menuTab.dirty
-      ? [{ label: 'Save', icon: 'lucideSave', iconSize: '12', shortcut: 'Ctrl+S', divide: 'after', class: 'text-xs! py-1', onClick: () => tabMenu && void saveTab(tabMenu.id) } as ZDropdownMenuItem]
+      ? [{ label: 'Save', icon: 'lucideSave', iconSize: '12', shortcut: 'Ctrl+S', divide: 'after', class: 'text-sm! py-1', onClick: () => tabMenu && void saveTab(tabMenu.id) } as ZDropdownMenuItem]
       : []),
     ...(menuTab?.kind === 'file'
       ? [
-          { label: 'Open in the side panel', icon: 'lucidePanelRight', iconSize: '12', class: 'text-xs! py-1', onClick: () => openInViewer(menuTab.path, menuTab.root, menuTab.view) } as ZDropdownMenuItem,
+          { label: 'Open in the side panel', icon: 'lucidePanelRight', iconSize: '12', class: 'text-sm! py-1', onClick: () => openInViewer(menuTab.path, menuTab.root, menuTab.view) } as ZDropdownMenuItem,
           ...openWithItem(menuTab.path, openWithList, () => loadTabOpenWith(menuTab.path, menuTab.id)),
-          { label: 'Copy path', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', divide: 'after', onClick: () => void navigator.clipboard.writeText(menuTab.path) } as ZDropdownMenuItem,
+          { label: 'Copy path', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', divide: 'after', onClick: () => void navigator.clipboard.writeText(menuTab.path) } as ZDropdownMenuItem,
         ]
       : []),
     ...(menuTab?.kind === 'chat'
       ? [
-          { label: 'Copy conversation', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => void copyConversation(menuTab.sessionId) } as ZDropdownMenuItem,
-          { label: inTauri() ? 'Copy conversation file path' : 'Download conversation file', icon: 'lucideFileText', iconSize: '12', class: 'text-xs! py-1', onClick: () => void exportConversationPath(menuTab.sessionId) } as ZDropdownMenuItem,
+          { label: 'Copy conversation', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', onClick: () => void copyConversation(menuTab.sessionId) } as ZDropdownMenuItem,
+          { label: inTauri() ? 'Copy conversation file path' : 'Download conversation file', icon: 'lucideFileText', iconSize: '12', class: 'text-sm! py-1', onClick: () => void exportConversationPath(menuTab.sessionId) } as ZDropdownMenuItem,
           ...(workspace.sessions.find((session) => session.id === menuTab.sessionId)?.path
-            ? [{ label: 'Copy source transcript path', icon: 'lucideLink', iconSize: '12', class: 'text-xs! py-1', onClick: () => void navigator.clipboard.writeText(workspace.sessions.find((session) => session.id === menuTab.sessionId)?.path ?? '') } as ZDropdownMenuItem]
+            ? [{ label: 'Copy source transcript path', icon: 'lucideLink', iconSize: '12', class: 'text-sm! py-1', onClick: () => void navigator.clipboard.writeText(workspace.sessions.find((session) => session.id === menuTab.sessionId)?.path ?? '') } as ZDropdownMenuItem]
             : []),
         ]
       : []),
-    { label: 'Close tab', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+W', class: 'text-xs! py-1', onClick: () => tabMenu && closeTab(tabMenu.id) },
-    { label: 'Close other tabs', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+K Ctrl+O', class: 'text-xs! py-1', onClick: () => tabMenu && closeOtherTabs(tabMenu.id) },
-    { label: 'Close all tabs', icon: 'lucideListX', iconSize: '12', shortcut: 'Ctrl+K Ctrl+W', divide: 'before', class: 'text-xs! py-1', onClick: () => closeAllTabs() },
+    { label: 'Close tab', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+W', class: 'text-sm! py-1', onClick: () => tabMenu && closeTab(tabMenu.id) },
+    { label: 'Close other tabs', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+K Ctrl+O', class: 'text-sm! py-1', onClick: () => tabMenu && closeOtherTabs(tabMenu.id) },
+    { label: 'Close all tabs', icon: 'lucideListX', iconSize: '12', shortcut: 'Ctrl+K Ctrl+W', divide: 'before', class: 'text-sm! py-1', onClick: () => closeAllTabs() },
   ]);
 
   // Tab strip: label per tab, and the dropdown that lists every tab once they overflow the strip.
@@ -193,7 +193,7 @@
             aria-selected={active}
             title={tab.kind === 'file' ? displayPath(tab.root, tab.path) : label}
             data-tip-clip
-            class="flex h-8 max-w-56 shrink-0 cursor-pointer items-center justify-between gap-1.5 rounded-md py-0 pr-2.5 pl-2.5 text-xs outline-none focus-visible:ring-0 {active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+            class="flex h-7 max-w-56 shrink-0 cursor-pointer items-center justify-between gap-1 rounded-md py-0 pr-2 pl-2 text-sm outline-none focus-visible:ring-0 {active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
             onclick={() => activateTab(tab.id)}
             oncontextmenu={(event) => openTabMenu(event, tab.id)}
             onkeydown={(event) => event.key === 'Enter' && activateTab(tab.id)}

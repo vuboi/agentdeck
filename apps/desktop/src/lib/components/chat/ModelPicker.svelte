@@ -21,10 +21,10 @@
   }: { agent: Agent; model: string; effort: Effort; fast: boolean; permission: Permission } = $props();
 
   let open = $state(false);
-  /** The flow of the open chat: with one, a message runs through its steps instead of one agent. */
+  /** The flow assigned to the open chat. */
   const flow = $derived(presetOf(workspace.activeId));
-  /** The agents the flow's steps run on, each once: shown on the button in place of one model. */
-  const flowAgents = $derived([...new Set((flow?.steps ?? []).map((step) => step.agent))].slice(0, 3));
+  /** Preferred providers for this flow's sub-agents, shown on the button in place of one model. */
+  const flowAgents = $derived([...new Set((flow?.agents ?? []).map((agent) => agent.agent))].slice(0, 3));
   // The popover scales in; tabs measured during that are off-centre. They are drawn again once it has settled.
   let settled = $state(false);
   $effect(() => {
@@ -56,7 +56,7 @@
               // The popover hands focus back to its button when it closes; the warm-up must not leave it there.
               if (document.activeElement === trigger) {
                 trigger?.blur();
-                document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus();
+                document.querySelector<HTMLElement>('[data-composer-editor]')?.focus();
               }
               delete root.dataset.warming;
               warming = false;
@@ -187,7 +187,7 @@
   zWave={false}
   zType="ghost"
   zSize="sm"
-  class="group h-7 w-fit min-w-0 max-w-full flex-none justify-start gap-1 px-1.5 text-left text-[11px] {open ? '!bg-primary/15 !text-primary hover:!bg-primary/20' : 'hover:!bg-primary/15 hover:!text-primary'}"
+  class="group h-7 w-fit min-w-0 max-w-full flex-none justify-start gap-1 px-1.5 text-left text-[0.6875rem] {open ? '!bg-primary/15 !text-primary hover:!bg-primary/20' : 'hover:!bg-primary/15 hover:!text-primary'}"
   aria-haspopup="dialog"
   aria-expanded={open}
   aria-label="Model and permissions"
@@ -225,7 +225,7 @@
   zPosition="top-left"
   zOffset={8}
   zWidth={320}
-  onClosed={() => !warming && document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()}
+  onClosed={() => !warming && document.querySelector<HTMLElement>('[data-composer-editor]')?.focus()}
 >
   {#snippet children()}
     <div class="overflow-x-hidden overflow-y-auto py-2.5" style:max-height="{panelMax}px">
@@ -241,7 +241,7 @@
               aria-haspopup="dialog"
               aria-expanded={subOpen && subProvider === source.key}
               data-glide-item
-              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {(subOpen && subProvider === source.key) || current ? 'bg-primary/10' : ''}"
+              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {(subOpen && subProvider === source.key) || current ? 'bg-primary/10' : ''}"
               onpointerenter={(event) => openSub(source.key, event.currentTarget)}
               onpointerleave={leaveSub}
               onfocus={(event) => openSub(source.key, event.currentTarget)}
@@ -251,7 +251,7 @@
               <!-- Name and model share one baseline: their sizes differ, so centring each box would set them off. -->
               <span class="flex min-w-0 flex-1 items-baseline gap-2">
                 <span class="truncate {current ? 'max-w-[60%] shrink-0' : 'min-w-0 flex-1'}">{source.label}</span>
-                {#if current}<span class="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground">{current}</span>{/if}
+                {#if current}<span class="min-w-0 flex-1 truncate text-right text-[0.6875rem] text-muted-foreground">{current}</span>{/if}
               </span>
               <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
             </button>
@@ -268,14 +268,14 @@
             aria-haspopup="dialog"
             aria-expanded={subOpen && subProvider === FLOW}
             data-glide-item
-            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {subOpen && subProvider === FLOW ? 'bg-primary/10' : ''}"
+            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {subOpen && subProvider === FLOW ? 'bg-primary/10' : ''}"
             onpointerenter={(event) => openSub(FLOW, event.currentTarget)}
             onpointerleave={leaveSub}
             onfocus={(event) => openSub(FLOW, event.currentTarget)}
           >
             <ZIcon zType="lucideWorkflow" class="size-3.5 shrink-0 {flow ? 'text-primary' : 'text-muted-foreground'}" />
             <span class="flex-1 truncate">Flow</span>
-            <span class="truncate text-[11px] text-muted-foreground" {@attach zTooltip({ content: flow?.name ?? 'None', position: 'right', autoDetect: true, offset: 6 })}>{flow?.name ?? 'None'}</span>
+            <span class="truncate text-[0.6875rem] text-muted-foreground" {@attach zTooltip({ content: flow?.name ?? 'None', position: 'right', autoDetect: true, offset: 6 })}>{flow?.name ?? 'None'}</span>
             <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
           </button>
         </div>
@@ -300,11 +300,11 @@
 
       <section aria-label="Speed" class="flex items-center justify-between gap-6 px-0.5">
         <div>
-          <div class="flex items-center gap-1.5 text-xs font-medium">
+          <div class="flex items-center gap-1.5 text-sm font-medium">
             <ZIcon zType="lucideZap" class="size-3.5 text-warning" />
             Fast mode
           </div>
-          <div class="mt-1 text-[11px] leading-snug text-muted-foreground">Faster output, higher usage</div>
+          <div class="mt-1 text-[0.6875rem] leading-snug text-muted-foreground">Faster output, higher usage</div>
         </div>
         <ZSwitch zVariant="dot" bind:checked={fast} zSize="sm" />
       </section>
@@ -319,11 +319,11 @@
           ] as row (row.key)}
             <div class="flex items-center justify-between gap-6">
               <div class="min-w-0">
-                <div class="flex items-center gap-1.5 text-xs font-medium">
+                <div class="flex items-center gap-1.5 text-sm font-medium">
                   <ZIcon zType={row.icon as ZIconName} class="size-3.5 text-muted-foreground" />
                   {row.title}
                 </div>
-                <div class="mt-0.5 text-[11px] leading-snug text-muted-foreground">{row.note}</div>
+                <div class="mt-0.5 text-[0.6875rem] leading-snug text-muted-foreground">{row.note}</div>
               </div>
               <ZSwitch zVariant="dot" checked={row.on} zSize="sm" onChange={row.set} />
             </div>
@@ -349,8 +349,8 @@
           >
             <ZIcon zType={item.icon} class="mt-0.5 size-3.5 shrink-0 {item.danger ? 'text-destructive' : 'text-muted-foreground'}" />
             <span class="min-w-0 flex-1">
-              <span class="block truncate text-xs {item.danger ? 'text-destructive' : ''}" {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}>{item.label}</span>
-              <span class="block truncate text-[11px] text-muted-foreground" {@attach zTooltip({ content: blocked ? 'Your Antigravity account cannot use this mode' : item.hint, position: 'right', autoDetect: true, offset: 6 })}>{blocked ? 'Not available on your Antigravity account' : item.hint}</span>
+              <span class="block truncate text-sm {item.danger ? 'text-destructive' : ''}" {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}>{item.label}</span>
+              <span class="block truncate text-[0.6875rem] text-muted-foreground" {@attach zTooltip({ content: blocked ? 'Your Antigravity account cannot use this mode' : item.hint, position: 'right', autoDetect: true, offset: 6 })}>{blocked ? 'Not available on your Antigravity account' : item.hint}</span>
             </span>
             <span class="mt-0.5 size-3.5 shrink-0">
               {#if selected}<ZIcon zType="lucideCheck" class="size-3.5 text-primary" />{/if}
@@ -371,19 +371,19 @@
   zTrigger="manual"
   zPosition="right-top"
   zOffset={6}
-  zWidth={173}
+                  zWidth={203}
 >
   {#snippet children()}
     {#if subProvider === FLOW}
       <div class="flex w-full flex-col" style:max-height="{subMax}px">
         <div class="flex min-h-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1" role="radiogroup" tabindex="-1" aria-label="Flows" onpointerenter={keepSub} onpointerleave={leaveSub} {@attach glide()}>
-          <button type="button" role="radio" aria-checked={!flow} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {!flow ? 'bg-primary/10' : ''}" {...onPress(() => assignPreset(workspace.activeId, null))} {@attach zTooltip({ content: 'No flow: the agent answers', position: 'right', autoDetect: true, offset: 6 })}>
+          <button type="button" role="radio" aria-checked={!flow} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-sm outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {!flow ? 'bg-primary/10' : ''}" {...onPress(() => assignPreset(workspace.activeId, null))} {@attach zTooltip({ content: 'No flow: the agent answers', position: 'right', autoDetect: true, offset: 6 })}>
             <span class="min-w-0 flex-1 truncate">No flow: the agent answers</span>
             {#if !flow}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
           </button>
           {#each allPresets() as preset (preset.id)}
             {@const chosen = flow?.id === preset.id}
-            <button type="button" role="radio" aria-checked={chosen} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {chosen ? 'bg-primary/10' : ''}" {...onPress(() => assignPreset(workspace.activeId, preset.id))} {@attach zTooltip({ content: preset.name, position: 'right', autoDetect: true, offset: 6 })}>
+            <button type="button" role="radio" aria-checked={chosen} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-sm outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {chosen ? 'bg-primary/10' : ''}" {...onPress(() => assignPreset(workspace.activeId, preset.id))} {@attach zTooltip({ content: preset.name, position: 'right', autoDetect: true, offset: 6 })}>
               <span class="min-w-0 flex-1 truncate">{preset.name}</span>
               {#if chosen}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
             </button>
@@ -394,7 +394,7 @@
           <button
             type="button"
             role="menuitem"
-            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-muted-foreground outline-none hover:bg-primary/10 focus-visible:bg-primary/10"
+            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-sm text-muted-foreground outline-none hover:bg-primary/10 focus-visible:bg-primary/10"
             {...onPress(() => {
               subOpen = false;
               open = false;
@@ -413,20 +413,20 @@
     {:else if modelsOf(subProvider).length === 0}
       <div class="flex w-full flex-col items-center gap-1.5 px-3 py-4 text-center">
         <ZIcon zType="lucideShieldAlert" class="size-5 text-muted-foreground" />
-        <div class="text-xs font-medium">No AI models</div>
-        <p class="m-0 text-[11px] leading-snug text-muted-foreground">{sourceOf(subProvider).label} returned no models, or its provider has an error. Check it in Settings.</p>
+        <div class="text-sm font-medium">No AI models</div>
+        <p class="m-0 text-[0.6875rem] leading-snug text-muted-foreground">{sourceOf(subProvider).label} returned no models, or its provider has an error. Check it in Settings.</p>
       </div>
     {:else}
       <div class="flex w-full flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1" style:max-height="{subMax}px" role="radiogroup" tabindex="-1" aria-label="{sourceOf(subProvider).label} models" onpointerenter={keepSub} onpointerleave={leaveSub} {@attach glide()}>
         {#each subList.items as item, index (item.value)}
           {@const selected = agent === sourceOf(subProvider).provider && model === item.value}
-          {#each subList.dividers.filter((divider) => divider.at === index) as divider (divider.label)}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>{divider.label}</span><span class="h-px flex-1 bg-border"></span></div>{/each}
+          {#each subList.dividers.filter((divider) => divider.at === index) as divider (divider.label)}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-primary uppercase" class:text-green-500={divider.label === 'Free'} class:text-red-500={divider.label === 'Paid'} class:text-muted-foreground={divider.label === 'Hide'} role="separator"><span>{divider.label}</span><span class="h-px flex-1 bg-primary" class:bg-green-500={divider.label === 'Free'} class:bg-red-500={divider.label === 'Paid'} class:bg-muted-foreground={divider.label === 'Hide'}></span></div>{/each}
           <button
             type="button"
             role="radio"
             aria-checked={selected}
             data-glide-item
-            class="mr-1 flex cursor-pointer items-center justify-between rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''}"
+            class="mr-1 flex cursor-pointer items-center justify-between rounded-md px-2 py-1 text-left text-sm outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''}"
             {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}
             onclick={() => {
               pickModel(sourceOf(subProvider).provider, item.value);

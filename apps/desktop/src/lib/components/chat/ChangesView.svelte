@@ -219,14 +219,14 @@
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Changes">
   {#if root && changes.length > 0}
     <!-- Find a changed file by name: the same bar as the file tree's, over the changed files only. -->
-    <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center border-b border-border p-1.5 text-xs">
+    <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center border-b border-border p-1.5 text-sm">
       <button type="button" class="inline-flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-2 text-left outline-none {findOpen ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" title="Find a changed file by name" aria-expanded={findOpen} onclick={() => (findOpen = true)}>
         <ZIcon zType={icon('lucideSearch')} zSize="15" /> <span class="truncate">Search changed files</span>
       </button>
     </div>
   {/if}
   {#if !root || failure}
-    <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
+    <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
       <ZIcon zType={icon('lucideGitCompare')} zSize="28" class="size-7 opacity-60" />
       <p class="m-0 max-w-60">{root ? failure : 'Open a project to see its changes.'}</p>
     </div>
@@ -235,20 +235,20 @@
       <!-- git has not answered yet: the chat's bar along the top, then the list fades in under it. -->
       <div class="relative flex-1"><LoadingBar label="Loading changes" /></div>
     {:else if changes.length === 0}
-      <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
+      <div class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
         <ZIcon zType={icon('lucideGitCompare')} zSize="28" class="size-7 opacity-60" />
         <p class="m-0">No changes since the last commit.</p>
       </div>
     {:else}
-      <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-1.5 text-xs" bind:clientWidth={headWidth}>
+      <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-1.5 text-sm" bind:clientWidth={headWidth}>
         <span class="font-medium tabular-nums" title="{changes.length} {changes.length === 1 ? 'file' : 'files'}">{compact(changes.length)}{narrow ? '' : changes.length === 1 ? ' file' : ' files'}</span>
         <span class="text-emerald-500 tabular-nums" title="{totals.added} lines added">+{compact(totals.added)}</span>
         <span class="text-red-500 tabular-nums" title="{totals.removed} lines removed">−{compact(totals.removed)}</span>
         <span class="flex-1"></span>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 {narrow ? 'size-6! p-0' : 'px-2'} text-xs" disabled={busy} aria-label={allStaged ? 'Unstage all' : 'Stage all'} title={allStaged ? 'Unstage all' : 'Stage all'} onclick={() => void stage('', !allStaged)}>
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 {narrow ? 'size-6! p-0' : 'px-2'} text-sm" disabled={busy} aria-label={allStaged ? 'Unstage all' : 'Stage all'} title={allStaged ? 'Unstage all' : 'Stage all'} onclick={() => void stage('', !allStaged)}>
           {#if narrow}<ZIcon zType={icon(allStaged ? 'lucideMinus' : 'lucidePlus')} class="size-3.5" />{:else}{allStaged ? 'Unstage all' : 'Stage all'}{/if}
         </ZButton>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 gap-1 {narrow ? 'size-6! p-0' : 'px-2'} text-xs hover:!bg-destructive/10 hover:!text-destructive" disabled={busy} aria-label="Revert all" title="Revert all" onclick={() => (ask({ all: true, path: '' }))}>
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 gap-1 {narrow ? 'size-6! p-0' : 'px-2'} text-sm hover:!bg-destructive/10 hover:!text-destructive" disabled={busy} aria-label="Revert all" title="Revert all" onclick={() => (ask({ all: true, path: '' }))}>
           <ZIcon zType={icon(reverting ? 'lucideLoaderCircle' : 'lucideUndo2')} class="size-3.5 {reverting ? 'animate-spin' : ''}" />{#if !narrow} {reverting ? 'Reverting…' : 'Revert all'}{/if}
         </ZButton>
       </div>
@@ -261,9 +261,9 @@
             <!-- The virtual rows are updated after the list (an effect): for one frame a row can point past a list that shrank. -->
             {#if change}
             <!-- The slot is ROW high (the list is virtual); the row inside leaves 1px above and below, so rows do not touch. -->
-            <div class="absolute top-0 left-0 w-full py-px" style:height="{row.size}px" style:transform="translateY({row.start}px)">
+            <div class="absolute top-0 left-0 w-full" style:height="{row.size}px" style:transform="translateY({row.start}px)">
             <!-- The whole row opens the file; the stage and revert buttons at its end do their own thing. -->
-            <div class="group flex h-full cursor-pointer items-center gap-1.5 rounded-(--radius-row) px-2.5 text-xs hover:bg-muted/50" role="presentation" onpointerenter={() => warm(change)} onclick={(event) => !(event.target as Element).closest('[data-row-action]') && openChange(change)}>
+            <div class="group flex h-full cursor-pointer items-center gap-1.5 rounded-[3px] px-2.5 text-sm hover:bg-muted/50" role="presentation" onpointerenter={() => warm(change)} onclick={(event) => !(event.target as Element).closest('[data-row-action]') && openChange(change)}>
               <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left no-underline outline-none" title="Open {change.path}">
                 <span class="w-3 shrink-0 text-center font-mono {STATUS[change.status]?.tone}" title={STATUS[change.status]?.label}>{change.status}</span>
                 <span class="min-w-0 truncate" title={change.path}><span class="text-muted-foreground">{dirOf(change.path)}</span>{nameOf(change.path)}</span>

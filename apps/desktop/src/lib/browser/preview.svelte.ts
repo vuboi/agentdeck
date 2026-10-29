@@ -1,6 +1,6 @@
 // One lightbox for the whole app (z-ui's gallery preview): pictures and documents attached in the composer and in messages open it.
 import type { ZGalleryFile } from '@shival99/z-ui-svelte';
-import { readFileBytes, revealFile } from '../chat/agent';
+import { mimeOfPath, pictureSrc, readFileBytes, revealFile } from '../chat/agent';
 import { previewMime } from '../chat/content/attachments';
 import { toast } from '../app/platform/toast';
 
@@ -18,16 +18,21 @@ export function releasePreview() {
 }
 
 /** Opens the lightbox on `images[index]`, with arrows to step through the rest. */
-export function openImages(images: { src: string; name: string }[], index: number) {
+export function openImages(images: { src?: string; path?: string; name: string }[], index: number) {
   releasePreview();
-  preview.files = images.map((image, position) => ({
-    id: `${position}:${image.name}`,
-    name: image.name,
-    size: Math.round((image.src.length - image.src.indexOf(',') - 1) * 0.75),
-    type: image.src.slice(5, image.src.indexOf(';')) || 'image/png',
-    url: image.src,
-    thumbnailUrl: image.src,
-  }));
+  preview.files = images.map((image, position) => {
+    // A picture kept in its file is drawn from the file; a data URL is only sized when it is all there is.
+    const url = pictureSrc(image);
+    const data = !image.path && image.src?.startsWith('data:') ? image.src : '';
+    return {
+      id: `${position}:${image.name}`,
+      name: image.name,
+      size: data ? Math.round((data.length - data.indexOf(',') - 1) * 0.75) : 0,
+      type: data ? data.slice(5, data.indexOf(';')) || 'image/png' : mimeOfPath(image.path ?? ''),
+      url,
+      thumbnailUrl: url,
+    };
+  });
   preview.file = preview.files[index] ?? null;
 }
 
@@ -51,6 +56,16 @@ export async function openDocument(path: string, name: string, size = 0) {
   blobUrls.push(url);
   const file: ZGalleryFile = { id: `doc:${path}`, name, size: size || bytes.byteLength, type, url };
   paths.set(file.id, path);
+  preview.files = [file];
+  preview.file = file;
+}
+
+/** Opens a table of an answer in the lightbox, as the Markdown it is (a table is shown wide, with its own scroll). */
+export function openTablePreview(markdown: string) {
+  releasePreview();
+  const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown' }));
+  blobUrls.push(url);
+  const file: ZGalleryFile = { id: `table:${url}`, name: 'table.md', size: new Blob([markdown]).size, type: 'text/markdown', url };
   preview.files = [file];
   preview.file = file;
 }

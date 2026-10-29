@@ -8,7 +8,7 @@
   import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
   import { OPENAI_SVG, OPENCODE_SVG } from '../../agents/brand-icons';
   import { activeSession, workspace } from '../../chat/sessions.svelte';
-  import { saveAttachment, type ImageSettings, type SuggestedKeyword } from '../../chat/agent';
+  import { keepPicture, pictureSrc, saveAttachment, type ImageSettings, type SuggestedKeyword } from '../../chat/agent';
   import { openImages } from '../../browser/preview.svelte';
   import { clearSuggestions, draft, gen, refreshHistory, runSuggest, startRun, stopRun } from '../../files/image-gen.svelte';
   import { findModel, freeFirst, modelSources, modelsReady, parseCustomModel, type ProviderId } from '../../agents/models.svelte';
@@ -249,8 +249,8 @@
       return;
     }
     for (const file of pictures.slice(0, room)) {
-      const src = await readPicture(file);
-      references = [...references, { id: crypto.randomUUID(), name: file.name || 'pasted image', mime: file.type, src }];
+      const kept = await keepPicture({ id: crypto.randomUUID(), name: file.name || 'pasted image', mime: file.type, src: await readPicture(file) });
+      references = [...references, kept];
     }
   }
 
@@ -358,11 +358,11 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-col" role="tabpanel" aria-label="Image generator">
-  <header class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-1.5 text-[13px]">
+  <header class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-1.5 text-[0.8125rem]">
     <span class="grid size-7 place-items-center rounded-lg bg-primary/12 text-primary"><ZIcon zType="lucideImage" class="size-4" /></span>
-    <h2 class="m-0 min-w-0 flex-1 truncate text-xs font-semibold text-foreground">Image candidates</h2>
+    <h2 class="m-0 min-w-0 flex-1 truncate text-sm font-semibold text-foreground">Image candidates</h2>
     {#if runMs > 0}
-      <span class="inline-flex h-7 shrink-0 items-center rounded border border-border bg-background px-2.5 text-[11px] font-medium tabular-nums text-muted-foreground" title="Time of the last run" aria-live="off">{formatDuration(runMs)}</span>
+      <span class="inline-flex h-7 shrink-0 items-center rounded border border-border bg-background px-2.5 text-[0.6875rem] font-medium tabular-nums text-muted-foreground" title="Time of the last run" aria-live="off">{formatDuration(runMs)}</span>
     {/if}
     <button
       type="button"
@@ -398,7 +398,7 @@
                   )}
               >
                 <button type="button" class="block size-12 cursor-zoom-in overflow-hidden rounded-lg border border-border outline-none transition hover:ring-2 hover:ring-primary/50 focus-visible:ring-2 focus-visible:ring-ring" aria-label="Preview {reference.name}" onclick={() => openImages(references, references.indexOf(reference))}>
-                  <img src={reference.src} alt={reference.name} class="size-full object-cover" />
+                  <img src={pictureSrc(reference)} alt={reference.name} class="size-full object-cover" />
                 </button>
                 <button
                   type="button"
@@ -454,7 +454,7 @@
           <button
             bind:this={settingsTrigger}
             type="button"
-            class="flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingsOpen ? 'bg-primary/10 text-primary' : ''}"
+            class="flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingsOpen ? 'bg-primary/10 text-primary' : ''}"
             aria-haspopup="menu"
             aria-expanded={settingsOpen}
             aria-label="Image settings"
@@ -514,7 +514,7 @@
 
         <ZPopover anchor={settingsTrigger} bind:open={settingsOpen} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={256}>
           {#snippet children()}
-            <div class="flex w-full flex-col gap-4 overflow-x-hidden overflow-y-auto px-2.5 py-2.5 text-xs" role="menu" aria-label="Image settings" {@attach glide()}>
+            <div class="flex w-full flex-col gap-4 overflow-x-hidden overflow-y-auto px-2.5 py-2.5 text-sm" role="menu" aria-label="Image settings" {@attach glide()}>
               <section aria-label="Image models">
                 <SectionTitle label="MODEL" />
                 <button
@@ -562,7 +562,7 @@
                       <!-- As in the chat's model picker: the provider's name keeps its room, the model's gives way (truncated). -->
                       <span class="flex min-w-0 flex-1 items-baseline gap-2">
                         <span class="truncate {activeProvider ? 'max-w-[60%] shrink-0' : 'min-w-0 flex-1'}">{group.label}</span>
-                        {#if activeProvider}<span class="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground">{promptModelLabel}</span>{/if}
+                        {#if activeProvider}<span class="min-w-0 flex-1 truncate text-right text-[0.6875rem] text-muted-foreground">{promptModelLabel}</span>{/if}
                       </span>
                       <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
                     </button>
@@ -602,11 +602,11 @@
 
               <section aria-label="Speed" class="flex items-center justify-between gap-6 px-0.5">
                 <div>
-                  <div class="flex items-center gap-1.5 text-xs font-medium">
+                  <div class="flex items-center gap-1.5 text-sm font-medium">
                     <ZIcon zType="lucideZap" class="size-3.5 text-warning" />
                     Fast mode
                   </div>
-                  <div class="mt-1 text-[11px] leading-snug text-muted-foreground">Faster output, higher usage</div>
+                  <div class="mt-1 text-[0.6875rem] leading-snug text-muted-foreground">Faster output, higher usage</div>
                 </div>
                 <ZSwitch zVariant="dot" bind:checked={fast} zSize="sm" />
               </section>
@@ -614,10 +614,10 @@
           {/snippet}
         </ZPopover>
 
-        <ZPopover anchor={modelsRow} bind:open={modelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={173}>
+        <ZPopover anchor={modelsRow} bind:open={modelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={203}>
           {#snippet children()}
-            <div class="flex w-full flex-col gap-0.5 p-1.5 text-xs" role="menu" aria-label="Image models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
-              <div class="mr-1 flex shrink-0 items-center gap-2 px-1.5 py-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Codex</span><span class="h-px flex-1 bg-border"></span></div>
+            <div class="flex w-full flex-col gap-0.5 p-1.5 text-sm" role="menu" aria-label="Image models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
+              <div class="mr-1 flex shrink-0 items-center gap-2 px-1.5 py-1 text-[10px] font-medium tracking-wide text-primary uppercase" role="separator"><span>Codex</span><span class="h-px flex-1 bg-primary"></span></div>
               {#each openAiModels as item (item.model)}
                 {@const active = selectedModels.includes(item.model)}
                 <button
@@ -634,7 +634,7 @@
                   {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
                 </button>
               {/each}
-              <div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-1.5 py-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>Google Gemini</span><span class="h-px flex-1 bg-border"></span></div>
+              <div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-1.5 py-1 text-[10px] font-medium tracking-wide text-primary uppercase" role="separator"><span>Google Gemini</span><span class="h-px flex-1 bg-primary"></span></div>
               {#if geminiReady}
               {#each gemini as item (item.model)}
                 {@const active = selectedModels.includes(item.model)}
@@ -653,17 +653,17 @@
                 </button>
               {/each}
               {:else}
-                <p class="m-0 px-1.5 py-1 text-[11px] leading-snug text-muted-foreground">Add a Gemini API key in Settings, Cloud providers, to use Nano Banana.</p>
+                <p class="m-0 px-1.5 py-1 text-[0.6875rem] leading-snug text-muted-foreground">Add a Gemini API key in Settings, Cloud providers, to use Nano Banana.</p>
               {/if}
             </div>
           {/snippet}
         </ZPopover>
 
-        <ZPopover anchor={promptModelsAnchor} bind:open={promptModelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={173}>
+        <ZPopover anchor={promptModelsAnchor} bind:open={promptModelsOpen} zTrigger="manual" zPosition="right-top" zOffset={6} zWidth={203}>
           {#snippet children()}
             {@const selectedGroup = promptGroups.find((group) => group.provider === promptSubProvider)}
             {@const sorted = freeFirst(selectedGroup?.items ?? [])}
-            <div class="flex w-full flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1 text-xs" style:max-height="320px" role="radiogroup" aria-label="Prompt models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
+            <div class="flex w-full flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1 text-sm" style:max-height="320px" role="radiogroup" aria-label="Prompt models" tabindex="-1" onpointerenter={keepNestedMenusOpen} onpointerleave={closeNestedMenusSoon} {@attach glide()}>
               {#if selectedGroup && !modelsReady[selectedGroup.agent]}
                 <!-- The CLI's own list is still being read: rows that stand where its models will, instead of a list that would be replaced. -->
                 <div class="flex w-full flex-col gap-1 px-2 py-2" role="status" aria-label="Loading models">
@@ -673,13 +673,13 @@
                 <!-- The same empty state as the chat's model picker: the provider listed no models. -->
                 <div class="flex w-full flex-col items-center gap-1.5 px-2 py-3 text-center">
                   <ZIcon zType="lucideShieldAlert" class="size-5 text-muted-foreground" />
-                  <div class="text-xs font-medium">No AI models</div>
-                  <p class="m-0 text-[11px] leading-snug text-muted-foreground">{selectedGroup?.label ?? 'This provider'} returned no models, or its provider has an error. Check it in Settings.</p>
+                  <div class="text-sm font-medium">No AI models</div>
+                  <p class="m-0 text-[0.6875rem] leading-snug text-muted-foreground">{selectedGroup?.label ?? 'This provider'} returned no models, or its provider has an error. Check it in Settings.</p>
                 </div>
               {/if}
               {#each selectedGroup && modelsReady[selectedGroup.agent] ? sorted.items : [] as item, index (item.value)}
                 {@const active = item.value === promptModel}
-                {#each sorted.dividers.filter((divider) => divider.at === index) as divider (divider.label)}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>{divider.label}</span><span class="h-px flex-1 bg-border"></span></div>{/each}
+                {#each sorted.dividers.filter((divider) => divider.at === index) as divider (divider.label)}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-primary uppercase" class:text-green-500={divider.label === 'Free'} class:text-red-500={divider.label === 'Paid'} class:text-muted-foreground={divider.label === 'Hide'} role="separator"><span>{divider.label}</span><span class="h-px flex-1 bg-primary" class:bg-green-500={divider.label === 'Free'} class:bg-red-500={divider.label === 'Paid'} class:bg-muted-foreground={divider.label === 'Hide'}></span></div>{/each}
                 <button
                   type="button"
                   data-glide-item
@@ -699,7 +699,7 @@
 
         {#if suggesting || promptSuggestions.length}
           <div transition:fold class="-mx-1.5 -mb-2 mt-2 flex flex-col gap-1 overflow-hidden border-t border-border px-1.5 pt-2 pb-2" aria-label="Prompt suggestions">
-            <span class="px-1 text-[11px] text-muted-foreground">Suggested prompts · click to use</span>
+            <span class="px-1 text-[0.6875rem] text-muted-foreground">Suggested prompts · click to use</span>
             {#if suggesting}
               <div class="flex flex-col gap-2 px-1 py-1" role="status" aria-label="Writing prompt suggestions">
                 {#each [0, 1, 2] as line (line)}
@@ -708,14 +708,14 @@
               </div>
             {:else}
               {#each promptSuggestions as suggestion (suggestion)}
-                <button in:fade={{ duration: 220 }} type="button" class="rounded-md bg-muted/50 px-2 py-1.5 text-left text-xs leading-4 text-foreground transition-colors hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:text-primary outline-none" onclick={() => useSuggestion(suggestion)}>
+                <button in:fade={{ duration: 220 }} type="button" class="rounded-md bg-muted/50 px-2 py-1.5 text-left text-sm leading-4 text-foreground transition-colors hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:text-primary outline-none" onclick={() => useSuggestion(suggestion)}>
                   {suggestion}
                 </button>
               {/each}
               {#if suggestedKeywords.length > 0}
                 <div class="flex flex-wrap gap-1 px-1 pt-1" aria-label="Suggested keywords">
                   {#each suggestedKeywords as keyword (keyword.category + keyword.value)}
-                    <button type="button" class="rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 text-[11px] text-primary outline-none transition-colors hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring" title={SETTINGS.find((item) => item.key === SETTING_CATEGORY[keyword.category])?.label ?? 'Prompt keyword'} onclick={() => useKeyword(keyword)}>
+                    <button type="button" class="rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 text-[0.6875rem] text-primary outline-none transition-colors hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring" title={SETTINGS.find((item) => item.key === SETTING_CATEGORY[keyword.category])?.label ?? 'Prompt keyword'} onclick={() => useKeyword(keyword)}>
                       {keyword.value}
                     </button>
                   {/each}
@@ -732,7 +732,7 @@
           {@const chosen = settings[setting.key]}
           <button
             type="button"
-            class="flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingOpen && settingKey === setting.key ? ACTIVE_ON : ''} {chosen ? 'text-foreground' : 'text-muted-foreground'}"
+            class="flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm outline-none transition-colors hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring {settingOpen && settingKey === setting.key ? ACTIVE_ON : ''} {chosen ? 'text-foreground' : 'text-muted-foreground'}"
             aria-haspopup="menu"
             aria-expanded={settingOpen && settingKey === setting.key}
             onclick={(event) => openSetting(setting.key, event.currentTarget)}
