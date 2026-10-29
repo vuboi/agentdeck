@@ -1,4 +1,4 @@
-//! What the Preview agent learned about the pages of a site, kept in the webview's IndexedDB (src/lib/page-memory.ts) so the
+//! What the Preview agent learned about the pages of a site, kept in the webview's IndexedDB (src/lib/browser/page-memory.ts) so the
 //! next visit can look an element up instead of taking a screenshot and walking the DOM again.
 //!
 //! The webview owns the store: each call is emitted as a `page-memory` event `{ callId, op, args }` and, for the ones that

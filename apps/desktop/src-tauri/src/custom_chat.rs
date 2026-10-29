@@ -15,6 +15,7 @@ use ag_adapters::agent::permission::{verdict, Action, Mode, Verdict};
 use ag_adapters::agent::{
     allow_entry, file_change, summarize_tool_input, AgentEvent, PermissionRequest,
 };
+use ag_adapters::agent::warm::InjectSlot;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::AppHandle;
@@ -1561,6 +1562,9 @@ pub async fn run_turn(
         json!({ "role": "system", "content": if turn.restricted { RESTRICTED_PROMPT.to_string() } else { system_prompt(turn.cwd.as_deref(), &skills) } }),
     ];
     messages.extend(history.iter().map(wire_message));
+    // A message the user writes while this turn runs goes into the conversation at the next step, as a CLI that reads
+    // its input at any time would take it: the work goes on, and the answer covers it.
+    let (_inbox_slot, mut inbox) = InjectSlot::open(&turn.chat);
 
     let mut answer = String::new();
     let mut retries = 0;
@@ -1578,6 +1582,9 @@ pub async fn run_turn(
     // again with thinking off, before the turn is called a failure.
     let mut silent = 0;
     for step_number in 0..MAX_STEPS {
+        while let Ok(text) = inbox.try_recv() {
+            messages.push(json!({ "role": "user", "content": text }));
+        }
         let step = match model_call(&client, &turn, &messages, &tools, &mut emit).await {
             Ok(step) => step,
             Err(message) => return emit(AgentEvent::Error { message }),
@@ -1626,6 +1633,18 @@ pub async fn run_turn(
                 }
                 return emit(AgentEvent::Error { message: "the model gave no answer (it only thought), even with thinking off. Pick another model, or try a smaller step".into() });
             }
+            // A message that came in while the model was writing its last answer is not left unread: the work goes on.
+            let mut late = false;
+            while let Ok(text) = inbox.try_recv() {
+                if !late {
+                    messages.push(json!({ "role": "assistant", "content": step.text }));
+                    late = true;
+                }
+                messages.push(json!({ "role": "user", "content": text }));
+            }
+            if late {
+                continue;
+            }
             return emit(AgentEvent::Done {
                 session_id: None,
                 text: answer,
@@ -1662,7 +1681,11 @@ pub async fn run_turn(
             "tool_calls": calls.iter().zip(&ids).map(|(call, id)| json!({ "id": id, "type": "function", "function": { "name": call.name, "arguments": if call.arguments.is_empty() { "{}" } else { call.arguments.as_str() } } })).collect::<Vec<_>>(),
         }));
 
-        let mut denied = Vec::new();
+        // Every call of the step is shown as running at once. Those that only wait (on a sub-agent, on the web) start
+        // together, so the slowest sets the time and not the sum; the rest run in order after them. The tasks live in
+        // a set: when the turn is stopped it is dropped and they end with it, a sub-agent nobody waits for included.
+        let mut side_by_side = tokio::task::JoinSet::new();
+        let mut prepared: Vec<Value> = Vec::with_capacity(calls.len());
         for (call, id) in calls.iter().zip(&ids) {
             let args: Value = serde_json::from_str(if call.arguments.is_empty() {
                 "{}"
@@ -1702,9 +1725,40 @@ pub async fn run_turn(
                 name: shown,
                 input: summarize_tool_input(&call.name, &args),
                 change: change_for(&call.name, &args, turn.cwd.as_deref()),
-                background: false,
+                background: crate::delegate::is_tool(&call.name) && args["wait"] == false,
             });
-            let outcome = if !args.is_object() {
+            let waits_only = user_tool.is_none()
+                && args.is_object()
+                && (crate::delegate::is_tool(&call.name) || matches!(call.name.as_str(), "WebFetch" | "WebSearch" | "PackageInfo"));
+            if waits_only && matches!(decide(&turn, &call.name, &args, false), Decision::Allow) {
+                let (app, chat, name, args, id, restricted) = (app.clone(), chat.clone(), call.name.clone(), args.clone(), id.clone(), turn.restricted);
+                side_by_side.spawn(async move {
+                    let outcome = match name.as_str() {
+                        "WebFetch" => web_fetch(&args, restricted).await,
+                        "WebSearch" => web_search(&args).await,
+                        "PackageInfo" => package_info(&args).await,
+                        _ => browser_call(&app, &chat, &name, &args).await,
+                    };
+                    (id, outcome)
+                });
+            }
+            prepared.push(args);
+        }
+        let mut finished: std::collections::HashMap<String, Outcome> = std::collections::HashMap::new();
+        while let Some(joined) = side_by_side.join_next().await {
+            if let Ok((id, outcome)) = joined {
+                finished.insert(id, outcome);
+            }
+        }
+
+        let mut denied = Vec::new();
+        for ((call, id), args) in calls.iter().zip(&ids).zip(prepared) {
+            let user_tool = external
+                .iter()
+                .find(|(exposed, _, _)| *exposed == call.name);
+            let outcome = if let Some(done) = finished.remove(id) {
+                done
+            } else if !args.is_object() {
                 failed("the arguments were not valid JSON")
             } else {
                 match decide(&turn, &call.name, &args, user_tool.is_some()) {

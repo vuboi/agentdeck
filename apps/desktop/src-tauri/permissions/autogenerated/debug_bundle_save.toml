@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-debug-bundle-save"
+description = "Enables the debug_bundle_save command without any pre-configured scope."
+commands.allow = ["debug_bundle_save"]
+
+[[permission]]
+identifier = "deny-debug-bundle-save"
+description = "Denies the debug_bundle_save command without any pre-configured scope."
+commands.deny = ["debug_bundle_save"]

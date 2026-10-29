@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use github_copilot_sdk::handler::{PermissionHandler, PermissionResult};
 use github_copilot_sdk::types::{
-    Attachment, MessageOptions, PermissionRequestData, ResumeSessionConfig, SessionConfig,
+    Attachment, DeliveryMode, MessageOptions, PermissionRequestData, ResumeSessionConfig, SessionConfig,
 };
 use github_copilot_sdk::{Client, ClientOptions};
 use serde_json::{json, Value};
@@ -30,6 +30,8 @@ use crate::connectors::{capture, which};
 struct AgentEnvelope {
     session: String,
     turn: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_id: Option<String>,
     event: AgentEvent,
 }
 
@@ -110,27 +112,34 @@ pub(crate) async fn run_turn(
     app: AppHandle,
     chat_id: String,
     turn_id: String,
+    message_id: Option<String>,
     request: TurnRequest,
     stop: ag_adapters::agent::interrupt::StopToken,
 ) {
-    let result = run_turn_inner(&app, &chat_id, &turn_id, request, stop).await;
+    let permissions = Arc::new(CopilotPermissions {
+        app: app.clone(),
+        chat_id: chat_id.clone(),
+        turn_id: turn_id.clone(),
+        message_id: message_id.clone(),
+        mode: Mode::parse(request.permission_mode.as_deref()),
+        allowed: request.allowed_tools.clone(),
+    });
+    let sink = |event: AgentEvent| emit(&app, &chat_id, &turn_id, message_id.as_deref(), event);
+    let result = run_turn_core(&chat_id, request, permissions, stop, sink).await;
     forget_pending(&turn_id);
     if let Err(error) = result {
-        emit(
-            &app,
-            &chat_id,
-            &turn_id,
-            AgentEvent::Error { message: error },
-        );
+        emit(&app, &chat_id, &turn_id, message_id.as_deref(), AgentEvent::Error { message: error });
     }
 }
 
-async fn run_turn_inner(
-    app: &AppHandle,
+/// The turn without a window: starts the runtime, runs the message and sends every event to `out`. `chat_id` is where a
+/// message written while the turn runs is taken from (`warm::inject`).
+pub(crate) async fn run_turn_core(
     chat_id: &str,
-    turn_id: &str,
     request: TurnRequest,
+    permissions: Arc<dyn PermissionHandler>,
     mut stop: ag_adapters::agent::interrupt::StopToken,
+    mut out: impl FnMut(AgentEvent),
 ) -> Result<(), String> {
     let token = github_token().await?;
     let client = start_client(token, request.cwd.as_deref()).await?;
@@ -138,13 +147,6 @@ async fn run_turn_inner(
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let permissions = Arc::new(CopilotPermissions {
-        app: app.clone(),
-        chat_id: chat_id.to_string(),
-        turn_id: turn_id.to_string(),
-        mode: Mode::parse(request.permission_mode.as_deref()),
-        allowed: request.allowed_tools.clone(),
-    });
     let mcp = mcp_servers(request.cwd.as_deref());
     let session_result = if request.resume {
         let mut config = ResumeSessionConfig::new(session_id.clone().into())
@@ -202,6 +204,9 @@ async fn run_turn_inner(
         }
     };
     let mut events = session.subscribe();
+    // A message the user writes while the turn runs is steered into it (`immediate`): the work goes on and reads it at its
+    // next model call, as a CLI that takes input at any time would.
+    let (_inbox_slot, mut inbox) = ag_adapters::agent::warm::InjectSlot::open(chat_id);
 
     // Existing prompts name images and files by absolute path. Copilot's SDK accepts those same paths as native
     // attachments; keep the prompt intact so old messages and non-image files retain their current behavior.
@@ -211,40 +216,74 @@ async fn run_turn_inner(
     } else {
         MessageOptions::new(request.prompt.clone()).with_attachments(attachments)
     };
-    let send = session.send_and_wait(message);
-    tokio::pin!(send);
+    // `send`, not `send_and_wait`: that one gives up after 60 s by default, a long turn is not a failure, and what comes
+    // after the first idle (a shell that finishes, Copilot going on by itself) is read here from the events.
+    if let Err(error) = session.send(message).await {
+        let _ = session.disconnect().await;
+        let _ = client.stop().await;
+        return Err(error.to_string());
+    }
     let mut answer = String::new();
+    let mut last_message: Option<String> = None;
     let mut file_snapshots: HashMap<String, FileSnapshot> = HashMap::new();
     let mut children = Children::default();
     let mut finished = false;
     let mut turn_error = None;
     // After an abort the SDK still sends the end of the run (`session.idle`): read up to it so the stream is not cut mid-way.
     let mut aborting: Option<tokio::time::Instant> = None;
+    // The main agent went idle but the run did not end (a shell is still detached): how long to wait for what follows.
+    let mut lingering: Option<tokio::time::Instant> = None;
+    let far = || tokio::time::Instant::now() + Duration::from_secs(24 * 3600);
     loop {
-        let abort_deadline = aborting.unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(3600));
+        let abort_deadline = aborting.unwrap_or_else(far);
+        let linger_deadline = lingering.unwrap_or_else(far);
         tokio::select! {
             _ = stop.stopped(), if aborting.is_none() => {
                 let _ = session.abort().await;
                 aborting = Some(tokio::time::Instant::now() + ABORT_GRACE);
             }
             _ = tokio::time::sleep_until(abort_deadline), if aborting.is_some() => break,
+            _ = tokio::time::sleep_until(linger_deadline), if lingering.is_some() && aborting.is_none() => {
+                // Nothing more came: the shell is still running. The turn ends with its answer; the shell dies with the runtime.
+                finished = true;
+                break;
+            }
+            Some(text) = inbox.recv(), if aborting.is_none() => {
+                let mut steer = MessageOptions::new(text);
+                steer.mode = Some(DeliveryMode::Immediate);
+                if session.send(steer).await.is_ok() {
+                    lingering = None;
+                }
+            }
             event = events.recv() => match event {
                 Ok(event) => {
-                    if aborting.is_some() && event.event_type == "session.idle" && event.agent_id.is_none() {
+                    let root = event.agent_id.as_deref().is_none_or(str::is_empty);
+                    if std::env::var_os("COPILOT_REAL_RAW").is_some() { eprintln!("RAW {} agent={:?} {}", event.event_type, event.agent_id, event.data.to_string().chars().take(160).collect::<String>()); } // DBG
+                    if root && event.event_type == "session.idle" && std::env::var_os("COPILOT_REAL_LINGER").is_none() { // DBG
+                        finished = aborting.is_none();
                         break;
+                    }
+                    if root && event.event_type == "assistant.idle" {
+                        lingering = Some(tokio::time::Instant::now() + std::env::var("COPILOT_REAL_LINGER").ok().and_then(|v| v.parse().ok()).map_or(LINGER, Duration::from_secs)); // DBG
+                    }
+                    if root && matches!(event.event_type.as_str(), "assistant.turn_start" | "system.notification" | "tool.execution_start") {
+                        lingering = None;
                     }
                     // A sub-agent's events carry its `agentId`: they belong under the call that started it, not in the answer.
                     let task = children.lifecycle(&event.event_type, event.agent_id.as_deref(), &event.data);
                     let parent = children.parent_of(event.agent_id.as_deref(), &event.data);
-                    if let Some(task) = task { emit(app, chat_id, turn_id, task); }
+                    if let Some(task) = task { out(task); }
                     if event.event_type == "system.notification" {
                         // A shell that ran on its own finished: Copilot goes on by itself with a new turn.
                         let reason = event.data["kind"]["type"].as_str().unwrap_or("notification").to_string();
-                        emit(app, chat_id, turn_id, AgentEvent::AutoTurn { reason });
+                        out(AgentEvent::AutoTurn { reason });
                     }
                     if parent.is_none() {
-                        if let Some(text) = event.data.get("deltaContent").and_then(Value::as_str) {
-                            if event.event_type == "assistant.message_delta" { answer.push_str(text); }
+                        if event.event_type == "assistant.message_delta" {
+                            if let Some(text) = event.data.get("deltaContent").and_then(Value::as_str) { answer.push_str(text); }
+                        }
+                        if event.event_type == "assistant.message" && root {
+                            if let Some(text) = event.data["content"].as_str().filter(|text| !text.is_empty()) { last_message = Some(text.to_owned()); }
                         }
                     }
                     let mapped = match event.event_type.as_str() {
@@ -291,28 +330,17 @@ async fn run_turn_inner(
                             cache_write_tokens: event.data["cacheWriteTokens"].as_u64().unwrap_or_default(),
                             new_call: true,
                         }),
-                        "session.error" => Some(AgentEvent::Error { message: event.data["message"].as_str().unwrap_or("Copilot session failed").to_string() }),
+                        "session.error" => {
+                            turn_error = Some(event.data["message"].as_str().unwrap_or("Copilot session failed").to_string());
+                            None
+                        }
                         _ => None,
                     };
-                    if let Some(mapped) = mapped { emit(app, chat_id, turn_id, scoped(parent, mapped)); }
+                    if let Some(mapped) = mapped { out(scoped(parent, mapped)); }
+                    if turn_error.is_some() { break; }
                 }
                 Err(_) => break,
             },
-            result = &mut send => {
-                // A stopped run ends here without an error: the stop is not a failure.
-                if aborting.is_some() { break; }
-                match result {
-                    Ok(Some(event)) => {
-                        // The returned message can be a sub-agent's: only the main agent's text is the answer.
-                        let final_text = if event.agent_id.is_none() { event.data["content"].as_str().unwrap_or(&answer).to_string() } else { String::new() };
-                        answer = if final_text.is_empty() { answer } else { final_text };
-                        finished = true;
-                    }
-                    Ok(None) => finished = true,
-                    Err(error) => turn_error = Some(error.to_string()),
-                }
-                break;
-            }
         }
     }
     let _ = session.disconnect().await;
@@ -321,19 +349,18 @@ async fn run_turn_inner(
         return Err(error);
     }
     if finished {
-        emit(
-            app,
-            chat_id,
-            turn_id,
-            AgentEvent::Done {
-                session_id: Some(session_id),
-                text: answer,
-                cost_usd: None,
-            },
-        );
+        out(AgentEvent::Done {
+            session_id: Some(session_id),
+            text: last_message.unwrap_or(answer),
+            cost_usd: None,
+        });
     }
     Ok(())
 }
+
+/// How long the main agent may stay idle, with the run not over, before the turn ends with its answer: a shell it left
+/// running is still going, and Copilot's own follow-up comes when that shell ends. Anything it does restarts the wait.
+const LINGER: Duration = Duration::from_secs(15);
 
 /// How long a stopped run is read for its end (`session.idle`) before it is given up.
 const ABORT_GRACE: Duration = Duration::from_secs(5);
@@ -503,6 +530,7 @@ struct CopilotPermissions {
     app: AppHandle,
     chat_id: String,
     turn_id: String,
+    message_id: Option<String>,
     mode: Mode,
     allowed: Vec<String>,
 }
@@ -578,6 +606,7 @@ impl PermissionHandler for CopilotPermissions {
             &self.app,
             &self.chat_id,
             &self.turn_id,
+            self.message_id.as_deref(),
             AgentEvent::PermissionDenied {
                 requests: vec![ag_adapters::agent::PermissionRequest {
                     id,
@@ -594,12 +623,13 @@ impl PermissionHandler for CopilotPermissions {
     }
 }
 
-fn emit(app: &AppHandle, session: &str, turn: &str, event: AgentEvent) {
+fn emit(app: &AppHandle, session: &str, turn: &str, message_id: Option<&str>, event: AgentEvent) {
     let _ = app.emit(
         "agent-event",
         AgentEnvelope {
             session: session.to_string(),
             turn: turn.to_string(),
+            message_id: message_id.map(str::to_owned),
             event,
         },
     );
@@ -648,5 +678,220 @@ mod tests {
         let mut children = Children::default();
         let failed = children.lifecycle("subagent.failed", Some("a"), &json!({ "toolCallId": "c", "error": "boom" }));
         assert!(matches!(failed, Some(AgentEvent::Task { status: TaskStatus::Failed, summary: Some(ref text), .. }) if text == "boom"));
+    }
+}
+
+/// Runs the turn against the REAL Copilot runtime with the account `gh` has active. Off by default (network, quota):
+///
+/// ```text
+/// cargo test -p agentdeck-desktop --lib copilot_real -- --ignored --nocapture
+/// ```
+///
+/// `COPILOT_REAL_MODEL` picks the model (default `gpt-5.6-luna`, low effort) and `COPILOT_REAL_ONLY` one scenario by
+/// name (`plain`, `tools`, `subagent`, `background`, `steer`, `abort`). Every event is printed with its time.
+#[cfg(test)]
+mod real {
+    use super::*;
+    use ag_adapters::agent::interrupt::StopHandle;
+    use github_copilot_sdk::types::{PermissionRequestData, RequestId, SessionId};
+
+    struct ApproveAll;
+
+    #[async_trait::async_trait]
+    impl PermissionHandler for ApproveAll {
+        async fn handle(&self, _session: SessionId, _request: RequestId, _data: PermissionRequestData) -> PermissionResult {
+            PermissionResult::approve_once()
+        }
+    }
+
+    type Log = Arc<Mutex<Vec<(u128, AgentEvent)>>>;
+
+    struct Run {
+        events: Vec<(u128, AgentEvent)>,
+        result: Result<(), String>,
+        took: Duration,
+    }
+
+    impl Run {
+        fn kinds(&self) -> Vec<&AgentEvent> {
+            self.events.iter().map(|(_, event)| event).collect()
+        }
+        fn done_text(&self) -> Option<&str> {
+            self.events.iter().rev().find_map(|(_, event)| match event {
+                AgentEvent::Done { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+        }
+        fn main_text(&self) -> String {
+            self.events
+                .iter()
+                .filter_map(|(_, event)| match event {
+                    AgentEvent::Delta { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    fn short(event: &AgentEvent) -> String {
+        let text = format!("{event:?}");
+        if text.len() > 230 { format!("{}…", text.chars().take(230).collect::<String>()) } else { text }
+    }
+
+    /// One scenario: the prompt, an optional second message sent after a delay (as the chat's inject does), an optional stop.
+    async fn scenario(name: &str, prompt: &str, steer: Option<(u64, &str)>, stop_after: Option<u64>, limit: u64) -> Run {
+        let dir = std::env::temp_dir().join(format!("agentdeck-copilot-real-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("work folder");
+        let chat = format!("copilot-real-{name}-{}", std::process::id());
+        let request = TurnRequest {
+            prompt: prompt.to_owned(),
+            session_id: Some(uuid::Uuid::new_v4().to_string()),
+            resume: false,
+            model: Some(std::env::var("COPILOT_REAL_MODEL").unwrap_or_else(|_| "gpt-5.6-luna".to_owned())),
+            permission_mode: None,
+            effort: Some("low".to_owned()),
+            allowed_tools: Vec::new(),
+            cwd: Some(dir),
+            owner: Some(chat.clone()),
+            api_key: None,
+        };
+        let log: Log = Arc::default();
+        let started = std::time::Instant::now();
+        let (handle, token) = StopHandle::new();
+        let sink_log = Arc::clone(&log);
+        let sink = move |event: AgentEvent| {
+            let at = started.elapsed().as_millis();
+            println!("[{name} {at:>6} ms] {}", short(&event));
+            sink_log.lock().expect("log").push((at, event));
+        };
+        let side_chat = chat.clone();
+        let steer = steer.map(|(after, text)| (after, text.to_owned()));
+        let helper = tokio::spawn(async move {
+            if let Some((after, text)) = steer {
+                tokio::time::sleep(Duration::from_secs(after)).await;
+                let taken = ag_adapters::agent::warm::inject(&side_chat, &text);
+                println!("[steer] inject taken = {taken}");
+            }
+            if let Some(after) = stop_after {
+                tokio::time::sleep(Duration::from_secs(after)).await;
+                println!("[stop] asked");
+                handle.stop();
+            }
+            // Keeps the handle alive as long as the helper waits for a stop that never comes.
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        });
+        let result = tokio::time::timeout(
+            Duration::from_secs(limit),
+            run_turn_core(&chat, request, Arc::new(ApproveAll), token, sink),
+        )
+        .await
+        .unwrap_or_else(|_| Err(format!("the turn did not end in {limit} s")));
+        helper.abort();
+        let events = log.lock().expect("log").clone();
+        println!("[{name}] ended after {:?}: {result:?}", started.elapsed());
+        Run { events, result, took: started.elapsed() }
+    }
+
+    fn wanted(name: &str) -> bool {
+        std::env::var("COPILOT_REAL_ONLY").map_or(true, |only| only == name)
+    }
+
+    #[tokio::test]
+    #[ignore = "uses the real Copilot account (network, quota): see the module docs"]
+    async fn copilot_real() {
+        if wanted("plain") {
+            let run = scenario("plain", "Reply with exactly the word PONG and nothing else.", None, None, 120).await;
+            assert!(run.result.is_ok(), "{:?}", run.result);
+            assert!(run.done_text().is_some_and(|text| text.contains("PONG")), "{:?}", run.done_text());
+            assert!(matches!(run.kinds().last(), Some(AgentEvent::Done { .. })), "Done is the last event");
+            assert!(!run.kinds().iter().any(|event| matches!(event, AgentEvent::Scoped { .. })));
+        }
+        if wanted("tools") {
+            let run = scenario(
+                "tools",
+                "Using your tools, create a file named hello.txt containing the word HELLO, then run the shell command `echo done`, then reply with the word FINISHED.",
+                None,
+                None,
+                240,
+            )
+            .await;
+            assert!(run.result.is_ok(), "{:?}", run.result);
+            let calls = run.kinds().iter().filter(|event| matches!(event, AgentEvent::ToolCall { .. })).count();
+            let results = run.kinds().iter().filter(|event| matches!(event, AgentEvent::ToolResult { .. })).count();
+            assert!(calls >= 2 && results >= 2, "calls={calls} results={results}");
+            assert!(matches!(run.kinds().last(), Some(AgentEvent::Done { .. })));
+        }
+        if wanted("subagent") {
+            let run = scenario(
+                "subagent",
+                "Use the task tool to start one general-purpose sub-agent that replies with only the word SUBDONE. Then reply with exactly the word RELAYED.",
+                None,
+                None,
+                240,
+            )
+            .await;
+            assert!(run.result.is_ok(), "{:?}", run.result);
+            let started = run.kinds().iter().any(|event| matches!(event, AgentEvent::Task { status: TaskStatus::Started, .. }));
+            let done = run.kinds().iter().any(|event| matches!(event, AgentEvent::Task { status: TaskStatus::Done, .. }));
+            println!("[subagent] task started={started} done={done}");
+            let calls: Vec<String> = run
+                .kinds()
+                .iter()
+                .filter_map(|event| match event {
+                    AgentEvent::ToolCall { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect();
+            for event in run.kinds() {
+                if let AgentEvent::Scoped { parent, .. } = event {
+                    assert!(calls.contains(parent), "a scoped event names a call that was shown: {parent}");
+                }
+            }
+            assert!(!run.main_text().contains("SUBDONE"), "the sub-agent's words stay out of the main answer: {}", run.main_text());
+            assert!(matches!(run.kinds().last(), Some(AgentEvent::Done { .. })));
+        }
+        if wanted("background") {
+            let run = scenario(
+                "background",
+                "Start this PowerShell command as a DETACHED background shell (async mode, do not wait for it): `Start-Sleep -Seconds 8; Write-Output BGDONE`. Reply STARTED right away. When the shell finishes, report its output.",
+                None,
+                None,
+                240,
+            )
+            .await;
+            assert!(run.result.is_ok(), "{:?}", run.result);
+            let auto = run.kinds().iter().filter(|event| matches!(event, AgentEvent::AutoTurn { .. })).count();
+            println!("[background] auto turns = {auto}, took {:?}, answer = {:?}", run.took, run.done_text());
+            assert!(matches!(run.kinds().last(), Some(AgentEvent::Done { .. })), "the turn ends, it never hangs");
+            assert!(run.took < Duration::from_secs(200));
+        }
+        if wanted("steer") {
+            let run = scenario(
+                "steer",
+                "Run the shell command `Start-Sleep -Seconds 12` and wait for it, then reply with exactly FIRST-DONE.",
+                Some((5, "Also include the word SECOND-MSG in your final answer.")),
+                None,
+                240,
+            )
+            .await;
+            assert!(run.result.is_ok(), "{:?}", run.result);
+            let text = run.done_text().unwrap_or_default().to_owned();
+            println!("[steer] answer = {text:?}");
+            assert!(matches!(run.kinds().last(), Some(AgentEvent::Done { .. })));
+            assert!(text.contains("SECOND-MSG"), "the steered message was read: {text}");
+        }
+        if wanted("abort") {
+            let run = scenario(
+                "abort",
+                "Run the shell command `Start-Sleep -Seconds 60` and wait for it, then reply DONE.",
+                None,
+                Some(6),
+                120,
+            )
+            .await;
+            assert!(run.result.is_ok(), "a stop is not a failure: {:?}", run.result);
+            assert!(!run.kinds().iter().any(|event| matches!(event, AgentEvent::Error { .. })));
+            assert!(run.took < Duration::from_secs(30), "the stop ended the turn: {:?}", run.took);
+        }
     }
 }

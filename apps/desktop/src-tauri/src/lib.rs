@@ -19,6 +19,7 @@ mod detect;
 mod devtools;
 mod endpoints;
 mod error_log;
+mod flow_log;
 mod fs_ops;
 mod image_backend;
 mod image_gen;
@@ -531,18 +532,105 @@ fn audit_file() -> Result<PathBuf, String> {
     Ok(home_folder()?.join(".agentdeck").join("audit.jsonl"))
 }
 
+/// Per-day line counts of the Audit log, kept beside it so a count does not read the whole file.
+/// `length` is the log's size it was made for and `offset_min` the time zone (JS `getTimezoneOffset`) the days are cut by:
+/// when either no longer matches (a crash between write and index, an edit by hand, a clock change) the index is rebuilt.
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Copy)]
+struct AuditDay {
+    total: usize,
+    failed: usize,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct AuditIndex {
+    length: u64,
+    offset_min: i64,
+    days: std::collections::BTreeMap<i64, AuditDay>,
+}
+
+/// Counts one entry (its JSON line) into its day: every call, and the failed ones apart.
+fn count_audit_line(days: &mut std::collections::BTreeMap<i64, AuditDay>, line: &str, offset_min: i64) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { return };
+    let Some(started) = value.get("startedAt").and_then(serde_json::Value::as_f64) else { return };
+    let day = days.entry(audit_day(started, offset_min as f64)).or_default();
+    day.total += 1;
+    if value.get("status").and_then(serde_json::Value::as_str) == Some("fail") {
+        day.failed += 1;
+    }
+}
+
+const DAY_MS: f64 = 86_400_000.0;
+
+/// The local day number of a time (ms since the epoch) for a time zone offset given in JS minutes (positive west of UTC).
+fn audit_day(started: f64, offset_min: f64) -> i64 {
+    ((started - offset_min * 60_000.0) / DAY_MS).floor() as i64
+}
+
+fn audit_index_file() -> Result<PathBuf, String> {
+    Ok(home_folder()?.join(".agentdeck").join("audit.index.json"))
+}
+
+/// Serialises every change to the index: appends, counts and rebuilds all read and write it.
+static AUDIT_INDEX_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn audit_index_lock() -> std::sync::MutexGuard<'static, ()> {
+    AUDIT_INDEX_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn read_audit_index() -> Option<AuditIndex> {
+    let text = std::fs::read_to_string(audit_index_file().ok()?).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn save_audit_index(index: &AuditIndex) -> Result<(), String> {
+    let path = audit_index_file()?;
+    let temp = path.with_extension("json.tmp");
+    let text = serde_json::to_string(index).map_err(|error| error.to_string())?;
+    std::fs::write(&temp, text).map_err(|error| error.to_string())?;
+    std::fs::rename(&temp, &path).map_err(|error| error.to_string())
+}
+
+/// The index for the log as it is now: the saved one when it still matches the file, else rebuilt from the file.
+fn audit_index_now(offset_min: i64) -> Result<AuditIndex, String> {
+    let path = audit_file()?;
+    let length = match std::fs::metadata(&path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(AuditIndex { offset_min, ..Default::default() }),
+        Err(error) => return Err(error.to_string()),
+    };
+    if let Some(index) = read_audit_index().filter(|index| index.length == length && index.offset_min == offset_min) {
+        return Ok(index);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let mut index = AuditIndex { length: text.len() as u64, offset_min, days: Default::default() };
+    for line in text.lines() {
+        count_audit_line(&mut index.days, line, offset_min);
+    }
+    save_audit_index(&index)?;
+    Ok(index)
+}
+
 #[tauri::command]
-fn audit_append(line: String) -> Result<(), String> {
+fn audit_append(line: String, offset_min: i64) -> Result<(), String> {
     use std::io::Write;
+    let _guard = audit_index_lock();
     let path = audit_file()?;
     std::fs::create_dir_all(path.parent().ok_or("no folder for the audit log")?)
         .map_err(|error| error.to_string())?;
+    let before = std::fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
+        .open(&path)
         .map_err(|error| error.to_string())?;
-    writeln!(file, "{line}").map_err(|error| error.to_string())
+    writeln!(file, "{line}").map_err(|error| error.to_string())?;
+    // The index follows the append only while it was up to date before it; otherwise the next count rebuilds it.
+    if let Some(mut index) = read_audit_index().filter(|index| index.length == before && index.offset_min == offset_min) {
+        count_audit_line(&mut index.days, &line, offset_min);
+        index.length = std::fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
+        save_audit_index(&index)?;
+    }
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -636,6 +724,31 @@ async fn audit_read(cursor: Option<u64>, limit: usize) -> Result<AuditPage, Stri
     .map_err(|error| error.to_string())?
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditDayCount {
+    day: i64,
+    total: usize,
+    failed: usize,
+}
+
+/// The full count of every day the Audit log holds (its local day number, all calls, failed calls), so the headers show
+/// the whole day from the start and not only the pages read so far.
+#[tauri::command]
+async fn audit_days(offset_min: i64) -> Result<Vec<AuditDayCount>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = audit_index_lock();
+        let index = audit_index_now(offset_min)?;
+        Ok(index
+            .days
+            .into_iter()
+            .map(|(day, count)| AuditDayCount { day, total: count.total, failed: count.failed })
+            .collect())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Keeps only the Audit log lines that started at or after `cutoff` (ms since the epoch; the app passes the start of
 /// yesterday, so two days are kept), and deletes the pictures no kept line points to. Returns how many lines went.
 #[tauri::command]
@@ -687,7 +800,13 @@ async fn audit_prune(cutoff: f64) -> Result<usize, String> {
 
 #[tauri::command]
 fn audit_clear() -> Result<(), String> {
+    let _guard = audit_index_lock();
     match std::fs::remove_dir_all(audit_images()?) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    match std::fs::remove_file(audit_index_file()?) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.to_string()),
@@ -1336,7 +1455,15 @@ fn persist_file_open_app(app: &AppHandle, file: &str, program: &Path) -> Result<
 
 /// Returns installed applications that make sense for this file type, plus the OS app chooser.
 #[tauri::command]
-fn file_open_options(app: AppHandle, path: String) -> Result<Vec<FileOpenOption>, String> {
+async fn file_open_options(app: AppHandle, path: String) -> Result<Vec<FileOpenOption>, String> {
+    // Windows icon extraction starts PowerShell for each detected editor. Keep filesystem probing and
+    // icon extraction off the webview/main thread so merely opening a tab context menu stays responsive.
+    tauri::async_runtime::spawn_blocking(move || file_open_options_sync(app, path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn file_open_options_sync(app: AppHandle, path: String) -> Result<Vec<FileOpenOption>, String> {
     if !Path::new(&path).is_file() {
         return Err("file does not exist".to_string());
     }
@@ -1581,7 +1708,13 @@ fn which_app(name: &str) -> Option<PathBuf> {
 
 /// Opens a file in a detected application or the operating system's app chooser.
 #[tauri::command]
-fn file_open_with(app: AppHandle, path: String, app_id: String) -> Result<(), String> {
+async fn file_open_with(app: AppHandle, path: String, app_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || file_open_with_sync(app, path, app_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn file_open_with_sync(app: AppHandle, path: String, app_id: String) -> Result<(), String> {
     if !Path::new(&path).is_file() {
         return Err("file does not exist".to_string());
     }
@@ -1598,7 +1731,7 @@ fn file_open_with(app: AppHandle, path: String, app_id: String) -> Result<(), St
                 .args(["shell32.dll,OpenAs_RunDLL", &path])
                 .spawn()
         } else {
-            let options = file_open_options(app.clone(), path.clone())?;
+            let options = file_open_options_sync(app.clone(), path.clone())?;
             if !options
                 .iter()
                 .any(|option| option.id == app_id && app_id != "system")
@@ -1851,6 +1984,40 @@ async fn settings_export(app: AppHandle, name: String, text: String) -> Result<O
     .map_err(|error| error.to_string())?
 }
 
+/// Writes a portable chat transcript under AgentDeck's app-data folder and returns its absolute path.
+#[tauri::command]
+async fn conversation_export(app: AppHandle, name: String, text: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let folder = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())?
+            .join("conversations");
+        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+        let stem = name.strip_suffix(".md").unwrap_or(&name);
+        let safe: String = stem
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let filename = if safe.is_empty() {
+            "conversation.md".to_string()
+        } else {
+            format!("{safe}.md")
+        };
+        let destination = folder.join(filename);
+        std::fs::write(&destination, text).map_err(|error| error.to_string())?;
+        Ok(destination.display().to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Reads an export the user picks with the native Open dialog. `None` when the dialog was cancelled.
 #[tauri::command]
 async fn settings_import(app: AppHandle) -> Result<Option<String>, String> {
@@ -1971,6 +2138,7 @@ pub fn run() {
                 .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
         })
         .setup(|app| {
+            flow_log::install(app.handle());
             // Create the main webview with the same WebView2 extension setting used by Preview child views.
             let main_window = app
                 .config()
@@ -2145,9 +2313,14 @@ pub fn run() {
             error_log::error_log_read,
             error_log::error_log_save,
             error_log::error_log_clear,
+            flow_log::flow_log_append,
+            flow_log::flow_log_read,
+            flow_log::debug_bundle_save,
+            flow_log::debug_log_path,
             connectors::local_scan,
             audit_append,
             audit_read,
+            audit_days,
             audit_clear,
             audit_image_save,
             audit_image_read,
@@ -2172,6 +2345,7 @@ pub fn run() {
             image_save_as,
             file_copy_as,
             settings_export,
+            conversation_export,
             settings_import,
             audit_prune,
             pick_folder,

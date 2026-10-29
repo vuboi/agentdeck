@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-audit-days"
+description = "Enables the audit_days command without any pre-configured scope."
+commands.allow = ["audit_days"]
+
+[[permission]]
+identifier = "deny-audit-days"
+description = "Denies the audit_days command without any pre-configured scope."
+commands.deny = ["audit_days"]

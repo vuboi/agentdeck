@@ -233,6 +233,9 @@
     const click = (event) => {
       event.preventDefault();
       event.stopPropagation();
+      // Do not rely on the last mousemove: WebView2 can deliver the click before a move after
+      // focus/resize, and that cached target may be empty or belong to the previous pointer position.
+      target = under(event.clientX, event.clientY);
       if (target) post({ kind: 'pick', id, element: describe(target), url: location.href, title: document.title });
       stopPicking();
     };

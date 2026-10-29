@@ -2,6 +2,7 @@
 //! `agent-event`s, and stopped on request.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
@@ -12,11 +13,23 @@ use ag_adapters::agent::opencode::OpenCode;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
 use ag_adapters::agent::interrupt::{StopHandle, StopToken, INTERRUPT_DEADLINE};
 use ag_adapters::agent::warm::drive_warm_turn_with;
-use ag_adapters::agent::{AgentEvent, Provider, TurnRequest};
+use ag_adapters::agent::{AgentEvent, ChatResponseCapabilities, Provider, TurnRequest};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::{custom_chat, mcp_manage};
+
+/// A chat in "This computer" has no project path; give its CLI an intentional user-home cwd instead of letting it
+/// inherit the directory the desktop app happened to be launched from (often the AgentDeck source repository).
+fn home_directory() -> Option<PathBuf> {
+    ["USERPROFILE", "HOME"]
+        .into_iter()
+        .find_map(|key| std::env::var_os(key).map(PathBuf::from).filter(|path| path.is_dir()))
+}
+
+fn working_directory(cwd: Option<String>) -> Option<PathBuf> {
+    cwd.map(PathBuf::from).or_else(home_directory)
+}
 
 /// One event of one chat, sent to the UI on the `agent-event` channel.
 #[derive(Clone, Serialize)]
@@ -24,13 +37,15 @@ struct AgentEnvelope {
     session: String,
     /// Which run of the chat the event belongs to, so a stopped run's last events are never mistaken for the next one's.
     turn: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_id: Option<String>,
     event: AgentEvent,
 }
 
 /// The run in progress of one chat: which turn it is, so a stop meant for an older turn never ends a newer one.
 struct Run {
-    turn: String,
     handle: tauri::async_runtime::JoinHandle<()>,
+    response: ChatResponseCapabilities,
     /// How to ask the run to stop gracefully (an interrupt, so its warm CLI survives). `None` for a run that cannot
     /// (a custom provider): it is aborted.
     stop: Option<StopHandle>,
@@ -56,13 +71,20 @@ fn stop_run(run: Run) {
     });
 }
 
-/// The runs in progress, per chat, so one can be stopped.
-static RUNNING: LazyLock<Mutex<HashMap<String, Run>>> = LazyLock::new(Default::default);
+/// The active runs, per visible chat and turn. A foreground listener and a background waiter can coexist in one chat.
+static RUNNING: LazyLock<Mutex<HashMap<(String, String), Run>>> = LazyLock::new(Default::default);
 
-/// Keeps `handle` as the chat's run. A chat runs one turn at a time: the run it replaces is stopped.
-fn track(session: String, turn: String, handle: tauri::async_runtime::JoinHandle<()>, stop: Option<StopHandle>) {
+/// Keeps one independently addressable run. A new turn never replaces another lane of the same visible chat.
+fn track(
+    session: String,
+    turn: String,
+    handle: tauri::async_runtime::JoinHandle<()>,
+    stop: Option<StopHandle>,
+    response: ChatResponseCapabilities,
+) {
     if let Ok(mut running) = RUNNING.lock() {
-        if let Some(previous) = running.insert(session, Run { turn, handle, stop }) {
+        let key = (session, turn);
+        if let Some(previous) = running.insert(key, Run { handle, stop, response }) {
             stop_run(previous);
         }
     }
@@ -71,18 +93,18 @@ fn track(session: String, turn: String, handle: tauri::async_runtime::JoinHandle
 /// A run that ended on its own leaves the table, unless a newer turn of the chat already took its place.
 fn forget(session: &str, turn: &str) {
     if let Ok(mut running) = RUNNING.lock() {
-        if running.get(session).is_some_and(|run| run.turn == turn) {
-            running.remove(session);
-        }
+        running.remove(&(session.to_owned(), turn.to_owned()));
     }
 }
 
-fn emit(app: &AppHandle, session: &str, turn: &str, event: AgentEvent) {
+fn emit(app: &AppHandle, session: &str, turn: &str, message_id: Option<&str>, event: AgentEvent) {
+    crate::flow_log::tap(session, turn, &event);
     let _ = app.emit(
         "agent-event",
         AgentEnvelope {
             session: session.to_owned(),
             turn: turn.to_owned(),
+            message_id: message_id.map(str::to_owned),
             event,
         },
     );
@@ -99,37 +121,41 @@ fn provider_for(agent: &str) -> Result<Box<dyn Provider>, String> {
 }
 
 /// Runs one turn for the app: resolves the binary, then forwards every event to the UI.
+#[allow(clippy::too_many_arguments)] // the turn identity, reply identity, provider, request and stop token are separate inputs
 async fn run_turn(
     app: AppHandle,
     session: String,
     turn: String,
     provider: Box<dyn Provider>,
     req: TurnRequest,
+    message_id: Option<String>,
     keep_open: bool,
     mut stop: StopToken,
 ) {
+    let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, provider.id(), req.model.as_deref().unwrap_or("-"));
     if provider.id() == "antigravity" {
         mcp_manage::ensure_agy_link().await;
     }
     // What a kept CLI says on its own after a turn (a background job finished) reaches the chat through this.
     let tail_app = app.clone();
-    ag_adapters::agent::tail::set_sink(std::sync::Arc::new(move |chat, turn, event| emit(&tail_app, chat, turn, event)));
+    ag_adapters::agent::tail::set_sink(std::sync::Arc::new(move |chat, turn, event| emit(&tail_app, chat, turn, None, event)));
     let binary = resolve_binary(provider.as_ref());
     // Claude, Codex and Antigravity keep their CLI open between the chat's turns (see `warm.rs`); OpenCode starts one per turn.
     // A turn that runs for another one (a side answer, a delegated worker, a step of a flow) is run once, not kept: it
     // would sit idle for twenty minutes and push the processes of the chats people are in out of the pool.
     let warm = keep_open
         && drive_warm_turn_with(binary.clone(), provider.as_ref(), &req, stop.clone(), |event| {
-            emit(&app, &session, &turn, event)
+            emit(&app, &session, &turn, message_id.as_deref(), event)
         })
         .await;
     if !warm {
         // A per-turn process has no interrupt message: a stop drops the turn, which ends its process tree.
         tokio::select! {
-            () = drive_turn(binary, provider.as_ref(), &req, |event| emit(&app, &session, &turn, event)) => {}
+            () = drive_turn(binary, provider.as_ref(), &req, |event| emit(&app, &session, &turn, message_id.as_deref(), event)) => {}
             () = stop.stopped() => {}
         }
     }
+    noted.finish(if stop.is_stopped() { "stopped" } else { "finished" });
     forget(&session, &turn);
 }
 
@@ -169,7 +195,7 @@ pub(crate) async fn agent_prewarm(
         permission_mode,
         effort,
         allowed_tools,
-        cwd: cwd.map(Into::into),
+        cwd: working_directory(cwd),
         owner: Some(session),
         api_key,
     };
@@ -190,6 +216,7 @@ pub(crate) async fn agent_send(
     app: AppHandle,
     session: String,
     turn: String,
+    message_id: Option<String>,
     agent: String,
     prompt: String,
     agent_session: Option<String>,
@@ -203,6 +230,7 @@ pub(crate) async fn agent_send(
     keep_open: Option<bool>,
 ) -> Result<(), String> {
     if agent == "copilot" {
+        let response = ChatResponseCapabilities::copilot();
         let req = TurnRequest {
             prompt,
             session_id: agent_session,
@@ -211,15 +239,18 @@ pub(crate) async fn agent_send(
             permission_mode,
             effort,
             allowed_tools,
-            cwd: cwd.map(Into::into),
+            cwd: working_directory(cwd),
             owner: Some(session.clone()),
             api_key,
         };
         let (stop, token) = StopHandle::new();
-        let handle = tauri::async_runtime::spawn(crate::copilot::run_turn(
-            app.clone(), session.clone(), turn.clone(), req, token,
-        ));
-        track(session, turn, handle, Some(stop));
+        let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, "copilot", req.model.as_deref().unwrap_or("-"));
+        let run = crate::copilot::run_turn(app.clone(), session.clone(), turn.clone(), message_id.clone(), req, token);
+        let handle = tauri::async_runtime::spawn(async move {
+            run.await;
+            noted.finish("finished");
+        });
+        track(session, turn, handle, Some(stop), response);
         return Ok(());
     }
     let provider = provider_for(&agent)?;
@@ -231,10 +262,11 @@ pub(crate) async fn agent_send(
         permission_mode,
         effort,
         allowed_tools,
-        cwd: cwd.map(Into::into),
+        cwd: working_directory(cwd),
         owner: Some(session.clone()),
         api_key,
     };
+    let response = provider.chat_capabilities(&req);
     let (stop, token) = StopHandle::new();
     let handle = tauri::async_runtime::spawn(run_turn(
         app,
@@ -242,10 +274,11 @@ pub(crate) async fn agent_send(
         turn.clone(),
         provider,
         req,
+        message_id,
         keep_open.unwrap_or(true),
         token,
     ));
-    track(session, turn, handle, Some(stop));
+    track(session, turn, handle, Some(stop), response);
     Ok(())
 }
 
@@ -257,6 +290,7 @@ pub(crate) async fn custom_send(
     app: AppHandle,
     session: String,
     turn: String,
+    message_id: Option<String>,
     kind: String,
     base_url: String,
     api_key: Option<String>,
@@ -268,35 +302,46 @@ pub(crate) async fn custom_send(
     effort: Option<String>,
     restricted: Option<bool>,
 ) -> Result<(), String> {
+    let restricted = restricted.unwrap_or(false);
     let config = custom_chat::Turn {
         kind,
         base_url,
         api_key,
         model,
-        cwd: cwd.map(Into::into),
+        cwd: if restricted { None } else { working_directory(cwd) },
         permission_mode,
         allowed: allowed_tools,
         chat: session.clone(),
         effort,
-        restricted: restricted.unwrap_or(false),
+        restricted,
     };
+    let response = ChatResponseCapabilities::custom();
     let (chat, this_turn) = (session.clone(), turn.clone());
+    let mut noted = crate::flow_log::TurnGuard::new(&chat, &this_turn, "custom", &config.model);
     let handle = tauri::async_runtime::spawn(async move {
         custom_chat::run_turn(&app.clone(), config, messages, |event| {
-            emit(&app, &chat, &this_turn, event)
+            emit(&app, &chat, &this_turn, message_id.as_deref(), event)
         })
         .await;
+        noted.finish("finished");
         forget(&chat, &this_turn);
     });
-    track(session, turn, handle, None);
+    track(session, turn, handle, None, response);
     Ok(())
 }
 
-/// Hands a message to the turn that is running in a chat (Claude only). True when the turn took it: the CLI reads it at
-/// its next step, in the same turn. False when the chat has no such turn; the caller then keeps the message for later.
+/// Hands a message to a running turn only when its provider guarantees a distinct reply for that message. Merged steer
+/// and native queue events stay under AgentDeck's message queue because this command has no independent reply identity.
 #[tauri::command]
 pub(crate) fn agent_inject(session: String, text: String) -> bool {
-    ag_adapters::agent::warm::inject(&session, &text)
+    let can_inject = RUNNING.lock().ok().is_some_and(|running| {
+        let mut session_runs = running.iter().filter(|((chat, _), _)| chat == &session);
+        match (session_runs.next(), session_runs.next()) {
+            (Some((_, run)), None) => run.response.can_inject_as_distinct_reply(),
+            _ => false,
+        }
+    });
+    can_inject && ag_adapters::agent::warm::inject(&session, &text)
 }
 
 /// Stops the run of a chat: its CLI is interrupted and keeps running, warm (see `stop_run`). With `turn`, only that turn is stopped: a stop
@@ -308,9 +353,13 @@ pub(crate) fn agent_stop(session: String, turn: Option<String>) {
         ag_adapters::agent::tail::interrupt(&session);
     }
     if let Ok(mut running) = RUNNING.lock() {
-        let current = running.get(&session).map(|run| run.turn.as_str());
-        if current.is_some() && (turn.is_none() || turn.as_deref() == current) {
-            if let Some(run) = running.remove(&session) {
+        let keys = running
+            .keys()
+            .filter(|(chat, run_turn)| chat == &session && turn.as_deref().is_none_or(|target| target == run_turn))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in keys {
+            if let Some(run) = running.remove(&key) {
                 stop_run(run);
             }
         }

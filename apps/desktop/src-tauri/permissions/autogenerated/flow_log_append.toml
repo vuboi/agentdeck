@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-flow-log-append"
+description = "Enables the flow_log_append command without any pre-configured scope."
+commands.allow = ["flow_log_append"]
+
+[[permission]]
+identifier = "deny-flow-log-append"
+description = "Denies the flow_log_append command without any pre-configured scope."
+commands.deny = ["flow_log_append"]

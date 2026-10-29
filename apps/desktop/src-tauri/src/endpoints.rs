@@ -1,5 +1,5 @@
 //! The addresses of providers, connectors and local model servers, from the one file the frontend reads too
-//! (`src/lib/endpoints.json`, built in). Change an address there, not where it is used.
+//! (`src/lib/agents/endpoints.json`, built in). Change an address there, not where it is used.
 
 use std::sync::LazyLock;
 
@@ -63,11 +63,11 @@ pub struct Endpoints {
     pub local: Vec<Local>,
 }
 
-const SOURCE: &str = include_str!("../../src/lib/endpoints.json");
+const SOURCE: &str = include_str!("../../src/lib/agents/endpoints.json");
 
 /// The addresses, read once. The file is part of the build and checked by a test, so it always reads.
 pub static ENDPOINTS: LazyLock<Endpoints> = LazyLock::new(|| {
-    serde_json::from_str(SOURCE).unwrap_or_else(|error| panic!("src/lib/endpoints.json: {error}"))
+    serde_json::from_str(SOURCE).unwrap_or_else(|error| panic!("src/lib/agents/endpoints.json: {error}"))
 });
 
 #[cfg(test)]

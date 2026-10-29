@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::AppHandle;
 
-static ENABLED: AtomicBool = AtomicBool::new(false);
+// Computer Use is available by default; the Settings switch remains the user's immediate kill switch.
+static ENABLED: AtomicBool = AtomicBool::new(true);
 
 #[tauri::command]
 pub fn computer_use_set_enabled(enabled: bool) {
