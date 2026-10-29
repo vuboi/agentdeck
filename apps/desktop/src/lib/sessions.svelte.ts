@@ -190,6 +190,29 @@ export const AGENT_ICON: Record<Agent, ZIconName> = {
   custom: 'lucideServer' as ZIconName,
 };
 
+/** Track turn execution state: running vs completed. */
+export interface TurnState {
+  turnId?: string;
+  running: boolean;
+  streamingText: boolean;
+  lastEventTime: number;
+}
+
+/** Classify message: related (inject/queue into running turn) or independent (new turn). */
+export function classifyMessage(
+  turnState: TurnState,
+  midTurnInjection: boolean,
+): 'related' | 'independent' {
+  // Turn not running: independent (new turn).
+  if (!turnState.running) return 'independent';
+  // Provider doesn't support mid-turn injection: independent (will queue or new turn in CLI).
+  if (!midTurnInjection) return 'independent';
+  // Sent during text streaming or while tool runs: related (inject into current turn).
+  if (turnState.streamingText) return 'related';
+  // Otherwise (turn running, injection supported, not streaming): related.
+  return 'related';
+}
+
 export const AGENTS: { value: Agent; label: string }[] = [
   ...BUILT_IN_AGENTS.map(({ id, label }) => ({ value: id as Agent, label })),
 ];
