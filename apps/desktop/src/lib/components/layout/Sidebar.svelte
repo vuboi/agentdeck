@@ -58,80 +58,10 @@
     Object.assign(view, change);
     setPref('sidebar.view', { ...view });
   }
-  // A heading folds its rows, and "Show more" adds some, by changing which nodes the tree is given, which the tree
-  // cannot animate on its own. The classes it uses for a folder do it here: rows that go fade out first, rows that
-  // arrive fade in, and the ones below glide to their new place (`z-tree-exit`, `z-tree-enter`). Rows are found by their position in the visible list (`data-index`).
-  let treeWrap: HTMLDivElement | undefined = $state();
-  const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let glideTimer: ReturnType<typeof setTimeout> | undefined;
-  function glide() {
-    treeWrap?.classList.add('sidebar-glide');
-    clearTimeout(glideTimer);
-    glideTimer = setTimeout(() => treeWrap?.classList.remove('sidebar-glide'), 320);
-  }
-  const visibleIds = (list: ZTreeNode<TreeData>[], open: string[] = sidebarTree.expanded): string[] =>
-    list.flatMap((node) => [node.id, ...(node.children?.length && open.includes(node.id) ? visibleIds(node.children, open) : [])]);
-  const rowAt = (index: number) => treeWrap?.querySelector<HTMLElement>(`[role="treeitem"][data-index="${index}"]`);
-  const MOVING_ROWS = 30;
-  const MAX_ANIMATED_ROWS = 6;
-
-  /** Applies a change to what the tree shows, animating only small changes to avoid a large-list reflow hitch. */
-  function animateChange(next: { collapsed?: string[]; showPages?: Record<string, number>; expanded?: string[] }, apply: () => void) {
-    if (reduced || !treeWrap) return apply();
-    const before = visibleIds(nodes);
-    const after = visibleIds(buildTree({ view, collapsed: next.collapsed ?? collapsed, showPages: next.showPages ?? showPages }), next.expanded ?? sidebarTree.expanded);
-    const stays = new Set(after);
-    const leavingAll = before.flatMap((id, index) => (stays.has(id) ? [] : [index]));
-    if (leavingAll.length > MAX_ANIMATED_ROWS) return apply();
-    const leaving = leavingAll.slice(0, MOVING_ROWS);
-    if (leaving.length) {
-      // As the tree itself does for a folder: the rows that go are cloned at their old place and fade out there while
-      // the tree already shows the new list (the rows below glide up), and its height holds until that is over.
-      const container = rowAt(leaving[0])?.parentElement;
-      const clones = leaving.flatMap((index) => {
-        const row = rowAt(index);
-        if (!row || !container) return [];
-        const clone = row.cloneNode(true) as HTMLElement;
-        for (const attribute of ['role', 'tabindex', 'data-index', 'data-glide-item', 'id']) clone.removeAttribute(attribute);
-        clone.setAttribute('aria-hidden', 'true');
-        clone.classList.add('z-tree-exit', 'pointer-events-none');
-        return [clone];
-      });
-      if (container) {
-        container.style.minHeight = `${container.offsetHeight}px`;
-        container.append(...clones);
-      }
-      glide();
-      apply();
-      setTimeout(() => {
-        for (const clone of clones) clone.remove();
-        if (container) container.style.minHeight = '';
-      }, 320);
-      return;
-    }
-    const known = new Set(before);
-    const arrivingAll = after.flatMap((id, index) => (known.has(id) ? [] : [index]));
-    if (arrivingAll.length > MAX_ANIMATED_ROWS) return apply();
-    const arriving = arrivingAll.slice(0, MOVING_ROWS);
-    glide();
-    apply();
-    void tick().then(() => {
-      const rows = arriving.flatMap((index, order) => {
-        const row = rowAt(index);
-        if (!row) return [];
-        row.style.setProperty('--z-tree-delay', `${Math.min(order, 4) * 25}ms`);
-        row.classList.add('z-tree-enter');
-        return [row];
-      });
-      setTimeout(() => rows.forEach((row) => row.classList.remove('z-tree-enter')), 420);
-    });
-  }
   function toggleSection(key: string) {
     const next = collapsed.includes(key) ? collapsed.filter((item) => item !== key) : [...collapsed, key];
-    animateChange({ collapsed: next }, () => {
-      collapsed = next;
-      setPref('sidebar.collapsed', collapsed);
-    });
+    collapsed = next;
+    setPref('sidebar.collapsed', collapsed);
   }
   // App updates: checked in the background; the button next to Settings shows a dot when one is waiting.
   // The recents drawer (folded sidebar, narrow window) goes away once Settings or the update dialog is used. The update
@@ -155,7 +85,7 @@
     const next = { ...showPages };
     if (done) delete next[key];
     else next[key] = (next[key] ?? 0) + 1;
-    animateChange({ showPages: next }, () => (showPages = next));
+    showPages = next;
   }
   const sectionKey = (nodeId: string) => nodeId.replace(/^section:/, '');
 
@@ -283,7 +213,7 @@
   }
   function toggleNode(id: string) {
     const next = sidebarTree.expanded.includes(id) ? sidebarTree.expanded.filter((item) => item !== id) : [...sidebarTree.expanded, id];
-    animateChange({ expanded: next }, () => (sidebarTree.expanded = next));
+    sidebarTree.expanded = next;
     // A click leaves the row focused, and a focused row keeps its hover buttons on after the mouse has gone.
     requestAnimationFrame(() => {
       const active = document.activeElement;
@@ -706,7 +636,7 @@
       </div>
     {/if}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div bind:this={treeWrap} class="contents" onclick={blurAfterClick}>
+    <div class="contents" onclick={blurAfterClick}>
     <ZTree
       {nodes}
       zSize="sm"
@@ -889,16 +819,6 @@
 
 
 <style>
-  /* The rows below a fold glide to their new place. The tree's own `z-tree-moving` also switches the hover highlight
-     off for the whole glide, so it blinked back afterwards: this one moves the rows only. */
-  aside :global(.sidebar-glide [role='treeitem']) {
-    transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-  @media (prefers-reduced-motion: reduce) {
-    aside :global(.sidebar-glide [role='treeitem']) {
-      transition: none;
-    }
-  }
   /* The scrollbar has its own lane, so rows do not shift sideways when it appears or goes. */
   aside :global(.z-tree) {
     scrollbar-gutter: stable;
