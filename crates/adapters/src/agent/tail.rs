@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 
 use super::interrupt;
 use super::stall::Watchdog;
@@ -30,10 +31,18 @@ static SINK: OnceLock<EventSink> = OnceLock::new();
 static TAILS: LazyLock<Mutex<HashMap<String, Tail>>> = LazyLock::new(Default::default);
 static SERIAL: AtomicU64 = AtomicU64::new(0);
 
-/// A tail that has nothing to read for this long gives the process back to the pool (which ends it after its own idle time).
+/// A tail with no background work open and nothing to read for this long gives the process back to the pool (which ends
+/// it after its own idle time): nothing is going to speak.
 const QUIET: Duration = Duration::from_secs(20 * 60);
-/// How long a new turn waits for a tail's answer in progress before it starts on its own.
-const HANDOVER: Duration = Duration::from_secs(10 * 60);
+/// With background work open the CLI may speak much later (a build, a long sub-agent). Giving the process up would end it
+/// and, with it, the job it is waiting for (`Warm` kills its process tree when dropped), so the tail waits for as long as a
+/// work day. The next message of the chat still takes the process back at once.
+const QUIET_WITH_TASKS: Duration = Duration::from_secs(8 * 60 * 60);
+/// How long a new message waits for an answer the CLI is giving on its own before that answer is interrupted: it is a
+/// report on finished work, so it is short, and the user is waiting.
+const HANDOVER: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(15) };
+/// The longest `stop` can take: the wait, the interrupt, the CLI's time to obey, and a little for the bookkeeping.
+const HANDOVER_MAX: Duration = Duration::from_secs(15 + 30 + 5);
 /// Events held while waiting for the first one that is part of an answer (token counts come before the text).
 const HELD: usize = 64;
 
@@ -52,6 +61,11 @@ pub(super) fn available() -> bool {
     SINK.get().is_some()
 }
 
+/// How many tails are reading a process now.
+pub fn count() -> usize {
+    TAILS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len()
+}
+
 /// Stops the answer in progress of a chat's tail (an interrupt). False when the chat has none.
 pub fn interrupt(chat: &str) -> bool {
     TAILS
@@ -61,12 +75,18 @@ pub fn interrupt(chat: &str) -> bool {
         .is_some_and(|tail| tail.interrupt.send(()).is_ok())
 }
 
-/// Takes the process back from the chat's tail, if it has one: waits for an answer in progress, then the process is parked.
-pub(super) async fn stop(chat: &str) {
+/// Takes the process back from the chat's tail, if it has one: waits (`HANDOVER`) for an answer in progress, which is then
+/// interrupted, and the process is parked. Returns `false` when the caller's own stop came first: the caller is being
+/// replaced and must not wait. The wait is bounded either way, so a message never waits behind a tail for ever.
+pub(super) async fn stop(chat: &str, token: &mut interrupt::StopToken) -> bool {
     let tail = TAILS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(chat);
-    if let Some(Tail { stop, done, .. }) = tail {
-        let _ = stop.send(());
-        let _ = tokio::time::timeout(HANDOVER, done).await;
+    let Some(Tail { stop, done, .. }) = tail else {
+        return true;
+    };
+    let _ = stop.send(());
+    tokio::select! {
+        _ = tokio::time::timeout(HANDOVER_MAX, done) => true,
+        () = token.stopped() => false,
     }
 }
 
@@ -79,6 +99,20 @@ pub(super) fn background_open(line: &str) -> Option<bool> {
     (value["subtype"] == "background_tasks_changed").then(|| value["tasks"].as_array().is_some_and(|tasks| !tasks.is_empty()))
 }
 
+
+/// Whether a line of the CLI's output says that a sub-agent (not a shell left running) is still open. A delegated worker
+/// waits for its sub-agents, whose answer it is asked for, but not for a dev server: that never ends.
+pub(super) fn agents_open(line: &str) -> Option<bool> {
+    if !line.contains("background_tasks_changed") {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    (value["subtype"] == "background_tasks_changed").then(|| {
+        value["tasks"]
+            .as_array()
+            .is_some_and(|tasks| tasks.iter().any(|task| task["task_type"].as_str().is_some_and(|kind| kind.contains("agent"))))
+    })
+}
 pub(super) fn start(chat: String, warm: Warm, provider: Arc<dyn Provider>) {
     let Some(sink) = SINK.get().cloned() else {
         park(chat, warm);
@@ -91,7 +125,13 @@ pub(super) fn start(chat: String, warm: Warm, provider: Arc<dyn Provider>) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(chat.clone(), Tail { stop: stop_tx, interrupt: interrupt_tx, done: done_rx });
+    super::trace::note(&chat, "tail", format!("started, background work open={}", warm.open_tasks));
     tokio::spawn(run(chat, warm, provider, sink, stop_rx, interrupt_rx, done_tx));
+}
+
+/// A moment that never comes, for a timer branch that is switched off.
+fn far() -> Instant {
+    Instant::now() + Duration::from_secs(365 * 24 * 60 * 60)
 }
 
 /// An event that is part of what the CLI says, not bookkeeping around it.
@@ -117,42 +157,68 @@ async fn run(
     let mut turn = String::new();
     let mut held: Vec<AgentEvent> = Vec::new();
     let mut stopping = false;
+    // The CLI was asked to stop its answer (by the user, or because a message is waiting for the process).
     let mut asked = false;
+    // A message is waiting for the process while the CLI answers: the moment that answer is interrupted, and the moment
+    // the process is given up if it does not obey.
+    let mut interrupt_at: Option<Instant> = None;
+    let mut kill_at: Option<Instant> = None;
+    let mut failure: Option<String> = None;
     let mut dog = Watchdog::new(provider.stall_limit());
     let fate = 'read: loop {
-        let wait = if turn.is_empty() { QUIET } else { provider.stall_limit() };
-        let next = tokio::select! {
-            next = warm.lines.next_segment() => next,
+        let wait = if !turn.is_empty() {
+            provider.stall_limit()
+        } else if warm.open_tasks {
+            QUIET_WITH_TASKS
+        } else {
+            QUIET
+        };
+        let ask = tokio::select! {
+            next = warm.lines.next_segment() => {
+                let Ok(Some(bytes)) = next else {
+                    failure = Some("agent ended without a result".to_owned());
+                    break 'read Fate::Drop;
+                };
+                dog.touch();
+                Some(bytes)
+            }
             _ = &mut stop, if !stopping => {
                 stopping = true;
                 if turn.is_empty() {
                     break 'read Fate::Park;
                 }
-                continue;
+                interrupt_at = Some(Instant::now() + HANDOVER);
+                None
             }
             Some(()) = interrupts.recv(), if !turn.is_empty() && !asked => {
+                interrupt_at = Some(Instant::now());
+                None
+            }
+            () = tokio::time::sleep_until(interrupt_at.unwrap_or_else(far)), if interrupt_at.is_some() && !asked => {
                 let line = format!("{}\n", interrupt::claude_interrupt_line("agentdeck-stop-auto"));
                 if warm.stdin.write_all(line.as_bytes()).await.is_ok() && warm.stdin.flush().await.is_ok() {
                     asked = true;
-                    continue;
+                    kill_at = Some(Instant::now() + interrupt::INTERRUPT_DEADLINE);
+                    None
+                } else {
+                    failure = Some("could not interrupt the agent".to_owned());
+                    break 'read Fate::Drop;
                 }
+            }
+            () = tokio::time::sleep_until(kill_at.unwrap_or_else(far)), if kill_at.is_some() => {
                 break 'read Fate::Drop;
             }
-            _ = tokio::time::sleep(wait) => {
+            () = tokio::time::sleep(wait) => {
                 if turn.is_empty() {
                     break 'read Fate::Park;
                 }
-                sink(&chat, &turn, AgentEvent::Error { message: dog.message() });
+                failure = Some(dog.message());
                 break 'read Fate::Drop;
             }
         };
-        let Ok(Some(bytes)) = next else {
-            if !turn.is_empty() {
-                sink(&chat, &turn, AgentEvent::Error { message: "agent ended without a result".to_owned() });
-            }
-            break 'read Fate::Drop;
+        let Some(bytes) = ask else {
+            continue;
         };
-        dog.touch();
         let text = String::from_utf8_lossy(&bytes);
         let line = text.strip_suffix('\r').unwrap_or(&text);
         if let Some(open) = background_open(line) {
@@ -165,6 +231,7 @@ async fn run(
             if turn.is_empty() {
                 if is_content(&event) {
                     turn = format!("auto-{}", SERIAL.fetch_add(1, Ordering::Relaxed) + 1);
+                    super::trace::note(&chat, "tail", format!("the CLI went on by itself: {turn}"));
                     sink(&chat, &turn, AgentEvent::AutoTurn { reason: "background work finished".to_owned() });
                     for earlier in held.drain(..) {
                         sink(&chat, &turn, earlier);
@@ -184,11 +251,32 @@ async fn run(
             turn.clear();
             held.clear();
             asked = false;
+            interrupt_at = None;
+            kill_at = None;
             if stopping || !warm.open_tasks {
                 break 'read Fate::Park;
             }
         }
     };
+    // A reply that was open when the process was given up must be closed, or the chat shows it working for ever.
+    if matches!(fate, Fate::Drop) && !turn.is_empty() {
+        let closing = if asked || stopping {
+            interrupt::killed(warm.conversation.as_deref())
+        } else {
+            AgentEvent::Error { message: failure.clone().unwrap_or_else(|| "agent ended without a result".to_owned()) }
+        };
+        sink(&chat, &turn, closing);
+    }
+    super::trace::note(
+        &chat,
+        "tail",
+        format!(
+            "ended: {} (answer open={}, stopping={stopping}, asked={asked}){}",
+            if matches!(fate, Fate::Park) { "process parked" } else { "process dropped, its children end with it" },
+            !turn.is_empty(),
+            failure.as_deref().map(|why| format!(" why: {why}")).unwrap_or_default()
+        ),
+    );
     match fate {
         Fate::Park => park(chat.clone(), warm),
         Fate::Drop => drop(warm),
@@ -200,9 +288,28 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::interrupt::StopToken;
     use crate::agent::warm::{drive_warm_turn_with, holds, settings_key};
     use crate::agent::{claude::Claude, TurnRequest};
-    use crate::agent::interrupt::StopToken;
+
+    type Heard = Vec<(String, String, AgentEvent)>;
+
+    /// What every test's sink heard (the sink is set once per process, so the tests share it and filter by chat).
+    static HEARD: LazyLock<Mutex<Heard>> = LazyLock::new(Default::default);
+
+    fn heard_of(chat: &str) -> Vec<(String, AgentEvent)> {
+        HEARD
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(from, _, _)| from == chat)
+            .map(|(_, turn, event)| (turn.clone(), event.clone()))
+            .collect()
+    }
+
+    fn listen() {
+        set_sink(Arc::new(|chat, turn, event| HEARD.lock().unwrap().push((chat.to_owned(), turn.to_owned(), event))));
+    }
 
     /// A Claude-like provider whose "CLI" is `sh script`.
     struct Fake {
@@ -235,28 +342,15 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn what_the_cli_says_after_its_turn_becomes_a_reply_of_its_own() {
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("agentdeck-tail-{}.sh", std::process::id()));
-        let body = r#"read first
-echo '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"}]}'
-echo '{"type":"result","subtype":"success","session_id":"s1","result":"started"}'
-sleep 1
-echo '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
-echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"report"}}}'
-echo '{"type":"result","subtype":"success","session_id":"s1","result":"report"}'
-read second
-"#;
+    fn script(name: &str, body: &str) -> (std::path::PathBuf, Fake) {
+        let path = std::env::temp_dir().join(format!("agentdeck-tail-{name}-{}.sh", std::process::id()));
         std::fs::write(&path, body).unwrap();
         let script = path.to_string_lossy().replace('\\', "/");
-        let provider = Fake { script };
+        (path, Fake { script })
+    }
 
-        let heard: Arc<Mutex<Vec<(String, String, AgentEvent)>>> = Arc::default();
-        let sink_heard = Arc::clone(&heard);
-        set_sink(Arc::new(move |chat, turn, event| sink_heard.lock().unwrap().push((chat.to_owned(), turn.to_owned(), event))));
-
-        let req = TurnRequest {
+    fn request(chat: &str) -> TurnRequest {
+        TurnRequest {
             prompt: "go".into(),
             session_id: Some("s1".into()),
             resume: false,
@@ -265,40 +359,104 @@ read second
             effort: None,
             allowed_tools: Vec::new(),
             cwd: None,
-            owner: Some("chat-tail".into()),
+            owner: Some(chat.into()),
             api_key: None,
-        };
+        }
+    }
+
+    const FIRST_RESULT: &str = r#"read first
+echo '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"}]}'
+echo '{"type":"result","subtype":"success","session_id":"s1","result":"started"}'
+sleep 1
+echo '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
+echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"report"}}}'
+"#;
+
+    const FINAL_RESULT: &str = r#"echo '{"type":"result","subtype":"success","session_id":"s1","result":"report"}'
+read second
+"#;
+
+    const OBEY_INTERRUPT: &str = r#"read interrupt
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","result":""}'
+read more
+"#;
+
+    async fn first_turn(provider: &Fake, chat: &str) {
         let mut own = Vec::new();
-        let ran = drive_warm_turn_with("sh".into(), &provider, &req, StopToken::never(), |event| own.push(event)).await;
+        let ran = drive_warm_turn_with("sh".into(), provider, &request(chat), StopToken::never(), |event| own.push(event)).await;
         assert!(ran);
         assert!(matches!(own.last(), Some(AgentEvent::Done { .. })), "the turn ends at its first result, holding no lock");
+    }
 
-        let mut told = Vec::new();
+    async fn until(mut done: impl FnMut() -> bool) -> bool {
         for _ in 0..100 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            told = heard.lock().unwrap().clone();
-            if told.iter().any(|(_, _, event)| matches!(event, AgentEvent::Done { .. })) {
-                break;
+            if done() {
+                return true;
             }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        done()
+    }
+
+    #[tokio::test]
+    async fn what_the_cli_says_after_its_turn_becomes_a_reply_of_its_own() {
+        listen();
+        let (path, provider) = script("report", &format!("{FIRST_RESULT}{FINAL_RESULT}"));
+        first_turn(&provider, "chat-tail").await;
+        let ended = until(|| heard_of("chat-tail").iter().any(|(_, event)| matches!(event, AgentEvent::Done { .. }))).await;
         let _ = std::fs::remove_file(&path);
-        let kinds: Vec<&AgentEvent> = told.iter().map(|(_, _, event)| event).collect();
-        assert!(matches!(kinds.first(), Some(AgentEvent::AutoTurn { .. })), "{kinds:?}");
-        assert!(kinds.iter().any(|event| matches!(event, AgentEvent::Delta { text } if text == "report")), "{kinds:?}");
-        assert!(matches!(kinds.last(), Some(AgentEvent::Done { .. })), "{kinds:?}");
-        assert!(told.iter().all(|(chat, turn, _)| chat == "chat-tail" && turn.starts_with("auto-")));
+        assert!(ended, "no answer of its own arrived: {:?}", heard_of("chat-tail"));
+        let told = heard_of("chat-tail");
+        assert!(matches!(told.first(), Some((_, AgentEvent::AutoTurn { .. }))), "{told:?}");
+        assert!(told.iter().any(|(_, event)| matches!(event, AgentEvent::Delta { text } if text == "report")), "{told:?}");
+        assert!(matches!(told.last(), Some((_, AgentEvent::Done { .. }))), "{told:?}");
+        assert!(told.iter().all(|(turn, _)| turn.starts_with("auto-")));
 
         // The answer over, the process goes back to the pool for the chat's next message.
-        let key = settings_key("faketail", &provider.args(&req), &[]);
-        let mut parked = false;
-        for _ in 0..50 {
-            if holds("chat-tail", &key, Some("s1"), false) {
-                parked = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        assert!(parked, "the process was not parked after the answer");
+        let key = settings_key("faketail", &provider.args(&request("chat-tail")), &[]);
+        assert!(until(|| holds("chat-tail", &key, Some("s1"), false)).await, "the process was not parked after the answer");
+        crate::agent::warm::reset(Some("faketail"));
+    }
+
+    #[tokio::test]
+    async fn a_message_does_not_wait_for_ever_behind_an_answer_the_cli_gives_on_its_own() {
+        listen();
+        // The CLI starts an answer and carries on until it is interrupted, as a long report would.
+        let (path, provider) = script("handover", &format!("{FIRST_RESULT}{OBEY_INTERRUPT}"));
+        first_turn(&provider, "chat-handover").await;
+        assert!(until(|| heard_of("chat-handover").iter().any(|(_, event)| matches!(event, AgentEvent::Delta { .. }))).await, "the answer never started");
+
+        let started = std::time::Instant::now();
+        let mut token = StopToken::never();
+        assert!(stop("chat-handover", &mut token).await, "the process came back");
+        let _ = std::fs::remove_file(&path);
+        assert!(started.elapsed() < Duration::from_secs(10), "the message waited {:?}", started.elapsed());
+
+        let told = heard_of("chat-handover");
+        assert!(
+            matches!(told.last(), Some((_, AgentEvent::Done { .. }))),
+            "the interrupted answer is closed as a stopped one, not left working: {told:?}"
+        );
+        let key = settings_key("faketail", &provider.args(&request("chat-handover")), &[]);
+        assert!(holds("chat-handover", &key, Some("s1"), false), "the process is parked for the message");
+        crate::agent::warm::reset(Some("faketail"));
+    }
+
+    #[tokio::test]
+    async fn a_replaced_turn_stops_waiting_for_the_tail() {
+        listen();
+        // This CLI never obeys an interrupt: only the caller's own stop can end the wait.
+        let (path, provider) = script("deaf", &format!("{FIRST_RESULT}sleep 3\n"));
+        first_turn(&provider, "chat-deaf").await;
+        assert!(until(|| heard_of("chat-deaf").iter().any(|(_, event)| matches!(event, AgentEvent::Delta { .. }))).await);
+
+        let (handle, mut token) = crate::agent::interrupt::StopHandle::new();
+        let waiter = tokio::spawn(async move { stop("chat-deaf", &mut token).await });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        handle.stop();
+        let answered = tokio::time::timeout(Duration::from_secs(5), waiter).await;
+        let _ = std::fs::remove_file(&path);
+        assert!(matches!(answered, Ok(Ok(false))), "the wait did not end with the caller's stop: {answered:?}");
         crate::agent::warm::reset(Some("faketail"));
     }
 }

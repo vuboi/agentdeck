@@ -16,7 +16,9 @@ use serde_json::{json, Value};
 use super::codex::APP_CONTEXT;
 use super::interrupt::{self, Interrupter, Signal, StopToken};
 use super::stall::Watchdog;
-use super::warm::{holds, lock_of, park, send, settings_key, start, take_server, Warm, EXIT_GRACE};
+use tokio::sync::mpsc::UnboundedReceiver;
+
+use super::warm::{holds, lock_of, park, send, settings_key, start, take_server, InjectSlot, Warm, EXIT_GRACE};
 use super::{AgentEvent, Provider, TaskStatus, TurnRequest};
 
 /// A reply to a handshake request that takes longer than this means the server is not coming up.
@@ -449,7 +451,7 @@ enum Ending {
 /// Reads notifications until the turn is over, answering what the server asks of the client. A stop (`stop`) sends
 /// `turn/interrupt` (as soon as the turn's id is known) and keeps reading: the turn ends as interrupted and the server
 /// stays up. One silent for the deadline is given up (`Failed`: the caller ends it).
-async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, stop: StopToken, emit: &mut impl FnMut(AgentEvent)) -> Ending {
+async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, stop: StopToken, mut inbox: UnboundedReceiver<String>, emit: &mut impl FnMut(AgentEvent)) -> Ending {
     let mut translate = Translate::default();
     let mut stopper = Interrupter::new(stop);
     // The id of this turn (from `turn/start`'s reply or `turn/started`), and the id of the interrupt request once sent.
@@ -458,7 +460,20 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, stop:
     let mut wants_interrupt = false;
     let mut deadline: Option<tokio::time::Instant> = None;
     let mut dog = Watchdog::new(provider.stall_limit());
+    // Messages written while the turn runs go in with `turn/steer` once the turn's id is known. A steer the server
+    // refuses (the turn just ended) is sent again as a `turn/start`, which joins the running turn or starts the next.
+    // The requests' ids: `Some(text)` for a steer, `None` for that second try (its refusal is not the turn's failure).
+    let mut waiting: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut steers: HashMap<u64, Option<String>> = HashMap::new();
     loop {
+        if let Some(turn_id) = turn.as_deref() {
+            while let Some(text) = waiting.pop_front() {
+                warm.rpc += 1;
+                steers.insert(warm.rpc, Some(text.clone()));
+                let params = json!({ "threadId": thread, "expectedTurnId": turn_id, "input": [{ "type": "text", "text": text, "text_elements": [] }] });
+                let _ = write(warm, &json!({ "id": warm.rpc, "method": "turn/steer", "params": params })).await;
+            }
+        }
         if wants_interrupt && interrupt_id.is_none() {
             if let Some(turn) = &turn {
                 warm.rpc += 1;
@@ -478,6 +493,10 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, stop:
                     emit(AgentEvent::Error { message: dog.message() });
                     return Ending::Failed;
                 }
+                Some(text) = inbox.recv() => {
+                    waiting.push_back(text);
+                    continue;
+                }
                 signal = stopper.signal() => {
                     if signal == Signal::Ask {
                         wants_interrupt = true;
@@ -495,6 +514,15 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, stop:
         if method.is_empty() {
             // The reply to the interrupt: the turn's own end follows as `turn/completed`, so nothing to do.
             if interrupt_id.is_some() && message.get("id").and_then(Value::as_u64) == interrupt_id {
+                continue;
+            }
+            if let Some(kind) = message.get("id").and_then(Value::as_u64).and_then(|id| steers.remove(&id)) {
+                if let (Some(text), Some(_)) = (kind, message.get("error")) {
+                    warm.rpc += 1;
+                    steers.insert(warm.rpc, None);
+                    let params = json!({ "threadId": thread, "input": [{ "type": "text", "text": text, "text_elements": [] }] });
+                    let _ = write(warm, &json!({ "id": warm.rpc, "method": "turn/start", "params": params })).await;
+                }
                 continue;
             }
             if let Some(id) = message["result"]["turn"]["id"].as_str() {
@@ -561,6 +589,8 @@ pub async fn drive(binary: OsString, provider: &dyn Provider, req: &TurnRequest,
     let _ = provider.args(req);
     let lock = lock_of(&chat);
     let _turn = lock.lock().await;
+    // A message the user writes while the turn runs is handed to it (`turn/steer`): the work goes on and the answer covers it.
+    let (_slot, inbox) = InjectSlot::open(&chat);
     let params = thread_params(req);
     let (key, args, env) = identity(provider, req, &params);
 
@@ -620,7 +650,7 @@ pub async fn drive(binary: OsString, provider: &dyn Provider, req: &TurnRequest,
     for event in provider.parse_line(&json!({ "type": "thread.started", "thread_id": thread }).to_string()) {
         emit(event);
     }
-    match read_turn(&mut warm, provider, &thread, stop, &mut emit).await {
+    match read_turn(&mut warm, provider, &thread, stop, inbox, &mut emit).await {
         Ending::Done => park(chat, warm),
         Ending::Failed => drop(warm),
         Ending::Closed => {

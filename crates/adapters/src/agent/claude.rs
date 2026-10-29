@@ -198,7 +198,7 @@ impl Provider for Claude {
         serde_json::json!({ "type": "control_request", "request_id": request_id, "request": { "subtype": "set_model", "model": model } }).to_string()
     }
 
-    fn chat_capabilities(&self) -> super::ChatResponseCapabilities {
+    fn chat_capabilities(&self, _req: &TurnRequest) -> super::ChatResponseCapabilities {
         super::ChatResponseCapabilities::claude()
     }
 

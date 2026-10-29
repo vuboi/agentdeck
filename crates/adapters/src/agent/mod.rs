@@ -16,6 +16,7 @@ pub mod resolve;
 pub mod runner;
 pub mod stall;
 pub mod tail;
+pub mod trace;
 pub mod warm;
 
 use serde::Serialize;
@@ -220,7 +221,7 @@ pub trait Provider: Send + Sync {
         false
     }
     /// Chat response capabilities for UI abstraction (how to handle mid-turn messages, auto-turns, etc.).
-    fn chat_capabilities(&self) -> ChatResponseCapabilities {
+    fn chat_capabilities(&self, _req: &TurnRequest) -> ChatResponseCapabilities {
         ChatResponseCapabilities::custom()
     }
     /// A copy of this provider that can read a kept process after its turn (see `tail.rs`), for a CLI that goes on by
@@ -234,35 +235,186 @@ pub trait Provider: Send + Sync {
     }
 }
 
-/// What this provider can do for turn/message handling (foundation for UI abstraction).
-#[derive(Debug, Clone, Copy)]
+/// How one message submitted while a provider is busy is actually delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MidTurnDelivery {
+    /// AgentDeck holds the message until the current interaction ends.
+    AppQueue,
+    /// The provider accepts a distinct next interaction while the current one is active.
+    NativeQueue { association: ResponseAssociation },
+    /// The provider folds the message into the active model interaction.
+    NativeSteer { association: ResponseAssociation },
+    /// The provider runs a separate interaction concurrently.
+    Parallel { association: ResponseAssociation },
+}
+
+/// How reliably an assistant answer can be attributed to one user message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseAssociation {
+    /// Provider supplies a distinct interaction/message identifier.
+    PerMessage,
+    /// The response covers the active message and one or more follow-ups together.
+    MergedIntoActive,
+    /// Evidence or identifiers are insufficient to preserve the association.
+    Unknown,
+}
+
+/// Provider-specific stop semantics. This describes the adapter behavior; the adapter still performs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterruptBehavior {
+    GracefulReusable,
+    AbortAndDrain,
+    KillProcess,
+    AbortRun,
+}
+
+/// Raw event that proves the provider interaction is complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnEndBehavior {
+    ResultEvent,
+    ThreadTurnCompleted,
+    SessionIdle,
+    ProcessExit,
+    Custom,
+}
+
+/// How work that outlives the first answer is surfaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundBehavior {
+    None,
+    TailAutoTurn,
+    NotificationAutoTurn,
+    PollOnly,
+}
+
+/// How the provider exposes child-agent output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildOutputBehavior {
+    ScopedEvents,
+    SeparateThread,
+    TranscriptLookup,
+    Unsupported,
+}
+
+/// Per-provider response contract. It describes behavior integrated by AgentDeck, not every feature the upstream CLI
+/// might support. Unknown behavior stays explicit and the chat coordinator uses its own queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChatResponseCapabilities {
-    /// Mid-turn message injection: `true` = inject/replay (Claude, Codex), `false` = queue for next turn.
-    pub mid_turn_injection: bool,
-    /// Messages sent while text streams: `true` = parallel (OpenCode), `false` = queued until turn end.
-    pub parallel_messages: bool,
-    /// Auto-generated turn on background task completion: rendered as new answer with indicator.
-    pub auto_background_turn: bool,
+    pub delivery: MidTurnDelivery,
+    pub interruption: InterruptBehavior,
+    pub turn_end: TurnEndBehavior,
+    pub background: BackgroundBehavior,
+    pub child_output: ChildOutputBehavior,
 }
 
 impl ChatResponseCapabilities {
     pub fn claude() -> Self {
-        Self { mid_turn_injection: true, parallel_messages: false, auto_background_turn: true }
+        Self {
+            delivery: MidTurnDelivery::NativeSteer { association: ResponseAssociation::MergedIntoActive },
+            interruption: InterruptBehavior::GracefulReusable,
+            turn_end: TurnEndBehavior::ResultEvent,
+            background: BackgroundBehavior::TailAutoTurn,
+            child_output: ChildOutputBehavior::ScopedEvents,
+        }
     }
     pub fn codex() -> Self {
-        Self { mid_turn_injection: true, parallel_messages: false, auto_background_turn: true }
+        Self {
+            delivery: MidTurnDelivery::NativeSteer { association: ResponseAssociation::MergedIntoActive },
+            interruption: InterruptBehavior::GracefulReusable,
+            turn_end: TurnEndBehavior::ThreadTurnCompleted,
+            background: BackgroundBehavior::PollOnly,
+            child_output: ChildOutputBehavior::ScopedEvents,
+        }
     }
     pub fn opencode() -> Self {
-        Self { mid_turn_injection: false, parallel_messages: true, auto_background_turn: false }
+        Self {
+            delivery: MidTurnDelivery::Parallel { association: ResponseAssociation::Unknown },
+            interruption: InterruptBehavior::KillProcess,
+            turn_end: TurnEndBehavior::ProcessExit,
+            background: BackgroundBehavior::None,
+            child_output: ChildOutputBehavior::SeparateThread,
+        }
     }
     pub fn antigravity() -> Self {
-        Self { mid_turn_injection: false, parallel_messages: false, auto_background_turn: true }
+        Self {
+            delivery: MidTurnDelivery::NativeQueue { association: ResponseAssociation::PerMessage },
+            interruption: InterruptBehavior::KillProcess,
+            turn_end: TurnEndBehavior::ResultEvent,
+            background: BackgroundBehavior::PollOnly,
+            child_output: ChildOutputBehavior::TranscriptLookup,
+        }
     }
     pub fn copilot() -> Self {
-        Self { mid_turn_injection: false, parallel_messages: false, auto_background_turn: true }
+        Self {
+            delivery: MidTurnDelivery::NativeSteer { association: ResponseAssociation::MergedIntoActive },
+            interruption: InterruptBehavior::AbortAndDrain,
+            turn_end: TurnEndBehavior::SessionIdle,
+            background: BackgroundBehavior::NotificationAutoTurn,
+            child_output: ChildOutputBehavior::ScopedEvents,
+        }
     }
     pub fn custom() -> Self {
-        Self { mid_turn_injection: false, parallel_messages: false, auto_background_turn: false }
+        Self {
+            delivery: MidTurnDelivery::AppQueue,
+            interruption: InterruptBehavior::AbortRun,
+            turn_end: TurnEndBehavior::Custom,
+            background: BackgroundBehavior::None,
+            child_output: ChildOutputBehavior::Unsupported,
+        }
+    }
+
+    /// A follow-up may bypass the coordinator queue only when its reply can be linked to that message.
+    pub fn can_inject_as_distinct_reply(self) -> bool {
+        matches!(
+            self.delivery,
+            MidTurnDelivery::NativeSteer { association: ResponseAssociation::PerMessage }
+        )
+    }
+}
+
+#[cfg(test)]
+mod response_capability_tests {
+    use super::{
+        BackgroundBehavior, ChatResponseCapabilities, ChildOutputBehavior, InterruptBehavior, MidTurnDelivery,
+        ResponseAssociation, TurnEndBehavior,
+    };
+
+    #[test]
+    fn custom_provider_defaults_to_the_agentdeck_queue() {
+        let profile = ChatResponseCapabilities::custom();
+        assert_eq!(profile.delivery, MidTurnDelivery::AppQueue);
+        assert!(!profile.can_inject_as_distinct_reply());
+    }
+
+    #[test]
+    fn native_features_are_not_mistaken_for_separate_message_replies() {
+        for profile in [ChatResponseCapabilities::claude(), ChatResponseCapabilities::codex(), ChatResponseCapabilities::copilot()] {
+            assert!(!profile.can_inject_as_distinct_reply());
+            assert!(matches!(profile.delivery, MidTurnDelivery::NativeSteer { association: ResponseAssociation::MergedIntoActive }));
+        }
+        let agy = ChatResponseCapabilities::antigravity();
+        assert!(matches!(agy.delivery, MidTurnDelivery::NativeQueue { association: ResponseAssociation::PerMessage }));
+        assert!(!agy.can_inject_as_distinct_reply());
+    }
+
+    #[test]
+    fn providers_keep_their_distinct_end_stop_and_child_contracts() {
+        let claude = ChatResponseCapabilities::claude();
+        assert_eq!(claude.turn_end, TurnEndBehavior::ResultEvent);
+        assert_eq!(claude.background, BackgroundBehavior::TailAutoTurn);
+        assert_eq!(claude.child_output, ChildOutputBehavior::ScopedEvents);
+        assert_eq!(claude.interruption, InterruptBehavior::GracefulReusable);
+
+        assert_eq!(ChatResponseCapabilities::codex().turn_end, TurnEndBehavior::ThreadTurnCompleted);
+
+        let copilot = ChatResponseCapabilities::copilot();
+        assert_eq!(copilot.turn_end, TurnEndBehavior::SessionIdle);
+        assert_eq!(copilot.background, BackgroundBehavior::NotificationAutoTurn);
+        assert_eq!(copilot.interruption, InterruptBehavior::AbortAndDrain);
+
+        let opencode = ChatResponseCapabilities::opencode();
+        assert_eq!(opencode.turn_end, TurnEndBehavior::ProcessExit);
+        assert_eq!(opencode.interruption, InterruptBehavior::KillProcess);
     }
 }
 

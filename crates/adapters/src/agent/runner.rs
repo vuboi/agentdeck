@@ -200,6 +200,9 @@ pub async fn drive_turn(
 
     let mut finished = false;
     let mut stalled = false;
+    // A sub-agent is still open, and the result the CLI printed before it ended (kept, in case nothing follows).
+    let mut agents_open = false;
+    let mut early_done: Option<AgentEvent> = None;
     let mut watchdog = Watchdog::new(provider.stall_limit());
     // Set once the CLI has exited, with the time after which its pipe is no longer read.
     let mut exited: Option<(std::io::Result<std::process::ExitStatus>, tokio::time::Instant)> = None;
@@ -231,8 +234,18 @@ pub async fn drive_turn(
             watchdog.touch(); // any line, even one nobody understands, shows the CLI is alive
             let text = String::from_utf8_lossy(&bytes);
             let line = text.strip_suffix('\r').unwrap_or(&text);
+            if let Some(open) = super::tail::agents_open(line) {
+                agents_open = open;
+                watchdog.set_background(open);
+            }
             for event in provider.parse_line(line) {
                 watchdog.note(&event);
+                // A worker is asked for the answer of the work it handed to sub-agents: the CLI's first result comes
+                // while they still run, and it goes on by itself when they end. That second result is the answer.
+                if agents_open && matches!(event, AgentEvent::Done { .. }) {
+                    early_done = Some(event);
+                    continue;
+                }
                 finished |= matches!(event, AgentEvent::Done { .. } | AgentEvent::Error { .. });
                 emit(event);
             }
@@ -244,6 +257,13 @@ pub async fn drive_turn(
         }
     }
 
+    // The CLI ended (or went silent for good) without a second result: the first one is the answer.
+    if !finished {
+        if let Some(done) = early_done.take() {
+            finished = true;
+            emit(done);
+        }
+    }
     // Ended on its own: what the CLI left running in the background (a dev server) is not ours to stop.
     // A stalled turn is the exception: the guard ends the whole tree when it drops.
     if !stalled {
@@ -512,5 +532,99 @@ mod kill_tests {
         assert!(script.contains("pkill -KILL -P 4242"));
         assert!(script.contains("kill -KILL 4242"));
         assert!(script.ends_with("exit 0"));
+    }
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+    use crate::agent::claude::Claude;
+
+    /// A Claude-like provider whose "CLI" is `sh script`.
+    struct Fake(String);
+    impl Provider for Fake {
+        fn id(&self) -> &'static str {
+            "fakeworker"
+        }
+        fn binary(&self) -> &'static str {
+            "sh"
+        }
+        fn candidates(&self) -> Vec<std::path::PathBuf> {
+            Vec::new()
+        }
+        fn args(&self, _req: &TurnRequest) -> Vec<String> {
+            vec![self.0.clone()]
+        }
+        fn parse_line(&self, line: &str) -> Vec<AgentEvent> {
+            Claude.parse_line(line)
+        }
+    }
+
+    fn request() -> TurnRequest {
+        TurnRequest {
+            prompt: "go".into(),
+            session_id: None,
+            resume: false,
+            model: None,
+            permission_mode: None,
+            effort: None,
+            allowed_tools: Vec::new(),
+            cwd: None,
+            owner: None,
+            api_key: None,
+        }
+    }
+
+    async fn run(name: &str, body: &str) -> Vec<AgentEvent> {
+        let path = std::env::temp_dir().join(format!("agentdeck-worker-{name}-{}.sh", std::process::id()));
+        std::fs::write(&path, body).unwrap();
+        let provider = Fake(path.to_string_lossy().replace('\\', "/"));
+        let mut events = Vec::new();
+        drive_turn("sh".into(), &provider, &request(), |event| events.push(event)).await;
+        let _ = std::fs::remove_file(&path);
+        events
+    }
+
+    #[tokio::test]
+    async fn a_worker_waits_for_its_sub_agents_and_answers_with_the_second_result() {
+        let events = run(
+            "agents",
+            r#"echo '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a","task_type":"local_agent"}]}'
+echo '{"type":"result","subtype":"success","session_id":"s1","result":"started"}'
+sleep 1
+echo '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
+echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"the real answer"}}}'
+echo '{"type":"result","subtype":"success","session_id":"s1","result":"the real answer"}'
+"#,
+        )
+        .await;
+        let dones: Vec<&AgentEvent> = events.iter().filter(|event| matches!(event, AgentEvent::Done { .. })).collect();
+        assert_eq!(dones.len(), 1, "{events:?}");
+        assert!(matches!(dones[0], AgentEvent::Done { text, .. } if text == "the real answer"), "{events:?}");
+    }
+
+    #[tokio::test]
+    async fn a_worker_does_not_wait_for_a_shell_left_running() {
+        let events = run(
+            "shell",
+            r#"echo '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b","task_type":"local_bash"}]}'
+echo '{"type":"result","subtype":"success","session_id":"s1","result":"started the server"}'
+sleep 30
+"#,
+        )
+        .await;
+        assert!(matches!(events.last(), Some(AgentEvent::Done { text, .. }) if text == "started the server"), "{events:?}");
+    }
+
+    #[tokio::test]
+    async fn a_worker_whose_cli_ends_after_the_first_result_still_answers() {
+        let events = run(
+            "early",
+            r#"echo '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a","task_type":"local_agent"}]}'
+echo '{"type":"result","subtype":"success","session_id":"s1","result":"only answer"}'
+"#,
+        )
+        .await;
+        assert!(matches!(events.last(), Some(AgentEvent::Done { text, .. }) if text == "only answer"), "{events:?}");
     }
 }

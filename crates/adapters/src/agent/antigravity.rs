@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use super::{AgentEvent, PermissionRequest, Provider, TurnRequest};
+use super::{AgentEvent, PermissionRequest, Provider, TaskStatus, TurnRequest};
 
 /// What an approval card hands back for a refused command: `agy:command(<command>)`.
 const ALLOW_PREFIX: &str = "agy:command(";
@@ -263,7 +263,7 @@ impl Provider for Antigravity {
         }
     }
 
-    fn chat_capabilities(&self) -> super::ChatResponseCapabilities {
+    fn chat_capabilities(&self, _req: &TurnRequest) -> super::ChatResponseCapabilities {
         super::ChatResponseCapabilities::antigravity()
     }
 }
@@ -445,11 +445,38 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
                     name,
                     input,
                     change,
-                    background: false,
+                    background: is_subagent_tool(raw_name),
                 });
+                // agy runs a sub-agent in a conversation of its own and says nothing of what it does until it ends:
+                // the card shows who it is from the start.
+                if is_subagent_tool(raw_name) {
+                    events.push(AgentEvent::Task {
+                        id: index.to_string(),
+                        tool_use_id: Some(index.to_string()),
+                        status: TaskStatus::Started,
+                        label: parameters["Role"].as_str().or_else(|| parameters["TypeName"].as_str()).map(str::to_owned),
+                        summary: None,
+                        tools: None,
+                    });
+                }
             }
             match state {
                 "DONE" => {
+                    // The step that ends a sub-agent lists who ran and what it was asked.
+                    let listed = match &update["subagent_info"] {
+                        Value::String(text) => serde_json::from_str::<Value>(text).unwrap_or(Value::Null),
+                        other => other.clone(),
+                    };
+                    for agent in listed["subagents"].as_array().into_iter().flatten() {
+                        events.push(AgentEvent::Task {
+                            id: agent["conversation_id"].as_str().map_or_else(|| index.to_string(), str::to_owned),
+                            tool_use_id: Some(index.to_string()),
+                            status: TaskStatus::Done,
+                            label: agent["role"].as_str().or_else(|| agent["type_name"].as_str()).map(str::to_owned),
+                            summary: agent["initial_prompt"].as_str().map(|prompt| prompt.chars().take(200).collect()),
+                            tools: None,
+                        });
+                    }
                     let output = info["output"].as_str().unwrap_or_default().to_string();
                     let image = offloaded_image(&output);
                     let change = turn
@@ -495,6 +522,11 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
         }],
         _ => Vec::new(),
     }
+}
+
+/// The tools that start a sub-agent.
+fn is_subagent_tool(name: &str) -> bool {
+    matches!(name, "invoke_subagent" | "define_subagent" | "browser_subagent")
 }
 
 fn finish(result: &Value, turn: &Turn) -> Vec<AgentEvent> {
@@ -753,6 +785,20 @@ mod tests {
         assert_eq!(results, 3);
     }
 
+
+    #[test]
+    fn a_sub_agent_is_a_background_call_with_a_task_that_names_it() {
+        let events = run(include_str!("../../tests/fixtures/agy/subagent.jsonl"));
+        let call = events.iter().find_map(|event| match event {
+            AgentEvent::ToolCall { id, background, .. } if *background => Some(id.clone()),
+            _ => None,
+        });
+        let call = call.expect("the invoke_subagent call is marked as background work");
+        let tasks: Vec<&AgentEvent> = events.iter().filter(|event| matches!(event, AgentEvent::Task { .. })).collect();
+        assert!(matches!(tasks.first(), Some(AgentEvent::Task { status: TaskStatus::Started, tool_use_id: Some(id), label: Some(label), .. }) if *id == call && label == "Math Calculator"), "{tasks:?}");
+        assert!(tasks.iter().any(|event| matches!(event, AgentEvent::Task { status: TaskStatus::Done, summary: Some(summary), .. } if summary.contains("17*3"))), "{tasks:?}");
+        assert!(matches!(events.last(), Some(AgentEvent::Done { .. })));
+    }
     #[test]
     fn a_denied_command_asks_for_approval_before_done() {
         let events = run(include_str!("../../tests/fixtures/agy/tool_denied.jsonl"));

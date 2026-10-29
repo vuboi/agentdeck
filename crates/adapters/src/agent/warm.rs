@@ -98,10 +98,12 @@ pub fn inject(chat: &str, prompt: &str) -> bool {
 }
 
 /// Registers a turn to take injected messages, and takes the registration back when the turn ends.
-struct InjectSlot(String);
+pub struct InjectSlot(String);
 
 impl InjectSlot {
-    fn open(chat: &str) -> (InjectSlot, UnboundedReceiver<String>) {
+    /// Opens the chat's inbox for as long as the slot lives. A provider that runs its own loop (a custom chat provider)
+    /// reads it between its steps; a message `inject` reports as taken must be read.
+    pub fn open(chat: &str) -> (InjectSlot, UnboundedReceiver<String>) {
         let (sender, receiver) = unbounded_channel();
         INJECT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(chat.to_owned(), sender);
         (InjectSlot(chat.to_owned()), receiver)
@@ -130,6 +132,11 @@ static SERIAL: AtomicU64 = AtomicU64::new(0);
 /// Where the idle process of `chat` with the settings `key` is kept.
 fn slot(chat: &str, key: &str) -> String {
     format!("{chat}{SEP}{}", key.split(SEP).next().unwrap_or_default())
+}
+
+/// How many idle processes are kept.
+pub fn pool_len() -> usize {
+    pool().len()
 }
 
 fn pool() -> MutexGuard<'static, HashMap<String, Warm>> {
@@ -320,8 +327,10 @@ enum Ending {
 /// Reads the turn's lines until its result. The process stays up afterwards. A stop (`stop`) sends the CLI its interrupt
 /// message and keeps reading: the result that follows ends the turn as a stopped one and the process is kept. A CLI
 /// without an interrupt message, or one silent for the deadline, is given up (`Failed`: the caller ends it).
-async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, mut inject: Option<UnboundedReceiver<String>>, emit: &mut impl FnMut(AgentEvent)) -> Ending {
+async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, mut inject: Option<UnboundedReceiver<String>>, chat: &str, emit: &mut impl FnMut(AgentEvent)) -> Ending {
     let conversation = warm.conversation.clone();
+    let began = std::time::Instant::now();
+    let mut first_line = true;
     let Warm { lines, child, stdin, open_tasks, .. } = warm;
     let mut stopper = Interrupter::new(stop);
     let mut requests = 0u32;
@@ -374,6 +383,9 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, mu
         };
         let Ok(Some(bytes)) = next else { return Ending::Closed };
         dog.touch();
+        if std::mem::take(&mut first_line) {
+            super::trace::note(chat, "first line", format!("{} ms after the message was sent", began.elapsed().as_millis()));
+        }
         let text = String::from_utf8_lossy(&bytes);
         let line = text.strip_suffix('\r').unwrap_or(&text);
         let mut ending = None;
@@ -457,9 +469,15 @@ pub async fn drive_warm_turn_with(binary: OsString, provider: &dyn Provider, req
         return true;
     }
     let lock = lock_of(&chat);
+    let asked_at = std::time::Instant::now();
     let _turn = lock.lock().await;
+    super::trace::note(&chat, "chat lock", format!("{} waited {} ms", provider.id(), asked_at.elapsed().as_millis()));
     // A process that was left reading what the CLI does on its own comes back first, after an answer in progress.
-    super::tail::stop(&chat).await;
+    if !super::tail::stop(&chat, &mut stop.clone()).await {
+        // Stopped (replaced) while waiting for the process: the turn ends here, with nothing written.
+        emit(interrupt::killed(req.session_id.as_deref()));
+        return true;
+    }
     // Only Claude reads a message at any time and tells when it did (`--replay-user-messages`).
     let (_slot, inbox) = if provider.id() == "claude" {
         let (slot, receiver) = InjectSlot::open(&chat);
@@ -474,11 +492,16 @@ pub async fn drive_warm_turn_with(binary: OsString, provider: &dyn Provider, req
     let mut warm = match take(&chat, &key, req.session_id.as_deref()) {
         Some(mut warm) => {
             warm.fresh = false;
+            super::trace::note(&chat, "process", format!("kept one takes the turn pid={:?}", warm.child.id()));
             warm
         }
         None => match start(binary.clone(), provider, &args, &env, req, &key) {
-            Ok(warm) => warm,
+            Ok(warm) => {
+                super::trace::note(&chat, "process", format!("started pid={:?} resume={}", warm.child.id(), req.resume));
+                warm
+            }
             Err(message) => {
+                super::trace::note(&chat, "process", format!("could not start: {message}"));
                 emit(AgentEvent::Error { message });
                 return true;
             }
@@ -510,23 +533,30 @@ pub async fn drive_warm_turn_with(binary: OsString, provider: &dyn Provider, req
         }
     }
 
-    match read_turn(&mut warm, provider, stop, inbox, &mut emit).await {
+    let began = std::time::Instant::now();
+    match read_turn(&mut warm, provider, stop, inbox, &chat, &mut emit).await {
         Ending::Done(conversation) => {
             if conversation.is_some() {
                 warm.conversation = conversation;
             }
-            match provider.tail_provider().filter(|_| warm.open_tasks && super::tail::available()) {
+            let tail = provider.tail_provider().filter(|_| warm.open_tasks && super::tail::available());
+            super::trace::note(&chat, "turn read", format!("done after {:.1}s background_open={} -> {}", began.elapsed().as_secs_f32(), warm.open_tasks, if tail.is_some() { "tail" } else { "park" }));
+            match tail {
                 Some(reader) => super::tail::start(chat, warm, reader),
                 None => park(chat, warm),
             }
         }
-        Ending::Failed => drop(warm),
+        Ending::Failed => {
+            super::trace::note(&chat, "turn read", format!("failed after {:.1}s: the process is dropped (its children end with it)", began.elapsed().as_secs_f32()));
+            drop(warm)
+        }
         Ending::Closed => {
             let stderr = warm
                 .stderr
                 .lock()
                 .map(|kept| String::from_utf8_lossy(&kept).trim().to_owned())
                 .unwrap_or_default();
+            super::trace::note(&chat, "turn read", format!("the CLI went away after {:.1}s; stderr: {}", began.elapsed().as_secs_f32(), stderr.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>()));
             drop(warm);
             emit(AgentEvent::Error {
                 message: if stderr.is_empty() { "agent ended without a result".to_owned() } else { stderr },

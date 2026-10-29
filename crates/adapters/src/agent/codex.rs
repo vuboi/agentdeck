@@ -500,7 +500,7 @@ impl Provider for Codex {
         events
     }
 
-    fn chat_capabilities(&self) -> super::ChatResponseCapabilities {
+    fn chat_capabilities(&self, _req: &TurnRequest) -> super::ChatResponseCapabilities {
         super::ChatResponseCapabilities::codex()
     }
 }
