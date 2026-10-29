@@ -65,23 +65,33 @@ export function buildTree(
     return b.updatedAt.localeCompare(a.updatedAt);
   };
   // Two levels, as in Claude: every fork, a fork of a fork too, sits right under the chat it all started from.
+  // Found once per build (by id, memoised), not by scanning every chat for every row: a rebuild stays linear.
+  const byId = new Map(workspace.sessions.map((item) => [item.id, item]));
+  const roots = new Map<string, string>();
   const rootOf = (item: SessionItem): string => {
+    const known = roots.get(item.id);
+    if (known) return known;
     let cursor = item;
     for (let depth = 0; cursor.parentId && depth < 50; depth++) {
-      const parent = workspace.sessions.find(
-        (other) => other.id === cursor.parentId,
-      );
+      const parent = byId.get(cursor.parentId);
       if (!parent) break;
       cursor = parent;
     }
+    roots.set(item.id, cursor.id);
     return cursor.id;
   };
+  const forksByRoot = new Map<string, SessionItem[]>();
+  for (const item of workspace.sessions) {
+    if (!item.parentId) continue;
+    const root = rootOf(item);
+    if (root === item.id) continue;
+    const list = forksByRoot.get(root);
+    if (list) list.push(item);
+    else forksByRoot.set(root, [item]);
+  }
   const forksOf = (root: SessionItem): ZTreeNode<TreeData>[] =>
-    workspace.sessions
-      .filter(
-        (item) =>
-          item.parentId && item.id !== root.id && rootOf(item) === root.id,
-      )
+    (forksByRoot.get(root.id) ?? [])
+      .slice()
       .sort(newest)
       .map((item, index, list) => sessionNode(item, index === list.length - 1));
 
