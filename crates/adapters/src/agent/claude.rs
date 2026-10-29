@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use super::{
-    allow_entry, file_change, summarize_tool_input, AgentEvent, PermissionRequest, Provider,
+    allow_entry, file_change, summarize_tool_input, AgentEvent, PermissionRequest, Provider, TaskStatus,
     TurnRequest,
 };
 
@@ -202,10 +202,32 @@ impl Provider for Claude {
         super::ChatResponseCapabilities::claude()
     }
 
+    fn tail_provider(&self) -> Option<std::sync::Arc<dyn Provider>> {
+        Some(std::sync::Arc::new(Claude))
+    }
+
     fn parse_line(&self, line: &str) -> Vec<AgentEvent> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return Vec::new();
         };
+        let events = self.parse_value(&value, line);
+        // A line of a sub-agent carries the id of the tool call that started it: its text and tools belong under that
+        // card, not in the main answer.
+        match value["parent_tool_use_id"].as_str().filter(|id| !id.is_empty()) {
+            Some(parent) => events
+                .into_iter()
+                .map(|event| match event {
+                    AgentEvent::Usage { .. } | AgentEvent::Raw { .. } | AgentEvent::Task { .. } => event,
+                    inner => AgentEvent::Scoped { parent: parent.to_owned(), event: Box::new(inner) },
+                })
+                .collect(),
+            None => events,
+        }
+    }
+}
+
+impl Claude {
+    fn parse_value(&self, value: &Value, line: &str) -> Vec<AgentEvent> {
         match value["type"].as_str() {
             // Partial message chunks (needs --include-partial-messages).
             Some("stream_event") => {
@@ -287,17 +309,31 @@ impl Provider for Claude {
                     change: None,
                 })
                 .collect(),
-            // Background task completed: auto-generated turn will follow.
-            Some("system") if value["subtype"] == "task_notification" => {
-                vec![AgentEvent::BackgroundTaskNotification {
-                    summary: value["summary"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
-                    task_id: value["task_id"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
+            // A sub-agent or a background job starts, reports on its way, and ends.
+            Some("system")
+                if matches!(value["subtype"].as_str(), Some("task_started" | "task_progress" | "task_notification")) =>
+            {
+                let text = |key: &str| value[key].as_str().filter(|text| !text.is_empty()).map(str::to_owned);
+                let (status, summary) = match value["subtype"].as_str() {
+                    Some("task_started") => (TaskStatus::Started, None),
+                    Some("task_progress") => (TaskStatus::Progress, text("description")),
+                    _ => (
+                        if matches!(value["status"].as_str(), Some("completed")) { TaskStatus::Done } else { TaskStatus::Failed },
+                        text("summary"),
+                    ),
+                };
+                let label = match (text("subagent_type"), text("description")) {
+                    (Some(kind), Some(what)) if status == TaskStatus::Started => Some(format!("{kind}: {what}")),
+                    (Some(kind), _) => Some(kind),
+                    (None, what) => what.filter(|_| status == TaskStatus::Started),
+                };
+                vec![AgentEvent::Task {
+                    id: text("task_id").unwrap_or_default(),
+                    tool_use_id: text("tool_use_id"),
+                    status,
+                    label,
+                    summary,
+                    tools: value["usage"]["tool_uses"].as_u64().and_then(|count| u32::try_from(count).ok()),
                 }]
             }
             // The CLI moved a turn to another model (a refusal, an overload, a model that is gone). Passed on as it is:
@@ -592,6 +628,44 @@ mod tests {
             .parse_line(r#"{"type":"system","subtype":"init"}"#)
             .is_empty());
         assert!(Claude.parse_line("not json").is_empty());
+    }
+
+    #[test]
+    fn a_sub_agents_lines_are_scoped_to_the_tool_call_that_started_it() {
+        let call = r#"{"type":"assistant","parent_tool_use_id":"toolu_agent","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}}]}}"#;
+        match Claude.parse_line(call).as_slice() {
+            [AgentEvent::Scoped { parent, event }] => {
+                assert_eq!(parent, "toolu_agent");
+                assert!(matches!(**event, AgentEvent::ToolCall { .. }));
+            }
+            other => panic!("expected a scoped tool call, got {other:?}"),
+        }
+        let top = r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#;
+        assert!(matches!(Claude.parse_line(top).as_slice(), [AgentEvent::ToolCall { .. }]));
+    }
+
+    #[test]
+    fn task_lines_report_where_a_sub_agent_stands() {
+        let started = r#"{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_agent","description":"Scan docs","subagent_type":"Explore"}"#;
+        assert!(matches!(
+            Claude.parse_line(started).as_slice(),
+            [AgentEvent::Task { status: TaskStatus::Started, label: Some(label), tool_use_id: Some(_), .. }] if label == "Explore: Scan docs"
+        ));
+        let progress = r#"{"type":"system","subtype":"task_progress","task_id":"a1","tool_use_id":"toolu_agent","description":"Reading","usage":{"tool_uses":3}}"#;
+        assert!(matches!(Claude.parse_line(progress).as_slice(), [AgentEvent::Task { status: TaskStatus::Progress, tools: Some(3), .. }]));
+        let done = r#"{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_agent","status":"completed","summary":"Found 4 files"}"#;
+        assert!(matches!(
+            Claude.parse_line(done).as_slice(),
+            [AgentEvent::Task { status: TaskStatus::Done, summary: Some(summary), .. }] if summary == "Found 4 files"
+        ));
+    }
+
+    #[test]
+    fn open_background_work_is_read_from_the_task_list() {
+        use crate::agent::tail::background_open;
+        assert_eq!(background_open(r#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"}]}"#), Some(true));
+        assert_eq!(background_open(r#"{"type":"system","subtype":"background_tasks_changed","tasks":[]}"#), Some(false));
+        assert_eq!(background_open(r#"{"type":"result"}"#), None);
     }
 }
 

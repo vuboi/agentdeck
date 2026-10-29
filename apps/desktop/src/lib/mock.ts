@@ -7,7 +7,7 @@ export type Session = { id: string; title: string; agent: Agent; status: 'workin
 export type Block =
   | { kind: 'thinking'; text: string; streaming?: boolean }
   | { kind: 'response'; text: string; streaming?: boolean }
-  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; /** A delegate_task call: the task it started (see delegate-task.ts). */ taskId?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string }
+  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; /** A delegate_task call: the task it started (see delegate-task.ts). */ taskId?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string; /** Work done under this call by a sub-agent: its steps and what it wrote. */ children?: Block[]; /** A sub-agent or background job this call started, and how far it is. */ task?: { status: 'started' | 'progress' | 'done' | 'failed'; label?: string; summary?: string; tools?: number } }
   | { kind: 'loading'; label: string }
   /** Part of the user's message handed to another agent in a chat of its own; `state` follows that chat. */
   | { kind: 'delegate'; childId: string; agent: Agent; model: string; state: 'queued' | 'running' | 'asking' | 'done' | 'failed' | 'skipped'; note?: string; /** The workflow step it runs, when it comes from a flow. */ step?: string; /** Questions the step asked the user (state 'asking'). */ questions?: import('./questions').Question[]; /** The earlier step it is asking something right now, and what. */ talking?: string; talkText?: string }

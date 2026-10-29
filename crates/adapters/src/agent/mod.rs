@@ -15,6 +15,7 @@ pub mod permission;
 pub mod resolve;
 pub mod runner;
 pub mod stall;
+pub mod tail;
 pub mod warm;
 
 use serde::Serialize;
@@ -78,12 +79,36 @@ pub enum AgentEvent {
         label: String,
         line: String,
     },
-    /// A background task (sub-agent or `run_in_background`) completed. The CLI auto-generates the next turn.
-    /// The UI renders it as a new answer with a "background task completed" indicator.
-    BackgroundTaskNotification {
-        summary: String,
-        task_id: String,
+    /// An event that belongs to child work (a sub-agent, a delegated thread) and not to the main answer. `parent` is the
+    /// id of the tool call that started the child; the chat draws the inner event under that call's card.
+    Scoped {
+        parent: String,
+        event: Box<AgentEvent>,
     },
+    /// Where a sub-agent or a background job stands. `tool_use_id` links it to the tool call that started it.
+    Task {
+        id: String,
+        tool_use_id: Option<String>,
+        status: TaskStatus,
+        /// Who runs it ("Explore", "general-purpose", a model name) and what for.
+        label: Option<String>,
+        summary: Option<String>,
+        /// How many tools the task has run so far.
+        tools: Option<u32>,
+    },
+    /// The CLI went on by itself (a background job finished, its report is a new answer): not an answer to a message.
+    /// The events after it belong to a new reply in the same chat.
+    AutoTurn { reason: String },
+}
+
+/// How far a sub-agent or a background job is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Started,
+    Progress,
+    Done,
+    Failed,
 }
 
 /// The address of the browser's MCP server for one chat: `/mcp?chat=<id>&root=<folder>`. The bridge reads both from it.
@@ -197,6 +222,11 @@ pub trait Provider: Send + Sync {
     /// Chat response capabilities for UI abstraction (how to handle mid-turn messages, auto-turns, etc.).
     fn chat_capabilities(&self) -> ChatResponseCapabilities {
         ChatResponseCapabilities::custom()
+    }
+    /// A copy of this provider that can read a kept process after its turn (see `tail.rs`), for a CLI that goes on by
+    /// itself when background work ends. `None`: nothing speaks between this CLI's turns.
+    fn tail_provider(&self) -> Option<std::sync::Arc<dyn Provider>> {
+        None
     }
     /// The line (without its newline) that switches a kept process to `model`; only used when `live_model` is true.
     fn model_switch_line(&self, _request_id: &str, _model: &str) -> String {

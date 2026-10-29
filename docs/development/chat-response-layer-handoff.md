@@ -89,3 +89,22 @@ Mỗi provider khai báo năng lực, UI chỉ dựa vào năng lực:
 - Khoá OpenRouter đã dán trong chat; người dùng nói sẽ xoá. Không lưu khoá vào repo.
 - Tài khoản Codex đã đổi sang tài khoản mới; quota tuần của tài khoản cũ từng ở 93%.
 - Không tự đổi tài khoản của agent; không đăng nhập hộ người dùng.
+
+## 7. Cập nhật sau lượt làm tiếp (2026-10-29)
+
+Đã làm và kiểm chứng (cargo clippy `-D warnings` sạch, `cargo test -p ag-adapters` 122 pass, svelte-check 0 lỗi, `agent-reply.test.ts` 4 pass, phát lại log thật `live-claude-rA/rB.jsonl` qua `Claude.parse_line`):
+- Sự kiện chung mới ở `agent/mod.rs`: `Scoped { parent, event }` (việc của con nằm dưới thẻ công cụ cha), `Task { id, tool_use_id, status, label, summary, tools }`, `AutoTurn { reason }`.
+- Claude: dòng có `parent_tool_use_id` được bọc `Scoped`; `task_started/progress/notification` thành `Task`. Trước đó việc của sub-agent bị vẽ lẫn vào lượt chính (nguyên nhân chính của chat loạn).
+- Lỗi treo: bản sửa đầu (nuốt `Done` khi còn việc nền) sai, vì dev server chạy nền không bao giờ kết thúc nên giữ khoá chat vĩnh viễn và watchdog giết tiến trình. Thay bằng `agent/tail.rs`: lượt kết thúc ở `result` như cũ, tiến trình được "đuôi" đọc tiếp, câu trả lời tự sinh của CLI hiện thành một reply mới (`AutoTurn` → `beginAutoTurn` trong `sessions.svelte.ts`), tin kế tiếp của chat lấy lại tiến trình (`tail::stop`), Stop ngắt được (`tail::interrupt`). Watchdog nới giới hạn khi còn việc nền (`Watchdog::set_background`).
+- Copilot: sự kiện có `agentId` không còn nối vào câu trả lời; `system.notification` thành `AutoTurn`; `abort()` đọc đến `session.idle`. Codex live: thông báo của thread con thành `Scoped` thay vì bị bỏ. OpenCode: `subagent` thành `Task`.
+- UI: thẻ công cụ hiện nhãn agent, số công cụ đã chạy, chỉ báo đang chạy, và bên trong là các bước/lời của sub-agent (`CommandGroup.svelte`).
+- Tài liệu thêm provider: mục "Response layer" ở `adding-agent-provider.md`.
+
+Chưa làm / chưa kiểm chứng:
+- Chưa chạy trong app thật với Claude (chỉ test tích hợp bằng CLI giả `sh` và phát lại log). Cần thử: gửi một yêu cầu có `run_in_background` và một yêu cầu có 3 sub-agent song song, rồi Stop giữa chừng.
+- Antigravity: không có sub-agent trong stream, tin giữa lượt xếp hàng, Stop = kill (đã ghi trong `probe-reports/live-agy-copilot.md`); chưa có ánh xạ riêng.
+- Worker uỷ quyền (`keep_open=false`, `runner.rs`) vẫn dùng đường mỗi-lượt-một-tiến-trình: lượt kết thúc ở `result` đầu, việc nền của worker bị giết cùng tiến trình.
+- Lượt tự sinh đến sau khi đuôi đã trả tiến trình (im lặng quá 20 phút) vẫn có thể bị đọc nhầm ở lượt kế.
+- Bước phân loại tin "liên quan hay độc lập" (`classifyMessage`) mới là hàm, chưa nối vào luồng gửi.
+- Bọc provider chỉ có chat thường (OpenRouter) chưa làm.
+- Hiệu năng: `applyAgentEvent` lọc `loading` mỗi delta (O(số block)); chưa đo xem có đáng tối ưu không.

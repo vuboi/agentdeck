@@ -20,7 +20,7 @@ use tokio::sync::oneshot;
 
 use ag_adapters::agent::permission::{verdict, Action, Mode, Verdict};
 use ag_adapters::agent::{
-    begin_file_snapshot, file_change, finish_file_snapshot, AgentEvent, FileSnapshot, TurnRequest,
+    begin_file_snapshot, file_change, finish_file_snapshot, AgentEvent, FileSnapshot, TaskStatus, TurnRequest,
 };
 
 use crate::connectors::{capture, which};
@@ -215,18 +215,37 @@ async fn run_turn_inner(
     tokio::pin!(send);
     let mut answer = String::new();
     let mut file_snapshots: HashMap<String, FileSnapshot> = HashMap::new();
+    let mut children = Children::default();
     let mut finished = false;
     let mut turn_error = None;
+    // After an abort the SDK still sends the end of the run (`session.idle`): read up to it so the stream is not cut mid-way.
+    let mut aborting: Option<tokio::time::Instant> = None;
     loop {
+        let abort_deadline = aborting.unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(3600));
         tokio::select! {
-            _ = stop.stopped() => {
+            _ = stop.stopped(), if aborting.is_none() => {
                 let _ = session.abort().await;
-                break;
+                aborting = Some(tokio::time::Instant::now() + ABORT_GRACE);
             }
+            _ = tokio::time::sleep_until(abort_deadline), if aborting.is_some() => break,
             event = events.recv() => match event {
                 Ok(event) => {
-                    if let Some(text) = event.data.get("deltaContent").and_then(Value::as_str) {
-                        if event.event_type == "assistant.message_delta" { answer.push_str(text); }
+                    if aborting.is_some() && event.event_type == "session.idle" && event.agent_id.is_none() {
+                        break;
+                    }
+                    // A sub-agent's events carry its `agentId`: they belong under the call that started it, not in the answer.
+                    let task = children.lifecycle(&event.event_type, event.agent_id.as_deref(), &event.data);
+                    let parent = children.parent_of(event.agent_id.as_deref(), &event.data);
+                    if let Some(task) = task { emit(app, chat_id, turn_id, task); }
+                    if event.event_type == "system.notification" {
+                        // A shell that ran on its own finished: Copilot goes on by itself with a new turn.
+                        let reason = event.data["kind"]["type"].as_str().unwrap_or("notification").to_string();
+                        emit(app, chat_id, turn_id, AgentEvent::AutoTurn { reason });
+                    }
+                    if parent.is_none() {
+                        if let Some(text) = event.data.get("deltaContent").and_then(Value::as_str) {
+                            if event.event_type == "assistant.message_delta" { answer.push_str(text); }
+                        }
                     }
                     let mapped = match event.event_type.as_str() {
                         "assistant.message_delta" => event.data["deltaContent"].as_str().map(|text| AgentEvent::Delta { text: text.to_string() }),
@@ -244,12 +263,13 @@ async fn run_turn_inner(
                                     file_snapshots.insert(id.clone(), snapshot);
                                 }
                             }
+                            let background = name == "task" || args["mode"] == "background";
                             Some(AgentEvent::ToolCall {
                                 id,
                                 name,
                                 input: event.data["arguments"].as_str().map(str::to_string).unwrap_or_else(|| event.data["arguments"].to_string()),
                                 change,
-                                background: false,
+                                background,
                             })
                         }
                         "tool.execution_complete" => {
@@ -274,14 +294,17 @@ async fn run_turn_inner(
                         "session.error" => Some(AgentEvent::Error { message: event.data["message"].as_str().unwrap_or("Copilot session failed").to_string() }),
                         _ => None,
                     };
-                    if let Some(mapped) = mapped { emit(app, chat_id, turn_id, mapped); }
+                    if let Some(mapped) = mapped { emit(app, chat_id, turn_id, scoped(parent, mapped)); }
                 }
                 Err(_) => break,
             },
             result = &mut send => {
+                // A stopped run ends here without an error: the stop is not a failure.
+                if aborting.is_some() { break; }
                 match result {
                     Ok(Some(event)) => {
-                        let final_text = event.data["content"].as_str().unwrap_or(&answer).to_string();
+                        // The returned message can be a sub-agent's: only the main agent's text is the answer.
+                        let final_text = if event.agent_id.is_none() { event.data["content"].as_str().unwrap_or(&answer).to_string() } else { String::new() };
                         answer = if final_text.is_empty() { answer } else { final_text };
                         finished = true;
                     }
@@ -310,6 +333,70 @@ async fn run_turn_inner(
         );
     }
     Ok(())
+}
+
+/// How long a stopped run is read for its end (`session.idle`) before it is given up.
+const ABORT_GRACE: Duration = Duration::from_secs(5);
+
+/// The sub-agents of a run: which tool call started each, so what they say and do is drawn under that call.
+#[derive(Default)]
+struct Children {
+    parents: HashMap<String, String>,
+}
+
+impl Children {
+    /// The tool call an event with this `agentId` belongs under; `None` for the main agent's own events.
+    fn parent_of(&self, agent_id: Option<&str>, data: &Value) -> Option<String> {
+        let agent = agent_id?;
+        Some(
+            self.parents
+                .get(agent)
+                .cloned()
+                .or_else(|| data["parentToolCallId"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| agent.to_owned()),
+        )
+    }
+
+    /// The task event a `subagent.*` event stands for, remembering which call started the sub-agent.
+    fn lifecycle(&mut self, kind: &str, agent_id: Option<&str>, data: &Value) -> Option<AgentEvent> {
+        if !matches!(kind, "subagent.started" | "subagent.completed" | "subagent.failed") {
+            return None;
+        }
+        let tool = data["toolCallId"].as_str().map(str::to_owned);
+        let id = agent_id.map(str::to_owned).or_else(|| tool.clone())?;
+        let tools = data["totalToolCalls"].as_u64().and_then(|count| u32::try_from(count).ok());
+        let name = data["agentDisplayName"].as_str().or_else(|| data["agentName"].as_str()).unwrap_or("sub-agent");
+        let label = match data["agentDescription"].as_str().filter(|text| !text.is_empty()) {
+            Some(description) => format!("{name}: {description}"),
+            None => name.to_owned(),
+        };
+        match kind {
+            "subagent.started" => {
+                if let Some(tool) = &tool {
+                    self.parents.insert(id.clone(), tool.clone());
+                }
+                Some(AgentEvent::Task { id, tool_use_id: tool, status: TaskStatus::Started, label: Some(label), summary: None, tools: None })
+            }
+            "subagent.completed" => {
+                Some(AgentEvent::Task { id, tool_use_id: tool, status: TaskStatus::Done, label: Some(label), summary: None, tools })
+            }
+            _ => {
+                let error = data["error"]["message"].as_str().or_else(|| data["error"].as_str()).map(str::to_owned);
+                Some(AgentEvent::Task { id, tool_use_id: tool, status: TaskStatus::Failed, label: Some(label), summary: error, tools })
+            }
+        }
+    }
+}
+
+/// An event of a sub-agent wrapped so the chat draws it under its parent call; the main agent's events and the ones
+/// that are not drawn per block (usage, errors) pass unchanged.
+fn scoped(parent: Option<String>, event: AgentEvent) -> AgentEvent {
+    match (parent, &event) {
+        (Some(parent), AgentEvent::Delta { .. } | AgentEvent::Thinking { .. } | AgentEvent::ToolCall { .. } | AgentEvent::ToolResult { .. }) => {
+            AgentEvent::Scoped { parent, event: Box::new(event) }
+        }
+        _ => event,
+    }
 }
 
 /// Starts a request-scoped SDK client using the account selected in GitHub CLI.
@@ -516,4 +603,50 @@ fn emit(app: &AppHandle, session: &str, turn: &str, event: AgentEvent) {
             event,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sub_agent_is_a_task_and_its_events_go_under_the_call_that_started_it() {
+        let mut children = Children::default();
+        let started = json!({ "toolCallId": "call_1", "agentName": "general-purpose", "agentDisplayName": "subdone-agent", "agentDescription": "Return completion marker" });
+        let task = children.lifecycle("subagent.started", Some("agent-1"), &started);
+        assert_eq!(
+            task,
+            Some(AgentEvent::Task {
+                id: "agent-1".into(),
+                tool_use_id: Some("call_1".into()),
+                status: TaskStatus::Started,
+                label: Some("subdone-agent: Return completion marker".into()),
+                summary: None,
+                tools: None,
+            })
+        );
+        assert_eq!(children.parent_of(Some("agent-1"), &json!({})), Some("call_1".into()));
+        assert_eq!(children.parent_of(None, &json!({})), None, "the main agent's events stay in the answer");
+        let delta = scoped(children.parent_of(Some("agent-1"), &json!({})), AgentEvent::Delta { text: "SUBDONE".into() });
+        assert!(matches!(delta, AgentEvent::Scoped { ref parent, .. } if parent == "call_1"));
+        let usage = AgentEvent::Usage { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_write_tokens: 0, new_call: true };
+        assert_eq!(scoped(Some("call_1".into()), usage.clone()), usage, "usage is counted on the message, not under a card");
+        let done = children.lifecycle("subagent.completed", Some("agent-1"), &json!({ "toolCallId": "call_1", "totalToolCalls": 3 }));
+        assert!(matches!(done, Some(AgentEvent::Task { status: TaskStatus::Done, tools: Some(3), .. })));
+        assert!(children.lifecycle("assistant.message", Some("agent-1"), &json!({})).is_none());
+    }
+
+    #[test]
+    fn an_unknown_sub_agent_falls_back_to_the_parent_named_in_the_event() {
+        let children = Children::default();
+        assert_eq!(children.parent_of(Some("a"), &json!({ "parentToolCallId": "call_9" })), Some("call_9".into()));
+        assert_eq!(children.parent_of(Some("a"), &json!({})), Some("a".into()));
+    }
+
+    #[test]
+    fn a_failed_sub_agent_carries_its_error() {
+        let mut children = Children::default();
+        let failed = children.lifecycle("subagent.failed", Some("a"), &json!({ "toolCallId": "c", "error": "boom" }));
+        assert!(matches!(failed, Some(AgentEvent::Task { status: TaskStatus::Failed, summary: Some(ref text), .. }) if text == "boom"));
+    }
 }

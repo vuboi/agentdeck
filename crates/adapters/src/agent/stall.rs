@@ -33,6 +33,8 @@ pub struct Watchdog {
     last: Instant,
     /// Tool calls started and not answered yet: while one runs, the limit is `TOOL_STALL_LIMIT`.
     open_tools: usize,
+    /// A sub-agent or a background shell is open: the CLI may say nothing until it ends, so the limit is as long as for a tool.
+    background: bool,
 }
 
 impl Watchdog {
@@ -41,7 +43,13 @@ impl Watchdog {
             limit,
             last: Instant::now(),
             open_tools: 0,
+            background: false,
         }
+    }
+
+    /// Records whether background work is open.
+    pub fn set_background(&mut self, open: bool) {
+        self.background = open;
     }
 
     /// Records output: the limit counts from now again.
@@ -59,7 +67,7 @@ impl Watchdog {
     }
 
     fn current_limit(&self) -> Duration {
-        if self.open_tools > 0 {
+        if self.open_tools > 0 || self.background {
             self.limit.max(TOOL_STALL_LIMIT)
         } else {
             self.limit

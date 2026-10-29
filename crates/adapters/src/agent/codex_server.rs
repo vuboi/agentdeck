@@ -17,7 +17,7 @@ use super::codex::APP_CONTEXT;
 use super::interrupt::{self, Interrupter, Signal, StopToken};
 use super::stall::Watchdog;
 use super::warm::{holds, lock_of, park, send, settings_key, start, take_server, Warm, EXIT_GRACE};
-use super::{AgentEvent, Provider, TurnRequest};
+use super::{AgentEvent, Provider, TaskStatus, TurnRequest};
 
 /// A reply to a handshake request that takes longer than this means the server is not coming up.
 const HANDSHAKE: Duration = Duration::from_secs(60);
@@ -71,6 +71,37 @@ struct Translate {
     cached: u64,
     written: u64,
     out: u64,
+    /// Sub-agent threads: the spawn call that started each, so what a child does is drawn under that call.
+    parents: HashMap<String, String>,
+    /// Spawn calls whose child thread is not known yet (the call names it when it completes).
+    unresolved: Vec<String>,
+    /// What each child is for (its model and task), for its task events.
+    labels: HashMap<String, String>,
+    /// Child threads whose end was already reported.
+    closed: HashSet<String>,
+    /// What each child thread has printed so far, translated like a turn of its own.
+    kids: HashMap<String, Translate>,
+}
+
+/// A child's event wrapped so the chat draws it under the call that spawned the child. Only what is drawn per block is
+/// kept: a child's usage, end and errors are not the parent turn's.
+fn scoped(parent: &str, event: AgentEvent) -> Option<AgentEvent> {
+    match event {
+        AgentEvent::Delta { .. } | AgentEvent::Thinking { .. } | AgentEvent::ToolCall { .. } | AgentEvent::ToolResult { .. } => {
+            Some(AgentEvent::Scoped { parent: parent.to_owned(), event: Box::new(event) })
+        }
+        _ => None,
+    }
+}
+
+/// The first line of a prompt, cut short, for a label.
+fn short(text: &str) -> String {
+    let line = text.lines().next().unwrap_or_default().trim();
+    let mut cut: String = line.chars().take(80).collect();
+    if line.chars().count() > 80 {
+        cut.push('…');
+    }
+    cut
 }
 
 fn status(item: &Value) -> &'static str {
@@ -115,8 +146,115 @@ fn exec_item(item: &Value) -> Option<Value> {
 }
 
 impl Translate {
+    /// The thread a spawn call's child runs on is named when the call completes; until then a child's notification
+    /// belongs under the latest call still waiting for its thread.
+    fn parent_of(&self, thread: &str) -> String {
+        self.parents.get(thread).or_else(|| self.unresolved.last()).cloned().unwrap_or_else(|| thread.to_owned())
+    }
+
+    /// The end of a child, reported once: from its own `turn/completed` or from the `wait` that collected it.
+    fn child_end(&mut self, thread: &str, status: TaskStatus, summary: Option<String>) -> Option<AgentEvent> {
+        if !self.closed.insert(thread.to_owned()) {
+            return None;
+        }
+        Some(AgentEvent::Task {
+            id: thread.to_owned(),
+            tool_use_id: self.parents.get(thread).cloned(),
+            status,
+            label: self.labels.get(thread).cloned(),
+            summary: summary.filter(|text| !text.is_empty()),
+            tools: None,
+        })
+    }
+
+    /// A `collabAgentToolCall` (an agent starting or waiting for other agents): a tool call in the chat, and the task
+    /// events of the children it names.
+    fn collab(&mut self, method: &str, item: &Value) -> Vec<AgentEvent> {
+        let id = item["id"].as_str().unwrap_or_default().to_owned();
+        let tool = item["tool"].as_str().unwrap_or("agent");
+        let receivers: Vec<&str> = item["receiverThreadIds"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        if method == "item/started" {
+            if tool == "spawnAgent" {
+                self.unresolved.push(id.clone());
+            }
+            let input = if tool == "spawnAgent" { short(item["prompt"].as_str().unwrap_or_default()) } else { format!("{} agent(s)", receivers.len()) };
+            return vec![AgentEvent::ToolCall { id, name: tool.to_owned(), input, change: None, background: tool == "spawnAgent" }];
+        }
+        let mut events = Vec::new();
+        let mut output = String::new();
+        if tool == "spawnAgent" {
+            self.unresolved.retain(|waiting| *waiting != id);
+            let prompt = short(item["prompt"].as_str().unwrap_or_default());
+            let label = match item["model"].as_str().filter(|model| !model.is_empty()) {
+                Some(model) => format!("{model}: {prompt}"),
+                None => prompt,
+            };
+            for thread in &receivers {
+                self.parents.insert((*thread).to_owned(), id.clone());
+                self.labels.insert((*thread).to_owned(), label.clone());
+                events.push(AgentEvent::Task {
+                    id: (*thread).to_owned(),
+                    tool_use_id: Some(id.clone()),
+                    status: TaskStatus::Started,
+                    label: Some(label.clone()),
+                    summary: None,
+                    tools: None,
+                });
+            }
+            output = format!("started {} agent(s)", receivers.len());
+        } else if let Some(states) = item["agentsStates"].as_object() {
+            let mut answers = Vec::new();
+            for (thread, state) in states {
+                let message = state["message"].as_str().unwrap_or_default();
+                let status = match state["status"].as_str() {
+                    Some("completed") => Some(TaskStatus::Done),
+                    Some("errored" | "failed" | "interrupted" | "shutdown" | "notFound") => Some(TaskStatus::Failed),
+                    _ => None,
+                };
+                if !message.is_empty() {
+                    answers.push(message.to_owned());
+                }
+                if let Some(end) = status.and_then(|status| self.child_end(thread, status, Some(message.to_owned()))) {
+                    events.push(end);
+                }
+            }
+            output = answers.join("\n");
+        }
+        let failed = matches!(item["status"].as_str(), Some("failed" | "declined"));
+        events.push(AgentEvent::ToolResult { id, output, is_error: failed, image: None, change: None });
+        events
+    }
+
+    /// The events of a notification from another thread (a sub-agent): its steps drawn under the call that spawned it,
+    /// and its task events. Its own end, usage and errors never end or fail the parent turn.
+    fn child_events(&mut self, provider: &dyn Provider, thread: &str, method: &str, params: &Value) -> Vec<AgentEvent> {
+        match method {
+            "turn/completed" => {
+                let (status, summary) = match params["turn"]["status"].as_str() {
+                    Some("failed") => (TaskStatus::Failed, params["turn"]["error"]["message"].as_str().map(str::to_owned)),
+                    Some("interrupted") => (TaskStatus::Failed, Some("stopped".to_owned())),
+                    _ => (TaskStatus::Done, None),
+                };
+                self.child_end(thread, status, summary).into_iter().collect()
+            }
+            "item/started" | "item/completed" if params["item"]["type"] == "collabAgentToolCall" => {
+                let parent = self.parent_of(thread);
+                self.collab(method, &params["item"]).into_iter().flat_map(|event| if matches!(event, AgentEvent::Task { .. }) { Some(event) } else { scoped(&parent, event) }).collect()
+            }
+            "thread/tokenUsage/updated" | "error" => Vec::new(),
+            _ => {
+                let parent = self.parent_of(thread);
+                let kid = self.kids.entry(thread.to_owned()).or_default();
+                kid.events(provider, method, params).into_iter().filter_map(|event| scoped(&parent, event)).collect()
+            }
+        }
+    }
+
     /// The events one notification stands for: streamed text directly, everything else through `Codex::parse_line`.
     fn events(&mut self, provider: &dyn Provider, method: &str, params: &Value) -> Vec<AgentEvent> {
+        if matches!(method, "item/started" | "item/completed") && params["item"]["type"] == "collabAgentToolCall" {
+            return self.collab(method, &params["item"]);
+        }
         let item_id = params["itemId"].as_str().unwrap_or_default().to_owned();
         let delta = params["delta"].as_str().unwrap_or_default();
         match method {
@@ -381,8 +519,13 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, stop:
                 turn.get_or_insert_with(|| id.to_owned());
             }
         }
-        // Sub-agents run on threads of their own; their notifications are not this turn's.
-        if params["threadId"].as_str().is_some_and(|other| other != thread) {
+        // Sub-agents run on threads of their own: their steps are drawn under the call that spawned them, and their end
+        // is a task ending, never this turn's end.
+        if let Some(other) = params["threadId"].as_str().filter(|other| *other != thread) {
+            for event in translate.child_events(provider, other, method, params) {
+                dog.note(&event);
+                emit(event);
+            }
             continue;
         }
         let mut ending = None;
@@ -545,6 +688,59 @@ mod tests {
         said("item/completed", json!({ "item": { "type": "agentMessage", "id": "a", "text": "one" } }), &mut translate);
         said("item/agentMessage/delta", json!({ "itemId": "b", "delta": "two" }), &mut translate);
         assert_eq!(text, "one\n\ntwo", "streamed once, the finished copy is not repeated");
+    }
+
+    /// The shape of live2-codex-A-orch: a spawn call, its child on another thread, then a `wait` that collects it.
+    #[test]
+    fn a_sub_agent_thread_is_drawn_under_its_spawn_call_and_never_ends_the_turn() {
+        let codex = Codex::default();
+        let mut translate = Translate::default();
+        let started = json!({ "item": { "type": "collabAgentToolCall", "id": "spawn-1", "tool": "spawnAgent", "status": "inProgress",
+            "receiverThreadIds": [], "prompt": "Compute 2+2. Reply only with the result.", "model": "" }, "threadId": "main" });
+        let events = translate.events(&codex, "item/started", &started);
+        assert!(matches!(&events[0], AgentEvent::ToolCall { id, name, background: true, .. } if id == "spawn-1" && name == "spawnAgent"));
+        let completed = json!({ "item": { "type": "collabAgentToolCall", "id": "spawn-1", "tool": "spawnAgent", "status": "completed",
+            "receiverThreadIds": ["kid"], "prompt": "Compute 2+2. Reply only with the result.", "model": "gpt-5.6-luna" }, "threadId": "main" });
+        let events = translate.events(&codex, "item/completed", &completed);
+        assert!(matches!(&events[0], AgentEvent::Task { id, tool_use_id: Some(call), status: TaskStatus::Started, label: Some(label), .. }
+            if id == "kid" && call == "spawn-1" && label == "gpt-5.6-luna: Compute 2+2. Reply only with the result."));
+        assert!(matches!(&events[1], AgentEvent::ToolResult { id, .. } if id == "spawn-1"));
+
+        let said = translate.child_events(&codex, "kid", "item/agentMessage/delta", &json!({ "threadId": "kid", "itemId": "m", "delta": "4" }));
+        assert_eq!(said, vec![AgentEvent::Scoped { parent: "spawn-1".into(), event: Box::new(AgentEvent::Delta { text: "4".into() }) }]);
+        let ran = translate.child_events(&codex, "kid", "item/started", &json!({ "threadId": "kid", "item": { "type": "commandExecution", "id": "c1", "command": "echo hi", "status": "inProgress" } }));
+        assert!(matches!(&ran[0], AgentEvent::Scoped { parent, event } if parent == "spawn-1" && matches!(**event, AgentEvent::ToolCall { .. })));
+        assert!(translate.child_events(&codex, "kid", "thread/tokenUsage/updated", &json!({ "threadId": "kid", "tokenUsage": { "last": { "inputTokens": 9 } } })).is_empty());
+        assert_eq!(translate.input, 0, "a child's tokens are not the parent turn's");
+
+        let ended = translate.child_events(&codex, "kid", "turn/completed", &json!({ "threadId": "kid", "turn": { "status": "completed" } }));
+        assert!(matches!(&ended[..], [AgentEvent::Task { id, status: TaskStatus::Done, .. }] if id == "kid"), "a child's end is a task ending, not a Done");
+
+        let waited = json!({ "item": { "type": "collabAgentToolCall", "id": "wait-1", "tool": "wait", "status": "completed",
+            "receiverThreadIds": ["kid"], "agentsStates": { "kid": { "status": "completed", "message": "4" } } }, "threadId": "main" });
+        let events = translate.events(&codex, "item/completed", &waited);
+        assert!(matches!(&events[..], [AgentEvent::ToolResult { id, output, .. }] if id == "wait-1" && output == "4"), "the child's end is reported once");
+    }
+
+    #[test]
+    fn a_wait_that_collects_a_child_ends_its_task_with_the_answer() {
+        let codex = Codex::default();
+        let mut translate = Translate::default();
+        translate.events(&codex, "item/completed", &json!({ "item": { "type": "collabAgentToolCall", "id": "s", "tool": "spawnAgent", "status": "completed", "receiverThreadIds": ["kid"], "prompt": "p", "model": "m" } }));
+        let waited = json!({ "item": { "type": "collabAgentToolCall", "id": "w", "tool": "wait", "status": "completed",
+            "receiverThreadIds": ["kid"], "agentsStates": { "kid": { "status": "completed", "message": "42" } } } });
+        let events = translate.events(&codex, "item/completed", &waited);
+        assert!(matches!(&events[0], AgentEvent::Task { id, status: TaskStatus::Done, summary: Some(text), tool_use_id: Some(call), .. } if id == "kid" && text == "42" && call == "s"));
+        assert!(matches!(&events[1], AgentEvent::ToolResult { output, .. } if output == "42"));
+    }
+
+    #[test]
+    fn a_child_failure_fails_its_task_only() {
+        let codex = Codex::default();
+        let mut translate = Translate::default();
+        let ended = translate.child_events(&codex, "kid", "turn/completed", &json!({ "turn": { "status": "failed", "error": { "message": "no quota" } } }));
+        assert!(matches!(&ended[..], [AgentEvent::Task { status: TaskStatus::Failed, summary: Some(text), .. }] if text == "no quota"));
+        assert!(translate.child_events(&codex, "kid", "error", &json!({ "error": { "message": "x" } })).is_empty());
     }
 
     #[test]

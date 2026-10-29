@@ -55,6 +55,9 @@ pub(super) struct Warm {
     /// Started ahead of the chat's first message (`prewarm`) and not used yet: it takes a turn that names no
     /// conversation, which is how a new chat's first turn arrives.
     pub(super) fresh: bool,
+    /// Background work the CLI started (a sub-agent, a shell left running) is still open: it may go on by itself when
+    /// that ends (see `tail.rs`).
+    pub(super) open_tasks: bool,
     /// Which parking this is, so an idle timer only ends the process it was set for.
     serial: u64,
 }
@@ -294,6 +297,7 @@ pub(super) fn start(binary: OsString, provider: &dyn Provider, args: &[String], 
         rpc: 0,
         model: req.model.clone(),
         fresh: false,
+        open_tasks: false,
         serial: 0,
     })
 }
@@ -318,7 +322,7 @@ enum Ending {
 /// without an interrupt message, or one silent for the deadline, is given up (`Failed`: the caller ends it).
 async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, mut inject: Option<UnboundedReceiver<String>>, emit: &mut impl FnMut(AgentEvent)) -> Ending {
     let conversation = warm.conversation.clone();
-    let Warm { lines, child, stdin, .. } = warm;
+    let Warm { lines, child, stdin, open_tasks, .. } = warm;
     let mut stopper = Interrupter::new(stop);
     let mut requests = 0u32;
     let mut deadline: Option<tokio::time::Instant> = None;
@@ -328,8 +332,6 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, mu
     // injected: a result that arrives while an injected one is unread ends only a part of the work, the CLI runs on.
     let mut unread = u32::from(inject.is_some());
     let mut injected = 0u32;
-    // Background tasks still running: do not end the turn while they complete.
-    let mut background_tasks_open = false;
     loop {
         let next = match deadline {
             Some(at) => tokio::time::timeout_at(at, lines.next_segment()).await.unwrap_or(Ok(None)),
@@ -378,21 +380,19 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, mu
         if unread > 0 && is_replay(line) {
             unread -= 1;
         }
-        // Track background tasks to avoid closing the turn early while they run.
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-            if json["type"] == "system" && json["subtype"] == "background_tasks_changed" {
-                background_tasks_open = json.get("tasks")
-                    .and_then(|t| t.as_array())
-                    .map_or(false, |tasks| !tasks.is_empty());
-            }
+        // Background work (a sub-agent, a shell left running) does not hold the turn: it ends at its result, and what the
+        // CLI does by itself afterwards is read by the tail (see `tail.rs`). The watchdog just allows for the silence.
+        if let Some(open) = super::tail::background_open(line) {
+            *open_tasks = open;
+            dog.set_background(open);
         }
         for event in provider.parse_line(line) {
             dog.note(&event);
             let event = if stopper.asked() { interrupt::stopped(event, conversation.as_deref()) } else { event };
             match &event {
-                // The end of a part of the work while an injected message is still unread, or while background tasks
-                // are running: the CLI goes on with the message or the background job, so this result is not the end.
-                AgentEvent::Done { .. } if (injected > 0 && unread > 0) || background_tasks_open => continue,
+                // The end of a part of the work while an injected message is still unread: the CLI goes on with it as the
+                // next turn, so this result is not the end and is not shown as one.
+                AgentEvent::Done { .. } if injected > 0 && unread > 0 => continue,
                 AgentEvent::Done { session_id, .. } => ending = Some(Ending::Done(session_id.clone().or_else(|| conversation.clone()))),
                 // A stream-json CLI reports a failed turn as its own result and waits for the next message: the process
                 // is kept. Any other CLI may be left in a state the next turn should not inherit, so it is not.
@@ -458,6 +458,8 @@ pub async fn drive_warm_turn_with(binary: OsString, provider: &dyn Provider, req
     }
     let lock = lock_of(&chat);
     let _turn = lock.lock().await;
+    // A process that was left reading what the CLI does on its own comes back first, after an answer in progress.
+    super::tail::stop(&chat).await;
     // Only Claude reads a message at any time and tells when it did (`--replay-user-messages`).
     let (_slot, inbox) = if provider.id() == "claude" {
         let (slot, receiver) = InjectSlot::open(&chat);
@@ -513,7 +515,10 @@ pub async fn drive_warm_turn_with(binary: OsString, provider: &dyn Provider, req
             if conversation.is_some() {
                 warm.conversation = conversation;
             }
-            park(chat, warm);
+            match provider.tail_provider().filter(|_| warm.open_tasks && super::tail::available()) {
+                Some(reader) => super::tail::start(chat, warm, reader),
+                None => park(chat, warm),
+            }
         }
         Ending::Failed => drop(warm),
         Ending::Closed => {

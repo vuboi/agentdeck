@@ -2275,11 +2275,45 @@ function recordAgentEvent(sessionId: string, event: AgentEvent) {
   }
 }
 
+/**
+ * The CLI went on by itself (a sub-agent or a background job ended and it reports on it): that is a new reply in the
+ * chat with no message of the user above it. A CLI that says so while a reply is already live (Copilot, mid-turn) just
+ * goes on writing that reply.
+ */
+function beginAutoTurn(sessionId: string, turn: string) {
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  if (!session || liveReplies[sessionId]?.live || hasSideTurn(sessionId)) return;
+  const list = messagesOf(sessionId);
+  list.push({
+    id: nextId(),
+    role: 'assistant',
+    time: clock(new Date().toISOString()),
+    at: new Date().toISOString(),
+    blocks: [],
+    live: true,
+    startedAt: Date.now(),
+    agent: session.agent,
+    model: session.model,
+  });
+  const reply = list[list.length - 1];
+  liveReplies[sessionId] = reply; // the stored (reactive) object
+  replies[sessionId] = reply.id;
+  turns[sessionId] = turn;
+  session.status = 'working';
+  const epoch = (runEpochs[sessionId] = (runEpochs[sessionId] ?? 0) + 1);
+  advanceRun(sessionId, { type: 'spawn', epoch });
+  advanceRun(sessionId, { type: 'turnStarted', epoch });
+}
+
 export function handleAgentEvent(
   sessionId: string,
   event: AgentEvent,
   turn?: string,
 ) {
+  if (event.kind === 'auto_turn') {
+    if (turn !== undefined) beginAutoTurn(sessionId, turn);
+    return;
+  }
   if (turn !== undefined && turns[sessionId] !== turn) return; // a run that was stopped or replaced
   recordAgentEvent(sessionId, event);
   const session = workspace.sessions.find((item) => item.id === sessionId);

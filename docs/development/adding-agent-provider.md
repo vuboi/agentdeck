@@ -91,3 +91,13 @@ Checklist for the next coding agent. Read `AGENTS.md` and `PLAN.md` before editi
 - Run the real app (`pnpm dev`, or reload the window if HMR did not fully apply): sign in, open the model picker, send a short message, and check the response and quota bar. A green build does not prove that chat works.
 - If the user requests testing, add/run suitable checks; do not call the network from tests. Authenticated runtime login/chat must be verified separately with an account that can use the provider.
 - Report which surfaces were connected, which checks actually ran, and which runtime limits could not be verified. Do not claim login/chat success without a real turn.
+
+## Response layer: sub-agents, background work, turns of their own
+
+Every provider maps what its CLI prints onto the same `AgentEvent`s (`crates/adapters/src/agent/mod.rs`); the UI knows nothing about a CLI's format.
+
+- **Child work** (sub-agent, delegated thread): wrap each event in `Scoped { parent, event }`, `parent` being the id of the tool call that started the child. The chat draws it under that call's card (`agent-reply.ts`, `CommandGroup.svelte`); it never joins the main answer. A provider that cannot tell child output from the main answer must at least not append it to the answer (see `copilot.rs`, `codex_server.rs`).
+- **Where a child stands:** `Task { id, tool_use_id, status, label, summary, tools }` (`Started`/`Progress`/`Done`/`Failed`). `tool_use_id` links it to the call that started it.
+- **A CLI that goes on by itself** when background work ends (Claude, Copilot's shell notification): the turn still ends at its result. Implement `Provider::tail_provider` (Claude) so `tail.rs` keeps reading the kept process and sends the unsolicited answer as `AutoTurn { reason }` followed by its events; the frontend opens a new reply for it (`beginAutoTurn`). Never hold the chat lock or swallow the result while background work is open: a dev server never ends.
+- **Capabilities:** declare `Provider::chat_capabilities` (mid-turn injection, parallel messages, auto background turn). New providers extend this and the event mapping; the reducer and cards stay as they are.
+- Probe the real CLI first (`docs/development/probe-reports/`): how a turn ends, what a message sent mid-turn does, how an interrupt ends, how child events are linked.

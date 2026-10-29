@@ -14,8 +14,15 @@ export type AgentEvent =
   | { kind: 'done'; session_id: string | null; text: string; cost_usd: number | null }
   | { kind: 'usage'; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number; new_call: boolean }
   | { kind: 'error'; message: string }
-  | { kind: 'background_task_notification'; summary: string; task_id: string }
+  /** An event of child work (a sub-agent): drawn under the tool call `parent`, never in the main answer. */
+  | { kind: 'scoped'; parent: string; event: AgentEvent }
+  /** Where a sub-agent or a background job stands; `tool_use_id` is the call that started it. */
+  | { kind: 'task'; id: string; tool_use_id: string | null; status: TaskStatus; label: string | null; summary: string | null; tools: number | null }
+  /** The CLI went on by itself (background work ended): what follows is a new reply, not an answer to a message. */
+  | { kind: 'auto_turn'; reason: string }
   | { kind: 'raw'; source: string; label: string; line: string };
+
+export type TaskStatus = 'started' | 'progress' | 'done' | 'failed';
 
 /** A tool the CLI would not run without approval. `allow` is what approves exactly this call. */
 export type PermissionRequest = { id: string; tool: string; summary: string; allow: string };

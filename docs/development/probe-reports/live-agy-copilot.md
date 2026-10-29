@@ -1,50 +1,37 @@
-# Antigravity (agy) and Copilot CLI: headless behaviour
+# Antigravity (agy) and Copilot: live behaviour
 
-## Status: no live turns ran for either CLI
+Raw logs: `%TEMP%\probe\live3-agy-*.jsonl` (agy 1.4.10, model `gemini-3.8-flash-low`, warm mode `--input-format stream-json -p= --output-format stream-json --dangerously-skip-permissions`) and `%TEMP%\probe\live-copilot-*.jsonl` (Copilot CLI core 1.0.105 reached through the SDK's `session.send` / `abort` / `delivery`, model `gpt-5.6-luna`). Event dumps use the harness format `{ms, harness|src, raw}`. Sign-in was already valid; nothing was signed in or switched during this probe. (An earlier attempt, when agy was signed out, is superseded.)
 
-- **agy 1.4.9** is installed but **not signed in**. The plain turn (`gemini-3.8-flash-low`, the cheapest listed model) printed a Google OAuth URL, waited 60 s, and exited 1 with `result.status: ERROR`, "authentication failed or timed out". I did not log in. Raw: `live-agy-1-plain.jsonl`, `.err`. Experiments 2 to 4 not run.
-- **Copilot CLI** is not installed (the npm package `@github/copilot` is absent). I did not install it. No `live-copilot-*.jsonl` exists.
-- Runs used: 1 of 8 (agy), 0 of 8 (Copilot).
+## Antigravity (agy)
 
-Below is from AgentDeck's adapters, agy fixtures recorded with agy 1.4.5, and Copilot SDK 1.0.28 source. Not verified against the installed versions.
+| Question | Observed |
+| --- | --- |
+| Turn end | `{"event":"result"}` (`status: SUCCESS`, `num_turns` counts turns of the process so far). One result per turn. |
+| Message sent mid-turn (during a 10 s `run_command`, +6 s) | **Queued, not injected.** Turn 1 finished with its own result (`DONE1`, 24.6 s); only then a `user_input` step (index 6) appeared and a second turn answered `TWO` (result 2, `num_turns: 2`). Nothing of it reached turn 1. |
+| stdin EOF during a running tool | Turn is NOT cancelled: tool finishes, answer and `result` arrive, then the process exits 0. EOF = "finish and quit". |
+| Kill (SIGKILL mid-tool) | No end marker at all (last line is the tool step `ACTIVE`). The app must close the turn itself. |
+| Interrupt | `agy --help` has no stream-json interrupt message; stop = kill. |
+| Sub-agent | Tool step `invoke_subagent` (`ACTIVE`), then a step with `step_type: "subagent"` and `subagent_info.subagents[]` = `{role, initial_prompt, conversation_id, log_uri, workspace_uris}` (the child conversation and its `transcript.jsonl`). The child's own steps and text are **not in the parent stream**; the parent model read the child's transcript with `read_file`. No sub-agent text leaks into the answer. Link = `conversation_id` of the child. |
+| Background command | `run_command` stayed `ACTIVE` while the model called `manage_task` (`Action: status`, `TaskId: <conv>/task-N`, output `Status: RUNNING`, `Log: .../tasks/task-N.log`). The turn ended with `result` while the command still ran. **No completion event and no automatic new turn** afterwards (unlike Claude); the process stayed up until stdin EOF. |
+| Other | A `system_message` step (no payload) follows tool steps; `agent_response` steps stream `text_delta` and end with `text_delta: "\n"` plus `usage`. |
 
-## agy
+## Copilot (SDK session events)
 
-**1. Plain turn (fixtures).** `init` (conversation_id, model, cwd, tools) → `step_update` user_input DONE → `agent_response` ACTIVE with `text_delta` chunks → `agent_response` DONE with `usage` → `result` (conversation_id, status SUCCESS or ERROR, full `response`, num_turns, usage). `result` is the final marker and also arrives on ERROR. Usage appears on the step DONE and on `result`; output includes thinking tokens.
+| Question | Observed |
+| --- | --- |
+| Turn end | `assistant.turn_end` ends one model round (a tool call makes 2: `turn=0`, `turn=1`); `assistant.idle` then `session.idle` end the whole run. **`assistant.idle` is not the end while a shell is detached**: with a background shell it fired at 10.8 s and `session.idle` only at 22.5 s. |
+| Mid-turn `delivery: "enqueue"` | Listed in `pending_messages` (`items`), answered as a **separate interaction** after the first one went idle: `FIRST-DONE` then (new `ia`) `SECOND-MSG`. |
+| Mid-turn `delivery: "immediate"` (steer) | `steeringMessages` set; merged into the same interaction at the next model call: one answer `FIRST-DONE SECOND-MSG`. The synchronous shell was detached by the steer (`tool.execution_complete` at 8 s while `sleep 10` ran on). |
+| Background shell completion | After the detach, `system.notification` (`kind.type: shell_completed`, `shellId`, `exitCode`) at 19.4 s started an **automatic new turn** (`read_powershell` then the answer again), like Claude's `task_notification`. `session.background_tasks_changed` fires around it (data empty in the dump). |
+| Interrupt (`session.abort()`) | `abort{reason:user_initiated}`, `agent.interrupted`, `model.turn_failed`, then `assistant.turn_end`, `assistant.idle`, `session.idle`. **A normal end sequence follows; no `Done`-like error event**: idle after abort is the marker (works pre-first-token and mid-command). Session reusable. |
+| Sub-agent (`task` tool, sync) | `tool.execution_start tool=task` then `subagent.started` (`toolCallId`, `agentName`, `agentDisplayName`, `model`, `executionMode`), child events carry **`agentId`** and `assistant.turn_start` has `parentToolCallId` = the `task` toolCallId, `subagent.completed` (`totalToolCalls`, `totalTokens`, `durationMs`). The child produced only a whole `assistant.message` (`SUBDONE`) with `agentId`; the 3 `assistant.message_delta` and all reasoning/streaming deltas were from the main agent. |
 
-**2. Mid-turn message.** `--input-format stream-json` reads one NDJSON message per turn. AgentDeck only sends the next message after a `result`. Behaviour when a message arrives mid-turn (merged, queued, rejected, parallel) is untested. Do not send mid-turn until measured.
+## What this means for AgentDeck
 
-**3. Interrupt.** No cancel path in the adapter. `--print-timeout` (30 m) ends the turn with an ERROR `result`. A killed process emits no `result`, so process exit must end the turn.
+- **agy**: `result` is a reliable turn end; mid-turn text must be queued by the app (the CLI queues it as the next turn anyway, so "inject" is not available). Child agents must be fetched from `log_uri` if shown; background tasks need polling of `manage_task` or the log, no event comes.
+- **Copilot** (`apps/desktop/src-tauri/src/copilot.rs:214-294`): the turn is closed from `send_and_wait`'s return and every `assistant.message_delta` is appended to `answer` without an `agentId` check. In this probe sub-agent text did not stream as deltas, but the final `event.data["content"]` taken from the returned message could be a sub-agent's (`assistant.message` carries `agentId`); filter on `agentId` / `parentToolCallId`. The probe used plain `send`, so `send_and_wait`'s return point with tools, steering and background shells is **not measured**. A background shell makes `assistant.idle` early, then an auto-turn: wait for `session.idle` (plus `background_tasks_changed`), not the first idle. Interrupt: after `abort()` read until `session.idle` instead of dropping the stream.
 
-**4. Sub-agent and background.** Not observed. Fixture step types: `user_input`, `system_message`, `agent_response`, `tool` (`tool_name`, `tool_info`). The adapter always sends `background: false`.
+## Code-derived notes (not re-verified)
 
-**Refusals.** A Bash step that fails with "permission", or ends with null output, is a refusal. `result.denied_actions[]` with `action: "command"` raises a permission request.
-
-**Ids.** `conversation_id` is stable across turns. Tool ids are `step_index`, unique within a turn.
-
-## Copilot (SDK-derived, not run)
-
-AgentDeck uses `github-copilot-sdk` 1.0.28 (`apps/desktop/src-tauri/src/copilot.rs`): streaming session, `send_and_wait(MessageOptions)`, event subscription, and on stop `session.abort()` then `disconnect`.
-
-**1. Turn timeline the app consumes.** `assistant.reasoning_delta` → Thinking; `assistant.message_delta` → Delta; `tool.execution_start` (`toolCallId`, `toolName`, `arguments` as JSON string) → ToolCall; `tool.execution_complete` (`toolCallId`, `result`, `error`) → ToolResult; `assistant.usage` → Usage; `session.error` → Error. The turn ends when `send_and_wait` resolves, which emits `Done`. The SDK also emits `user.message`, `session.idle`, `session.task_complete`, and `subagent.*`; AgentDeck ignores these.
-
-**2. Mid-turn messages.** The SDK has a steering lane and a queue. `queueSendNow` returns `steered: true` when accepted into the running turn, and `false` when no main turn is live. Queued items keep submission order. `in_flight_steering_count` shows how many steering messages were folded into the running turn (each emits `user.message`). AgentDeck does not use these calls, so its behaviour is untested.
-
-**3. Interrupt.** `session.abort()`, then the loop breaks with `finished = false`. No `Done` is emitted. The UI must end the turn locally on stop.
-
-**4. Sub-agents.** Each envelope has `id`, `timestamp`, `parentId`, `ephemeral`, and `agentId` (set for sub-agent events, absent for the root). Some tool payloads carry `parentToolCallId`. Lifecycle: `subagent.started`, `subagent.completed`, `subagent.failed`.
-
-**Risk.** `copilot.rs` appends every `assistant.message_delta` to the answer without checking `agentId`, so sub-agent text would merge into the main answer. Verify live.
-
-## What a UI needs
-
-- **Turn end:** agy `result` (any status), Copilot `Done`, or locally on stop or process exit.
-- **agy grouping:** `conversation_id` per session, `step_index` for tool pairing.
-- **Copilot grouping:** `toolCallId` for pairing, `agentId` to split sub-agent work, `parentToolCallId` to link to the parent tool.
-- **Mid-turn sends:** queue locally and send after the turn ends until measured.
-- **Background work:** no marker in either adapter; show as a tool call.
-
-## Next steps
-
-1. Sign in to agy yourself, then rerun experiments 1 to 4 with `gemini-3.8-flash-low`.
-2. Install `@github/copilot`, then run the SDK with the cheapest model, checking it has no premium multiplier.
+- agy `finish()` in `antigravity.rs` turns `result` into `Done`; `warm_message` writes `{"event":"user",...}` lines.
+- Copilot `steering` / queue (`queueSendNow` returns `steered`) exists in the SDK; the probe confirms `enqueue` vs `immediate`.

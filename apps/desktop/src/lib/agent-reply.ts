@@ -20,7 +20,19 @@ function close(blocks: Block[], endTurn: boolean, endStatus: 'ok' | 'fail' = 'ok
   for (const block of blocks) {
     if (block.kind === 'thinking' || block.kind === 'response') block.streaming = false;
     if (endTurn && block.kind === 'command' && block.status === 'running') block.status = endStatus;
+    if (endTurn && block.kind === 'command' && block.children) close(block.children, true, endStatus);
   }
+}
+
+/** The tool call `id`, at any depth: a sub-agent's own calls can start sub-agents. */
+function findCommand(blocks: Block[], id: string): Extract<Block, { kind: 'command' }> | undefined {
+  for (const block of blocks) {
+    if (block.kind !== 'command') continue;
+    if (block.id === id) return block;
+    const inner = block.children ? findCommand(block.children, id) : undefined;
+    if (inner) return inner;
+  }
+  return undefined;
 }
 
 export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdate {
@@ -90,11 +102,28 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
       if (!blocks.some((block) => block.kind === 'response') && event.text) blocks.push({ kind: 'response', text: event.text });
       return { blocks, finished: true, agentSession: event.session_id ?? undefined };
     }
-    case 'background_task_notification':
-      close(blocks, false);
-      blocks.push({ kind: 'response', text: `🔄 Background task: ${event.summary}` });
-      // The auto-generated turn follows after this; keep reading.
+    case 'scoped': {
+      // Child work goes under the call that started it. A child whose call is not here (yet) is dropped, not drawn as
+      // part of the main answer.
+      const parent = findCommand(blocks, event.parent);
+      if (parent) parent.children = applyAgentEvent(parent.children ?? [], event.event).blocks;
       return { blocks, finished: false };
+    }
+    case 'task': {
+      const call = event.tool_use_id ? findCommand(blocks, event.tool_use_id) : undefined;
+      if (call) {
+        call.task = {
+          status: event.status,
+          label: event.label ?? call.task?.label,
+          summary: event.summary ?? call.task?.summary,
+          tools: event.tools ?? call.task?.tools,
+        };
+      }
+      return { blocks, finished: false };
+    }
+    case 'auto_turn':
+      // Starts a reply of its own (see sessions.svelte.ts); nothing to draw in this one.
+      return { blocks: current, finished: false };
     case 'usage':
       // Counted on the message, not drawn as a block (see sessions.svelte.ts).
       return { blocks: current, finished: false };

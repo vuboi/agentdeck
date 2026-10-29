@@ -287,6 +287,16 @@
                 {/if}
               {/if}
               {#if step.counts}{@render chips(step.counts)}{/if}
+              {#if item.task}
+                <!-- A sub-agent or background job this call started: who it is, how many tools it ran, and that it is still going. -->
+                {@const going = item.task.status === 'started' || item.task.status === 'progress'}
+                <span class="flex min-w-0 shrink items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground" title={item.task.summary ?? item.task.label}>
+                  {#if going && working}<ZLoading zLoading zSpinner="orbit" zSize="2xs" zColor="primary" />{/if}
+                  <span class="truncate">{item.task.label ?? 'agent'}</span>
+                  {#if item.task.tools}<span class="shrink-0 tabular-nums">· {item.task.tools} tool{item.task.tools === 1 ? '' : 's'}</span>{/if}
+                  {#if item.task.status === 'failed'}<span class="shrink-0 text-destructive">failed</span>{/if}
+                </span>
+              {/if}
               {#if item.image}
                 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                 <span class="ml-1 shrink-0 cursor-zoom-in" title="See the screenshot" onclick={(event) => showShot(event, item.image!)}>
@@ -299,6 +309,24 @@
               <div class="min-h-0 overflow-hidden">
                 {#if view.rows[index] || built.rows[index]}
                 <div class="flex flex-col gap-2 px-3 py-1.5">
+                  {#if item.children?.length || item.task?.summary}
+                    <!-- What the sub-agent did under this call: its steps and its words, apart from the main answer. -->
+                    <div class="flex flex-col gap-1 rounded-md border border-border bg-background px-3 py-2">
+                      {#each item.children ?? [] as child, childIndex (childIndex)}
+                        {#if child.kind === 'command'}
+                          {@const sub = describeStep(child)}
+                          <div class="flex items-center gap-2 text-muted-foreground">
+                            <ZIcon zType={sub.icon as ZIconName} class="size-3 shrink-0 {child.status === 'fail' ? 'text-destructive' : ''}" />
+                            <span class="shrink-0">{sub.verb}</span>
+                            <span class="min-w-0 truncate font-medium text-foreground">{sub.subject}</span>
+                          </div>
+                        {:else if child.kind === 'response' && child.text.trim()}
+                          <div class="whitespace-pre-wrap text-foreground/90">{child.text.trim()}</div>
+                        {/if}
+                      {/each}
+                      {#if item.task?.summary}<div class="text-muted-foreground">{item.task.summary}</div>{/if}
+                    </div>
+                  {/if}
                   {#if item.change}
                     {@const rows = diffLines(item)}
                     {@const diffKey = `${stateKey}:${item.id ?? index}:${item.change.path}`}

@@ -6,7 +6,25 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use super::{AgentEvent, Provider, TurnRequest};
+use super::{AgentEvent, Provider, TaskStatus, TurnRequest};
+
+/// Where a `subagent` tool call stands. The child runs in a session of its own (`metadata.sessionID`); its text is not
+/// streamed into this one, only its result comes back, so the call needs no scoping, just a label and a status.
+fn subagent_task(part: &Value, call: &str, status: TaskStatus) -> AgentEvent {
+    let state = &part["state"];
+    let child = [&state["metadata"]["metadata"]["sessionID"], &state["metadata"]["sessionID"]]
+        .into_iter()
+        .find_map(Value::as_str)
+        .unwrap_or(call);
+    let input = &state["input"];
+    let label = match (input["agent"].as_str(), input["description"].as_str()) {
+        (Some(agent), Some(what)) => Some(format!("{agent}: {what}")),
+        (Some(text), None) | (None, Some(text)) => Some(text.to_owned()),
+        (None, None) => None,
+    };
+    let failed = (status == TaskStatus::Failed).then(|| state["error"].as_str().map(str::to_owned)).flatten();
+    AgentEvent::Task { id: child.to_owned(), tool_use_id: Some(call.to_owned()), status, label, summary: failed, tools: None }
+}
 
 /// A tool's argument worth showing next to its name: the command, the file, the pattern.
 fn input_summary(input: &Value) -> String {
@@ -249,8 +267,11 @@ impl Provider for OpenCode {
                         name: tool.to_owned(),
                         input: input_summary(input),
                         change,
-                        background: false,
+                        background: tool == "subagent",
                     });
+                    if tool == "subagent" {
+                        events.push(subagent_task(part, &id, TaskStatus::Started));
+                    }
                 }
                 if settled {
                     let is_error = part["state"]["status"] == "error";
@@ -265,7 +286,7 @@ impl Provider for OpenCode {
                             .and_then(super::finish_file_snapshot)
                     };
                     events.push(AgentEvent::ToolResult {
-                        id,
+                        id: id.clone(),
                         output: part["state"]["output"]
                             .as_str()
                             .or_else(|| part["state"]["error"].as_str())
@@ -275,6 +296,10 @@ impl Provider for OpenCode {
                         image: None,
                         change,
                     });
+                    if part["tool"] == "subagent" {
+                        let status = if is_error { TaskStatus::Failed } else { TaskStatus::Done };
+                        events.push(subagent_task(part, &id, status));
+                    }
                 }
                 events
             }
@@ -382,6 +407,35 @@ mod tests {
                 change: None
             }]
         );
+    }
+
+    /// A `subagent` tool line as the CLI writes it (live-opencode-5-subagent): a call, a background task and its end.
+    #[test]
+    fn a_subagent_call_is_a_background_task_with_the_child_session() {
+        let provider = OpenCode::default();
+        let line = r#"{"type":"tool_use","sessionID":"ses_main","part":{"partID":"prt_1","id":"chatcmpl-tool-9","tool":"subagent","state":{"status":"completed","input":{"agent":"general","description":"Compute 2+2","prompt":"compute"},"output":"<subagent sessionID=\"ses_child\" state=\"completed\">\n4\n</subagent>","metadata":{"metadata":{"sessionID":"ses_child","status":"completed"}}}}}"#;
+        let events = provider.parse_line(line);
+        assert!(matches!(&events[0], AgentEvent::ToolCall { name, background: true, .. } if name == "subagent"));
+        let task = |status| AgentEvent::Task {
+            id: "ses_child".into(),
+            tool_use_id: Some("chatcmpl-tool-9".into()),
+            status,
+            label: Some("general: Compute 2+2".into()),
+            summary: None,
+            tools: None,
+        };
+        assert_eq!(events[1], task(TaskStatus::Started));
+        assert!(matches!(&events[2], AgentEvent::ToolResult { is_error: false, .. }));
+        assert_eq!(events[3], task(TaskStatus::Done));
+        assert_eq!(events.len(), 4);
+    }
+
+    #[test]
+    fn a_failed_subagent_call_ends_its_task_as_failed() {
+        let provider = OpenCode::default();
+        let line = r#"{"type":"tool_use","part":{"id":"c9","tool":"subagent","state":{"status":"error","input":{"agent":"general"},"error":"boom"}}}"#;
+        let events = provider.parse_line(line);
+        assert!(matches!(events.last(), Some(AgentEvent::Task { status: TaskStatus::Failed, summary: Some(text), id, .. }) if text == "boom" && id == "c9"));
     }
 
     #[test]

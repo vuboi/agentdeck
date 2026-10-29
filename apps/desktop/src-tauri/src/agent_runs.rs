@@ -111,6 +111,9 @@ async fn run_turn(
     if provider.id() == "antigravity" {
         mcp_manage::ensure_agy_link().await;
     }
+    // What a kept CLI says on its own after a turn (a background job finished) reaches the chat through this.
+    let tail_app = app.clone();
+    ag_adapters::agent::tail::set_sink(std::sync::Arc::new(move |chat, turn, event| emit(&tail_app, chat, turn, event)));
     let binary = resolve_binary(provider.as_ref());
     // Claude, Codex and Antigravity keep their CLI open between the chat's turns (see `warm.rs`); OpenCode starts one per turn.
     // A turn that runs for another one (a side answer, a delegated worker, a step of a flow) is run once, not kept: it
@@ -300,6 +303,10 @@ pub(crate) fn agent_inject(session: String, text: String) -> bool {
 /// that reaches this side after the chat's next message was sent must not kill the new run (it would never answer).
 #[tauri::command]
 pub(crate) fn agent_stop(session: String, turn: Option<String>) {
+    // An answer the CLI began on its own (after background work) has no run of its own: it is interrupted here.
+    if turn.as_deref().is_none_or(|turn| turn.starts_with("auto-")) {
+        ag_adapters::agent::tail::interrupt(&session);
+    }
     if let Ok(mut running) = RUNNING.lock() {
         let current = running.get(&session).map(|run| run.turn.as_str());
         if current.is_some() && (turn.is_none() || turn.as_deref() == current) {
