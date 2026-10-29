@@ -1,34 +1,34 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import LinkMenu from '../lib/components/LinkMenu.svelte';
-  import SelectionMenu from '../lib/components/SelectionMenu.svelte';
-  import WindowControls from '../lib/components/WindowControls.svelte';
-  import ThemePanel from '../lib/components/ThemePanel.svelte';
-  import SettingsModal from '../lib/components/SettingsModal.svelte';
-  import FlowEditor from '../lib/components/flow/FlowEditor.svelte';
-  import { closeFlow } from '../lib/workflows.svelte';
-  import { guide } from '../lib/guide.svelte';
-  import { toast } from '../lib/toast';
-  import { openSettings, settings } from '../lib/connectors.svelte';
-  import ToolsModal from '../lib/components/ToolsModal.svelte';
-  import Sidebar from '../lib/components/Sidebar.svelte';
-  import SidebarPeek from '../lib/components/SidebarPeek.svelte';
-  import Chat from '../lib/components/Chat.svelte';
-  import Terminal from '../lib/components/Terminal.svelte';
-  import RightPanel from '../lib/components/RightPanel.svelte';
-  import BrowserGuide from '../lib/components/BrowserGuide.svelte';
-  import DockZone from '../lib/components/DockZone.svelte';
-  import Splitter from '../lib/components/Splitter.svelte';
+  import LinkMenu from '../lib/components/ui/LinkMenu.svelte';
+  import SelectionMenu from '../lib/components/ui/SelectionMenu.svelte';
+  import WindowControls from '../lib/components/ui/WindowControls.svelte';
+  import ThemePanel from '../lib/components/settings/ThemePanel.svelte';
+  import SettingsModal from '../lib/components/settings/SettingsModal.svelte';
+  import FlowEditor from '../lib/components/tasks/flow/FlowEditor.svelte';
+  import { closeFlow } from '../lib/tasks/workflows.svelte';
+  import { guide } from '../lib/app/ui/guide.svelte';
+  import { toast } from '../lib/app/platform/toast';
+  import { openSettings, settings } from '../lib/agents/connectors.svelte';
+  import ToolsModal from '../lib/components/settings/ToolsModal.svelte';
+  import Sidebar from '../lib/components/layout/Sidebar.svelte';
+  import SidebarPeek from '../lib/components/layout/SidebarPeek.svelte';
+  import Chat from '../lib/components/chat/Chat.svelte';
+  import Terminal from '../lib/components/terminal/Terminal.svelte';
+  import RightPanel from '../lib/components/layout/RightPanel.svelte';
+  import BrowserGuide from '../lib/components/browser/BrowserGuide.svelte';
+  import DockZone from '../lib/components/ui/DockZone.svelte';
+  import Splitter from '../lib/components/ui/Splitter.svelte';
   import { slide } from 'svelte/transition';
-  import { slideWidth } from '../lib/transitions';
-  import { layout, setSidebarCollapsed, setToolsOpen, type DockZone as Zone } from '../lib/layout.svelte';
-  import { terminal, handleTerminalShortcut } from '../lib/terminal.svelte';
-  import { browser } from '../lib/browser.svelte';
-  import { inTauri } from '../lib/history';
-  import { workspace } from '../lib/sessions.svelte';
-  import { openNewChatTab } from '../lib/content-tabs.svelte';
-  import FindBar from '../lib/components/FindBar.svelte';
-  import KeyboardShortcuts from '../lib/components/KeyboardShortcuts.svelte';
+  import { slideWidth } from '../lib/app/ui/transitions';
+  import { layout, setSidebarCollapsed, setToolsOpen, type DockZone as Zone } from '../lib/app/ui/layout.svelte';
+  import { terminal, handleTerminalShortcut } from '../lib/terminal/terminal.svelte';
+  import { browser } from '../lib/browser/browser.svelte';
+  import { inTauri } from '../lib/app/platform/history';
+  import { workspace } from '../lib/chat/sessions.svelte';
+  import { openNewChatTab } from '../lib/app/ui/content-tabs.svelte';
+  import FindBar from '../lib/components/ui/FindBar.svelte';
+  import KeyboardShortcuts from '../lib/components/settings/KeyboardShortcuts.svelte';
 
   // Layout, outside in: sidebar | [left zone | (top zone / chat / bottom zone / terminal) | right zone] | tools.
   // Every pane is a fixed px size kept in layout.sizes; splitters between them change those sizes.
@@ -109,7 +109,7 @@
   onMount(() => {
     if (!import.meta.env.DEV || !inTauri()) return;
     let stop: (() => void) | undefined;
-    void import('../lib/tauri-event').then(({ listen }) =>
+    void import('../lib/app/platform/tauri-event').then(({ listen }) =>
       listen<string>('dev-preview', ({ payload }) => {
         const [address, device, then] = payload.split('|');
         if (device === 'mobile' || device === 'tablet') browser.device = device;

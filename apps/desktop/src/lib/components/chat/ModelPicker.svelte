@@ -1,0 +1,443 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import AgentLogo from '../ui/AgentLogo.svelte';
+  import { ZButton, ZIcon, ZPopover, ZSwitch, ZTabs, zHoverGlide, zTooltip } from '@shival99/z-ui-svelte';
+  import { listHeight } from '../../app/ui/popover';
+  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { agyBlocks, agyModes } from '../../agents/agy-modes.svelte';
+  import { AGENT_TEXT, turnOptions, workspace, type Agent, type Effort, type Permission } from '../../chat/sessions.svelte';
+  import { allPresets, assignPreset, createFlow, presetOf } from '../../tasks/workflows.svelte';
+  import { findModel, freeFirst, modelSources, modelsReady } from '../../agents/models.svelte';
+  import { CREDIT_PREFIX } from '../../agents/credit-model';
+  import { automation, fallbackOn, setFallback } from '../../app/platform/automation.svelte';
+  import SectionTitle from '../ui/SectionTitle.svelte';
+
+  let {
+    agent = $bindable(),
+    model = $bindable(),
+    effort = $bindable(),
+    fast = $bindable(),
+    permission = $bindable(),
+  }: { agent: Agent; model: string; effort: Effort; fast: boolean; permission: Permission } = $props();
+
+  let open = $state(false);
+  /** The flow of the open chat: with one, a message runs through its steps instead of one agent. */
+  const flow = $derived(presetOf(workspace.activeId));
+  /** The agents the flow's steps run on, each once: shown on the button in place of one model. */
+  const flowAgents = $derived([...new Set((flow?.steps ?? []).map((step) => step.agent))].slice(0, 3));
+  // The popover scales in; tabs measured during that are off-centre. They are drawn again once it has settled.
+  let settled = $state(false);
+  $effect(() => {
+    if (!open) {
+      settled = false;
+      return;
+    }
+    const timer = setTimeout(() => (settled = true), 280);
+    return () => clearTimeout(timer);
+  });
+  let warming = false;
+
+  // The first open after a reload used to hitch: the popover's parts (tabs, switch, glide, scrollbar)
+  // were still being loaded and measured while it appeared. Open it once, invisibly, right after
+  // start-up so every later open is already warm.
+  onMount(() => {
+    const root = document.documentElement;
+    const timers: number[] = [];
+    const warm = () => {
+      if (open || !trigger) return;
+      warming = true;
+      root.dataset.warming = '';
+      open = true;
+      timers.push(
+        window.setTimeout(() => {
+          open = false;
+          timers.push(
+            window.setTimeout(() => {
+              // The popover hands focus back to its button when it closes; the warm-up must not leave it there.
+              if (document.activeElement === trigger) {
+                trigger?.blur();
+                document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus();
+              }
+              delete root.dataset.warming;
+              warming = false;
+            }, 500),
+          );
+        }, 350),
+      );
+    };
+    const idle = window.setTimeout(warm, 1200);
+    return () => {
+      clearTimeout(idle);
+      timers.forEach(clearTimeout);
+      delete root.dataset.warming;
+    };
+  });
+  let trigger: HTMLElement | null = $state(null);
+
+  // Models per provider, from the catalogue. Providers are rows; the models open in a nested popover.
+  const sources = $derived(modelSources());
+  const sourceOf = (key: string) => sources.find((source) => source.key === key) ?? sources[0];
+  const modelsOf = (key: string) => sourceOf(key).models();
+  // Free models first, the paid ones after a divider (models.svelte.ts).
+  const subList = $derived.by(() => freeFirst(modelsOf(subProvider)));
+  // The row the chosen model belongs to: a custom provider has its own, the CLIs are found by agent.
+  const currentSource = $derived(sources.find((source) => source.provider === agent && source.models().some((item) => item.value === model)) ?? sources.find((source) => source.provider === agent) ?? sources[0]);
+  // A model billed to the API credit says so wherever its name is shown alone.
+  const modelName = (provider: Agent, value: string) => (findModel(provider, value)?.label ?? value) + (value.startsWith(CREDIT_PREFIX) ? ' · Credit' : '');
+
+  let subOpen = $state(false);
+  let subProvider = $state('claude');
+  /** The row of the flow, opening the flows in the nested popover as the providers open their models. */
+  const FLOW = 'flow';
+  let subAnchor: HTMLElement | null = $state(null);
+  // Room above the trigger, so the panel never runs past the top of the window.
+  let panelMax = $state(600);
+  /** The nested popover is at most this tall (px) and scrolls inside. */
+  const subMax = $derived(Math.min(360, Math.max(160, panelMax - 40)));
+
+  function updatePanelMax() {
+    if (!trigger) return;
+    const availableAbove = trigger.getBoundingClientRect().top - 16;
+    panelMax = Math.max(
+      96,
+      Math.min(Math.max(550, listHeight() + 150), availableAbove, window.innerHeight - 24),
+    );
+  }
+
+  $effect(() => {
+    if (!open) return;
+    updatePanelMax();
+    window.addEventListener('resize', updatePanelMax);
+    return () => window.removeEventListener('resize', updatePanelMax);
+  });
+
+  // Hovering a provider row opens its models; moving to another row switches. Nothing to click.
+  // Leaving a row (or its list) closes the list after a short wait, so a pointer that crosses to it stays open.
+  let subTimer: ReturnType<typeof setTimeout> | undefined;
+  const keepSub = () => clearTimeout(subTimer);
+  const leaveSub = () => {
+    clearTimeout(subTimer);
+    subTimer = setTimeout(() => (subOpen = false), 200);
+  };
+  /**
+   * The nested list is a popover of its own, so a press in it is a press outside the main menu, which closes on it:
+   * the menu (and the nested list, anchored to a row of it) can be gone before the `click` arrives. A row therefore acts
+   * on the press; `click` only serves the keyboard (Enter and Space send a click with no pointer: `detail` 0).
+   */
+  const onPress = (action: () => void) => ({
+    onpointerdown: (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      action();
+    },
+    onclick: (event: MouseEvent) => {
+      if (event.detail === 0) action();
+    },
+  });
+  function openSub(provider: string, row: HTMLElement) {
+    keepSub();
+    if (subOpen && subProvider === provider) return;
+    subProvider = provider;
+    subAnchor = row;
+    subOpen = true;
+  }
+
+  // The reasoning levels the chosen model takes (from its CLI's catalogue).
+  const EFFORT_LABEL: Record<string, string> = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-High', max: 'Max', ultra: 'Ultra' };
+  const efforts = $derived(
+    (findModel(agent, model)?.efforts?.length ? findModel(agent, model)!.efforts! : ['low', 'medium', 'high', 'max']).map((value) => ({
+      value,
+      label: EFFORT_LABEL[value] ?? value,
+    })),
+  );
+  // A model that does not take the chosen level falls back to its own default.
+  $effect(() => {
+    const levels = efforts.map((item) => item.value);
+    if (!levels.includes(effort)) effort = (findModel(agent, model)?.defaultEffort ?? levels[Math.min(1, levels.length - 1)]) as Effort;
+  });
+
+  // The approval modes every agent CLI offers in some form.
+  // The OpenAI mark is plain black or white: it follows the text colour (white in dark mode, black in light) rather than green.
+  const tone = (provider: Agent) => (provider === 'codex' ? 'text-foreground' : AGENT_TEXT[provider]);
+
+  const permissions: { value: Permission; label: string; hint: string; icon: ZIconName; danger?: boolean }[] = [
+    { value: 'ask', label: 'Ask each time', hint: 'Approve every edit and command', icon: 'lucideHand' as ZIconName },
+    { value: 'edits', label: 'Auto-edit', hint: 'Apply file edits, ask before commands', icon: 'lucideFilePen' as ZIconName },
+    { value: 'plan', label: 'Plan only', hint: 'Read-only, proposes a plan first', icon: 'lucideClipboardList' as ZIconName },
+    { value: 'auto', label: 'Auto-approve', hint: 'Run commands in the sandbox', icon: 'lucideShieldCheck' as ZIconName },
+    { value: 'yolo', label: 'YOLO', hint: 'No prompts, full access to the machine', icon: 'lucideZap' as ZIconName, danger: true },
+  ];
+
+  const modelLabel = $derived(modelName(agent, model));
+  const effortLabel = $derived(efforts.find((item) => item.value === effort)?.label ?? effort);
+  const currentPermission = $derived(permissions.find((item) => item.value === permission) ?? permissions[0]);
+
+  // One highlight box glides between hovered rows; the chosen row is excluded so it never reacts to hover.
+  const glide = () => zHoverGlide({ class: 'bg-primary/10 rounded-md', exclude: '[aria-checked="true"]' });
+
+  function pickModel(nextAgent: Agent, nextModel: string) {
+    agent = nextAgent;
+    model = nextModel;
+  }
+</script>
+
+<div class="min-w-0 flex-1">
+<ZButton
+  bind:ref={trigger}
+  zWave={false}
+  zType="ghost"
+  zSize="sm"
+  class="group h-7 w-fit min-w-0 max-w-full flex-none justify-start gap-1 px-1.5 text-left text-[11px] {open ? '!bg-primary/15 !text-primary hover:!bg-primary/20' : 'hover:!bg-primary/15 hover:!text-primary'}"
+  aria-haspopup="dialog"
+  aria-expanded={open}
+  aria-label="Model and permissions"
+  onclick={() => {
+    updatePanelMax();
+    open = !open;
+  }}
+>
+  {#if flow}
+    <!-- With a flow the chat is not one model: the agents of its steps, overlapped, and the flow's name. -->
+    <span class="flex shrink-0 items-center -space-x-1">
+      {#each flowAgents as flowAgent (flowAgent)}
+        <span class="grid size-4 place-items-center rounded-full border border-background bg-muted">
+          <AgentLogo agent={flowAgent} class="size-2.5" />
+        </span>
+      {/each}
+    </span>
+    <span class="min-w-0 flex-1 truncate" {@attach zTooltip({ content: flow.name, position: 'top', autoDetect: true })}>{flow.name}</span>
+  {:else}
+    <AgentLogo agent={currentSource.provider} model={currentSource.provider === 'custom' ? model : undefined} class="size-3 shrink-0" />
+    <span class="min-w-0 flex-1 truncate" {@attach zTooltip({ content: modelLabel, position: 'top', autoDetect: true })}>{modelLabel}</span>
+    <span class="hidden shrink-0 text-muted-foreground min-[720px]:inline">· {effortLabel}</span>
+  {/if}
+  {#if fast}<ZIcon zType="lucideZap" class="size-3 shrink-0 text-warning" />{/if}
+  {#if permission !== 'ask'}
+    <span class="hidden shrink-0 rounded px-1 text-[10px] min-[720px]:inline {currentPermission.danger ? 'bg-destructive/15 text-destructive' : open ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground group-hover:bg-primary/15 group-hover:text-primary'}">{currentPermission.label}</span>
+  {/if}
+  <ZIcon zType="lucideChevronDown" class="size-3 shrink-0 text-muted-foreground" />
+</ZButton>
+
+<ZPopover
+  anchor={trigger}
+  bind:open
+  zTrigger="manual"
+  zPosition="top-left"
+  zOffset={8}
+  zWidth={320}
+  onClosed={() => !warming && document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()}
+>
+  {#snippet children()}
+    <div class="overflow-x-hidden overflow-y-auto py-2.5" style:max-height="{panelMax}px">
+      <div class="flex w-full flex-col gap-3 px-2.5">
+      <section aria-label="Model">
+        <SectionTitle label="MODEL" />
+        <div class="flex flex-col gap-0.5" {@attach glide()}>
+          {#each sources as source (source.key)}
+            {@const current = agent === source.provider && source.models().some((item) => item.value === model) ? modelName(agent, model) : ''}
+            <button
+              type="button"
+              role="menuitem"
+              aria-haspopup="dialog"
+              aria-expanded={subOpen && subProvider === source.key}
+              data-glide-item
+              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {(subOpen && subProvider === source.key) || current ? 'bg-primary/10' : ''}"
+              onpointerenter={(event) => openSub(source.key, event.currentTarget)}
+              onpointerleave={leaveSub}
+              onfocus={(event) => openSub(source.key, event.currentTarget)}
+            >
+              <AgentLogo agent={source.provider} model={source.provider === 'custom' ? source.models()[0]?.value : undefined} class="size-3.5 shrink-0" />
+              <!-- The provider's name has priority and stays whole; the chosen model takes what room is left and is cut. -->
+              <!-- Name and model share one baseline: their sizes differ, so centring each box would set them off. -->
+              <span class="flex min-w-0 flex-1 items-baseline gap-2">
+                <span class="truncate {current ? 'max-w-[60%] shrink-0' : 'min-w-0 flex-1'}">{source.label}</span>
+                {#if current}<span class="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground">{current}</span>{/if}
+              </span>
+              <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
+            </button>
+          {/each}
+        </div>
+      </section>
+
+      <section aria-label="Flow">
+        <SectionTitle label="FLOW" />
+        <div class="flex flex-col gap-0.5" {@attach glide()}>
+          <button
+            type="button"
+            role="menuitem"
+            aria-haspopup="dialog"
+            aria-expanded={subOpen && subProvider === FLOW}
+            data-glide-item
+            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {subOpen && subProvider === FLOW ? 'bg-primary/10' : ''}"
+            onpointerenter={(event) => openSub(FLOW, event.currentTarget)}
+            onpointerleave={leaveSub}
+            onfocus={(event) => openSub(FLOW, event.currentTarget)}
+          >
+            <ZIcon zType="lucideWorkflow" class="size-3.5 shrink-0 {flow ? 'text-primary' : 'text-muted-foreground'}" />
+            <span class="flex-1 truncate">Flow</span>
+            <span class="truncate text-[11px] text-muted-foreground" {@attach zTooltip({ content: flow?.name ?? 'None', position: 'right', autoDetect: true, offset: 6 })}>{flow?.name ?? 'None'}</span>
+            <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 text-muted-foreground" />
+          </button>
+        </div>
+      </section>
+
+      <section aria-label="Reasoning effort">
+        <SectionTitle label={agent === 'custom' ? 'THINKING' : 'EFFORT'} />
+        {#key `${settled}|${agent}|${model}`}
+        <ZTabs
+          zTabs={efforts}
+          zType="segmented"
+          zSize="xs"
+          zTabsOnly
+          zNavFullWidth
+          zCache={false}
+          class="w-full [&_.z-tab-item]:flex-1 [&_.z-tab-item-label]:text-center"
+          activeTab={effort}
+          onTabChange={(value) => (effort = value as Effort)}
+        />
+        {/key}
+      </section>
+
+      <section aria-label="Speed" class="flex items-center justify-between gap-6 px-0.5">
+        <div>
+          <div class="flex items-center gap-1.5 text-xs font-medium">
+            <ZIcon zType="lucideZap" class="size-3.5 text-warning" />
+            Fast mode
+          </div>
+          <div class="mt-1 text-[11px] leading-snug text-muted-foreground">Faster output, higher usage</div>
+        </div>
+        <ZSwitch zVariant="dot" bind:checked={fast} zSize="sm" />
+      </section>
+
+      <section aria-label="Automation">
+        <SectionTitle label="AUTOMATION" />
+        <div class="flex flex-col gap-2 px-0.5">
+          {#each [
+            { key: 'compress', icon: 'lucideShrink', title: 'Auto-compress context', note: 'Claude: compact a long chat before it runs out of room', on: automation.compress, set: (value: boolean) => (automation.compress = value) },
+            { key: 'fallback', icon: 'lucideRoute', title: 'Auto fallback', note: 'At a limit or a server error, the next agent carries on', on: fallbackOn(), set: setFallback },
+            { key: 'orchestrate', icon: 'lucideWorkflow', title: 'Auto-orchestrate', note: 'Proactively delegate independent work to other agents', on: automation.orchestrate, set: (value: boolean) => (automation.orchestrate = value) },
+          ] as row (row.key)}
+            <div class="flex items-center justify-between gap-6">
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-medium">
+                  <ZIcon zType={row.icon as ZIconName} class="size-3.5 text-muted-foreground" />
+                  {row.title}
+                </div>
+                <div class="mt-0.5 text-[11px] leading-snug text-muted-foreground">{row.note}</div>
+              </div>
+              <ZSwitch zVariant="dot" checked={row.on} zSize="sm" onChange={row.set} />
+            </div>
+          {/each}
+        </div>
+      </section>
+
+      <section aria-label="Permissions">
+        <SectionTitle label="PERMISSIONS" />
+        <div class="flex flex-col gap-0.5" {@attach glide()}>
+        {#each permissions as item (item.value)}
+          {@const blocked = agent === 'antigravity' && agyModes.loaded && agyBlocks(item.value)}
+          {@const selected = permission === item.value}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            data-glide-item
+            class="flex w-full items-start gap-2 rounded-md px-1.5 py-0.5 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''} {blocked ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}"
+            disabled={blocked}
+            aria-disabled={blocked}
+            onclick={() => (permission = item.value)}
+          >
+            <ZIcon zType={item.icon} class="mt-0.5 size-3.5 shrink-0 {item.danger ? 'text-destructive' : 'text-muted-foreground'}" />
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-xs {item.danger ? 'text-destructive' : ''}" {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}>{item.label}</span>
+              <span class="block truncate text-[11px] text-muted-foreground" {@attach zTooltip({ content: blocked ? 'Your Antigravity account cannot use this mode' : item.hint, position: 'right', autoDetect: true, offset: 6 })}>{blocked ? 'Not available on your Antigravity account' : item.hint}</span>
+            </span>
+            <span class="mt-0.5 size-3.5 shrink-0">
+              {#if selected}<ZIcon zType="lucideCheck" class="size-3.5 text-primary" />{/if}
+            </span>
+          </button>
+        {/each}
+        </div>
+      </section>
+      </div>
+    </div>
+  {/snippet}
+</ZPopover>
+</div>
+
+<ZPopover
+  anchor={subAnchor}
+  bind:open={subOpen}
+  zTrigger="manual"
+  zPosition="right-top"
+  zOffset={6}
+  zWidth={173}
+>
+  {#snippet children()}
+    {#if subProvider === FLOW}
+      <div class="flex w-full flex-col" style:max-height="{subMax}px">
+        <div class="flex min-h-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1" role="radiogroup" tabindex="-1" aria-label="Flows" onpointerenter={keepSub} onpointerleave={leaveSub} {@attach glide()}>
+          <button type="button" role="radio" aria-checked={!flow} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {!flow ? 'bg-primary/10' : ''}" {...onPress(() => assignPreset(workspace.activeId, null))} {@attach zTooltip({ content: 'No flow: the agent answers', position: 'right', autoDetect: true, offset: 6 })}>
+            <span class="min-w-0 flex-1 truncate">No flow: the agent answers</span>
+            {#if !flow}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
+          </button>
+          {#each allPresets() as preset (preset.id)}
+            {@const chosen = flow?.id === preset.id}
+            <button type="button" role="radio" aria-checked={chosen} data-glide-item class="mr-1 flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {chosen ? 'bg-primary/10' : ''}" {...onPress(() => assignPreset(workspace.activeId, preset.id))} {@attach zTooltip({ content: preset.name, position: 'right', autoDetect: true, offset: 6 })}>
+              <span class="min-w-0 flex-1 truncate">{preset.name}</span>
+              {#if chosen}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
+            </button>
+          {/each}
+        </div>
+        <div class="h-px shrink-0 bg-border" aria-hidden="true"></div>
+        <div class="shrink-0 p-1">
+          <button
+            type="button"
+            role="menuitem"
+            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-muted-foreground outline-none hover:bg-primary/10 focus-visible:bg-primary/10"
+            {...onPress(() => {
+              subOpen = false;
+              open = false;
+              createFlow();
+            })}
+          >
+            <ZIcon zType="lucidePlus" class="size-3.5 shrink-0" />New flow…
+          </button>
+        </div>
+      </div>
+    {:else if !modelsReady[sourceOf(subProvider).provider]}
+      <!-- The CLI's own list is still being read: rows that stand where its models will, instead of a list that would be replaced. -->
+      <div class="flex w-full flex-col gap-1 px-2 py-2" role="status" aria-label="Loading models">
+        {#each [70, 55, 82, 48] as width (width)}<span class="h-4 animate-pulse rounded bg-muted" style:width="{width}%"></span>{/each}
+      </div>
+    {:else if modelsOf(subProvider).length === 0}
+      <div class="flex w-full flex-col items-center gap-1.5 px-3 py-4 text-center">
+        <ZIcon zType="lucideShieldAlert" class="size-5 text-muted-foreground" />
+        <div class="text-xs font-medium">No AI models</div>
+        <p class="m-0 text-[11px] leading-snug text-muted-foreground">{sourceOf(subProvider).label} returned no models, or its provider has an error. Check it in Settings.</p>
+      </div>
+    {:else}
+      <div class="flex w-full flex-col gap-0.5 overflow-x-hidden overflow-y-auto py-1 pl-1" style:max-height="{subMax}px" role="radiogroup" tabindex="-1" aria-label="{sourceOf(subProvider).label} models" onpointerenter={keepSub} onpointerleave={leaveSub} {@attach glide()}>
+        {#each subList.items as item, index (item.value)}
+          {@const selected = agent === sourceOf(subProvider).provider && model === item.value}
+          {#each subList.dividers.filter((divider) => divider.at === index) as divider (divider.label)}<div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase" role="separator"><span>{divider.label}</span><span class="h-px flex-1 bg-border"></span></div>{/each}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            data-glide-item
+            class="mr-1 flex cursor-pointer items-center justify-between rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {selected ? 'bg-primary/10' : ''}"
+            {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}
+            onclick={() => {
+              pickModel(sourceOf(subProvider).provider, item.value);
+              subOpen = false;
+            }}
+          >
+            <span class="min-w-0 truncate">{item.label}</span>
+            {#if selected}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0 text-primary" />{/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  {/snippet}
+</ZPopover>

@@ -2,7 +2,7 @@
 // Run with: node --test tests/agent-reply.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addUsage, applyAgentEvent } from '../src/lib/agent-reply.ts';
+import { addUsage, applyAgentEvent } from '../src/lib/chat/agent-reply.ts';
 
 test('deltas join into one response block', () => {
   let blocks = [{ kind: 'loading', label: 'Thinking' }] as const;

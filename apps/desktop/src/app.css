@@ -5,6 +5,14 @@
 @import 'tailwindcss/utilities.css' layer(utilities);
 @import '@shival99/z-ui-svelte/styles.css';
 
+/* ZChatNavigator's preview reserves an empty question row when a turn has no title. */
+.z-popover-host[role='tooltip']:not(.z-tooltip-host) > div:first-child:empty {
+  display: none;
+}
+.z-popover-host[role='tooltip']:not(.z-tooltip-host) > div:first-child:empty + div {
+  margin-top: 0;
+}
+
 /* ---- Corner radius: two sizes, set here and nowhere else ----
    Small is for what you press or point at (buttons, inputs, tabs, rows, chips, tooltips); large is for surfaces that
    hold them (popovers, cards, panels, the message box, code blocks). Round things (dots, pills, avatars: rounded-full,
@@ -252,6 +260,8 @@ html[data-warming] [data-z-popover] {
   line-height: 1.65;
   overflow-wrap: anywhere;
   /* A wide table scrolls inside its own card (.md-table), instead of widening the whole answer. */
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
 }
@@ -306,7 +316,7 @@ html[data-warming] [data-z-popover] {
   background: var(--muted);
   font-size: 0.8em;
 }
-.md-table { margin: 0 0 0.75rem; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
+.md-table { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; margin: 0 0 0.75rem; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
 .md-table table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .md-table th, .md-table td { padding: 0.4rem 0.8rem; text-align: left; border: 0; }
 .md-table th { font-weight: 600; color: var(--muted-foreground); font-size: 0.75rem; border-bottom: 1px solid var(--border); }
@@ -334,7 +344,7 @@ html[data-warming] [data-z-popover] {
 .md-code-head button:hover, .md-code-foot button:hover { background: var(--accent); color: var(--foreground); }
 .md-code-head button svg, .md-code-foot button svg { grid-area: 1 / 1; transition: opacity 0.18s, transform 0.18s; }
 .md-code-head .ic-check, .md-code-foot .ic-check { opacity: 0; transform: scale(0.4); color: var(--success, #22c55e); }
-.md-table .md-code-head { border-radius: 0; }
+.md-table .md-code-head { position: sticky; left: 0; z-index: 1; width: 100%; border-radius: 0; }
 
 /* Running labels (Thinking, Reasoning, Working, a Shimmer status) read at the size of the streamed answer. One place: a
    component that shows such a label uses this class, not its own size. */

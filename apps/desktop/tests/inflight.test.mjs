@@ -1,7 +1,7 @@
 // Run: node --experimental-strip-types --test tests/inflight.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseInflight, planRunRestore, terminalVerdict, withTerminal, withoutTerminal } from '../src/lib/inflight.ts';
+import { parseInflight, planRunRestore, terminalVerdict, withTerminal, withoutTerminal } from '../src/lib/chat/runs/inflight.ts';
 
 const run = (over = {}) => ({ sessionId: 's', title: 't', project: 'p', input: 'pnpm dev\nC:\\app', startedAt: 1000, settled: false, ...over });
 const server = (over = {}) => ({ key: 4200, command: 'pnpm dev', cwd: 'C:\\app', running: true, age: 30, ...over });
@@ -65,7 +65,7 @@ test('two servers do not take the same record', () => {
   assert.equal(plan.resume.filter((item) => item.record).length, 1);
 });
 
-import { stripLocationPrefix, terminalStep } from '../src/lib/inflight.ts';
+import { stripLocationPrefix, terminalStep } from '../src/lib/chat/runs/inflight.ts';
 
 test('the same command run again is a new run with its own entry', () => {
   assert.equal(terminalStep(undefined, { runId: 1 }), 'start');

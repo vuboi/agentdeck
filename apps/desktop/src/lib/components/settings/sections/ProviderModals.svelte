@@ -1,0 +1,118 @@
+<script lang="ts">
+  import { untrack } from 'svelte';
+  import { ZButton, ZIcon, ZInput, ZModal, ZSelect, ZSwitch } from '@shival99/z-ui-svelte';
+  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import SecretInput from '../../ui/SecretInput.svelte';
+  import { ENDPOINTS } from '../../../agents/endpoints';
+  import { brandLogoFor } from '../../../agents/brand-icons';
+  import { connectors, removeProvider } from '../../../agents/connectors.svelte';
+  import { KINDS, type ProviderForm } from './provider-form.svelte';
+
+  let { form }: { form: ProviderForm } = $props();
+
+  const icon = (name: string) => name as ZIconName;
+
+  $effect(() => {
+    const id = form.account.trim();
+    untrack(() => {
+      if (form.draft && form.freePreset?.base.includes('{account_id}')) form.draft.baseUrl = form.freePreset.base.replace('{account_id}', id || '{account_id}');
+    });
+  });
+</script>
+
+<ZModal open={form.confirmDelete !== ''} zTitle="Delete provider" zWidth="440px" zBodyClass="min-h-0! py-3" zOkText="Delete" zCancelText="Cancel" onOk={() => { removeProvider(form.confirmDelete); form.confirmDelete = ''; }} onCancel={() => (form.confirmDelete = '')}>
+  <p class="text-sm text-muted-foreground">
+    Remove <b class="text-foreground">{connectors.custom.find((item) => item.id === form.confirmDelete)?.name ?? 'this provider'}</b> from AgentDeck? The server itself is not touched.
+  </p>
+</ZModal>
+
+<!-- The provider form, over the settings (as adding an MCP server is). -->
+<ZModal bind:open={form.providerModal} zTitle={form.draft && connectors.custom.some((item) => item.id === form.draft?.id) ? `Edit ${form.draft.name || 'provider'}` : form.freePreset ? `Add ${form.freePreset.name}` : 'New provider'} zWidth="640px" zBodyClass="scrollbar-full py-3" zOkText="Save provider" zCancelText="Cancel" zOkDisabled={!form.draft?.baseUrl.trim() || form.probing} zLoading={form.probing} onOk={() => void form.commit()} onClosed={() => (form.draft = null)}>
+  {#if form.draft}
+    {@const draft = form.draft}
+    <form onsubmit={(event) => { event.preventDefault(); void form.commit(); }}>
+      <div class="flex flex-col gap-4">
+        <div class="grid items-start gap-x-3 gap-y-4 sm:grid-cols-2">
+          <div class="flex flex-col gap-1 text-xs">
+            <span class="font-medium">Name and logo</span>
+            <div class="flex items-center gap-2">
+              <!-- A known provider shows its own logo (no upload). A free cloud provider's name is read-only; a
+                   custom endpoint takes an uploaded logo and any name. -->
+              {#if brandLogoFor(draft.baseUrl)}
+                <span class="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-muted/40"><img src={brandLogoFor(draft.baseUrl)} alt="" class="size-6 object-contain" /></span>
+              {:else}
+                <label class="group relative grid size-9 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-lg border border-dashed border-border bg-muted/40 transition-colors hover:border-primary/60 hover:bg-primary/5" title="Upload a logo">
+                  {#if draft.logo}<img src={draft.logo} alt="" class="size-6 object-contain" />{:else}<ZIcon zType={icon('lucideUpload')} class="size-4 text-muted-foreground group-hover:text-primary" />{/if}
+                  <input type="file" accept="image/*" class="sr-only" onchange={(event) => { void form.pickLogo(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} />
+                </label>
+              {/if}
+              {#if form.freePreset}
+                <div class="min-w-0 flex-1" title="The name of a free cloud provider is fixed"><ZInput value={form.freePreset.name} zReadonly /></div>
+              {:else}
+                <div class="min-w-0 flex-1"><ZInput bind:value={draft.name} zPlaceholder="My LiteLLM" /></div>
+              {/if}
+              {#if draft.logo && !brandLogoFor(draft.baseUrl)}<button type="button" class="shrink-0 text-[11px] text-muted-foreground hover:text-destructive" onclick={() => { if (form.draft) form.draft.logo = undefined; }}>Remove</button>{/if}
+            </div>
+          </div>
+          <div class="flex flex-col gap-1 text-xs">
+            <span class="font-medium">Protocol</span>
+            <ZSelect zOptions={KINDS.map((kind) => ({ label: kind.label, value: kind.value }))} value={draft.kind} onValueChange={(value) => form.pickKind(String(value))} />
+            <span class="text-[11px] text-muted-foreground">{KINDS.find((kind) => kind.value === draft?.kind)?.hint}</span>
+          </div>
+          {#if form.freePreset?.base.includes('{account_id}')}
+          <label class="flex flex-col gap-1 text-xs">
+            <span class="font-medium">Account ID</span>
+            <ZInput bind:value={form.account} zPlaceholder="32 hex characters" />
+            <span class="text-[11px] text-muted-foreground">On the Cloudflare dashboard, under Workers &amp; Pages (right column). The key is an API token with Workers AI access.</span>
+          </label>
+        {/if}
+        <label class="flex flex-col gap-1 text-xs">
+            <span class="font-medium">Base URL</span>
+            <ZInput bind:value={draft.baseUrl} zPlaceholder={ENDPOINTS.providerKinds.openai} />
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            <span class="font-medium">API key <span class="font-normal text-muted-foreground">· optional</span></span>
+            {#key draft.id}<SecretInput bind:value={draft.apiKey} kept={form.keptKey} />{/key}
+          </label>
+        </div>
+        <p class="-mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"><ZIcon zType={icon('lucideShieldCheck')} class="size-3" /> The key stays on this computer. It is never part of the source or a build.</p>
+
+        <div class="rounded-lg border border-border bg-muted/30 p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-medium">Models</span>
+            <ZButton zWave={false} zType="outline" zSize="sm" class="ml-auto h-7 gap-1.5 px-2.5 text-xs" disabled={form.probing || !draft.baseUrl} onclick={() => void form.test()}>
+              <ZIcon zType={icon(form.probing ? 'lucideLoaderCircle' : 'lucideRefreshCw')} class="size-3.5 {form.probing ? 'animate-spin' : ''}" /> {draft.models.length ? 'Reload models' : 'Load models'}
+            </ZButton>
+          </div>
+          <!-- One line always kept for the note, so loading, a result or an error never moves the form. -->
+          <p class="mt-1.5 flex h-4 min-w-0 items-center gap-1 text-xs transition-colors duration-200 {form.probing ? 'text-muted-foreground' : form.probeNote?.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}" role="status" title={form.probeNote?.text}>
+            {#if form.probing}
+              <ZIcon zType={icon('lucideLoaderCircle')} class="size-3.5 shrink-0 animate-spin" /><span class="truncate">Loading models…</span>
+            {:else if form.probeNote}
+              <ZIcon zType={icon(form.probeNote.ok ? 'lucideCircleCheck' : 'lucideCircleX')} class="size-3.5 shrink-0" /><span class="truncate">{form.probeNote.text}</span>
+            {/if}
+          </p>
+          {#if draft.models.length > 0}
+            <label class="mt-2.5 flex flex-col gap-1 text-xs">
+              <span class="text-muted-foreground">Default model</span>
+              <ZSelect zOptions={draft.models.map((model) => ({ label: model, value: model }))} zShowSearch={draft.models.length > 8} value={draft.defaultModel} onValueChange={(value) => { if (draft) draft.defaultModel = String(value ?? ''); }} />
+            </label>
+          {:else}
+            <label class="mt-2.5 flex flex-col gap-1 text-xs">
+              <span class="text-muted-foreground">Model id <span class="opacity-70">(loaded automatically on save, or type one)</span></span>
+              <ZInput bind:value={draft.defaultModel} zPlaceholder="qwen3-coder:30b" />
+            </label>
+          {/if}
+        </div>
+
+        <div class="flex items-start gap-3 rounded-lg border border-border p-3">
+          <div class="min-w-0 flex-1">
+            <div class="text-xs font-medium">Free tier: keep private data away</div>
+            <p class="mt-0.5 text-[11px] text-muted-foreground">Free plans may keep and train on what they are sent. This provider then gets web search only: no files, code, terminal, browser or MCP tools, and no project text. Other agents may hand it light public work (search, emails, prompts, scripts) after checking it holds nothing private.</p>
+          </div>
+          <ZSwitch zVariant="dot" checked={Boolean(draft.restricted)} zSize="sm" onChange={(value) => { if (draft) draft.restricted = value; }} />
+        </div>
+      </div>
+    </form>
+  {/if}
+</ZModal>

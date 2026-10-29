@@ -1,10 +1,10 @@
 <script lang="ts">
   import '../app.css';
   // Importing the store applies the saved theme before the first paint of the app shell.
-  import '../lib/theme.svelte';
+  import '../lib/app/ui/theme.svelte';
 
   import { onMount } from 'svelte';
-  import TitleTooltip from '../lib/components/TitleTooltip.svelte';
+  import TitleTooltip from '../lib/components/ui/TitleTooltip.svelte';
   import { ZToaster } from '@shival99/z-ui-svelte';
   let { children } = $props();
   const isTrayMenu = typeof window !== 'undefined' && window.location.pathname.startsWith('/tray');
@@ -32,9 +32,9 @@
     };
     document.addEventListener('pointerdown', scrollArrow, true);
 
-    void import('../lib/icons').then(({ warmIcons }) => warmIcons());
-    void import('../lib/sessions.svelte').then(({ importHistory }) => void importHistory());
-    void import('../lib/browser.svelte').then(({ listenToPage, resetBrowser }) => {
+    void import('../lib/app/platform/icons').then(({ warmIcons }) => warmIcons());
+    void import('../lib/chat/sessions.svelte').then(({ importHistory }) => void importHistory());
+    void import('../lib/browser/browser.svelte').then(({ listenToPage, resetBrowser }) => {
       // An F5 reloads this window but not the pages it opened, which would stay on screen.
       void resetBrowser();
       void listenToPage();
@@ -42,7 +42,7 @@
     // The agent opens pages and switches devices through events: listen from the start, not only once the Preview
     // panel has been shown (an event before that was lost, and browser_open timed out).
     let stopShortcuts: (() => void) | undefined;
-    void import('../lib/content-tabs.svelte').then(({ installTabShortcuts }) => (stopShortcuts = installTabShortcuts()));
+    void import('../lib/app/ui/content-tabs.svelte').then(({ installTabShortcuts }) => (stopShortcuts = installTabShortcuts()));
     return () => {
       stopShortcuts?.();
       document.removeEventListener('pointerdown', scrollArrow, true);
@@ -51,7 +51,13 @@
 </script>
 
 <!-- No browser menu (Reload, Inspect, ...): the app's own menus listen on their elements and open themselves. F12 still opens the devtools. -->
-<svelte:window oncontextmenu={(event) => event.preventDefault()} />
+<svelte:window
+  oncontextmenu={(event) => {
+    const target = event.target;
+    if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, [contenteditable="true"]'))) return;
+    event.preventDefault();
+  }}
+/>
 
 {@render children()}
 {#if !isTrayMenu}

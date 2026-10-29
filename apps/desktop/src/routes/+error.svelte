@@ -2,7 +2,7 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { ZButton } from '@shival99/z-ui-svelte';
-  import DevEmpty from '$components/DevEmpty.svelte';
+  import DevEmpty from '$components/browser/DevEmpty.svelte';
 
   // A page that does not exist (or fails to load): the same empty state as the Preview and the Audit log, centred.
   const notFound = $derived(page.status === 404);

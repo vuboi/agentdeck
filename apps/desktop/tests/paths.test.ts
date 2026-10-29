@@ -2,7 +2,7 @@
 // Run with: node --test tests/paths.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dirOf, fileRootOf, isAbsolutePath, joinPath, nameOf, relativeTo, resolveInProject, samePath, withinRoot } from '../src/lib/paths.ts';
+import { dirOf, fileRootOf, isAbsolutePath, joinPath, nameOf, relativeTo, resolveInProject, samePath, withinRoot } from '../src/lib/files/paths.ts';
 
 test('absolute paths: drive, UNC and POSIX', () => {
   assert.ok(isAbsolutePath('C:\\a\\b'));

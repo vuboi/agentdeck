@@ -2,7 +2,7 @@
 // Run with: node --experimental-strip-types --test tests/continuations.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { joinContinuations } from '../src/lib/continuations.ts';
+import { joinContinuations } from '../src/lib/chat/runs/continuations.ts';
 
 const text = (t) => ({ kind: 'response', text: t });
 

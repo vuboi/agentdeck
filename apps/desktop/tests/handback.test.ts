@@ -2,7 +2,7 @@
 // Run with: node --experimental-strip-types --test tests/handback.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { HANDBACK_HEAD, isHandbackPrompt } from '../src/lib/handback.ts';
+import { HANDBACK_HEAD, isHandbackPrompt } from '../src/lib/chat/runs/handback.ts';
 
 const body = `${HANDBACK_HEAD}\n\n### Claude · Opus\nDone.\n\nUsing their answers, finish the user's request: fix it`;
 

@@ -2,7 +2,7 @@
 // Run with: node --experimental-strip-types --test tests/file-cache.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_CACHED_TEXT, Recent, diffCache, fileKey, rememberText, textCache } from '../src/lib/file-cache.ts';
+import { MAX_CACHED_TEXT, Recent, diffCache, fileKey, rememberText, textCache } from '../src/lib/files/file-cache.ts';
 
 test('the same file has one key, whatever the slashes or the drive letter case', () => {
   assert.equal(fileKey('E:\\WORK\\proj', 'E:\\WORK\\proj/apps/a.ts'), fileKey('e:/work/proj', 'e:/work/proj/apps/a.ts'));

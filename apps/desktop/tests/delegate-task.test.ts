@@ -24,9 +24,9 @@ import {
   resolveModel,
   startedText,
   toolKindOf,
-} from '../src/lib/delegate-task.ts';
-import { applyAgentEvent } from '../src/lib/agent-reply.ts';
-import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from '../src/lib/handback.ts';
+} from '../src/lib/tasks/delegate-task.ts';
+import { applyAgentEvent } from '../src/lib/chat/agent-reply.ts';
+import { HANDBACK_HEAD, isHandbackPrompt, stripLead } from '../src/lib/chat/runs/handback.ts';
 
 // ---------- tool names ----------
 
