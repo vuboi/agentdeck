@@ -6,6 +6,7 @@ mod agent_runs;
 mod awake;
 mod answers;
 mod bridge;
+mod channel;
 mod browser;
 mod browser_extensions;
 mod cdp;
@@ -167,7 +168,7 @@ pub(crate) async fn save_attachment_bytes(mime: &str, bytes: Vec<u8>) -> Result<
 
 fn write_attachment(mime: &str, bytes: Vec<u8>) -> Result<String, String> {
     let (extension, bytes) = picture_store::stored_picture(mime, bytes);
-    let folder = home_folder()?.join(".agentdeck").join("attachments");
+    let folder = home_folder()?.join(crate::channel::home_folder_name()).join("attachments");
     std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -202,7 +203,7 @@ async fn attachment_save_file(name: String, data: String) -> Result<String, Stri
             .collect();
         let safe = safe.trim_matches(|c: char| c == '.' || c == ' ');
         let safe = if safe.is_empty() { "file" } else { safe };
-        let folder = home_folder()?.join(".agentdeck").join("attachments");
+        let folder = home_folder()?.join(crate::channel::home_folder_name()).join("attachments");
         std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -539,7 +540,7 @@ pub(crate) fn home_folder() -> Result<PathBuf, String> {
 
 /// The Audit log: `~/.agentdeck/audit.jsonl`, one JSON line per finished tool call or chat error.
 fn audit_file() -> Result<PathBuf, String> {
-    Ok(home_folder()?.join(".agentdeck").join("audit.jsonl"))
+    Ok(home_folder()?.join(crate::channel::home_folder_name()).join("audit.jsonl"))
 }
 
 /// Per-day line counts of the Audit log, kept beside it so a count does not read the whole file.
@@ -577,7 +578,7 @@ fn audit_day(started: f64, offset_min: f64) -> i64 {
 }
 
 fn audit_index_file() -> Result<PathBuf, String> {
-    Ok(home_folder()?.join(".agentdeck").join("audit.index.json"))
+    Ok(home_folder()?.join(crate::channel::home_folder_name()).join("audit.index.json"))
 }
 
 /// Serialises every change to the index: appends, counts and rebuilds all read and write it.
@@ -831,7 +832,7 @@ fn audit_clear() -> Result<(), String> {
 /// Pictures a tool call returned (a screenshot of the page): `~/.agentdeck/audit-images`, one file each. The log
 /// line keeps the file's name, not the picture, so the log stays small.
 fn audit_images() -> Result<PathBuf, String> {
-    Ok(home_folder()?.join(".agentdeck").join("audit-images"))
+    Ok(home_folder()?.join(crate::channel::home_folder_name()).join("audit-images"))
 }
 
 /// Saves a picture given as a data URL (`data:image/png;base64,…`). Returns the file's name.
@@ -961,7 +962,7 @@ fn run_file(root: Option<String>, run: &str, name: &str) -> Result<PathBuf, Stri
         Some(root) if !root.is_empty() => PathBuf::from(root),
         _ => home_folder()?,
     };
-    Ok(base.join(".agentdeck").join("runs").join(run).join(name))
+    Ok(base.join(crate::channel::home_folder_name()).join("runs").join(run).join(name))
 }
 
 /// Writes one file of a run's notes and returns its full path. The runs folder ignores itself in git.
@@ -1088,7 +1089,7 @@ fn inside_root(root: &str, path: &str) -> Result<PathBuf, String> {
 /// Where deleted files go, so they can be put back (Ctrl+Z in Explore, or by hand).
 fn file_trash() -> Result<PathBuf, String> {
     Ok(home_folder()?
-        .join(".agentdeck")
+        .join(crate::channel::home_folder_name())
         .join("trash")
         .join("files"))
 }
@@ -2162,6 +2163,8 @@ pub fn run() {
                 .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
         })
         .setup(|app| {
+            // First: every folder and MCP name below depends on which build this is.
+            channel::init(&app.config().identifier);
             flow_log::install(app.handle());
             // Create the main webview with the same WebView2 extension setting used by Preview child views.
             let main_window = app

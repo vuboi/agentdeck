@@ -216,11 +216,16 @@ fn bridge_url() -> Option<String> {
 }
 
 fn is_own(raw: &Raw) -> bool {
-    raw.name == "agentdeck"
+    crate::channel::is_bridge_name(&raw.name)
         && raw
             .url
             .as_deref()
             .is_some_and(|url| url.starts_with("http://127.0.0.1:") && url.ends_with("/mcp"))
+}
+
+/// This build's own browser server, as an agent config has it (another build's entry points at that build).
+fn is_own_channel(raw: &Raw) -> bool {
+    raw.name == crate::channel::server_name() && is_own(raw)
 }
 
 /// The same server in several agents' configs becomes one row with all of them.
@@ -267,7 +272,7 @@ pub async fn mcp_list() -> McpOverview {
         let raws = read_all();
         let agy_link = raws
             .iter()
-            .find(|raw| raw.agent == "antigravity" && is_own(raw))
+            .find(|raw| raw.agent == "antigravity" && is_own_channel(raw))
             .and_then(|raw| raw.url.clone());
         let mut entries = merge(&raws);
         if let Some(url) = bridge_url() {
@@ -287,7 +292,7 @@ pub async fn mcp_list() -> McpOverview {
                 0,
                 McpEntry {
                     id: "agentdeck|builtin".to_owned(),
-                    name: "agentdeck".to_owned(),
+                    name: crate::channel::server_name().to_owned(),
                     transport: "http".to_owned(),
                     target: url,
                     env_keys: Vec::new(),
@@ -507,7 +512,7 @@ pub async fn mcp_test(id: String) -> TestResult {
     let started = Instant::now();
     let found = if id == "agentdeck|builtin" {
         bridge_url().map(|url| Raw {
-            name: "agentdeck".into(),
+            name: crate::channel::server_name().into(),
             transport: "http".into(),
             url: Some(url),
             agent: "claude",
@@ -759,7 +764,7 @@ pub async fn mcp_add(spec: AddSpec) -> Result<Vec<AgentResult>, String> {
 /// Removes a server by name from the chosen agents.
 #[tauri::command]
 pub async fn mcp_remove(name: String, mut agents: Vec<String>, scope: Option<String>) -> Result<Vec<AgentResult>, String> {
-    if !valid_name(&name) || name == "agentdeck" {
+    if !valid_name(&name) || crate::channel::is_bridge_name(&name) {
         return Err("that server cannot be removed here".to_string());
     }
     let removed = crate::mcp_providers::forget_disabled(&name, scope.as_deref().unwrap_or("user"), &agents)?;
@@ -867,7 +872,7 @@ fn agy_opt_out_file() -> Option<PathBuf> {
     Some(
         crate::home_folder()
             .ok()?
-            .join(".agentdeck")
+            .join(crate::channel::home_folder_name())
             .join("agy-browser-off"),
     )
 }
@@ -882,7 +887,7 @@ pub async fn mcp_agy_link(enable: bool) -> Result<AgentResult, String> {
         if let Some(marker) = &marker {
             let _ = std::fs::remove_file(marker);
         }
-        vec!["mcp".into(), "add".into(), "agentdeck".into(), url]
+        vec!["mcp".into(), "add".into(), crate::channel::server_name().into(), url]
     } else {
         if let Some(marker) = &marker {
             if let Some(folder) = marker.parent() {
@@ -894,7 +899,7 @@ pub async fn mcp_agy_link(enable: bool) -> Result<AgentResult, String> {
 ",
             );
         }
-        vec!["mcp".into(), "remove".into(), "agentdeck".into()]
+        vec!["mcp".into(), "remove".into(), crate::channel::server_name().into()]
     };
     Ok(run_cli("antigravity", args).await)
 }
@@ -919,12 +924,12 @@ pub async fn ensure_agy_link() {
         .await
         .unwrap_or_default()
         .into_iter()
-        .find(|raw| raw.agent == "antigravity" && is_own(raw))
+        .find(|raw| raw.agent == "antigravity" && is_own_channel(raw))
         .and_then(|raw| raw.url);
     if current.as_deref() != Some(url.as_str()) {
         let added = run_cli(
             "antigravity",
-            vec!["mcp".into(), "add".into(), "agentdeck".into(), url.clone()],
+            vec!["mcp".into(), "add".into(), crate::channel::server_name().into(), url.clone()],
         )
         .await;
         // Not remembered as linked: the next turn tries again.

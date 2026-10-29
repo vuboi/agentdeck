@@ -59,7 +59,7 @@ pub struct HistoryRun {
 }
 
 fn open() -> Result<Connection, String> {
-    let folder = crate::home_folder()?.join(".agentdeck");
+    let folder = crate::home_folder()?.join(crate::channel::home_folder_name());
     std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
     let conn =
         Connection::open(folder.join("image-history.db")).map_err(|error| error.to_string())?;

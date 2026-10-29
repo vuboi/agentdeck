@@ -22,7 +22,7 @@ pub struct LockEntry {
 pub type Lock = BTreeMap<String, LockEntry>;
 
 fn lock_file(home: &Path) -> PathBuf {
-    home.join(".agentdeck").join("library").join("lock.json")
+    home.join(crate::channel::home_folder_name()).join("library").join("lock.json")
 }
 
 pub fn read(home: &Path) -> Lock {

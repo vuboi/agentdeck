@@ -57,7 +57,7 @@ fn open(root: &str) -> Result<Arc<Mutex<Index>>, String> {
     if let Some(found) = all.get(root) {
         return Ok(found.clone());
     }
-    let folder = crate::home_folder()?.join(".agentdeck").join("index");
+    let folder = crate::home_folder()?.join(crate::channel::home_folder_name()).join("index");
     std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
     let conn = Connection::open(folder.join(format!("{:016x}.db", fnv(&root.to_lowercase()))))
         .map_err(|error| error.to_string())?;

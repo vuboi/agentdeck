@@ -771,9 +771,9 @@ fn output_root(cwd: Option<&str>) -> Result<PathBuf, String> {
     let base = cwd
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
-        .or_else(|| home_folder().map(|home| home.join(".agentdeck")))
+        .or_else(|| home_folder().map(|home| home.join(crate::channel::home_folder_name())))
         .ok_or("cannot find a project or home folder")?;
-    let root = base.join(".agentdeck").join("generated-images");
+    let root = base.join(crate::channel::home_folder_name()).join("generated-images");
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     Ok(root)
 }

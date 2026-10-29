@@ -10,7 +10,7 @@ struct Disabled { agent: String, scope: String, name: String, source: String, va
 
 static MUTATIONS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn index() -> Result<PathBuf, String> { Ok(crate::home_folder()?.join(".agentdeck/mcp-provider-disabled.json")) }
+fn index() -> Result<PathBuf, String> { Ok(crate::home_folder()?.join(crate::channel::home_folder_name()).join("mcp-provider-disabled.json")) }
 fn read_index() -> Result<Vec<Disabled>, String> {
     match std::fs::read_to_string(index()?) {
         Ok(text) => serde_json::from_str(&text).map_err(|_| "Disabled MCP index is invalid".into()),
@@ -103,7 +103,7 @@ pub async fn mcp_source(id: String, target: Option<String>, args: Option<Vec<Str
 
 pub(crate) fn edit_source(id: &str, target: Option<String>, args: Option<Vec<String>>) -> Result<SourceDetails, String> {
     let _guard = MUTATIONS.lock().map_err(|e| e.to_string())?;
-    let definitions = mcp_manage::read_all().into_iter().filter(|r| mcp_manage::raw_id(r) == id && r.name != "agentdeck").collect::<Vec<_>>();
+    let definitions = mcp_manage::read_all().into_iter().filter(|r| mcp_manage::raw_id(r) == id && !crate::channel::is_bridge_name(&r.name)).collect::<Vec<_>>();
     let first = definitions.first().ok_or("MCP source is no longer available")?;
     let Some(target) = target else { return Ok(SourceDetails { target: first.url.clone().or_else(|| first.command.clone()).unwrap_or_default(), args: first.args.clone() }); };
     let target = target.trim().to_owned();
@@ -156,7 +156,7 @@ fn set(id: &str, agent: &str, enabled: bool) -> Result<(), String> {
     let _guard = MUTATIONS.lock().map_err(|e| e.to_string())?;
     if !["claude", "codex", "copilot", "antigravity"].contains(&agent) { return Err("Unsupported MCP provider".into()); }
     let raws = mcp_manage::read_all();
-    let source = raws.iter().find(|r| mcp_manage::raw_id(r) == id && r.name != "agentdeck").ok_or("MCP server is no longer available")?;
+    let source = raws.iter().find(|r| mcp_manage::raw_id(r) == id && !crate::channel::is_bridge_name(&r.name)).ok_or("MCP server is no longer available")?;
     let definitions: std::collections::HashSet<_> = raws.iter().filter(|r| mcp_manage::raw_id(r) == id && r.agent == agent).map(|r| &r.source).collect();
     if definitions.len() > 1 { return Err("Multiple config files define this server for the provider; resolve duplicate definitions first".into()); }
     let current = raws.iter().find(|r| mcp_manage::raw_id(r) == id && r.agent == agent);

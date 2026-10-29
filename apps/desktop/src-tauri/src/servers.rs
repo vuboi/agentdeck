@@ -173,7 +173,7 @@ static RUNNING: Mutex<Vec<Server>> = Mutex::new(Vec::new());
 /// The log file of the server on `port`.
 pub fn log_path(port: u16) -> Result<PathBuf, String> {
     Ok(crate::home_folder()?
-        .join(".agentdeck")
+        .join(crate::channel::home_folder_name())
         .join("servers")
         .join(format!("{port}.log")))
 }

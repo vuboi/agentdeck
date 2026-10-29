@@ -1982,7 +1982,7 @@ pub(crate) fn delete_secret(target: &str) -> Result<(), String> {
 }
 
 fn agy_accounts_path() -> Result<PathBuf, String> {
-    crate::home_folder().map(|home| home.join(".agentdeck").join("antigravity-accounts.json"))
+    crate::home_folder().map(|home| home.join(crate::channel::home_folder_name()).join("antigravity-accounts.json"))
 }
 
 #[cfg(windows)]
@@ -2465,7 +2465,7 @@ pub async fn agy_modes(force: bool) -> AgyModes {
     let version = version_of(&agy).await.unwrap_or_default();
     let cache = crate::home_folder()
         .ok()
-        .map(|home| home.join(".agentdeck").join("agy-modes.json"));
+        .map(|home| home.join(crate::channel::home_folder_name()).join("agy-modes.json"));
     if !force {
         let saved = cache
             .as_ref()

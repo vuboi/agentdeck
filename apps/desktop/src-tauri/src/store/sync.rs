@@ -122,7 +122,7 @@ pub(crate) fn merge_mcp(path: &Path, key: &str, name: &str, server: Value, toml_
 
 /// Project roots explicitly selected in Store; used only to discover managed installations again.
 pub(crate) fn known_projects(home: &Path) -> Vec<PathBuf> {
-    std::fs::read_to_string(home.join(".agentdeck/store-projects.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    std::fs::read_to_string(home.join(crate::channel::home_folder_name()).join("store-projects.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
 pub(super) fn remember_projects(home: &Path, projects: &[PathBuf]) -> Result<(), String> {
@@ -132,8 +132,8 @@ pub(super) fn remember_projects(home: &Path, projects: &[PathBuf]) -> Result<(),
         if !project.is_absolute() || !project.is_dir() { return Err("Project must be an existing absolute folder".into()); }
         if !known.contains(project) { known.push(project.clone()); }
     }
-    let file = home.join(".agentdeck/store-projects.json");
-    std::fs::create_dir_all(home.join(".agentdeck")).map_err(|e| e.to_string())?;
+    let file = home.join(crate::channel::home_folder_name()).join("store-projects.json");
+    std::fs::create_dir_all(home.join(crate::channel::home_folder_name())).map_err(|e| e.to_string())?;
     std::fs::write(file, serde_json::to_string_pretty(&known).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
