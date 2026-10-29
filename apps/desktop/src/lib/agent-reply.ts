@@ -90,6 +90,11 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
       if (!blocks.some((block) => block.kind === 'response') && event.text) blocks.push({ kind: 'response', text: event.text });
       return { blocks, finished: true, agentSession: event.session_id ?? undefined };
     }
+    case 'background_task_notification':
+      close(blocks, false);
+      blocks.push({ kind: 'response', text: `🔄 Background task: ${event.summary}` });
+      // The auto-generated turn follows after this; keep reading.
+      return { blocks, finished: false };
     case 'usage':
       // Counted on the message, not drawn as a block (see sessions.svelte.ts).
       return { blocks: current, finished: false };

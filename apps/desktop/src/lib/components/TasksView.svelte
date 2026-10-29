@@ -183,9 +183,13 @@
   const nothingToShow = $derived(!auditPaging.loading && !auditPaging.hasMore && finished.length === 0 && runningItems.length === 0 && chatRuns.length === 0);
 
   // A range or project filter that leaves the list shorter than the pane reads on by itself, until it is full or the log ends.
+  // It stops once the log has been read back past the start of the range: older entries are outside it, so reading them
+  // would change nothing on screen (a short Day list used to pull in the whole log, page after page).
   $effect(() => {
     if (!scroller || viewport === 0) return;
-    if (auditPaging.hasMore && !auditPaging.loading && layout.total < viewport + 220) loadMoreAudit();
+    const start = since(range);
+    const reachedStart = start > 0 && (audit[0]?.startedAt ?? Infinity) < start;
+    if (auditPaging.hasMore && !auditPaging.loading && !reachedStart && layout.total < viewport + 220) loadMoreAudit();
   });
 
   function onAuditWheel() {

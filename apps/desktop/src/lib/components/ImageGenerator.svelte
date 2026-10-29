@@ -1,6 +1,7 @@
 <script lang="ts">
   import PickerPopover, { type PickerItem } from './PickerPopover.svelte';
   import { ACTIVE_ON } from '../popover';
+  import { createTextHistory } from '../text-history';
   import { onMount, tick, untrack } from 'svelte';
   import { fade, slide } from 'svelte/transition';
   import { ZDrawer, ZIcon, ZPopover, ZSwitch, ZTabs, createVirtualizer, zHoverGlide, zTooltip } from '@shival99/z-ui-svelte';
@@ -135,6 +136,9 @@
   );
 
   let prompt = $state(draft.prompt);
+  // Ctrl+Z / Ctrl+Y also bring back a prompt that code changed (a suggestion, a keyword, a cleared field).
+  const promptHistory = createTextHistory(draft.prompt);
+  $effect(() => promptHistory.note(prompt));
   let selectedModels = $state<string[]>(draft.selectedModels ?? ['gpt-6-luna', 'gpt-image-2']);
   let variants = $state(draft.variants);
   let fast = $state(draft.fast);
@@ -370,6 +374,7 @@
   }
 
   function onPromptKeydown(event: KeyboardEvent) {
+    if (promptHistory.key(event, (text) => (prompt = text))) return;
     if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
     event.preventDefault();
     if (working || suggesting || !prompt.trim() || selectedModels.length === 0) return;

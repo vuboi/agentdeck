@@ -723,12 +723,10 @@
                             {connectors.busy['save:agy'] ? 'Saving…' : 'Retry save'}
                           </ZButton>
                         {/if}
-                        {#if info?.logged_in === true}
-                          {#if connectors.busy['login:agy']}
-                            <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" onclick={() => void cancelLogin('agy')}>Cancel</ZButton>
-                          {/if}
-                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={!path || Boolean(connectors.busy['login:agy'])} title="Open Antigravity to sign in with another Google account" onclick={() => void login('agy', card.label)}>
-                            <ZIcon zType={icon(connectors.busy['login:agy'] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {connectors.busy['login:agy'] ? 'animate-spin' : ''}" /> {connectors.busy['login:agy'] ? 'Waiting for login…' : 'Sign in another account'}
+                        <!-- While a sign-in waits, its Cancel and "Waiting for login…" are the card's own (above), as for Claude and Codex: one set of buttons. -->
+                        {#if info?.logged_in === true && !connectors.busy['login:agy']}
+                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={!path} title="Open Antigravity to sign in with another Google account" onclick={() => void login('agy', card.label)}>
+                            <ZIcon zType={icon('lucideLogIn')} class="size-3.5" /> Sign in another account
                           </ZButton>
                         {/if}
                       </div>

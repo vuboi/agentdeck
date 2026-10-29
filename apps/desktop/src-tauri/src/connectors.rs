@@ -242,11 +242,20 @@ async fn pump<R: AsyncRead + Unpin>(
     activity: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 ) {
     let mut lines = BufReader::new(stream).lines();
+    let mut opened = false;
     while let Ok(Some(line)) = lines.next_line().await {
         let line = line.trim_end().to_owned();
         if !line.is_empty() {
             if let Some(activity) = &activity {
                 let _ = activity.send(());
+            }
+            // Claude Code says it opens the browser, but started without a console on Windows it does not: the address it
+            // prints is opened here, once.
+            if cfg!(windows) && id == "claude" && !opened {
+                if let Some(url) = sign_in_address(&line) {
+                    opened = true;
+                    let _ = crate::browser::open_external(url);
+                }
             }
             let _ = app.emit(
                 "connector-log",
@@ -257,6 +266,13 @@ async fn pump<R: AsyncRead + Unpin>(
             );
         }
     }
+}
+
+/// The OAuth page address a sign-in CLI printed in `line`, if it is there.
+fn sign_in_address(line: &str) -> Option<String> {
+    let start = line.find("https://")?;
+    let url: String = line[start..].chars().take_while(|c| !c.is_whitespace()).collect();
+    (url.contains("/oauth/authorize")).then_some(url)
 }
 
 /// Runs a command to its end, sending each output line to the UI as `connector-log`.
@@ -2078,6 +2094,8 @@ fn agy_sign_in() -> Option<Value> {
 /// Saved Antigravity accounts. The JSON index stores emails only; each OAuth token is held by Windows Credential Manager.
 #[tauri::command]
 pub async fn antigravity_accounts_list() -> Vec<AgyAccount> {
+    #[cfg(windows)]
+    adopt_unsaved_agy_sign_in().await;
     let active = agy_saved_active_email().or_else(|| antigravity_login().email);
     read_agy_accounts()
         .into_iter()
@@ -2087,6 +2105,33 @@ pub async fn antigravity_accounts_list() -> Vec<AgyAccount> {
             account
         })
         .collect()
+}
+
+/// agy is signed in with a login no saved account holds (it was signed in outside AgentDeck, or agy got a new refresh
+/// token): the account is asked of agy itself (`agy models` writes the email to its log) and saved. Tried at most once
+/// every ten minutes, so a list refresh never runs the CLI over and over.
+#[cfg(windows)]
+async fn adopt_unsaved_agy_sign_in() {
+    static LAST_TRY: AtomicU64 = AtomicU64::new(0);
+    let Some(current) = agy_sign_in() else { return };
+    if current["token"]["access_token"].as_str().is_none_or(str::is_empty) {
+        return;
+    }
+    if agy_saved_active_email().is_some() {
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let last = LAST_TRY.load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < 600 {
+        return;
+    }
+    LAST_TRY.store(now, Ordering::Relaxed);
+    let Ok(email) = refresh_antigravity_cli_email(std::time::SystemTime::now()).await else {
+        return;
+    };
+    let _ = save_agy_account(&current, email);
 }
 
 fn agy_saved_active_email() -> Option<String> {
@@ -2134,6 +2179,28 @@ pub async fn antigravity_account_adopt() -> Result<(), String> {
     }
 }
 
+/// Puts agy's previous sign-in back unless the new one was completed. "Sign in another account" clears agy's shared
+/// sign-in first; a cancel (the task is dropped), a timeout or a closed console must not leave agy signed out.
+#[cfg(windows)]
+struct RestoreSignIn {
+    previous: Option<Value>,
+    armed: bool,
+}
+
+#[cfg(windows)]
+impl Drop for RestoreSignIn {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(previous) = &self.previous {
+            if let Ok(text) = serde_json::to_string(previous) {
+                let _ = write_secret("gemini:antigravity", &text);
+            }
+        }
+    }
+}
+
 /// Saves the current credential before clearing the shared sign-in, then waits for the desktop app to finish OAuth.
 async fn antigravity_sign_in_another_account() -> Result<(), String> {
     #[cfg(not(windows))]
@@ -2162,6 +2229,7 @@ async fn antigravity_sign_in_another_account() -> Result<(), String> {
                 format!("could not clear the old Antigravity sign-in file: {error}")
             })?;
         }
+        let mut restore = RestoreSignIn { previous: previous.clone(), armed: true };
         delete_secret("gemini:antigravity")?;
 
         // `agy` owns the CLI sign-in flow. A fresh console gives its TUI a real terminal and lets
@@ -2195,6 +2263,8 @@ async fn antigravity_sign_in_another_account() -> Result<(), String> {
                         refresh_antigravity_cli_email(login_started_at).await?
                     };
                     save_agy_account(&current, email)?;
+                    // The new sign-in stays: nothing to put back.
+                    restore.armed = false;
                     // Leave the authenticated CLI available in its terminal, but stop treating it
                     // as part of the cancellable sign-in task.
                     child.kill_on_drop = false;

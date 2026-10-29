@@ -54,6 +54,7 @@
   import { openAttachment, openImages } from '../preview.svelte';
   import FileChip from './FileChip.svelte';
   import { clipFromPaste, imageMime, isImageName } from '../attachments';
+  import { createTextHistory, type TextHistory } from '../text-history';
   import { fileSize, saveFileAttachment } from '../agent';
   import { customProviderOf } from '../provider-registry';
   import { onUsage, shortCount, totalTokens, usageLog, usd } from '../usage';
@@ -80,13 +81,12 @@
     return /(^|\n)\s{0,3}(#{1,6}\s|>\s|[-*+]\s|\d+[.)]\s|`{3}|~{3}|[-*_]{3,}\s*$)|\*\*[^\n]+\*\*|__[^\n]+__|~~[^\n]+~~|`[^`\n]+`|(?:^|\s)(?:\*[^*\n]+\*|_[^_\n]+_)(?=$|[\s.,!?])|!?\[[^\]]+\]\([^)]+\)|(^|\n)[^\n]*\|[^\n]*\n\s*\|?\s*:?-{3}/m.test(text);
   }
   const mentions = $derived(draftMentions[sessionId] ?? []);
-  // Text wiped by accident (select all + delete, cut) comes back with Ctrl+Z, even after switching chats, which
-  // drops the textarea's own undo history. A send clears the field on purpose and keeps nothing.
-  const cleared: Record<string, string> = {};
+  // Ctrl+Z / Ctrl+Y go through a history of our own (per chat): the draft is written from code (a send, a clear, another
+  // chat's draft), which drops the textarea's own undo history. A sent message can be brought back with Ctrl+Z too.
+  const histories: Record<string, TextHistory> = {};
+  const historyOf = (id: string) => (histories[id] ??= createTextHistory(drafts[id] ?? ''));
   const setDraft = (value: string, { sent = false } = {}) => {
-    const before = drafts[sessionId] ?? '';
-    if (!sent && !value.trim() && before.trim()) cleared[sessionId] = before;
-    if (value.trim()) delete cleared[sessionId];
+    historyOf(sessionId).note(value, { boundary: sent });
     drafts[sessionId] = value;
     // Typing a message starts the agent's CLI, so it is up by the time the message is sent.
     if (!sent && value.trim()) prewarmChat(sessionId);
@@ -947,19 +947,15 @@
       return;
     }
     if (
-      (event.ctrlKey || event.metaKey) &&
-      !event.shiftKey &&
-      event.key.toLowerCase() === 'z' &&
-      !draft.trim() &&
-      cleared[sessionId]
+      historyOf(sessionId).key(event, (text) => {
+        drafts[sessionId] = text;
+        requestAnimationFrame(() => {
+          area?.setSelectionRange(text.length, text.length);
+          resize();
+        });
+      })
     ) {
-      event.preventDefault();
-      const text = cleared[sessionId];
-      setDraft(text);
-      requestAnimationFrame(() => {
-        area?.setSelectionRange(text.length, text.length);
-        resize();
-      });
+      return;
     } else if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       // While the agent works: Enter waits in line (what waits goes out as one message when the reply is done),

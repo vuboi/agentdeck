@@ -1,0 +1,3 @@
+# OpenRouter (custom provider) live notes
+- Model nvidia/nemotron-3.5-lightning:free, streaming chat/completions. Reasoning arrives token by token in delta.reasoning; tool calls arrive as fragments with `index` (parallel calls = several indexes, id + name first, then arguments pieces); finish_reason "tool_calls"; a last chunk carries usage (+ cost 0 for free) then `data: [DONE]`.
+- Stateless: a user message appended after tool results is read in the same next call (nothing to merge; the app owns the conversation). No sub-agents, no background tasks, no mid-turn input: AgentDeck must supply them (custom_chat.rs loop, MAX_STEPS 40).

@@ -14,6 +14,7 @@ export type AgentEvent =
   | { kind: 'done'; session_id: string | null; text: string; cost_usd: number | null }
   | { kind: 'usage'; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number; new_call: boolean }
   | { kind: 'error'; message: string }
+  | { kind: 'background_task_notification'; summary: string; task_id: string }
   | { kind: 'raw'; source: string; label: string; line: string };
 
 /** A tool the CLI would not run without approval. `allow` is what approves exactly this call. */
@@ -201,6 +202,12 @@ export async function listenAgentEvents(onEvent: (envelope: AgentEnvelope) => vo
 export async function stopAgentTurn(session: string, turn?: string): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('agent_stop', { session, turn: turn ?? null });
+}
+
+/** Hands a message to the turn running in a chat (Claude only): the CLI reads it at its next step, in the same turn. False when it was not taken. */
+export async function injectAgentMessage(session: string, text: string): Promise<boolean> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<boolean>('agent_inject', { session, text });
 }
 
 /** A delegation tool called by an agent through the app's MCP server (src-tauri/src/delegate.rs). */

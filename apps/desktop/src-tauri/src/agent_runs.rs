@@ -289,6 +289,13 @@ pub(crate) async fn custom_send(
     Ok(())
 }
 
+/// Hands a message to the turn that is running in a chat (Claude only). True when the turn took it: the CLI reads it at
+/// its next step, in the same turn. False when the chat has no such turn; the caller then keeps the message for later.
+#[tauri::command]
+pub(crate) fn agent_inject(session: String, text: String) -> bool {
+    ag_adapters::agent::warm::inject(&session, &text)
+}
+
 /// Stops the run of a chat: its CLI is interrupted and keeps running, warm (see `stop_run`). With `turn`, only that turn is stopped: a stop
 /// that reaches this side after the chat's next message was sent must not kill the new run (it would never answer).
 #[tauri::command]

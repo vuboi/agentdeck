@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Split};
 use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use super::interrupt::{self, InterruptMode, Interrupter, Signal, StopToken};
 use super::stall::Watchdog;
@@ -79,6 +80,43 @@ pub(super) fn lock_of(chat: &str) -> Arc<tokio::sync::Mutex<()>> {
     // not keep one entry for every chat and worker the app ever ran.
     locks.retain(|key, lock| key == chat || Arc::strong_count(lock) > 1);
     Arc::clone(locks.entry(chat.to_owned()).or_default())
+}
+
+/// Where a message written while a turn runs is handed to that turn, by chat. Only a turn on a kept Claude process
+/// registers here: Claude's stream-json input takes a message at any time.
+static INJECT: LazyLock<Mutex<HashMap<String, UnboundedSender<String>>>> = LazyLock::new(Default::default);
+
+/// Hands a message to the turn running for `chat`, which writes it to the CLI at once. The CLI reads it at its next step
+/// (between two tool calls) in the same turn, or, when the turn is only writing text, as the turn that follows. False
+/// when the chat has no such turn: the caller keeps the message for after the turn.
+pub fn inject(chat: &str, prompt: &str) -> bool {
+    let senders = INJECT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    senders.get(chat).is_some_and(|sender| sender.send(prompt.to_owned()).is_ok())
+}
+
+/// Registers a turn to take injected messages, and takes the registration back when the turn ends.
+struct InjectSlot(String);
+
+impl InjectSlot {
+    fn open(chat: &str) -> (InjectSlot, UnboundedReceiver<String>) {
+        let (sender, receiver) = unbounded_channel();
+        INJECT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(chat.to_owned(), sender);
+        (InjectSlot(chat.to_owned()), receiver)
+    }
+}
+
+impl Drop for InjectSlot {
+    fn drop(&mut self) {
+        INJECT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&self.0);
+    }
+}
+
+/// Whether a line is the CLI reading back a message of the user (`--replay-user-messages`), which is how a turn knows a
+/// message written to it was taken.
+fn is_replay(line: &str) -> bool {
+    line.contains("\"isReplay\":true")
+        && serde_json::from_str::<serde_json::Value>(line)
+            .is_ok_and(|value| value["type"] == "user" && value["message"]["content"].is_string())
 }
 
 /// The idle processes, by chat and agent (`slot`): a process started ahead for the agent a chat may fall back to does not
@@ -278,7 +316,7 @@ enum Ending {
 /// Reads the turn's lines until its result. The process stays up afterwards. A stop (`stop`) sends the CLI its interrupt
 /// message and keeps reading: the result that follows ends the turn as a stopped one and the process is kept. A CLI
 /// without an interrupt message, or one silent for the deadline, is given up (`Failed`: the caller ends it).
-async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, emit: &mut impl FnMut(AgentEvent)) -> Ending {
+async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, mut inject: Option<UnboundedReceiver<String>>, emit: &mut impl FnMut(AgentEvent)) -> Ending {
     let conversation = warm.conversation.clone();
     let Warm { lines, child, stdin, .. } = warm;
     let mut stopper = Interrupter::new(stop);
@@ -286,6 +324,12 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, em
     let mut deadline: Option<tokio::time::Instant> = None;
     // Counts from the start of the turn, not from when the process was parked: an idle process says nothing.
     let mut dog = Watchdog::new(provider.stall_limit());
+    // Messages written to the CLI that it has not read back yet (the turn's own prompt counts), and how many were
+    // injected: a result that arrives while an injected one is unread ends only a part of the work, the CLI runs on.
+    let mut unread = u32::from(inject.is_some());
+    let mut injected = 0u32;
+    // Background tasks still running: do not end the turn while they complete.
+    let mut background_tasks_open = false;
     loop {
         let next = match deadline {
             Some(at) => tokio::time::timeout_at(at, lines.next_segment()).await.unwrap_or(Ok(None)),
@@ -298,6 +342,19 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, em
                 _ = tokio::time::sleep_until(dog.deadline()) => {
                     emit(AgentEvent::Error { message: dog.message() });
                     return Ending::Failed;
+                }
+                Some(prompt) = async {
+                    match inject.as_mut() {
+                        Some(receiver) => receiver.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let line = format!("{}\n", provider.warm_message(&prompt));
+                    if stdin.write_all(line.as_bytes()).await.is_ok() && stdin.flush().await.is_ok() {
+                        unread += 1;
+                        injected += 1;
+                    }
+                    continue;
                 }
                 signal = stopper.signal() => {
                     let asked = signal == Signal::Ask && provider.interrupt_mode() == InterruptMode::StreamJson;
@@ -318,10 +375,24 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, stop: StopToken, em
         let text = String::from_utf8_lossy(&bytes);
         let line = text.strip_suffix('\r').unwrap_or(&text);
         let mut ending = None;
+        if unread > 0 && is_replay(line) {
+            unread -= 1;
+        }
+        // Track background tasks to avoid closing the turn early while they run.
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            if json["type"] == "system" && json["subtype"] == "background_tasks_changed" {
+                background_tasks_open = json.get("tasks")
+                    .and_then(|t| t.as_array())
+                    .map_or(false, |tasks| !tasks.is_empty());
+            }
+        }
         for event in provider.parse_line(line) {
             dog.note(&event);
             let event = if stopper.asked() { interrupt::stopped(event, conversation.as_deref()) } else { event };
             match &event {
+                // The end of a part of the work while an injected message is still unread, or while background tasks
+                // are running: the CLI goes on with the message or the background job, so this result is not the end.
+                AgentEvent::Done { .. } if (injected > 0 && unread > 0) || background_tasks_open => continue,
                 AgentEvent::Done { session_id, .. } => ending = Some(Ending::Done(session_id.clone().or_else(|| conversation.clone()))),
                 // A stream-json CLI reports a failed turn as its own result and waits for the next message: the process
                 // is kept. Any other CLI may be left in a state the next turn should not inherit, so it is not.
@@ -387,6 +458,13 @@ pub async fn drive_warm_turn_with(binary: OsString, provider: &dyn Provider, req
     }
     let lock = lock_of(&chat);
     let _turn = lock.lock().await;
+    // Only Claude reads a message at any time and tells when it did (`--replay-user-messages`).
+    let (_slot, inbox) = if provider.id() == "claude" {
+        let (slot, receiver) = InjectSlot::open(&chat);
+        (Some(slot), Some(receiver))
+    } else {
+        (None, None)
+    };
     let env = provider.environment(req);
     let key = key_for(provider, &args, &env);
     let line = format!("{}\n", provider.warm_message(&req.prompt));
@@ -430,7 +508,7 @@ pub async fn drive_warm_turn_with(binary: OsString, provider: &dyn Provider, req
         }
     }
 
-    match read_turn(&mut warm, provider, stop, &mut emit).await {
+    match read_turn(&mut warm, provider, stop, inbox, &mut emit).await {
         Ending::Done(conversation) => {
             if conversation.is_some() {
                 warm.conversation = conversation;

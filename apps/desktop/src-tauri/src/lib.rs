@@ -2198,6 +2198,7 @@ pub fn run() {
             awake::keep_awake_set,
             agent_runs::custom_send,
             agent_runs::agent_stop,
+            agent_runs::agent_inject,
             delegate::delegate_reply,
             delegate::delegate_ready,
             delegate::delegate_enter,

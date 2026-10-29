@@ -176,6 +176,8 @@ impl Provider for Claude {
         let mut args = self.args(req);
         args.push("--input-format".to_string());
         args.push("stream-json".to_string());
+        // The CLI reads each message of the user back when it takes it: how a turn knows an injected one was read.
+        args.push("--replay-user-messages".to_string());
         Some(args)
     }
 
@@ -281,6 +283,19 @@ impl Provider for Claude {
                     change: None,
                 })
                 .collect(),
+            // Background task completed: auto-generated turn will follow.
+            Some("system") if value["subtype"] == "task_notification" => {
+                vec![AgentEvent::BackgroundTaskNotification {
+                    summary: value["summary"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    task_id: value["task_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                }]
+            }
             // The CLI moved a turn to another model (a refusal, an overload, a model that is gone). Passed on as it is:
             // the chat says so and, when the whole session moved (`scope` other than "local"), follows the new model.
             Some("system")

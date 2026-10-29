@@ -78,6 +78,12 @@ pub enum AgentEvent {
         label: String,
         line: String,
     },
+    /// A background task (sub-agent or `run_in_background`) completed. The CLI auto-generates the next turn.
+    /// The UI renders it as a new answer with a "background task completed" indicator.
+    BackgroundTaskNotification {
+        summary: String,
+        task_id: String,
+    },
 }
 
 /// The address of the browser's MCP server for one chat: `/mcp?chat=<id>&root=<folder>`. The bridge reads both from it.

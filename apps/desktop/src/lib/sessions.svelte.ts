@@ -40,6 +40,7 @@ import {
   replyDelegateCall,
   prewarmAgent,
   saveAttachment,
+  injectAgentMessage,
   sendAgentTurn,
   sendCustomTurn,
   stopAgentTurn,
@@ -4588,6 +4589,11 @@ export function sendMessage(
     needsUserInput(session.id)
   ) {
     if (whileRunning !== 'interrupt') {
+      // Claude takes the message into the turn that is running: the work goes on and reads it at its next step.
+      if (canInject(session.id, { text, images, elements, mentions })) {
+        void injectNow(session.id, { text, images, elements, mentions, files });
+        return;
+      }
       enqueue(queued, session.id, {
         text,
         images,
@@ -4612,6 +4618,44 @@ export function sendMessage(
   send(session.id, text, images, elements, mentions, {
     files,
   });
+}
+
+/** Whether a message can go into the turn that is running: Claude's turn on a kept process, text and files only. */
+function canInject(sessionId: string, item: Pick<Queued, 'text' | 'images' | 'elements' | 'mentions'>): boolean {
+  const session = workspace.sessions.find((entry) => entry.id === sessionId);
+  return (
+    inTauri() &&
+    session?.agent === 'claude' &&
+    Boolean(replies[sessionId]) &&
+    !needsUserInput(sessionId) &&
+    item.images.length === 0 &&
+    item.elements.length === 0 &&
+    !(item.mentions ?? []).some((mention) => mention.kind === 'ai') &&
+    item.text.trim().length > 0
+  );
+}
+
+/** Writes a message into the running turn. It shows in the chat at once; when the turn did not take it (it ended, or it
+ *  does not run on a kept process) the message goes back to the queue, to be sent with the others when the turn is done. */
+async function injectNow(sessionId: string, item: Queued) {
+  const list = messagesOf(sessionId);
+  const files = item.files ?? [];
+  const shown = userMessage(item.text.trim(), [], [], files);
+  list.push(shown);
+  persistLocal();
+  const attached = files.length ? `\n\nAttached files: ${files.map((file) => file.path).join(', ')}` : '';
+  let taken = false;
+  try {
+    taken = await injectAgentMessage(sessionId, mentionContext(item.mentions ?? []) + item.text.trim() + attached);
+  } catch {
+    taken = false;
+  }
+  if (taken) return;
+  const index = list.findIndex((message) => message.id === shown.id);
+  if (index !== -1) list.splice(index, 1);
+  enqueue(queued, sessionId, item);
+  persistLocal();
+  if (!replies[sessionId] && !isRunning(sessionId)) sendNextQueued(sessionId);
 }
 
 /** Sends a queued message now: the reply running in the chat is stopped (what it wrote stays), and this one goes out. */
