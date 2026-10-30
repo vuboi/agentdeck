@@ -2372,6 +2372,8 @@ pub fn run() {
             tts::tts_speak,
             project_memory::project_memory_read,
             project_memory::project_memory_write,
+            project_memory::project_proposals_read,
+            project_memory::project_proposals_write,
             file_open_options,
             file_open_with,
             file_save_as,

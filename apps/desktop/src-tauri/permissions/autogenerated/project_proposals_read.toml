@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-project-proposals-read"
+description = "Enables the project_proposals_read command without any pre-configured scope."
+commands.allow = ["project_proposals_read"]
+
+[[permission]]
+identifier = "deny-project-proposals-read"
+description = "Denies the project_proposals_read command without any pre-configured scope."
+commands.deny = ["project_proposals_read"]

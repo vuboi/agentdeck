@@ -3,7 +3,7 @@
   import { ZButton, ZSelect, ZSwitch } from '@shival99/z-ui-svelte';
   import { toast } from '../../../app/platform/toast';
   import { replyStyle } from '../../../chat/content/reply-style.svelte';
-  import { readProjectMemory, writeProjectMemory, MEMORY_FILE } from '../../../chat/content/project-memory';
+  import { readProjectMemory, writeProjectMemory, readProposals, writeProposals, parseProposals, dropProposal, MEMORY_FILE, PROPOSALS_FILE } from '../../../chat/content/project-memory';
   import { workspace } from '../../../chat/sessions.svelte';
   import { settings } from '../../../agents/connectors.svelte';
 
@@ -13,6 +13,8 @@
   let memoryText = $state('');
   let memorySaved = $state('');
   let memoryBusy = $state(false);
+  let proposalsText = $state('');
+  const proposals = $derived(parseProposals(proposalsText));
   const memoryProject = $derived(workspace.projects.find((project) => project.id === memoryProjectId) ?? workspace.projects[0]);
   $effect(() => {
     const path = memoryProject?.path;
@@ -21,7 +23,31 @@
       if (memoryProject?.path !== path) return;
       memoryText = memorySaved = text;
     });
+    void readProposals(path).then((text) => {
+      if (memoryProject?.path !== path) return;
+      proposalsText = text;
+    });
   });
+  /** Keeping a proposal appends it to the memory and saves both files; dropping it only removes it from the list. */
+  async function decideProposal(index: number, keep: boolean) {
+    if (!memoryProject) return;
+    memoryBusy = true;
+    try {
+      if (keep) {
+        memoryText = `${memoryText.trimEnd()}\n- ${proposals[index].replace(/\n/g, '\n  ')}\n`.trimStart();
+        await writeProjectMemory(memoryProject.path, memoryText);
+        memorySaved = memoryText;
+      }
+      const next = dropProposal(proposalsText, index);
+      await writeProposals(memoryProject.path, next);
+      proposalsText = next;
+      toast.success(keep ? 'Added to memory' : 'Proposal dropped');
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      memoryBusy = false;
+    }
+  }
   async function saveMemory() {
     if (!memoryProject) return;
     memoryBusy = true;
@@ -63,4 +89,19 @@
                   </div>
                 {/if}
               </section>
+              {#if proposals.length}
+                <section class="rounded-xl border border-border p-4">
+                  <h3 class="text-sm font-semibold">Suggested by agents</h3>
+                  <p class="mt-1 text-[0.75rem] text-muted-foreground">Better ways agents found while working, kept in <code>{PROPOSALS_FILE}</code>. Keep one to add it to the memory, or drop it.</p>
+                  <ul class="mt-3 flex flex-col gap-2">
+                    {#each proposals as proposal, index (index)}
+                      <li class="flex items-start gap-2 rounded-lg border border-border bg-background p-2">
+                        <p class="min-w-0 flex-1 whitespace-pre-line text-sm">{proposal}</p>
+                        <ZButton zWave={false} zSize="sm" class="h-7 px-3 text-sm" disabled={memoryBusy} onclick={() => void decideProposal(index, false)}>Drop</ZButton>
+                        <ZButton zWave={false} zSize="sm" class="h-7 px-3 text-sm" disabled={memoryBusy} onclick={() => void decideProposal(index, true)}>Keep</ZButton>
+                      </li>
+                    {/each}
+                  </ul>
+                </section>
+              {/if}
             </div>
