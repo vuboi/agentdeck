@@ -441,6 +441,26 @@ pub async fn prewarm(binary: OsString, provider: &dyn Provider, req: &TurnReques
     }
 }
 
+/// The notification names a turn, and it is not the current one. Only notifications that carry a turn id are judged
+/// (`turn/*` has it in `turn.id`, the others in `turnId`).
+fn foreign_turn(current: Option<&str>, params: &Value) -> bool {
+    let named = params["turn"]["id"].as_str().or_else(|| params["turnId"].as_str());
+    matches!((current, named), (Some(current), Some(named)) if current != named)
+}
+
+/// Reads and drops what a kept server wrote while no turn ran (the end of an interrupted turn, late notifications), so
+/// none of it is taken for the next turn's. `false` when the server ended or is too chatty to trust: it is not reused.
+async fn drain_unread(warm: &mut Warm) -> bool {
+    for _ in 0..10_000 {
+        match tokio::time::timeout(Duration::ZERO, warm.lines.next_segment()).await {
+            Err(_) => return true,
+            Ok(Ok(Some(_))) => {}
+            Ok(_) => return false,
+        }
+    }
+    false
+}
+
 /// How the turn ended.
 enum Ending {
     Done,
@@ -556,6 +576,10 @@ async fn read_turn(warm: &mut Warm, provider: &dyn Provider, thread: &str, stop:
             }
             continue;
         }
+        // A leftover of an earlier turn (its end, an error it reported) is not this turn's.
+        if foreign_turn(turn.as_deref(), params) {
+            continue;
+        }
         let mut ending = None;
         for event in translate.events(provider, method, params) {
             dog.note(&event);
@@ -605,7 +629,10 @@ pub async fn drive(binary: OsString, provider: &dyn Provider, req: &TurnRequest,
                     Some(id) => warm.conversation.as_deref() == Some(id),
                     None => warm.fresh,
                 };
-                if same {
+                if !drain_unread(&mut warm).await {
+                    // Ended, or writing without stopping: not trusted for a new turn.
+                    Err(String::new())
+                } else if same {
                     Ok(warm)
                 } else {
                     thread(&mut warm, params.clone(), wanted(req)).await.map(|()| warm)
@@ -680,6 +707,16 @@ mod tests {
             owner: Some("chat".into()),
             api_key: None,
         }
+    }
+
+    #[test]
+    fn a_notification_of_another_turn_is_not_this_turns() {
+        let end = |id: &str| json!({ "turn": { "id": id, "status": "completed" } });
+        assert!(foreign_turn(Some("t2"), &end("t1")));
+        assert!(!foreign_turn(Some("t2"), &end("t2")));
+        assert!(!foreign_turn(None, &end("t1")), "the turn is not known yet");
+        assert!(foreign_turn(Some("t2"), &json!({ "turnId": "t1", "error": {} })));
+        assert!(!foreign_turn(Some("t2"), &json!({ "item": {} })), "no turn named");
     }
 
     #[test]

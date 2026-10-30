@@ -21,29 +21,45 @@ export type Answer = { picked: string[]; text: string };
 
 const FENCE = /```(?:questions|agentdeck-questions|agentdeck-ask)[^\n]*\n([\s\S]*?)```/;
 
+/** A block written without its fence: a `{"questions":…}` object that ends the answer (some models drop the fence). */
+function bareBlock(text: string): { body: string; index: number; length: number } | null {
+  const index = text.search(/\{\s*"questions"\s*:[^]*$/);
+  if (index < 0) return null;
+  const body = text.slice(index).trim();
+  return body.endsWith('}') ? { body, index, length: text.length - index } : null;
+}
+
 /** The questions in an answer (when it has a valid block) and the text around them. */
 export function parseQuestions(text: string): { questions: Question[]; rest: string } {
   const found = FENCE.exec(text);
-  if (!found) return { questions: [], rest: text };
+  const block = found ? { body: found[1], index: found.index, length: found[0].length } : bareBlock(text);
+  if (!block) return { questions: [], rest: text };
   try {
-    const data = JSON.parse(found[1]) as { questions?: unknown } | unknown[];
+    const data = JSON.parse(block.body) as { questions?: unknown } | unknown[];
     const list = (Array.isArray(data) ? data : (data as { questions?: unknown }).questions) as unknown[];
+    // Each provider names the same parts its own way (question / text / prompt, options / choices, label / title / value,
+    // multi / multiSelect / multiple): all of them land in one shape here.
     const questions = (Array.isArray(list) ? list : [])
-      .map((item) => item as Partial<Question> & { options?: unknown[]; multi?: boolean })
-      .filter((item) => typeof item.question === 'string' && item.question.trim())
+      .map((item) => item as Record<string, unknown>)
       .map((item) => ({
         header: typeof item.header === 'string' ? item.header : undefined,
-        question: item.question!.trim(),
-        multiSelect: item.multiSelect === true || item.multi === true,
+        question: [item.question, item.text, item.prompt].find((value): value is string => typeof value === 'string')?.trim() ?? '',
+        multiSelect: item.multiSelect === true || item.multi === true || item.multiple === true,
         required: item.required === true,
-        options: (Array.isArray(item.options) ? item.options : [])
-          .map((option) => (typeof option === 'string' ? { label: option } : (option as QuestionOption)))
-          .filter((option) => option && typeof option.label === 'string' && option.label.trim())
+        options: (Array.isArray(item.options) ? item.options : Array.isArray(item.choices) ? item.choices : [])
+          .map((option): QuestionOption => {
+            if (typeof option === 'string') return { label: option };
+            const entry = option as Record<string, unknown>;
+            const label = [entry.label, entry.title, entry.value].find((value): value is string => typeof value === 'string') ?? '';
+            return { label, description: typeof entry.description === 'string' ? entry.description : undefined };
+          })
+          .filter((option) => option.label.trim())
           .slice(0, 6),
       }))
+      .filter((item) => item.question)
       .slice(0, 6);
     if (!questions.length) return { questions: [], rest: text };
-    return { questions, rest: (text.slice(0, found.index) + text.slice(found.index + found[0].length)).trim() };
+    return { questions, rest: (text.slice(0, block.index) + text.slice(block.index + block.length)).trim() };
   } catch {
     // A block that is not valid JSON stays as text: the user still reads the questions.
     return { questions: [], rest: text };

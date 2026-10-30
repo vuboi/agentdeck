@@ -950,7 +950,21 @@ mod tests {
 
     #[test]
     fn indexes_this_project() {
-        let root = format!("{}/../src", env!("CARGO_MANIFEST_DIR"));
+        // A tiny project of its own: lib/viewer.ts imports lib/content-tabs.ts.
+        let dir = std::env::temp_dir().join(format!("agentdeck-index-{}", std::process::id()));
+        let lib = dir.join("lib");
+        std::fs::create_dir_all(&lib).expect("temp project");
+        std::fs::write(
+            lib.join("content-tabs.ts"),
+            "export function openFileTab(path: string) { return path; }\n",
+        )
+        .expect("write content-tabs");
+        std::fs::write(
+            lib.join("viewer.ts"),
+            "import { openFileTab } from './content-tabs';\nexport const open = () => openFileTab('a');\n",
+        )
+        .expect("write viewer");
+        let root = dir.to_string_lossy().into_owned();
         let args = json!({ "root": root });
         let started = Instant::now();
         let status = run("code_index_status", &args, "").expect("status");
@@ -962,7 +976,7 @@ mod tests {
         )
         .expect("search");
         eprintln!("{found}");
-        assert!(found.contains("content-tabs.svelte.ts"));
+        assert!(found.contains("content-tabs.ts"));
         let refs = run(
             "code_references",
             &json!({ "root": root, "name": "openFileTab", "limit": 5 }),
@@ -972,19 +986,20 @@ mod tests {
         eprintln!("{refs}");
         let importers = run(
             "code_importers",
-            &json!({ "root": root, "path": "lib/content-tabs.svelte.ts" }),
+            &json!({ "root": root, "path": "lib/content-tabs.ts" }),
             "",
         )
         .expect("importers");
         eprintln!("{importers}");
-        assert!(importers.contains("FileView.svelte"));
+        assert!(importers.contains("viewer.ts"));
         let again = Instant::now();
         let _ = run(
             "code_outline",
-            &json!({ "root": root, "path": "lib/content-tabs.svelte.ts" }),
+            &json!({ "root": root, "path": "lib/content-tabs.ts" }),
             "",
         )
         .expect("outline");
         eprintln!("query {:?}", again.elapsed());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

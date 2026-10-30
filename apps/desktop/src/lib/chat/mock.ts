@@ -7,7 +7,7 @@ export type Session = { id: string; title: string; agent: Agent; status: 'workin
 export type Block =
   | { kind: 'thinking'; text: string; streaming?: boolean }
   | { kind: 'response'; text: string; streaming?: boolean }
-  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; /** A delegate_task call: the task it started (see delegate-task.ts). */ taskId?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string; /** Work done under this call by a sub-agent: its steps and what it wrote. */ children?: Block[]; /** A sub-agent or background job this call started, and how far it is. */ task?: { status: 'started' | 'progress' | 'done' | 'failed'; label?: string; summary?: string; tools?: number } }
+  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; /** A delegate_task call: the task it started (see delegate-task.ts). */ taskId?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string; /** Work done under this call by a sub-agent: its steps and what it wrote. */ children?: Block[]; /** A sub-agent or background job this call started, and how far it is. */ task?: { status: 'started' | 'progress' | 'done' | 'failed'; label?: string; summary?: string; tools?: number; /** When the task first showed: its running time counts from here. */ startedAt?: number; endedAt?: number } }
   | { kind: 'loading'; label: string }
   /** A sub-agent running in its own child chat; `state` follows that chat. */
   | { kind: 'delegate'; childId: string; agent: Agent; model: string; state: 'queued' | 'running' | 'asking' | 'done' | 'failed' | 'skipped'; note?: string }
@@ -59,6 +59,11 @@ export type Message = {
   autoTurn?: boolean;
   /** User message whose work spawned this provider-initiated answer. */
   triggeredByMessageId?: string;
+  /** Original request title and worker records for a background report's own reply. */
+  taskTitle?: string;
+  taskIds?: string[];
+  /** Workflow whose background reports this reply integrates, if any. */
+  workflowRunId?: string;
 };
 
 export const sessions: Session[] = [

@@ -2,6 +2,7 @@
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { ZButton, ZIcon, ZLoading, ZShowMore, ZShimmerText, zModalService } from '@shival99/z-ui-svelte';
+  import { jsonInText } from '../../app/text/json-text';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { parseDiff, type DiffRow } from '../../files/diff';
   import { fileWrites } from '../../chat/runs/activity.svelte';
@@ -228,7 +229,7 @@
       {#if runningStep}
         <!-- While a step runs the line is that step ("Running pnpm test", "Using officecli load_skill word"), cut to the
              width; once every step is done it goes back to the summary. -->
-        <span class="min-w-0 truncate" title={runningLine}><ZShimmerText class="block truncate font-medium" zText={runningLine} /></span>
+        <span class="min-w-0 truncate"><ZShimmerText class="block truncate font-medium" zText={runningLine} /></span>
       {:else if working}
         <ZShimmerText class="truncate font-medium" zText={summarize(items)} />
       {:else}
@@ -348,7 +349,7 @@
                               <div class="flex flex-col gap-1.5 border-t border-border/70 bg-muted/20 p-2">
                                 <pre class="m-0 max-h-28 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] text-muted-foreground">{shown(child)}</pre>
                                 {#if child.output}
-                                  <pre class="m-0 max-h-52 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-[10px] text-foreground/90">{child.output}</pre>
+                                  <pre class="m-0 max-h-52 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-[10px] text-foreground/90">{jsonInText(child.output)}</pre>
                                 {:else if child.status === 'running'}
                                   <span class="text-[10px] text-muted-foreground">Waiting for this tool's output…</span>
                                 {/if}
@@ -427,7 +428,7 @@
                         {/if}
                       </div>
                     {:else}
-                      <pre class="m-0 max-h-60 overflow-auto px-1 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
+                      <pre class="m-0 max-h-60 overflow-auto px-1 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{jsonInText(item.output)}</pre>
                     {/if}
                   {/if}
                 </div>

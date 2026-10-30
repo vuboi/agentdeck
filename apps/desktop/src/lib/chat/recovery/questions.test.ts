@@ -74,3 +74,26 @@ test('the questions block never shows as text, whatever state it is in', () => {
   // Not valid JSON: stays as text, so the user still reads what was asked.
   assert.match(withoutQuestions('```agentdeck-ask\nnot json\n```'), /not json/);
 });
+
+test('a block written without its fence still becomes questions', () => {
+  const bare = 'Lỗi PHP chưa đủ thông tin. Bạn đang gặp tình huống nào?\n{"questions":[{"question":"Bạn gặp tình huống nào?","header":"Cần làm rõ","options":[{"label":"Dán thông báo lỗi"},{"label":"Nâng cấp PHP"}]}]}';
+  const { questions, rest } = parseQuestions(bare);
+  assert.equal(questions.length, 1);
+  assert.equal(questions[0].options.length, 2);
+  assert.equal(rest, 'Lỗi PHP chưa đủ thông tin. Bạn đang gặp tình huống nào?');
+  assert.equal(withoutQuestions(bare), 'Lỗi PHP chưa đủ thông tin. Bạn đang gặp tình huống nào?');
+});
+
+test('other providers names for the same parts become one shape', () => {
+  const other = 'Which one?\n{"questions":[{"prompt":"Pick","choices":[{"title":"Yes"},"No"],"multiple":true}]}';
+  const { questions } = parseQuestions(other);
+  assert.equal(questions[0].question, 'Pick');
+  assert.equal(questions[0].multiSelect, true);
+  assert.deepEqual(questions[0].options.map((option) => option.label), ['Yes', 'No']);
+});
+
+test('a bare object that is not valid JSON stays as text', () => {
+  const broken = 'Hỏi nhé {"questions":[{"question":"?"';
+  assert.equal(parseQuestions(broken).questions.length, 0);
+  assert.equal(parseQuestions(broken).rest, broken);
+});

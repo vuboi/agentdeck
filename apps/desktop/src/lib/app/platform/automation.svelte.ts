@@ -7,7 +7,7 @@
 import { getPref, setPref } from './prefs';
 import { connectors } from '../../agents/connectors.svelte';
 
-export const automation = $state({ compress: true, orchestrate: true });
+export const automation = $state({ compress: true, orchestrate: true, prehandle: true });
 
 const KEY = 'chat.automation';
 let hydrated = false;
@@ -29,9 +29,5 @@ export function setFallback(on: boolean) {
   connectors.recovery = { ...connectors.recovery, enabled: on, chosen: true };
 }
 
-/** A chat's context is compacted once it reaches this many tokens (or the window's share, for a small window). */
-export const COMPRESS_TOKENS = 200_000;
-export const COMPRESS_AT = 0.75;
-
-/** The context window of a Claude model, in tokens: `[1m]` models have a million, the others 200k. */
-export const contextWindow = (model: string | undefined | null) => (model && /\[1m\]/i.test(model) ? 1_000_000 : 200_000);
+/** A chat's context is compacted once it reaches this many tokens, for every model. */
+export const COMPRESS_TOKENS = 500_000;

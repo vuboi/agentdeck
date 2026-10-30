@@ -9,10 +9,11 @@
   import { rememberRowHeight, rowHeight } from '../../app/ui/row-size';
   import { setEagerColour, whenColoured } from '../../app/text/markdown';
   import { openSelectionMenu } from '../../app/ui/selection-menu.svelte';
-  import { activeSession, AGENTS, delegateTasks, chat, loadOlder, needsApproval, openTranscript, pendingProject, prewarmChat, releaseReplyRender, workspace } from '../../chat/sessions.svelte';
+  import { activeSession, AGENTS, delegateTasks, chat, loadOlder, needsApproval, openTranscript, pendingProject, prewarmChat, releaseReplyRender, transcriptSettled, workspace } from '../../chat/sessions.svelte';
   import { ticker } from '../../app/platform/clock.svelte';
   import { theme } from '../../app/ui/theme.svelte';
   import { hollow, markerText, neighbour, turnDivider } from '../../chat/content/chat-dividers';
+  import { focusMessage } from '../../chat/content/focus-message.svelte';
   import { preview, releasePreview, revealPreviewed } from '../../browser/preview.svelte';
   import { logError } from '../../app/platform/error-log.svelte';
   import { parseQuestions } from '../../chat/recovery/questions';
@@ -230,7 +231,20 @@
   async function revealAtEnd() {
     const target = restoreTarget;
     restoreTarget = null;
-    const at = target ? chat.messages.findIndex((message) => message.id === target.id) : -1;
+    const find = () => (target ? chat.messages.findIndex((message) => message.id === target.id) : -1);
+    const sessionId = workspace.activeId;
+    // A saved copy that is out of date has no older pages to read back from, so the place is looked for only once the
+    // fresh transcript is in. Until then the chat stays hidden: pinning to the end here is what lost the place.
+    if (target) await transcriptSettled();
+    if (workspace.activeId !== sessionId) return;
+    // The chat opens with its newest page only: a place read several pages up is read back in, page by page, until the
+    // message is in the list again. Without it the chat opened at its end instead of where it was left.
+    for (let page = 0; page < 60 && target && find() < 0 && chat.older > 0 && workspace.activeId === sessionId; page++) {
+      // 0 added: another read is in flight (wait a frame for it) or the file gave nothing more.
+      if ((await loadOlder(activeSession())) === 0) await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    if (workspace.activeId !== sessionId) return;
+    const at = find();
     if (target && at >= 0) {
       // Back from a child chat: the view goes to the message it was on, at the same place on screen, not to the end.
       stopSticking();
@@ -283,6 +297,18 @@
     return () => observer.disconnect();
   }
 
+  // The viewport grows and shrinks when the Work panel folds in the composer. A reader at the end stays at the end, so
+  // the last lines move with the panel instead of being pulled up; a reader scrolled up keeps the same place.
+  $effect(() => {
+    const node = viewportEl;
+    if (!node) return;
+    const observer = new ResizeObserver(() => {
+      if (following) node.scrollTop = node.scrollHeight;
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  });
+
   // Switching session loads its transcript (from disk for imported Claude/Codex history).
   // Re-runs when the open chat changes, and when it first appears in the list (after F5 the id is restored
   // before the history index is in).
@@ -313,7 +339,8 @@
     void openKey;
     untrack(() => {
       const id = workspace.activeId;
-      if (shownSession && shownSession !== id) rememberReading(shownSession);
+      if (noteFrame) cancelAnimationFrame(noteFrame);
+      noteFrame = 0;
       shownSession = id;
       const left = readingAt.get(id);
       restoreTarget = left && (restoreFor === id || !left.atEnd) ? left : null;
@@ -439,7 +466,7 @@
   // The brief is unfolded for one chat at a time: opening another chat folds it again.
 
   // While a reply streams the view follows it, but only for a reader who is already at the bottom:
-  // scrolling up to read stops the following, sending a message (or the jump button) resumes it.
+  // scrolling up to read stops the following, the jump button resumes it.
   let following = true;
   function onViewportScroll() {
     if (!viewportEl) return;
@@ -450,6 +477,17 @@
     const up = top < lastTop;
     lastTop = top;
     if (up && !draggingBar && top < nearTop()) revealOlder();
+    noteReading();
+  }
+  // The place is noted while the reader scrolls, not when the chat is left: by then the list already holds the next
+  // chat's rows, so reading it at the switch stored a wrong place (and the chat opened at its end again).
+  let noteFrame = 0;
+  function noteReading() {
+    if (noteFrame || !revealed || !shownSession) return;
+    noteFrame = requestAnimationFrame(() => {
+      noteFrame = 0;
+      if (revealed) rememberReading(shownSession);
+    });
   }
   // Follows what is on screen, not what has arrived: the answer is revealed word by word, so the list grows a little
   // every frame. Each time its measured height changes the view is put at the bottom right away (same frame, no
@@ -472,30 +510,16 @@
       view.scrollTop = view.scrollHeight;
     });
   });
-  // Your own message always brings you back to the bottom: only when one is added at the end. The list is also
-  // replaced when older messages are loaded above, and a chat whose last message is yours would then jump to the end.
-  // Only for a message sent by the person (the composer announces it with `agentdeck:scrolltoend`): a message that
-  // goes out by itself from the queue must not pull a reader away from what they scrolled up to.
+  // A message added at the end (sent by the person, or a queued one going out by itself) never moves a reader who has
+  // scrolled up: they stay where they are. Only a reader already at the bottom (`following`) is kept there, so their
+  // own new message stays in sight. The list is also replaced when older messages are loaded above; that adds nothing
+  // at the end, so it does not count.
   let lastMessageId: string | undefined;
-  let userSentUntil = 0;
-  function toEnd() {
-    following = true;
-    stickToEnd(1500);
-    void pinToNewest();
-  }
-  $effect(() => {
-    const onSent = () => {
-      userSentUntil = performance.now() + 800;
-      toEnd();
-    };
-    window.addEventListener('agentdeck:scrolltoend', onSent);
-    return () => window.removeEventListener('agentdeck:scrolltoend', onSent);
-  });
   $effect(() => {
     const last = chat.messages.at(-1);
     const added = last?.id !== lastMessageId;
     lastMessageId = last?.id;
-    if (added && revealed && last?.role === 'user' && performance.now() < userSentUntil) untrack(toEnd);
+    if (added && revealed && last?.role === 'user' && following) untrack(() => void pinToNewest());
   });
 
   async function jumpToTurn(turn: number) {
@@ -511,6 +535,24 @@
       $virtualizer.scrollToIndex(target, { align: 'start' });
     }
   }
+
+  // A background task's "Show in chat": the message it came from is brought into view, the same way as a turn jump.
+  $effect(() => {
+    const id = focusMessage.id;
+    if (!focusMessage.at || !id) return;
+    const row = untrack(() => chat.messages.findIndex((message) => message.id === id));
+    if (row < 0) return;
+    untrack(() => {
+      const target = row - from;
+      $virtualizer.scrollToIndex(target, { align: 'center' });
+      void (async () => {
+        for (let pass = 0; pass < 3; pass++) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          $virtualizer.scrollToIndex(target, { align: 'center' });
+        }
+      })();
+    });
+  });
 </script>
 
 <main class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden" aria-label="Conversation">

@@ -13,6 +13,13 @@ export type Activity = {
   /** The tool id the CLI gave this call. Ids restart every turn, so the key adds a counter. */
   callId?: string;
   sessionId: string;
+  /** Provider turn owning this entry; concurrent replies must not settle each other's tools. */
+  turn?: string;
+  /** Stable provider task identity, independent of the call that launched it. */
+  nativeTaskId?: string;
+  taskLabel?: string;
+  sourceMessageId?: string;
+  sourceTitle?: string;
   title: string;
   /** The project the chat belongs to, by name ('' when none). Old entries have none. */
   project?: string;
@@ -187,20 +194,45 @@ function record(item: Activity) {
 /** The message a chat sent and is waiting on: one entry from the send to the end of the reply, so the log shows who
  *  answered, how long it took, and what went wrong (a limit, a time out, a failed start). */
 const requests = new Map<string, { item: Activity; firstAt?: number }>();
+/**
+ * The user stopped this chat: nothing of it keeps running. Items whose turn ends with no matching event (a background
+ * tool of a reply that already closed, or a turn id that never reached the handler) would otherwise stay "running" for good.
+ */
+export function closeRunningActivity(sessionId: string) {
+  for (const [key, request] of requests) {
+    if (request.item.sessionId !== sessionId) continue;
+    requests.delete(key);
+    // The request's own log line is closed too, not only dropped: it would stay "running" in the audit.
+    if (request.item.status === 'running' || request.item.status === 'background') {
+      request.item.status = 'stopped';
+      request.item.endedAt = Date.now();
+      record(request.item);
+    }
+  }
+  for (const item of activity) {
+    if (item.sessionId !== sessionId || (item.status !== 'running' && item.status !== 'background')) continue;
+    item.status = 'stopped';
+    item.endedAt = Date.now();
+    record(item);
+  }
+}
+
+/** Separates foreground/background reply lifetimes within the same visible chat. */
+const runKey = (sessionId: string, turn?: string) => turn ? `${sessionId}:${turn}` : sessionId;
 
 const seconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`);
 
 /** A message was sent to an agent: its entry runs until the reply ends. `detail` is what the turn was started with. */
-export function logRequest(sessionId: string, title: string, project: string, agent: string, model: string | null, detail: string, agentId?: string) {
-  endRequest(sessionId, 'stopped', 'A new message was sent before this reply ended.');
-  const item: Activity = { key: `${sessionId}:request:${++calls}`, sessionId, title, project, name: 'Request', input: `${agent} · ${model ?? 'default model'}`, agent: agentId, model, background: false, status: 'running', startedAt: Date.now(), output: detail };
-  requests.set(sessionId, { item });
+export function logRequest(sessionId: string, title: string, project: string, agent: string, model: string | null, detail: string, agentId?: string, turn?: string) {
+  endRequest(sessionId, 'stopped', 'A new message was sent before this reply ended.', turn);
+  const item: Activity = { key: `${sessionId}:request:${++calls}`, sessionId, turn, title, project, name: 'Request', input: `${agent} · ${model ?? 'default model'}`, agent: agentId, model, background: false, status: 'running', startedAt: Date.now(), output: detail };
+  requests.set(runKey(sessionId, turn), { item });
   audit.push(item);
 }
 
 /** The reply began: how long the agent took to start answering. */
-function noteFirstReply(sessionId: string) {
-  const request = requests.get(sessionId);
+function noteFirstReply(sessionId: string, turn?: string) {
+  const request = requests.get(runKey(sessionId, turn));
   if (!request || request.firstAt) return;
   request.firstAt = Date.now();
   request.item.output = `${request.item.output ?? ''}
@@ -208,10 +240,10 @@ First reply after ${seconds(request.firstAt - request.item.startedAt)}.`;
 }
 
 /** The reply ended (or failed): the entry is final, with how long it took and the error if there was one. */
-function endRequest(sessionId: string, status: 'ok' | 'fail' | 'stopped', note: string) {
-  const request = requests.get(sessionId);
+function endRequest(sessionId: string, status: 'ok' | 'fail' | 'stopped', note: string, turn?: string) {
+  const request = requests.get(runKey(sessionId, turn));
   if (!request) return;
-  requests.delete(sessionId);
+  requests.delete(runKey(sessionId, turn));
   const { item } = request;
   item.status = status;
   item.endedAt = Date.now();
@@ -225,26 +257,33 @@ ${note}` : ''}`;
 /** The reasoning of a chat's run so far: it streams in pieces and is one log entry, written when something else happens. */
 const thoughts = new Map<string, { text: string; at: number; title: string; project: string }>();
 
-function flushThinking(sessionId: string) {
-  const thought = thoughts.get(sessionId);
+function flushThinking(sessionId: string, turn?: string) {
+  const thought = thoughts.get(runKey(sessionId, turn));
   if (!thought) return;
-  thoughts.delete(sessionId);
+  thoughts.delete(runKey(sessionId, turn));
   const text = thought.text.trim();
   if (!text) return;
   record({ key: `${sessionId}:thinking:${++calls}`, sessionId, title: thought.title, project: thought.project, name: 'Thinking', input: text.replace(/\s+/g, ' ').slice(0, 200), background: false, status: 'ok', startedAt: thought.at, endedAt: Date.now(), output: text });
 }
 
 /** Keeps the log in step with one event of a chat's run. */
-export function trackActivity(sessionId: string, title: string, project: string, event: AgentEvent) {
-  if (event.kind === 'thinking' || event.kind === 'delta' || event.kind === 'tool_call') noteFirstReply(sessionId);
+export function trackActivity(sessionId: string, title: string, project: string, event: AgentEvent, turn?: string, context?: { agent: string; model?: string; messageId?: string; request?: string }) {
+  if (event.kind === 'scoped') {
+    const parent = activity.findLast((item) => item.sessionId === sessionId && item.turn === turn && item.callId === event.parent);
+    if (!parent) return;
+    if (event.event.kind === 'delta') parent.output = `${parent.output ?? ''}${event.event.text}`.slice(-OUTPUT_CAP);
+    if (event.event.kind === 'tool_call') parent.output = `${parent.output ?? ''}\nRunning ${event.event.name}`.trim().slice(-OUTPUT_CAP);
+    return;
+  }
+  if (event.kind === 'thinking' || event.kind === 'delta' || event.kind === 'tool_call') noteFirstReply(sessionId, turn);
   if (event.kind === 'thinking') {
-    const thought = thoughts.get(sessionId) ?? { text: '', at: Date.now(), title, project };
+    const thought = thoughts.get(runKey(sessionId, turn)) ?? { text: '', at: Date.now(), title, project };
     thought.text += event.text;
-    thoughts.set(sessionId, thought);
+    thoughts.set(runKey(sessionId, turn), thought);
     return;
   }
   // Anything else ends the reasoning that came before it (a tool, the answer, the end of the run).
-  if (event.kind !== 'usage') flushThinking(sessionId);
+  if (event.kind !== 'usage') flushThinking(sessionId, turn);
   if (event.kind === 'raw') {
     // A step of the CLI the app does not turn into anything: its line as the CLI wrote it, to copy when debugging.
     const now = Date.now();
@@ -254,6 +293,11 @@ export function trackActivity(sessionId: string, title: string, project: string,
       key: `${sessionId}:${event.id}:${++calls}`,
       callId: event.id,
       sessionId,
+      turn,
+      agent: context?.agent,
+      model: context?.model,
+      sourceMessageId: context?.messageId,
+      sourceTitle: context?.request,
       title,
       project,
       name: event.name,
@@ -265,14 +309,18 @@ export function trackActivity(sessionId: string, title: string, project: string,
     activity.push(item);
     // The Audit view shares this live entry; `record` replaces it with the final snapshot on completion.
     audit.push(item);
-    if (activity.length > LIMIT) activity.splice(0, activity.length - LIMIT);
+    // Active background work must not disappear when newer tools fill the log.
+    if (activity.length > LIMIT) {
+      const finished = activity.findIndex((entry) => entry.status !== 'running' && entry.status !== 'background');
+      if (finished >= 0) activity.splice(finished, 1);
+    }
   } else if (event.kind === 'tool_output_delta') {
-    const same = (entry: Activity) => entry.sessionId === sessionId && entry.callId === event.id;
+    const same = (entry: Activity) => entry.sessionId === sessionId && entry.turn === turn && entry.callId === event.id;
     const item = activity.findLast((entry) => same(entry) && (entry.status === 'running' || entry.status === 'background'));
     if (item) item.output = `${item.output ?? ''}${event.delta}`.slice(-OUTPUT_CAP);
   } else if (event.kind === 'tool_result') {
     // The call still open with this id, else the latest one with it.
-    const same = (entry: Activity) => entry.sessionId === sessionId && entry.callId === event.id;
+    const same = (entry: Activity) => entry.sessionId === sessionId && entry.turn === turn && entry.callId === event.id;
     const item = activity.findLast((entry) => same(entry) && (entry.status === 'running' || entry.status === 'background')) ?? activity.findLast(same);
     if (!item) return;
     item.output = event.output.length > 4000 ? `${event.output.slice(0, 4000)}…` : event.output;
@@ -287,9 +335,34 @@ export function trackActivity(sessionId: string, title: string, project: string,
       item.image = undefined;
     }
     if (item.status === 'ok' && (item.name === 'Write' || item.name === 'Edit' || item.name === 'Delete' || item.name === 'MultiEdit')) fileWrites.tick++;
+  } else if (event.kind === 'task') {
+    const callId = event.tool_use_id ?? event.id;
+    const sameTask = (entry: Activity) => entry.sessionId === sessionId && entry.nativeTaskId === event.id;
+    const matchingCalls = activity.filter((entry) => entry.sessionId === sessionId && entry.callId === callId && (!entry.nativeTaskId || entry.nativeTaskId === event.id));
+    let item = activity.findLast(sameTask) ?? matchingCalls.findLast((entry) => entry.turn === turn) ?? (matchingCalls.length === 1 ? matchingCalls[0] : undefined);
+    if (!item) {
+      item = { key: `${sessionId}:task:${event.id}`, sessionId, turn, callId, title, project, name: 'Agent', input: event.label ?? 'Background task', background: true, status: 'background', startedAt: Date.now(), agent: context?.agent, model: context?.model, sourceMessageId: context?.messageId, sourceTitle: context?.request };
+      activity.push(item);
+      item = activity[activity.length - 1];
+    }
+    if (item.endedAt && item.nativeTaskId === event.id) return;
+    // A synchronous tool result may have preceded the provider's task-start notification.
+    if ((event.status === 'started' || event.status === 'progress') && !item.nativeTaskId) item.endedAt = undefined;
+    item.nativeTaskId = event.id;
+    item.taskLabel = event.label ?? item.taskLabel;
+    item.background = true;
+    if (event.status === 'started' || event.status === 'progress') {
+      item.status = 'background';
+      if (event.summary) item.output = event.summary;
+      return;
+    }
+    item.status = event.status === 'failed' ? 'fail' : 'ok';
+    item.output = event.summary ?? item.output;
+    item.endedAt = Date.now();
+    record(item);
   } else if (event.kind === 'done' || event.kind === 'error') {
-    const asked = requests.has(sessionId);
-    endRequest(sessionId, event.kind === 'done' ? 'ok' : event.message === 'stopped' ? 'stopped' : 'fail', event.kind === 'error' && event.message !== 'stopped' ? event.message : '');
+    const asked = requests.has(runKey(sessionId, turn));
+    endRequest(sessionId, event.kind === 'done' ? 'ok' : event.message === 'stopped' ? 'stopped' : 'fail', event.kind === 'error' && event.message !== 'stopped' ? event.message : '', turn);
     // The failure is on the request's entry: a second "Chat error" for the same thing would only repeat it.
     if (event.kind === 'error' && event.message !== 'stopped' && !asked) {
       const now = Date.now();
@@ -307,10 +380,10 @@ export function trackActivity(sessionId: string, title: string, project: string,
         output: event.message,
       });
     }
-    // The run is over: what was still in progress ended with it. The CLI exits after a run, and the shells it
-    // left in the background go with it.
+    // A successful answer does not end provider background work. Only its own task event proves completion.
     for (const item of activity) {
       if (item.sessionId !== sessionId || (item.status !== 'running' && item.status !== 'background')) continue;
+      if (item.turn !== turn || (event.kind === 'done' && item.background)) continue;
       item.status = event.kind === 'error' || item.status === 'background' ? 'stopped' : 'ok';
       item.endedAt = Date.now();
       record(item);

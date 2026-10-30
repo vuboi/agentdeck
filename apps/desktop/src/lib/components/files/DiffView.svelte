@@ -1,8 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { codeToTokens, type ThemedToken } from 'shiki';
   import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
   import { type DiffRow } from '../../files/diff';
+  import { highlightTokens, type Token } from '../../files/highlight';
   import { activeSession, drafts } from '../../chat/sessions.svelte';
   import { theme } from '../../app/ui/theme.svelte';
   import { toast } from '../../app/platform/toast';
@@ -53,7 +53,7 @@
 
   const shikiTheme = $derived(theme.dark ? 'github-dark' : 'github-light');
   // Plain map, not $state: one version counter tells the template when a chunk has landed.
-  const tokens = new Map<number, ThemedToken[]>();
+  const tokens = new Map<number, Token[]>();
   let version = $state(0);
   let generation = 0;
 
@@ -80,9 +80,10 @@
       // The lines of a chunk go in one piece, in the order of the diff, so a comment or a string that spans lines stays one.
       const text = rows.slice(at, end).map((row) => (row.kind === 'hunk' ? '' : row.text)).join('\n');
       try {
-        const result = await codeToTokens(text, { lang: lang as never, theme: shikiTheme });
+        const result = await highlightTokens(text, lang, theme.dark);
+        if (!result) continue;
         if (gen !== generation) return;
-        result.tokens.forEach((line, offset) => tokens.set(at + offset, line));
+        result.forEach((line, offset) => tokens.set(at + offset, line));
         version += 1;
       } catch {
         // A language shiki does not know: the rows stay plain.

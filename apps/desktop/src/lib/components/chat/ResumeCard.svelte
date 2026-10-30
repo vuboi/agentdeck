@@ -28,7 +28,7 @@
     <ZIcon zType={'lucideGauge' as ZIconName} class="mt-0.5 size-4 shrink-0 text-destructive" />
     <div class="min-w-0">
       <div class="truncate text-sm font-medium">{resume.label}{model ? ` · ${model}` : ''}</div>
-      <div class="truncate text-sm text-muted-foreground">{#if canAutoResume}{resume.detail ?? 'Try again after the provider limit resets'} · {left}{:else}{resume.detail ?? 'Try again after resolving this limit'}{/if}</div>
+      <div class="mt-1 truncate text-sm text-muted-foreground">{#if canAutoResume}{resume.detail ?? 'Try again after the provider limit resets'} · {left}{:else}{resume.detail ?? 'Try again after resolving this limit'}{/if}</div>
     </div>
   </div>
   <div class="flex min-h-7 shrink-0 items-center gap-3 pl-6">

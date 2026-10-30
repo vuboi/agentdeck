@@ -16,12 +16,16 @@ export const agyBlocks = (permission: Permission) => {
   return Boolean(mode && agyModes.unavailable.includes(mode));
 };
 
-export async function loadAgyModes() {
-  if (!inTauri() || agyModes.loaded || agyModes.loading) return;
+export async function loadAgyModes(force = false) {
+  if (!inTauri() || (agyModes.loaded && !force) || agyModes.loading) return;
+  if (force) {
+    agyModes.loaded = false;
+    agyModes.unavailable = [];
+  }
   agyModes.loading = true;
   try {
     const { invoke } = await import('@tauri-apps/api/core');
-    const found = await invoke<{ unavailable: string[] }>('agy_modes', { force: false });
+    const found = await invoke<{ unavailable: string[] }>('agy_modes', { force });
     agyModes.unavailable = found.unavailable;
     agyModes.loaded = true;
   } catch {

@@ -89,7 +89,7 @@ marked.use({
       const language = (lang ?? '').trim().split(/\s+/)[0];
       return (
         `<div class="md-code" data-lang="${escapeHtml(language)}">` +
-        `<div class="md-code-head"><span class="md-code-kind" title="${escapeHtml(language || 'text')}" aria-label="${escapeHtml(language || 'text')}">${KIND_ICON.code}</span><span class="md-code-actions">` +
+        `<div class="md-code-head"><span class="md-code-kind" title="${escapeHtml(language || 'text')}" aria-label="${escapeHtml(language || 'text')}">${KIND_ICON.code}<span class="md-code-lang">${escapeHtml(language || 'text')}</span></span><span class="md-code-actions">` +
         (SHELLS.has(language.toLowerCase()) ? `<button type="button" data-run title="Run in terminal" aria-label="Run in terminal">${RUN_ICON}</button>` : '') +
         `<button type="button" data-copy title="Copy" aria-label="Copy code">${COPY_ICON}</button></span></div>` +
         `<pre><code>${escapeHtml(text)}</code></pre>` +
@@ -125,12 +125,16 @@ export function renderMarkdown(source: string, keep = true): string {
   const html = marked.parse(source, { async: false });
   // Tables sit in a rounded, scrollable card like the code blocks.
   // Each table has a head bar with a copy button (as a code block has), which copies it as tab-separated rows.
+  // When the answer was read: a block shown in its first moment gets a short reveal (see Markdown.svelte).
+  const at = Date.now();
   const framed = html
     .replaceAll('<table>', `<div class="md-table"><div class="md-code-head"><span class="md-code-kind" title="Table" aria-label="Table">${KIND_ICON.table}</span><span class="md-code-actions"><button type="button" data-preview-table title="Preview table" aria-label="Preview table">${PREVIEW_ICON}</button><button type="button" data-copy-table title="Copy table" aria-label="Copy table">${COPY_ICON}</button></span></div><table>`)
     .replaceAll('</table>', '</table></div>')
     // A cell's content in a box of its own: a table cell ignores `max-width`, a box does not, so no column takes the
     // whole width and squeezes the others (see .md-cell).
-    .replace(/<td([^>]*)>([\s\S]*?)<\/td>/g, '<td$1><div class="md-cell">$2</div></td>');
+    .replace(/<td([^>]*)>([\s\S]*?)<\/td>/g, '<td$1><div class="md-cell">$2</div></td>')
+    .replaceAll('<div class="md-code" ', `<div class="md-code" data-at="${at}" `)
+    .replaceAll('<div class="md-table">', `<div class="md-table" data-at="${at}">`);
   const clean = DOMPurify.sanitize(framed, { ADD_ATTR: ['target'] });
   if (!keep) return clean;
   rendered.set(source, clean);

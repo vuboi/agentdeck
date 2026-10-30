@@ -4,10 +4,38 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::codex::APP_CONTEXT;
-use super::{AgentEvent, Provider, TaskStatus, TurnRequest};
+use super::permission::{self, Action, Mode, Verdict};
+use super::{allow_entry, AgentEvent, PermissionRequest, Provider, TaskStatus, TurnRequest};
+
+/// The label of a sub-agent call: `agent: description`, from whichever of the two the call has.
+fn task_label(input: &Value) -> Option<String> {
+    match (input["agent"].as_str(), input["description"].as_str()) {
+        (Some(agent), Some(what)) => Some(format!("{agent}: {what}")),
+        (Some(text), None) | (None, Some(text)) => Some(text.to_owned()),
+        (None, None) => None,
+    }
+}
+
+/// Whether a tool is a sub-agent call: `subagent` (the name the CLI writes) or `task` (the name the server gives it).
+pub fn is_subagent(tool: &str) -> bool {
+    matches!(tool, "subagent" | "task")
+}
+
+/// The task card of a sub-agent call, keyed by the call that started it. Used where the call's own metadata (the child
+/// session) is not known, as in the server's event stream.
+pub fn subagent_event(input: &Value, call: &str, status: TaskStatus, summary: Option<String>) -> AgentEvent {
+    AgentEvent::Task {
+        id: call.to_owned(),
+        tool_use_id: Some(call.to_owned()),
+        status,
+        label: task_label(input),
+        summary,
+        tools: None,
+    }
+}
 
 /// Where a `subagent` tool call stands. The child runs in a session of its own (`metadata.sessionID`); its text is not
 /// streamed into this one, only its result comes back, so the call needs no scoping, just a label and a status.
@@ -17,14 +45,119 @@ fn subagent_task(part: &Value, call: &str, status: TaskStatus) -> AgentEvent {
         .into_iter()
         .find_map(Value::as_str)
         .unwrap_or(call);
-    let input = &state["input"];
-    let label = match (input["agent"].as_str(), input["description"].as_str()) {
-        (Some(agent), Some(what)) => Some(format!("{agent}: {what}")),
-        (Some(text), None) | (None, Some(text)) => Some(text.to_owned()),
-        (None, None) => None,
-    };
     let failed = (status == TaskStatus::Failed).then(|| state["error"].as_str().map(str::to_owned)).flatten();
-    AgentEvent::Task { id: child.to_owned(), tool_use_id: Some(call.to_owned()), status, label, summary: failed, tools: None }
+    AgentEvent::Task {
+        id: child.to_owned(),
+        tool_use_id: Some(call.to_owned()),
+        status,
+        label: task_label(&state["input"]),
+        summary: failed,
+        tools: None,
+    }
+}
+
+/// What a turn has said so far: the text of its answer and what its steps cost. OpenCode writes text before a tool call
+/// too (a preamble), so the answer is the text of the last step that wrote any, as the `result` of a Claude turn is.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Answer {
+    /// The step in progress.
+    step: String,
+    /// The last step that ended with text.
+    earlier: String,
+    /// Sum of the steps' cost.
+    cost: f64,
+}
+
+impl Answer {
+    pub fn push_text(&mut self, text: &str) {
+        self.step.push_str(text);
+    }
+
+    /// A step ended with this cost. Its text stays the answer until a later step writes some of its own.
+    pub fn end_step(&mut self, cost: f64) {
+        self.cost += cost;
+        let text = std::mem::take(&mut self.step);
+        if !text.trim().is_empty() {
+            self.earlier = text;
+        }
+    }
+
+    /// The answer: the step in progress, or else the last step that wrote text.
+    pub fn text(&self) -> String {
+        if self.step.trim().is_empty() {
+            self.earlier.clone()
+        } else {
+            self.step.clone()
+        }
+    }
+
+    /// What the turn cost, when it cost anything (a free model reports none).
+    pub fn cost_usd(&self) -> Option<f64> {
+        (self.cost > 0.0).then_some(self.cost)
+    }
+}
+
+/// How a permission request of OpenCode is answered: approved once, or refused and reported as a card.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PermissionAnswer {
+    Approve,
+    Refuse(PermissionRequest),
+}
+
+/// The kind of an action the server asks about, as the modes read it.
+fn action_kind(action: &str) -> Action {
+    match action {
+        "shell" | "bash" => Action::Shell,
+        "edit" | "write" | "patch" | "apply_patch" | "multiedit" => Action::Write,
+        "read" | "glob" | "grep" | "list" | "lsp" => Action::Read,
+        _ => Action::Other,
+    }
+}
+
+/// The name of an action in an allow list (`--allowedTools`): `Bash` for a command, `Write` for a file change, `Read`.
+fn allow_name(action: &str) -> String {
+    match action_kind(action) {
+        Action::Shell => "Bash".into(),
+        Action::Write => "Write".into(),
+        Action::Read => "Read".into(),
+        Action::Other => action.to_owned(),
+    }
+}
+
+/// What a permission request is about, in one line: the command, the file, the pattern.
+fn request_summary(data: &Value) -> String {
+    let metadata = &data["metadata"];
+    ["command", "filepath", "filePath", "path", "pattern", "url"]
+        .into_iter()
+        .find_map(|key| metadata[key].as_str().filter(|text| !text.is_empty()))
+        .map(str::to_owned)
+        .or_else(|| {
+            let resources: Vec<&str> = data["resources"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+            (!resources.is_empty()).then(|| resources.join(", "))
+        })
+        .or_else(|| data["message"].as_str().filter(|text| !text.is_empty()).map(str::to_owned))
+        .unwrap_or_else(|| data["action"].as_str().unwrap_or_default().to_owned())
+}
+
+/// Answers a permission request of the server the way Claude's `--allowedTools` and the modes do: a call the mode or the
+/// approved list allows runs; any other is refused, and offered to the user as a card whose `allow` approves exactly it.
+/// `data` is the request as the server sends it (`permission.asked`); `id` falls back to the request's own id.
+pub fn answer_permission(data: &Value, mode: Mode, allowed: &[String]) -> PermissionAnswer {
+    let action = data["action"].as_str().unwrap_or_default();
+    let tool = allow_name(action);
+    let summary = request_summary(data);
+    let allow = allow_entry(&tool, &json!({ "command": summary }));
+    let approved = permission::verdict(mode, action_kind(action)) == Verdict::Approve
+        || allowed.iter().any(|entry| *entry == allow || *entry == tool);
+    if approved {
+        return PermissionAnswer::Approve;
+    }
+    let id = data["source"]["id"]
+        .as_str()
+        .or_else(|| data["id"].as_str())
+        .unwrap_or_default()
+        .to_owned();
+    PermissionAnswer::Refuse(PermissionRequest { id, tool, summary, allow })
 }
 
 /// A tool's argument worth showing next to its name: the command, the file, the pattern.
@@ -94,8 +227,8 @@ pub struct OpenCode {
     session: Mutex<Option<String>>,
     /// Tool ids already announced, so a call that arrives already finished shows as one call, not a bare result.
     tools: Mutex<HashSet<String>>,
-    /// Sum of the steps' `cost`, reported with the turn's end.
-    cost: Mutex<f64>,
+    /// The turn's answer text and cost so far, reported with the turn's end.
+    answer: Mutex<Answer>,
     root: Mutex<Option<PathBuf>>,
     file_snapshots: Mutex<std::collections::HashMap<String, super::FileSnapshot>>,
 }
@@ -105,7 +238,7 @@ impl Default for OpenCode {
         Self {
             session: Mutex::new(None),
             tools: Mutex::new(HashSet::new()),
-            cost: Mutex::new(0.0),
+            answer: Mutex::new(Answer::default()),
             root: Mutex::new(None),
             file_snapshots: Mutex::new(std::collections::HashMap::new()),
         }
@@ -131,6 +264,9 @@ impl Provider for OpenCode {
         }
         if let Ok(mut tools) = self.tools.lock() {
             tools.clear();
+        }
+        if let Ok(mut answer) = self.answer.lock() {
+            *answer = Answer::default();
         }
         Ok(())
     }
@@ -178,17 +314,14 @@ impl Provider for OpenCode {
         (!continues).then(|| format!("{APP_CONTEXT}{}", super::claude::ASK_CONTEXT))
     }
     fn environment(&self, req: &TurnRequest) -> Vec<(String, String)> {
-        let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") else {
-            return Vec::new();
-        };
-        let url = super::mcp_url(&bridge, req.owner.as_deref(), req.cwd.as_deref());
-        vec![(
-            "OPENCODE_CONFIG_CONTENT".into(),
-            serde_json::json!({
-                "mcp": { "agentdeck": { "type": "remote", "url": url, "enabled": true } }
-            })
-            .to_string(),
-        )]
+        // OpenCode's own `question` tool waits for an answer that a headless run cannot give, so the turn hung. It is
+        // denied here; the agent asks with the agentdeck-ask block instead (ASK_CONTEXT).
+        let mut config = serde_json::json!({ "permission": { "question": "deny" } });
+        if let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") {
+            let url = super::mcp_url(&bridge, req.owner.as_deref(), req.cwd.as_deref());
+            config["mcp"] = serde_json::json!({ "agentdeck": { "type": "remote", "url": url, "enabled": true } });
+        }
+        vec![("OPENCODE_CONFIG_CONTENT".into(), config.to_string())]
     }
     fn parse_line(&self, line: &str) -> Vec<AgentEvent> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
@@ -210,12 +343,17 @@ impl Provider for OpenCode {
             .or_else(|| part["text"].as_str())
             .unwrap_or_default();
         match kind {
-            "text" | "message" | "agent_message" => (!text.is_empty())
-                .then_some(AgentEvent::Delta {
-                    text: text.to_owned(),
-                })
-                .into_iter()
-                .collect(),
+            "text" | "message" | "agent_message" => {
+                if let Ok(mut answer) = self.answer.lock() {
+                    answer.push_text(text);
+                }
+                (!text.is_empty())
+                    .then_some(AgentEvent::Delta {
+                        text: text.to_owned(),
+                    })
+                    .into_iter()
+                    .collect()
+            }
             "reasoning" | "thinking" => (!text.is_empty())
                 .then_some(AgentEvent::Thinking {
                     text: text.to_owned(),
@@ -223,10 +361,8 @@ impl Provider for OpenCode {
                 .into_iter()
                 .collect(),
             "step_finish" => {
-                if let Some(cost) = part["cost"].as_f64() {
-                    if let Ok(mut total) = self.cost.lock() {
-                        *total += cost;
-                    }
+                if let Ok(mut answer) = self.answer.lock() {
+                    answer.end_step(part["cost"].as_f64().unwrap_or_default());
                 }
                 let tokens = &part["tokens"];
                 vec![AgentEvent::Usage {
@@ -309,11 +445,14 @@ impl Provider for OpenCode {
                 }
                 events
             }
-            "done" | "session_end" => vec![AgentEvent::Done {
-                session_id: session,
-                text: String::new(),
-                cost_usd: value["cost"].as_f64(),
-            }],
+            "done" | "session_end" => {
+                let answer = self.answer.lock().map(|answer| answer.clone()).unwrap_or_default();
+                vec![AgentEvent::Done {
+                    session_id: session,
+                    text: answer.text(),
+                    cost_usd: value["cost"].as_f64().or(answer.cost_usd()),
+                }]
+            }
             "error" => vec![AgentEvent::Error {
                 message: error_text(&value["error"])
                     .or_else(|| (!text.is_empty()).then_some(text.to_owned()))
@@ -326,15 +465,15 @@ impl Provider for OpenCode {
     /// with the first line, so the turn is finished here.
     fn finish(&self, _req: &TurnRequest) -> Option<AgentEvent> {
         let session_id = self.session.lock().ok().and_then(|mut id| id.take())?;
-        let cost = self
-            .cost
+        let answer = self
+            .answer
             .lock()
-            .map(|mut total| std::mem::take(&mut *total))
-            .unwrap_or(0.0);
+            .map(|mut answer| std::mem::take(&mut *answer))
+            .unwrap_or_default();
         Some(AgentEvent::Done {
             session_id: Some(session_id),
-            text: String::new(),
-            cost_usd: (cost > 0.0).then_some(cost),
+            text: answer.text(),
+            cost_usd: answer.cost_usd(),
         })
     }
 
@@ -360,6 +499,13 @@ mod tests {
             owner: None,
             api_key: None,
         }
+    }
+
+    #[test]
+    fn the_question_tool_is_denied_so_a_headless_turn_never_waits_for_an_answer() {
+        let env = OpenCode::default().environment(&request("hi"));
+        let config: Value = serde_json::from_str(&env[0].1).expect("config json");
+        assert_eq!(config["permission"]["question"], "deny");
     }
 
     #[test]
@@ -545,5 +691,109 @@ mod tests {
         assert!(!provider.args(&req).contains(&"--auto".to_string()));
         req.permission_mode = Some("auto".into());
         assert!(provider.args(&req).contains(&"--auto".to_string()));
+    }
+
+    fn request_of(action: &str, metadata: Value) -> Value {
+        json!({ "id": "per_1", "sessionID": "ses_1", "action": action, "metadata": metadata, "source": { "type": "tool", "messageID": "msg_1", "id": "call_7" } })
+    }
+
+    #[test]
+    fn a_refused_command_is_offered_as_a_card_that_allows_exactly_it() {
+        let shell = request_of("shell", json!({ "command": "git push" }));
+        let answer = answer_permission(&shell, Mode::Ask, &[]);
+        assert_eq!(
+            answer,
+            PermissionAnswer::Refuse(PermissionRequest {
+                id: "call_7".into(),
+                tool: "Bash".into(),
+                summary: "git push".into(),
+                allow: "Bash(git push)".into(),
+            })
+        );
+        // The next turn carries that entry, and then the same command runs.
+        assert_eq!(answer_permission(&shell, Mode::Ask, &["Bash(git push)".into()]), PermissionAnswer::Approve);
+        // Another command is still refused, and a bare `Bash` approves every command.
+        let other = request_of("shell", json!({ "command": "rm -rf x" }));
+        assert!(matches!(answer_permission(&other, Mode::Ask, &["Bash(git push)".into()]), PermissionAnswer::Refuse(_)));
+        assert_eq!(answer_permission(&other, Mode::Ask, &["Bash".into()]), PermissionAnswer::Approve);
+    }
+
+    #[test]
+    fn the_modes_decide_what_runs_without_asking() {
+        let edit = request_of("edit", json!({ "filepath": "a.ts" }));
+        let shell = request_of("shell", json!({ "command": "ls" }));
+        let read = request_of("read", json!({}));
+        assert_eq!(answer_permission(&edit, Mode::Edits, &[]), PermissionAnswer::Approve);
+        assert!(matches!(answer_permission(&shell, Mode::Edits, &[]), PermissionAnswer::Refuse(_)));
+        assert_eq!(answer_permission(&shell, Mode::Auto, &[]), PermissionAnswer::Approve);
+        assert_eq!(answer_permission(&shell, Mode::Yolo, &[]), PermissionAnswer::Approve);
+        assert_eq!(answer_permission(&read, Mode::Plan, &[]), PermissionAnswer::Approve);
+        // Plan refuses changes and commands; the card names the file it would have changed.
+        match answer_permission(&edit, Mode::Plan, &[]) {
+            PermissionAnswer::Refuse(request) => assert_eq!((request.tool.as_str(), request.summary.as_str()), ("Write", "a.ts")),
+            other => panic!("plan must refuse an edit: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_request_without_metadata_is_summarised_by_its_resources_and_id_falls_back() {
+        let data = json!({ "id": "per_9", "sessionID": "ses_1", "action": "external_directory", "resources": ["/tmp/a", "/tmp/b"] });
+        match answer_permission(&data, Mode::Ask, &[]) {
+            PermissionAnswer::Refuse(request) => {
+                assert_eq!(request.summary, "/tmp/a, /tmp/b");
+                assert_eq!(request.id, "per_9");
+                assert_eq!(request.allow, "external_directory");
+            }
+            other => panic!("expected a refusal: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_answer_is_the_last_step_that_wrote_text_and_the_cost_adds_up() {
+        let mut answer = Answer::default();
+        assert_eq!((answer.text(), answer.cost_usd()), (String::new(), None));
+        answer.push_text("I'll launch three subagents.");
+        answer.end_step(0.0);
+        answer.push_text("4,6,8");
+        answer.end_step(0.25);
+        // A last step that writes nothing keeps the text before it.
+        answer.end_step(0.0);
+        assert_eq!(answer.text(), "4,6,8");
+        assert_eq!(answer.cost_usd(), Some(0.25));
+    }
+
+    #[test]
+    fn a_subagent_card_is_keyed_by_its_call_and_labelled_by_agent_and_description() {
+        let input = json!({ "agent": "general", "description": "Compute 2+2" });
+        assert_eq!(
+            subagent_event(&input, "call_3", TaskStatus::Started, None),
+            AgentEvent::Task {
+                id: "call_3".into(),
+                tool_use_id: Some("call_3".into()),
+                status: TaskStatus::Started,
+                label: Some("general: Compute 2+2".into()),
+                summary: None,
+                tools: None,
+            }
+        );
+        assert!(is_subagent("subagent") && is_subagent("task") && !is_subagent("bash"));
+    }
+
+    /// Finished text, a tool call in between and the step's end: the Done carries the final answer, as a Claude
+    /// `result` does, so a delegated report has what it needs.
+    #[test]
+    fn the_done_event_carries_the_final_answer_text() {
+        let provider = OpenCode::default();
+        provider.parse_line(r#"{"type":"text","sessionID":"ses_3","part":{"text":"Let me check."}}"#);
+        provider.parse_line(r#"{"type":"step_finish","sessionID":"ses_3","part":{"cost":0.1,"tokens":{"input":1,"output":1}}}"#);
+        provider.parse_line(r#"{"type":"text","sessionID":"ses_3","part":{"text":"Done: 4"}}"#);
+        assert_eq!(
+            provider.finish(&request("")),
+            Some(AgentEvent::Done {
+                session_id: Some("ses_3".into()),
+                text: "Done: 4".into(),
+                cost_usd: Some(0.1),
+            })
+        );
     }
 }

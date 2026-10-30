@@ -38,7 +38,6 @@ export function cancelEdit() {
 export function finishEdit(id: string) {
   if (!edit.text.trim() || edit.loading) return;
   editMessage(id, edit.text, edit.files);
-  window.dispatchEvent(new Event('agentdeck:scrolltoend'));
   edit.id = null;
   edit.files = [];
 }

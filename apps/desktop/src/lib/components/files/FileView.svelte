@@ -5,13 +5,13 @@
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { contentTabs, saveTab, type ContentTab } from '../../app/ui/content-tabs.svelte';
   import { isViewerTab } from '../../files/file-viewer.svelte';
-  import { changeLines, countsOf, parseDiff, type DiffRow } from '../../files/diff';
+  import { changeLines, countsOf, type DiffRow } from '../../files/diff';
   import { displayPath, relativeTo } from '../../files/paths';
   import { imageMimeOf, languageLabel, languageOf, mediaOf, officeFormatOf, readImageUrl, readProjectFile } from '../../files/files';
   import MediaView from './MediaView.svelte';
   import { canFormat, prettifyStrict } from '../../app/text/format';
   import { drafts, type Draft } from '../../files/file-buffers';
-  import { diffCache, fileKey, rememberText, textCache } from '../../files/file-cache';
+  import { diffCache, fileKey, invalidateDiffCache, preloadDiff, rememberText, textCache } from '../../files/file-cache';
   import { MAX_EDIT_BYTES, splitFileText } from '../../files/file-edit';
   import { toast } from '../../app/platform/toast';
   import { activeSession, draftFiles, drafts as chatDrafts } from '../../chat/sessions.svelte';
@@ -235,25 +235,36 @@
   // `diffCache`, even when this viewer is gone, for the next viewer of the file.
   let diffSeq = 0;
   let diffApplied = 0;
+  let observedWriteTick = fileWrites.tick;
   $effect(() => {
     const { root, path } = file;
-    void fileWrites.tick;
+    const writeTick = fileWrites.tick;
+    if (writeTick !== observedWriteTick) {
+      observedWriteTick = writeTick;
+      invalidateDiffCache();
+    }
     if (!inTauri() || imageMimeOf(file.name) || mediaOf(file.name)) {
       diffRead = true;
       return;
     }
-    const seq = ++diffSeq;
     const key = fileKey(root, path);
+    if (file.view !== 'changes') {
+      // Warm Git in the background after the normal file view has started rendering.
+      void preloadDiff(key, root, relativeTo(root, path));
+      diffRead = true;
+      return;
+    }
+    diffRead = false;
+    const seq = ++diffSeq;
     const live = () => seq >= diffApplied && !destroyed;
-    void import('@tauri-apps/api/core')
-      .then(({ invoke }) => invoke<string>('change_diff', { root, path: relativeTo(root, path) }))
-      .then((diff) => {
+    void preloadDiff(key, root, relativeTo(root, path))
+      .then((cached) => {
+        if (!cached) throw new Error('Unable to read file changes');
+        const { diff, rows: next } = cached;
         if (seq < diffApplied) return;
         diffApplied = seq;
         // The same diff as on screen: keep the rows (and the scroll, the colours) as they are.
         if (diff === shownDiff) return;
-        const next = parseDiff(diff);
-        diffCache.set(key, { diff, rows: next });
         shownDiff = diff;
         if (!destroyed) rows = next;
       })
@@ -606,4 +617,3 @@
 {#if codeMenu}
   <Menu items={codeItems} bind:open={codeMenuOpen} at={codeMenu} position="bottom-left" width={200} />
 {/if}
-

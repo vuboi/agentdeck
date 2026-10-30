@@ -9,7 +9,7 @@ import { mimeOfPath } from '../agent';
 import { enqueue, enqueueNext } from '../runs/queue';
 import { getPref, setPref } from '../../app/platform/prefs';
 import { presetById, presetOf, type WorkflowPreset } from '../../tasks/workflows.svelte';
-import { automation, contextWindow, COMPRESS_AT, COMPRESS_TOKENS } from '../../app/platform/automation.svelte';
+import { automation, COMPRESS_TOKENS } from '../../app/platform/automation.svelte';
 import { needsContext } from '../recovery/context-need';
 import { activeSession, localMessages, nextId, persistLocal, workspace, type Attachment, type Effort, type FileAttachment, type Mention, type PageElement, type SessionItem } from './state.svelte';
 import { afterSwitch, beginSessionWork, continuationGroups, hasTurnWork, hiddenPrompt, isRunning, modelFor, queuePaused, queued, stopTurn, switchingAgent, turnOptions, withElements, type Queued } from './turns.svelte';
@@ -55,7 +55,8 @@ export function handbackPrompt(batch: DelegateReports): string {
 }
 
 /**
- * Send from the message box. While busy: Enter queues at the end, Alt+Enter queues next, Ctrl/Cmd+Enter stops and sends now.
+ * Send from the message box. While busy: Enter queues at the end, Alt+Enter queues next, Ctrl/Cmd+Enter sends now: it stops
+ * the reply, or runs beside a background task that keeps listening.
  */
 /** The picture of each picked element, sent with the message as an image next to its markup. */
 const elementPictures = (elements: PageElement[]): Attachment[] =>
@@ -73,7 +74,7 @@ const elementPictures = (elements: PageElement[]): Attachment[] =>
       : [],
   );
 
-export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = [], mentions: Mention[] = [], whileRunning: 'queue' | 'next' | 'interrupt' | 'resume' = 'queue', files: FileAttachment[] = []) {
+export function sendMessage(text: string, images: Attachment[] = [], elements: PageElement[] = [], mentions: Mention[] = [], whileRunning: 'queue' | 'next' | 'interrupt' = 'queue', files: FileAttachment[] = []) {
   const session = activeSession();
   // A mention only applies while its inline token is still present in the draft.
   mentions = mentions.filter((mention) => text.includes(mention.kind === 'workflow' ? `/w ${mention.label}` : `@${mention.label}`));
@@ -84,33 +85,8 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
   // A task for another agent needs words to say what the task is.
   if (mentions.some((mention) => mention.kind === 'ai') && !text.trim()) return;
   beginSessionWork(session.id);
-  if (whileRunning === 'resume') {
-    const runGroup = continueCurrentRun(session.id);
-    enqueue(queued, session.id, {
-      messageId: nextId(),
-      text,
-      images,
-      elements,
-      mentions,
-      files,
-      runGroup,
-    });
-    delete queuePaused[session.id];
-    sendNextQueued(session.id);
-    return;
-  }
-  // Explicit provider background work may outlive its current answer. Give a new prompt its own CLI conversation
-  // and reply message while that waiter continues; never use this route for ambiguous waits or another active listener.
-  // Messages already waiting keep their order: a new one joins the line, it does not jump ahead of them.
-  if (whileRunning === 'queue' && canListenToSession(session.id) && !queued[session.id]?.length && !needsUserInput(session.id) && !mentions.some((mention) => mention.kind === 'ai' || mention.kind === 'workflow')) {
-    const preface = handoffDigest(messagesOf(session.id), 'The user sent a new message while your previous task continues in the background. Handle this request independently and keep your reply under the new message. Avoid modifying files likely owned by the still-running task; if the requests conflict, explain the conflict before changing shared files. Do not claim the background task has finished.');
-    send(session.id, text, images, elements, mentions, {
-      files,
-      listener: true,
-      preface,
-    });
-    return;
-  }
+  // Sending is an explicit request to continue delivery; no extra paused-queue choice is needed.
+  delete queuePaused[session.id];
   // Questions are waiting and nothing runs: writing a message is the way to skip them. It goes out at once (not behind
   // the questions), says so to the agent, and the card closes because a newer message of the user follows it.
   // The same goes for a permission request: writing instead of answering it cancels it, and the agent is told the command
@@ -159,8 +135,8 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
       });
       return;
     }
-    stopTurn(session.id, true);
-    send(session.id, text, images, elements, mentions, {
+    sendImmediate(session.id, {
+      text, images, elements, mentions,
       files,
       runGroup,
       messageId: nextId(),
@@ -172,18 +148,32 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
   });
 }
 
-/** Sends a queued message now: the reply running in the chat is stopped (what it wrote stays), and this one goes out. */
+/** Uses the same immediate-delivery policy for the composer shortcut and a queued row's Send now action. */
+export function sendImmediate(sessionId: string, item: Queued) {
+  const listener = canListenToSession(sessionId) && !needsUserInput(sessionId) && !item.mentions?.some((mention) => mention.kind === 'ai' || mention.kind === 'workflow');
+  // Priority changes order, never cancels work. A provider without a free lane finishes its current turn first.
+  if (!listener && hasTurnWork(sessionId)) {
+    enqueueNext(queued, sessionId, { ...item, priority: true });
+    return;
+  }
+  const preface = listener
+    ? handoffDigest(messagesOf(sessionId), 'The user sent a new message while your previous task continues in the background. Handle this request independently and keep your reply under the new message. Avoid modifying files likely owned by the still-running task; if the requests conflict, explain the conflict before changing shared files. Do not claim the background task has finished.')
+    : undefined;
+  send(sessionId, item.text, item.images, item.elements, item.mentions, {
+    files: item.files, runGroup: item.runGroup, messageId: item.messageId, listener, preface,
+  });
+}
+
+/** Prioritizes a queued message without cancelling the current task. */
 export function steerQueued(sessionId: string, item: Queued) {
+  // A stale/double click must not resend an item, and Send now must not bypass an approval or required answer.
+  if (!queued[sessionId]?.includes(item) || needsUserInput(sessionId)) return;
   beginSessionWork(sessionId);
+  delete queuePaused[sessionId];
   const rest = (queued[sessionId] ?? []).filter((entry) => entry !== item);
   if (rest.length) queued[sessionId] = rest;
   else delete queued[sessionId];
-  if (replies[sessionId]) stopTurn(sessionId, true);
-  send(sessionId, item.text, item.images, item.elements, item.mentions, {
-    files: item.files,
-    runGroup: item.runGroup,
-    messageId: item.messageId,
-  });
+  sendImmediate(sessionId, item);
 }
 
 /** Messages waiting in a chat (sent while its reply runs, not yet started). */
@@ -377,6 +367,9 @@ export function send(
     runGroup?: string;
     messageId?: string;
     listener?: boolean;
+    report?: Pick<Message, 'triggeredByMessageId' | 'taskTitle' | 'taskIds' | 'workflowRunId'>;
+    /** A silent send is not queued when a reply already runs: this tells its caller, who puts the work back in line. */
+    onDropped?: () => void;
   } = {},
 ) {
   const session = workspace.sessions.find((item) => item.id === sessionId);
@@ -391,7 +384,13 @@ export function send(
   const rawBody = text.trim();
   const body = flowMention && requestedFlow ? rawBody.replace(`/w ${flowMention.label}`, '').trim() : rawBody;
   const files = extra.files ?? [];
-  if (!session || (replies[sessionId] && !extra.listener)) return;
+  if (!session) return;
+  // Account-switch waiters can wake together. Once one owns the reply, retain later user messages in FIFO order.
+  if (replies[sessionId] && !extra.listener) {
+    if (!extra.silent) enqueue(queued, sessionId, { text, images, elements, mentions, files, runGroup: extra.runGroup, messageId: extra.messageId ?? nextId() });
+    else extra.onDropped?.();
+    return;
+  }
   const messageId = extra.messageId ?? nextId();
   // Waits behind the account switch of its agent, whole and in order (see switchingAgent).
   if (switchingAgent(session.agent)) {
@@ -408,28 +407,10 @@ export function send(
   }
   const messages = messagesOf(sessionId);
   if (extra.silent && extra.prompt && inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'opencode' || session.agent === 'copilot' || session.agent === 'custom')) {
-    beginWorkflowIntegration(sessionId);
-    startTurn(session, extra.prompt, [], [], extra.preface ?? '', [], extra.silent, extra.runGroup);
+    if (!extra.report || extra.report.workflowRunId) beginWorkflowIntegration(sessionId, extra.report?.workflowRunId);
+    startTurn(session, extra.prompt, [], [], extra.preface ?? '', [], extra.silent, extra.runGroup, false, extra.report);
     if (!session.path) localMessages[session.id] = messages;
     persistLocal();
-    return;
-  }
-  // Auto-compress: a Claude context near the model's window is compacted first; the message waits at the head of the
-  // queue and goes once the compaction is done.
-  if (!extra.prompt && !extra.preface && needsCompress(session, messages)) {
-    queued[sessionId] = [
-      {
-        messageId,
-        text,
-        images,
-        elements,
-        mentions,
-        files,
-        runGroup: extra.runGroup,
-      },
-      ...(queued[sessionId] ?? []),
-    ];
-    compressContext(session);
     return;
   }
   messages.push(userMessage(body, images, elements, files, extra.runGroup, messageId));
@@ -489,13 +470,13 @@ function workflowInstructions(preset: WorkflowPreset): string {
 
 export const COMPACT_COMMAND = '/compact';
 
-/** The context of `session` is big enough to compact: the last Claude call read COMPRESS_TOKENS (or COMPRESS_AT of a
- *  smaller window). Tokens, not characters: a short chat is never compacted. */
+/** The context of `session` is big enough to compact: the last Claude call read COMPRESS_TOKENS. Tokens, not characters:
+ *  a short chat is never compacted. */
 function needsCompress(session: SessionItem, messages: Message[]): boolean {
   if (!automation.compress || session.agent !== 'claude' || !session.agentStarted || !session.agentSession) return false;
   const last = [...messages].reverse().find((message) => message.role === 'assistant' && message.agent === 'claude');
   if (!last?.context || last.compressed) return false;
-  return last.context >= Math.min(COMPRESS_TOKENS, contextWindow(last.model) * COMPRESS_AT);
+  return last.context >= COMPRESS_TOKENS;
 }
 
 /** Runs `/compact` in the chat's Claude conversation, shown as one "Compressing context" line. */
@@ -505,6 +486,15 @@ function compressContext(session: SessionItem) {
   if (!reply) return;
   reply.compressed = true;
   reply.blocks = [{ kind: 'loading', label: 'Compressing context…' }];
+}
+
+/** Auto-compress after a reply, before the next queued message: the message already sent goes first, then the
+ *  compaction, then the queue. True when a compaction started (the caller waits for it to finish). */
+export function compressIfNeeded(sessionId: string): boolean {
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  if (!session || !needsCompress(session, messagesOf(sessionId))) return false;
+  compressContext(session);
+  return true;
 }
 
 /** A fork keeps the project and branch of its parent and nests under it in the tree. */

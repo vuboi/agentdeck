@@ -175,6 +175,18 @@ export async function loadModels(providers: readonly ProviderId[] = ['claude', '
     }),
   );
 }
+
+/** Re-reads model catalogues whose account-backed CLI changed, showing loading instead of the previous account's list. */
+export async function reloadModels(providers: readonly ProviderId[]) {
+  for (const provider of providers) {
+    modelsReady[provider] = false;
+    // Do not expose the previous account's catalogue while the new credential is being read.
+    if (provider === 'claude') claudeOwn = [];
+    else catalog[provider] = [];
+  }
+  await loadModels(providers);
+}
+
 void loadModels();
 
 /**

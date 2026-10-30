@@ -11,7 +11,7 @@
 //! chat interrupts the tail's answer (`interrupt`).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -46,7 +46,15 @@ const HANDOVER_MAX: Duration = Duration::from_secs(15 + 30 + 5);
 /// Events held while waiting for the first one that is part of an answer (token counts come before the text).
 const HELD: usize = 64;
 
+/// At most this many tails read a process at once (each holds a CLI). A turn that ends with background work open while this
+/// many are running parks its process instead, as it did before tails existed.
+const MAX_TAILS: usize = 8;
+
 struct Tail {
+    /// The provider of the process, so an account switch of one agent ends only its tails.
+    agent: &'static str,
+    /// Set when the process must end with the tail (an account switch, a reload), not go back to the pool.
+    discard: Arc<AtomicBool>,
     stop: oneshot::Sender<()>,
     interrupt: mpsc::UnboundedSender<()>,
     done: oneshot::Receiver<()>,
@@ -64,6 +72,29 @@ pub(super) fn available() -> bool {
 /// How many tails are reading a process now.
 pub fn count() -> usize {
     TAILS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len()
+}
+
+/// Whether a tail reads this chat's process now.
+pub(super) fn holds(chat: &str) -> bool {
+    TAILS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains_key(chat)
+}
+
+/// Ends every tail, or the tails of one agent, together with the process each one reads: after an account switch a CLI
+/// that goes on running would keep the sign-in it started with.
+pub(super) fn discard(agent: Option<&str>) {
+    let gone: Vec<Tail> = {
+        let mut tails = TAILS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let chats: Vec<String> = tails
+            .iter()
+            .filter(|(_, tail)| agent.is_none_or(|agent| tail.agent == agent))
+            .map(|(chat, _)| chat.clone())
+            .collect();
+        chats.into_iter().filter_map(|chat| tails.remove(&chat)).collect()
+    };
+    for tail in gone {
+        tail.discard.store(true, Ordering::Relaxed);
+        let _ = tail.stop.send(());
+    }
 }
 
 /// Stops the answer in progress of a chat's tail (an interrupt). False when the chat has none.
@@ -121,12 +152,21 @@ pub(super) fn start(chat: String, warm: Warm, provider: Arc<dyn Provider>) {
     let (stop_tx, stop_rx) = oneshot::channel();
     let (interrupt_tx, interrupt_rx) = mpsc::unbounded_channel();
     let (done_tx, done_rx) = oneshot::channel();
-    TAILS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(chat.clone(), Tail { stop: stop_tx, interrupt: interrupt_tx, done: done_rx });
+    let discard = Arc::new(AtomicBool::new(false));
+    {
+        let mut tails = TAILS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if tails.len() >= MAX_TAILS && !tails.contains_key(&chat) {
+            drop(tails);
+            park(chat, warm);
+            return;
+        }
+        tails.insert(
+            chat.clone(),
+            Tail { agent: provider.id(), discard: Arc::clone(&discard), stop: stop_tx, interrupt: interrupt_tx, done: done_rx },
+        );
+    }
     super::trace::note(&chat, "tail", format!("started, background work open={}", warm.open_tasks));
-    tokio::spawn(run(chat, warm, provider, sink, stop_rx, interrupt_rx, done_tx));
+    tokio::spawn(run(chat, warm, provider, sink, stop_rx, interrupt_rx, done_tx, discard));
 }
 
 /// A moment that never comes, for a timer branch that is switched off.
@@ -144,6 +184,7 @@ enum Fate {
     Drop,
 }
 
+#[allow(clippy::too_many_arguments)] // the process, its provider, and the four channels the tail is driven through
 async fn run(
     chat: String,
     mut warm: Warm,
@@ -152,6 +193,7 @@ async fn run(
     mut stop: oneshot::Receiver<()>,
     mut interrupts: mpsc::UnboundedReceiver<()>,
     done: oneshot::Sender<()>,
+    discard: Arc<AtomicBool>,
 ) {
     // The turn id of the answer in progress; empty while the CLI is silent.
     let mut turn = String::new();
@@ -184,6 +226,9 @@ async fn run(
             }
             _ = &mut stop, if !stopping => {
                 stopping = true;
+                if discard.load(Ordering::Relaxed) {
+                    break 'read Fate::Drop;
+                }
                 if turn.is_empty() {
                     break 'read Fate::Park;
                 }
@@ -278,8 +323,8 @@ async fn run(
         ),
     );
     match fate {
-        Fate::Park => park(chat.clone(), warm),
-        Fate::Drop => drop(warm),
+        Fate::Park if !discard.load(Ordering::Relaxed) => park(chat.clone(), warm),
+        Fate::Park | Fate::Drop => drop(warm),
     }
     TAILS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&chat);
     let _ = done.send(());
@@ -415,7 +460,8 @@ read more
         // The answer over, the process goes back to the pool for the chat's next message.
         let key = settings_key("faketail", &provider.args(&request("chat-tail")), &[]);
         assert!(until(|| holds("chat-tail", &key, Some("s1"), false)).await, "the process was not parked after the answer");
-        crate::agent::warm::reset(Some("faketail"));
+        // Only this chat's process: `reset` would end the other tests' tails too (they share the agent id).
+        let _ = crate::agent::warm::take("chat-tail", &key, None);
     }
 
     #[tokio::test]
@@ -439,7 +485,8 @@ read more
         );
         let key = settings_key("faketail", &provider.args(&request("chat-handover")), &[]);
         assert!(holds("chat-handover", &key, Some("s1"), false), "the process is parked for the message");
-        crate::agent::warm::reset(Some("faketail"));
+        // Only this chat's process: `reset` would end the other tests' tails too (they share the agent id).
+        let _ = crate::agent::warm::take("chat-handover", &key, None);
     }
 
     #[tokio::test]
@@ -457,6 +504,8 @@ read more
         let answered = tokio::time::timeout(Duration::from_secs(5), waiter).await;
         let _ = std::fs::remove_file(&path);
         assert!(matches!(answered, Ok(Ok(false))), "the wait did not end with the caller's stop: {answered:?}");
-        crate::agent::warm::reset(Some("faketail"));
+        // Only this chat's process: `reset` would end the other tests' tails too (they share the agent id).
+        let key = settings_key("faketail", &provider.args(&request("chat-deaf")), &[]);
+        let _ = crate::agent::warm::take("chat-deaf", &key, None);
     }
 }

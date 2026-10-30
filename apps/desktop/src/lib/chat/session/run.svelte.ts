@@ -1,7 +1,7 @@
 import { credentialBusy } from '../../agents/credential-switch';
 import { inTauri, clock } from '../../app/platform/history';
 import { accountEpoch } from '../runs/account-epoch.svelte';
-import { pictureData, prewarmAgent, saveAttachment, sendCustomTurn, sendAgentTurn, answerCopilotPermission } from '../agent';
+import { pictureData, prehandleAttachments, prewarmAgent, saveAttachment, sendCustomTurn, sendAgentTurn, stopAgentTurn, answerCopilotPermission } from '../agent';
 import { activeProviderKey, connectors, currentCredentialId } from '../../agents/connectors.svelte';
 import { type Message, messages as mockMessages } from '../mock';
 import { guide } from '../../app/ui/guide.svelte';
@@ -12,6 +12,7 @@ import { expandSlash } from '../slash.svelte';
 import { parseCustomModel } from '../../agents/models.svelte';
 import { customProviderOf } from '../../agents/provider-registry';
 import { automation } from '../../app/platform/automation.svelte';
+import { logError } from '../../app/platform/error-log.svelte';
 import { DELEGATE_HINT, agentdeckLead } from '../../tasks/delegate-task';
 import { houseStyleHint } from '../content/house-style';
 import { replyStyle } from '../content/reply-style.svelte';
@@ -22,12 +23,12 @@ import { type RunLane, deliveryFor } from '../runs/run-lanes';
 import { parseQuestions, type Question } from '../recovery/questions';
 import { dequeue } from '../runs/queue';
 import { MODELS, activeSession, advanceRun, localMessages, nextId, persistLocal, runEpochs, sessionCwd, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type SessionItem } from './state.svelte';
-import { AGENTDECK_HINT, KNOWS_PREVIEW, NATIVE_DELEGATION, NATIVE_DELEGATION_HINT, NO_DELEGATE_HINT, OPEN_WORDS, PERMISSION_MODE, agentLabel, approved, continuationGroups, delegateHinted, hasOutstandingSessionWork, hasTurnWork, hiddenPrompt, isRunning, lastPrompt, missedTurns, modelFor, nativeDelegationHinted, notifySessionWorkDone, orchestrateTold, priorDelegateHinted, queuePaused, queued, rememberDelegateHint, rememberLastChat, rememberNativeDelegationHint, turnOptions, turns } from './turns.svelte';
-import { handleAgentEvent, lastEventAt, lastEventKind, recoveryChain } from './events.svelte';
-import { backlog, flushReports, isWorkerChat } from './delegate-task.svelte';
+import { AGENTDECK_HINT, KNOWS_PREVIEW, NATIVE_DELEGATION, NATIVE_DELEGATION_HINT, NO_DELEGATE_HINT, OPEN_WORDS, PERMISSION_MODE, agentLabel, approved, continuationGroups, delegateHinted, hasOutstandingSessionWork, hasTurnWork, hiddenPrompt, isRunning, lastPrompt, missedTurns, modelFor, nativeDelegationHinted, notifySessionWorkDone, orchestrateTold, priorDelegateHinted, queuePaused, queued, rememberDelegateHint, rememberLastChat, rememberNativeDelegationHint, turnOptions, turnOptionsOf, turns } from './turns.svelte';
+import { handleAgentEvent, lastEventAt, lastEventKind, manuallyStopped, recoveryChain } from './events.svelte';
+import { answerWorkerApproval, backlog, flushReports, isWorkerChat } from './delegate-task.svelte';
 import { LANGUAGE_RULE } from './orchestration.svelte';
-import { COMPACT_COMMAND, MODEL_LEAD, handoffDigest, liveModel, send } from './sending.svelte';
-import { chat, history } from './history.svelte';
+import { COMPACT_COMMAND, MODEL_LEAD, compressIfNeeded, handoffDigest, liveModel, send, sendImmediate } from './sending.svelte';
+import { chat, history, settleKeptPermission } from './history.svelte';
 
 /** The chats that ran a turn since the app started: the first turn of any other chat that resumes a conversation resumes a session from before. */
 const touchedThisRun = new Set<string>();
@@ -36,6 +37,22 @@ export const pendingNew = new Set<string>();
 
 /** When each chat's CLI was last asked to start ahead (by chat, agent and model), so typing does not ask on every key. */
 const prewarmedAt = new Map<string, number>();
+
+function prehandleProvider() {
+  const score = (model: string) => {
+    const value = model.toLowerCase();
+    return (/(vision|vl|gemini|flash|haiku|mini|nano)/.test(value) ? 4 : 0) +
+      (/(free|local|ollama)/.test(value) ? 2 : 0);
+  };
+  return connectors.custom
+    .filter((provider) => provider.enabled && !provider.restricted && provider.kind !== 'anthropic' && provider.baseUrl.trim())
+    .map((provider) => {
+      const model = [...provider.models, provider.defaultModel].find(Boolean) ?? '';
+      return { provider, model, score: score(model) };
+    })
+    .filter((item) => item.model && item.score > 0)
+    .sort((a, b) => b.score - a.score)[0];
+}
 
 
 /** The conversation id a Claude chat takes after an account switch (by account epoch), so the CLI started ahead for it is the one used. */
@@ -102,8 +119,8 @@ export function prewarmChat(sessionId: string) {
     agentSession: cliId,
     resume,
     model: selectedModel,
-    permissionMode: PERMISSION_MODE[turnOptions.permission],
-    effort: turnOptions.effort as Effort,
+    permissionMode: PERMISSION_MODE[turnOptionsOf(session.id).permission],
+    effort: turnOptionsOf(session.id).effort as Effort,
     allowedTools: [...(approved[session.id] ?? [])],
     cwd,
   }).catch(() => {});
@@ -130,8 +147,8 @@ function prewarmFallback(session: SessionItem) {
     agentSession: null,
     resume: false,
     model,
-    permissionMode: PERMISSION_MODE[turnOptions.permission],
-    effort: turnOptions.effort as Effort,
+    permissionMode: PERMISSION_MODE[turnOptionsOf(session.id).permission],
+    effort: turnOptionsOf(session.id).effort as Effort,
     allowedTools: [...(approved[session.id] ?? [])],
     cwd,
   }).catch(() => {});
@@ -148,7 +165,11 @@ export function startTurn(
   silent?: Message,
   runGroup?: string,
   listener = false,
+  report?: Pick<Message, 'triggeredByMessageId' | 'taskTitle' | 'taskIds' | 'workflowRunId'>,
 ) {
+  // A new turn of the chat ends the "stopped by you" state: any start (a queued message, a recovery) clears it, or the
+  // composer kept offering "Continue" for a request that had already moved on.
+  if (!listener) delete manuallyStopped[session.id];
   const documentRequest = text.match(/^\/document(?:\s+([\s\S]*))?/i);
   if (documentRequest) {
     guide.tasks[session.id] = {
@@ -174,7 +195,7 @@ export function startTurn(
   rememberLastChat(
     session.agent,
     selectedModel,
-    turnOptions.effort as Effort,
+    turnOptionsOf(session.id).effort as Effort,
   );
   if (listener) {
     // Never resume the background conversation: this lane gets an independent provider conversation.
@@ -271,6 +292,7 @@ export function startTurn(
   // A silent turn (the hand-back) continues the finished reply that handed work out: it is one message on screen.
   const host = silent ? list.at(-1) : undefined;
   const continues =
+    !report &&
     !!host &&
     host.role === 'assistant' &&
     !host.live &&
@@ -290,6 +312,7 @@ export function startTurn(
           model: selectedModel ?? session.model,
           ...(asked?.role === 'user' ? { replyTo: asked.id } : {}),
           ...(runGroup ? { runGroup } : {}),
+          ...(report ? { ...report, autoTurn: true } : {}),
         };
   if (continues && host) {
     if (runGroup) host.runGroup = runGroup;
@@ -354,6 +377,36 @@ export function startTurn(
     const body = isWorkerChat(session.id)
       ? text
       : await within(expandSlash(text, session.agent, cwd), PREPARE_LIMIT_MS, 'reading the command', () => text);
+    // Stop/Send now can happen while attachments or a slash command are being prepared. Never start that old run.
+    if (!runReplies.has(turn)) return;
+    let dispatchBody = body;
+    let dispatchPaths = paths;
+    if (automation.prehandle && (paths.length || files.length)) {
+      const selected = prehandleProvider();
+      if (selected) {
+        try {
+          const memo = await within(
+            prehandleAttachments({
+              kind: selected.provider.kind,
+              baseUrl: selected.provider.baseUrl,
+              apiKey: activeProviderKey(selected.provider)?.apiKey || null,
+              model: selected.model,
+              prompt: body,
+              images: paths,
+              files: files.map((file) => file.path),
+            }),
+            PREPARE_LIMIT_MS,
+            'preparing attachment notes',
+          );
+          if (memo.trim()) {
+            dispatchBody = `${body}\n\n[Attachment pre-handle memo]\n${memo.trim()}`;
+            dispatchPaths = [];
+          }
+        } catch (error) {
+          logError('turn', 'attachment pre-handle failed; sending original attachments', error);
+        }
+      }
+    }
     if (session.agent === 'custom') {
       // A custom provider has no CLI to keep the conversation: the whole chat goes along with every turn.
       const target = parseCustomModel(selectedModel);
@@ -380,7 +433,12 @@ export function startTurn(
           content: spoken(message),
         }))
         .filter((message) => message.content);
-      await sendCustomTurn({
+      const pictureSources = dispatchPaths.length
+        ? await within(Promise.all(images.map((image) => pictureData(image))), PREPARE_LIMIT_MS, 'reading the pictures', () => [] as string[])
+        : [];
+      if (!runReplies.has(turn)) return;
+      // Like the CLI path: a start that never answers ends in an error the chat shows, not in "Thinking" for good.
+      await within(sendCustomTurn({
         session: session.id,
         turn,
         messageId: asked?.role === 'user' ? asked.id : undefined,
@@ -392,17 +450,17 @@ export function startTurn(
           ...history,
           {
             role: 'user',
-            content: body,
-            images: await Promise.all(images.map((image) => pictureData(image))),
+            content: dispatchBody,
+            images: pictureSources,
             files: files.map((file) => file.path),
           },
         ],
-        permissionMode: PERMISSION_MODE[turnOptions.permission],
+        permissionMode: PERMISSION_MODE[turnOptionsOf(session.id).permission],
         allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
         cwd: provider.restricted ? null : cwd,
-        effort: turnOptions.effort as Effort,
+        effort: turnOptionsOf(session.id).effort as Effort,
         restricted: Boolean(provider.restricted),
-      });
+      }), PREPARE_LIMIT_MS, 'starting the provider');
       return;
     }
     // A flow's step is not told it may open pages: it reports back, the user did not ask to see anything.
@@ -410,7 +468,7 @@ export function startTurn(
     const openHint =
       !isWorkerChat(session.id) &&
       !KNOWS_PREVIEW.has(session.agent) &&
-      OPEN_WORDS.test(body)
+      OPEN_WORDS.test(dispatchBody)
         ? AGENTDECK_HINT
         : '';
     // How to delegate (DELEGATE_HINT): said when the conversation starts, and once for a chat this app never told (an
@@ -443,14 +501,15 @@ export function startTurn(
     // The project's memory (project-memory.ts): read from its file when a conversation starts, so every agent of the
     // project begins with what earlier ones learned.
     const memoryNote = !resume && !isWorkerChat(session.id) && cwd && replyStyle.projectMemory ? memoryHint(true, cwd, await within(readProjectMemory(cwd), PREPARE_LIMIT_MS, "reading the project's memory", () => '')) : '';
+    if (!runReplies.has(turn)) return;
     const hint = agentdeckLead(openHint, delegateHint, styleHint, memoryNote, LANGUAGE_RULE);
     // Pictures and documents are on disk: the prompt names their paths, which the agent opens with its own tools.
     const attached =
-      (paths.length
-        ? `Attached image${paths.length > 1 ? 's' : ''} (open with the Read tool):\n${paths.map((path) => `- ${path}`).join('\n')}`
+      (dispatchPaths.length
+        ? `Attached image${dispatchPaths.length > 1 ? 's' : ''} (open with the Read tool):\n${dispatchPaths.map((path) => `- ${path}`).join('\n')}`
         : '') +
       (files.length
-        ? `${paths.length ? '\n\n' : ''}Attached file${files.length > 1 ? 's' : ''} (open with the Read tool or a shell command):\n${files.map((file) => `- ${file.path}${file.note ? ` (${file.note})` : ''}`).join('\n')}`
+        ? `${dispatchPaths.length ? '\n\n' : ''}Attached file${files.length > 1 ? 's' : ''} (open with the Read tool or a shell command):\n${files.map((file) => `- ${file.path}${file.note ? ` (${file.note})` : ''}`).join('\n')}`
         : '');
     // `/compact` (auto-compress) goes as it is: anything before it would make it a plain message.
     const prompt = text === COMPACT_COMMAND
@@ -458,10 +517,10 @@ export function startTurn(
       : hint +
       context +
       (attached
-        ? `${body || (files.length && !paths.length
+        ? `${dispatchBody || (files.length && !dispatchPaths.length
           ? 'Read the attached file. If this conversation shows that the user is returning a task prompt you just drafted or explicitly asked them to run, carry it out within that prompt’s scope instead of only summarizing it. Otherwise, treat the file as context and ask what they want done if the intent is unclear.'
           : 'Look at the attached image.')}\n\n${attached}`
-        : body);
+        : dispatchBody);
     logRequest(
       session.id,
       session.title,
@@ -469,13 +528,14 @@ export function startTurn(
       agentLabel(session.agent, selectedModel ?? undefined),
       selectedModel,
       [
-        `Effort: ${turnOptions.effort}`,
-        `Permission: ${turnOptions.permission}`,
+        `Effort: ${turnOptionsOf(session.id).effort}`,
+        `Permission: ${turnOptionsOf(session.id).permission}`,
         `Conversation: ${resume ? `continues ${cliId}` : cliId ? `new (${cliId})` : 'new'}`,
         `Folder: ${cwd ?? 'none'}`,
         `Message: ${prompt.length} characters${images.length ? `, ${images.length} picture(s)` : ''}${files.length ? `, ${files.length} file(s)` : ''}`,
       ].join('\n'),
       session.agent,
+      turn,
     );
     await within(
       sendAgentTurn({
@@ -489,8 +549,8 @@ export function startTurn(
         resume,
         // A model of another agent (left over from a switch) is never sent: the agent's own first model goes instead.
         model: selectedModel,
-        permissionMode: PERMISSION_MODE[turnOptions.permission],
-        effort: turnOptions.effort as Effort,
+        permissionMode: PERMISSION_MODE[turnOptionsOf(session.id).permission],
+        effort: turnOptionsOf(session.id).effort as Effort,
         allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
         cwd,
       }),
@@ -498,6 +558,8 @@ export function startTurn(
       'starting the agent',
     );
   })().catch((error: unknown) => {
+    // A start that timed out may still come up late: stop it, or its CLI runs next to the retry on the same conversation.
+    if (/^Error: Timed out after .* starting the /.test(String(error))) void stopAgentTurn(session.id, turn).catch(() => undefined);
     handleAgentEvent(
       session.id,
       { kind: 'error', message: String(error) },
@@ -538,10 +600,12 @@ export function answerPermission(
   if (waiting) {
     // The card shows the answer at once; if the SDK no longer waits for it (the turn was gone), it says so instead.
     block.state = answer === 'deny' ? 'denied' : 'allowed';
+    settleKeptPermission(session.id, messageId, blockIndex, block.state);
     persistLocal();
     void Promise.all(block.requests.map((request) => answerCopilotPermission(request.id, answer !== 'deny')))
       .catch(() => {
         block.state = 'expired';
+        settleKeptPermission(session.id, messageId, blockIndex, 'expired');
         persistLocal();
       });
     if (answer === 'deny') sendNextQueued(session.id);
@@ -549,12 +613,17 @@ export function answerPermission(
   }
   if (answer === 'deny') {
     block.state = 'denied';
+    settleKeptPermission(session.id, messageId, blockIndex, 'denied');
     persistLocal();
+    // A worker's task waits on this card: a "no" ends it instead of leaving it hanging until its time limit.
+    answerWorkerApproval(session.id, false);
     sendNextQueued(session.id);
     return;
   }
   block.state = 'allowed';
+  settleKeptPermission(session.id, messageId, blockIndex, 'allowed');
   persistLocal();
+  answerWorkerApproval(session.id, true);
   startTurn(
     session,
     'Permission granted. Please continue with what you were doing.',
@@ -565,7 +634,7 @@ export function answerPermission(
 
 /** Adds the typed message to the open session. The first message turns a draft into a real session. */
 /** The assistant message each live turn is writing into, per session. */
-export const replies: Record<string, string> = {};
+export const replies = $state<Record<string, string>>({});
 /** The reply object of each running turn. */
 export const liveReplies: Record<string, Message> = {};
 /** Every live provider run owns its reply by turn id; primary aliases above remain for legacy queue/status UI. */
@@ -574,6 +643,10 @@ export const sessionLanes = $state<Record<string, RunLane[]>>({});
 
 export function updateLane(sessionId: string, lane: RunLane) {
   const lanes = sessionLanes[sessionId] ?? [];
+  // Every streamed delta reports its lane again: an unchanged lane is left as it is, so the whole list is not rebuilt
+  // (and every reader of it woken) a hundred times per answer.
+  const same = lanes.find((item) => item.id === lane.id);
+  if (same && same.role === lane.role && same.state === lane.state && same.backgroundWork === lane.backgroundWork && lane.state !== 'done' && lane.state !== 'failed' && lane.state !== 'stopped') return;
   const next = lanes.filter((item) => item.id !== lane.id);
   if (lane.state === 'done' || lane.state === 'failed' || lane.state === 'stopped') {
     sessionLanes[sessionId] = next;
@@ -617,7 +690,7 @@ export const askText = (message: Message) =>
  * has written it so far) does not hold the running turn, or holds only part of it. The live question and reply go
  * on the end, in place of any copy of that question, so the text keeps growing where the reader left it.
  */
-export function withLive(sessionId: string, list: Message[]): Message[] {
+function withPrimaryLive(sessionId: string, list: Message[]): Message[] {
   const reply = liveReplies[sessionId];
   const handout = liveHandouts[sessionId];
   if (reply && handout === NO_HANDOUT)
@@ -645,6 +718,18 @@ export function withLive(sessionId: string, list: Message[]): Message[] {
     }
   }
   return [...list.slice(0, cut), asked, reply];
+}
+
+/** Reattaches every live lane after transcript loading, including independent replies beside background work. */
+export function withLive(sessionId: string, list: Message[]): Message[] {
+  const visible = withPrimaryLive(sessionId, list);
+  const next = [...visible];
+  for (const run of runReplies.values()) {
+    if (run.sessionId !== sessionId || !run.listener) continue;
+    if (run.ask && !next.some((message) => message.id === run.ask!.id)) next.push(run.ask);
+    if (!next.some((message) => message.id === run.reply.id)) next.push(run.reply);
+  }
+  return next;
 }
 
 /** Messages of a session: the live list for the active one, the remembered list for the others. */
@@ -775,16 +860,24 @@ export function closePendingPermissions(sessionId: string) {
 
 /** Dispatches one queued message only after the active turn and all user decisions are complete. */
 export function sendNextQueued(sessionId: string) {
-  if (queuePaused[sessionId] || hasTurnWork(sessionId)) return;
+  const listenerAvailable = () => canListenToSession(sessionId) && !needsUserInput(sessionId) && Boolean(queued[sessionId]?.length) && !queued[sessionId][0].mentions?.some((mention) => mention.kind === 'ai' || mention.kind === 'workflow');
+  if (queuePaused[sessionId] || (hasTurnWork(sessionId) && !listenerAvailable())) return;
   // Let the current event stack finish before taking an item. Ctrl/Cmd+Enter stops the current turn and
   // starts its message synchronously; taking an older queue item before that message starts would
   // remove it from the queue, then `send` would reject it because the priority turn is now running.
   setTimeout(() => {
-    if (queuePaused[sessionId] || hasTurnWork(sessionId)) return;
-    // Run only one queued user message per turn; the rest stay in line until this reply is rendered.
+    if (queuePaused[sessionId] || (hasTurnWork(sessionId) && !listenerAvailable())) return;
+    const listener = listenerAvailable();
+    // A context near the window is compacted before the next message; the compaction turn calls back here when done.
+    if (!listener && compressIfNeeded(sessionId)) return;
+    // Run only one queued user message per provider turn; the rest stay in line until it finishes.
     const next = dequeue(queued, sessionId);
     if (next) logFlow(sessionId, 'queue', `sending one waiting message (${queued[sessionId]?.length ?? 0} remain)`);
     if (next) {
+      if (listener) {
+        sendImmediate(sessionId, next);
+        return;
+      }
       send(sessionId, next.text, next.images, next.elements, next.mentions, {
         files: next.files,
         runGroup: next.runGroup,
@@ -804,10 +897,10 @@ export function sendNextQueued(sessionId: string) {
   }, 0);
 }
 
-/** The longest the queue waits for a finished reply to be drawn (typing its last text takes a few seconds at most). */
+/** Expiry for a finished reply's presentation state when its virtual blocks are not mounted. */
 export const RENDER_WAIT_LIMIT_MS = 15_000;
 
-/** A finished reply can still be animating its final Markdown into view; keep its queue behind that render. */
+/** A finished reply can still be animating its final Markdown; presentation tracking does not block the queue. */
 export const renderWaiters: Record<
   string,
   { messageId: string; blocks: Set<number> }

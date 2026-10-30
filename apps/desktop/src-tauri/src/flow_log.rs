@@ -246,6 +246,7 @@ fn describe(event: &AgentEvent) -> (&'static str, String) {
         AgentEvent::ToolResult { id, output, is_error, .. } => ("tool_result", format!("id={id} error={is_error} bytes={}", output.len())),
         AgentEvent::ToolOutputDelta { .. } => ("tool_output", String::new()),
         AgentEvent::PermissionDenied { requests } => ("permission_denied", format!("{} request(s)", requests.len())),
+        AgentEvent::Session { session_id } => ("session", format!("id={session_id}")),
         AgentEvent::Done { session_id, cost_usd, .. } => ("done", format!("session={} cost={cost_usd:?}", session_id.as_deref().unwrap_or("-"))),
         AgentEvent::Usage { .. } => ("usage", String::new()),
         AgentEvent::Error { message } => ("error", clip(message, 300)),

@@ -51,7 +51,7 @@
           aria-label={queuePaused[sessionId] ? 'Resume queue' : 'Pause queue'}
           onclick={() => queuePaused[sessionId] ? resumeQueue(sessionId) : pauseQueue(sessionId)}
         >
-          <ZIcon zType={(queuePaused[sessionId] ? 'lucidePlay' : 'lucidePause') as ZIconName} zSize="12" class="size-3" />
+          <ZIcon zType={(queuePaused[sessionId] ? 'lucidePlay' : 'lucideSquarePause') as ZIconName} zSize="12" class="size-3" />
           <span>{queuePaused[sessionId] ? 'Resume' : 'Pause'}</span>
         </button>
         <button
@@ -97,10 +97,13 @@
                   ? 'File'
                   : 'Element')}</span
           >
+          {#if item.priority}<span class="shrink-0 text-[0.6875rem] text-primary">Next</span>{/if}
           <span class="flex shrink-0 items-center gap-0.5">
             <button
               type="button"
-              class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+              disabled={waitingForUser}
+              title={waitingForUser ? 'Answer the pending question or permission first' : 'Send this message now'}
+              class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
               onclick={() => steerQueued(sessionId, item)}
             >
               <ZIcon zType={'lucideArrowRight' as ZIconName} class="size-3" />

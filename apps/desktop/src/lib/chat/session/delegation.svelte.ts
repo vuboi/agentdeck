@@ -79,8 +79,8 @@ export function addWorkflowWorker(main: string, childId: string, agent: Agent, m
 }
 
 /** Shows the lead model integrating reports returned by background workers. */
-export function beginWorkflowIntegration(main: string): void {
-  const run = activeWorkflowByMain.get(main);
+export function beginWorkflowIntegration(main: string, runId?: string): void {
+  const run = runId ? delegateRuns.find((item) => item.id === runId && item.main === main) : activeWorkflowByMain.get(main);
   if (!run || run.endedAt) return;
   run.handback = 'running';
   run.handbackAt = Date.now();
@@ -88,11 +88,14 @@ export function beginWorkflowIntegration(main: string): void {
 
 /** Ends the lead model's integration pass for a flow run. */
 export function finishWorkflowIntegration(main: string, reply: Message, failed: boolean): void {
-  const run = delegateRuns.find((item) => item.main === main && item.handback === 'running');
+  if (reply.taskIds && !reply.workflowRunId) return;
+  const run = delegateRuns.find((item) => item.main === main && item.handback === 'running' && (!reply.workflowRunId || item.id === reply.workflowRunId));
   if (!run) return;
   run.handback = failed ? 'failed' : 'done';
   run.endedAt = Date.now();
   run.handbackStats = statsOf(reply, run.handbackAt ?? run.startedAt);
+  // A finished run is no longer the chat's current one: the map entry would hold it (and its nodes) for good.
+  if (activeWorkflowByMain.get(main) === run) activeWorkflowByMain.delete(main);
 }
 
 /** Updates one worker in the history as the delegated task starts or finishes. */
@@ -105,6 +108,21 @@ export function updateWorkflowWorker(runId: string | undefined, childId: string,
   node.note = text;
   if (state === 'done' || state === 'failed') node.endedAt = Date.now();
   if (reply) node.stats = statsOf(reply, node.startedAt);
+}
+
+/**
+ * A worker ended with no report (the user or the caller stopped it). When no other worker can still run and no report is
+ * waiting to be handed back, the flow run ends: without this it stayed "waiting" for good, and the chat's work never
+ * counted as finished.
+ */
+export function settleWorkflowRun(runId: string | undefined, reportPending: boolean): void {
+  if (!runId || reportPending) return;
+  const run = delegateRuns.find((item) => item.id === runId);
+  if (!run || run.endedAt || run.handback !== 'waiting') return;
+  if (run.nodes.some((item) => item.state === 'idle' || item.state === 'running')) return;
+  run.handback = 'done';
+  run.endedAt = Date.now();
+  if (activeWorkflowByMain.get(run.main) === run) activeWorkflowByMain.delete(run.main);
 }
 
 /** Marks the main model's pass over a flow; background workers may still return and trigger a final hand-back. */

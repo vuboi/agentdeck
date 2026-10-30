@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyAgentEvent } from './agent-reply.ts';
+import { applyAgentEvent, updateHistoricalTask } from './agent-reply.ts';
 import type { AgentEvent } from './agent';
 import type { Block } from './mock';
+import type { Message } from './mock';
 
 const run = (events: AgentEvent[]): Block[] => events.reduce<Block[]>((blocks, event) => applyAgentEvent(blocks, event).blocks, []);
 
@@ -48,4 +49,27 @@ test('a child whose call is unknown is dropped and the end of the turn settles t
 
 test('an auto turn marker draws nothing in the reply it arrives in', () => {
   assert.deepEqual(applyAgentEvent([], { kind: 'auto_turn', reason: 'x' }), { blocks: [], finished: false });
+});
+
+test('a provider session id is captured before the final Done event', () => {
+  assert.deepEqual(applyAgentEvent([], { kind: 'session', session_id: 'provider-session-1' }), {
+    blocks: [],
+    finished: false,
+    agentSession: 'provider-session-1',
+  });
+});
+
+test('a task completing in a later turn closes its original card and ignores late progress', () => {
+  const messages: Message[] = [
+    { id: 'old', role: 'assistant', time: '', blocks: run([spawn]) },
+    { id: 'new', role: 'assistant', time: '', blocks: [{ kind: 'response', text: 'New answer' }] },
+  ];
+  const event: Extract<AgentEvent, { kind: 'task' }> = { kind: 'task', id: 'task-1', tool_use_id: 'agent1', status: 'done', label: 'Scan', summary: 'Finished', tools: 3 };
+  assert.equal(updateHistoricalTask(messages, event), true);
+  const call = messages[0].blocks[0];
+  assert.equal(call.kind === 'command' && call.task?.status, 'done');
+  updateHistoricalTask(messages, { ...event, status: 'progress' });
+  assert.equal(call.kind === 'command' && call.task?.status, 'done');
+  assert.deepEqual(messages[1].blocks, [{ kind: 'response', text: 'New answer' }]);
+  assert.equal(updateHistoricalTask(messages, { ...event, tool_use_id: 'unknown' }), false);
 });

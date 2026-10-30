@@ -1,12 +1,17 @@
 <script lang="ts">
-  import { ZIcon, ZShimmerText } from '@shival99/z-ui-svelte';
+  import { ZIcon, ZLoading, ZShimmerText } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
+  import { LOADER, LOADER_SIZE } from '../../app/platform/loaders';
+  import { ticker } from '../../app/platform/clock.svelte';
   import type { CommandBlock } from '../../chat/content/blocks';
   import { describeStep, toolOf } from '../../chat/content/blocks';
+  import { jsonInText } from '../../app/text/json-text';
   import type { Block } from '../../chat/mock';
   import { modelLabel, modelSources } from '../../agents/models.svelte';
   import { WEB_SEARCH } from '../../chat/content/tool-kind';
   import AgentLogo from '../ui/AgentLogo.svelte';
+  import StatusRoller from '../ui/StatusRoller.svelte';
+  import { fade } from 'svelte/transition';
 
   let { items, agent = 'codex' }: { items: CommandBlock[]; agent?: string } = $props();
   let expanded = $state<Record<string, boolean>>({});
@@ -14,6 +19,21 @@
   const keyOf = (item: CommandBlock, index: number) => item.id ?? String(index);
   const live = (item: CommandBlock) => item.task?.status === 'started' || item.task?.status === 'progress';
   const status = (item: CommandBlock) => item.task?.status === 'done' ? 'Completed' : item.task?.status === 'failed' ? 'Failed' : 'Working';
+  /** h:mm:ss from one hour on, mm:ss before. */
+  function clock(ms: number) {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  }
+  /** The running time of a task: it counts while live, and stops at its end. */
+  const timeOf = (item: CommandBlock) => {
+    const from = item.task?.startedAt;
+    if (!from) return '';
+    return clock((item.task?.endedAt ?? (live(item) ? ticker.sec : from)) - from);
+  };
   const logs = (item: CommandBlock) => (item.children ?? []).filter((child): child is Extract<Block, { kind: 'command' | 'response' }> => {
     if (child.kind === 'response') return true;
     if (child.kind !== 'command') return false;
@@ -53,13 +73,18 @@
     <div class="{index > 0 ? 'border-t border-border' : ''}">
       <button type="button" class="flex min-h-9 w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/60" aria-expanded={isOpen} onclick={() => (expanded[key] = !isOpen)}>
         <AgentLogo agent={info.agent} model={info.model} class="size-3.5 shrink-0" />
-        <span class="min-w-0 max-w-[40%] truncate font-medium" title={info.name}>
+        <span class="min-w-0 max-w-[40%] truncate font-medium">
           {#if live(item)}<ZShimmerText zBase="var(--primary)" zPeak="var(--foreground)" zText={info.name} />{:else}{info.name}{/if}
         </span>
-        <span class="min-w-0 flex-1 truncate text-muted-foreground" title={info.task || task.summary || item.command}>{info.task || task.summary || item.command}</span>
-        <span class="inline-flex w-[6.5rem] shrink-0 items-center gap-1.5 {task.status === 'failed' ? 'text-destructive' : task.status === 'done' ? 'text-emerald-500' : 'text-primary'}">
-          {#if live(item)}<span class="size-1.5 shrink-0 animate-pulse rounded-full bg-current" aria-hidden="true"></span>{:else}<ZIcon zType={(task.status === 'done' ? 'lucideCircleCheck' : 'lucideCircleX') as ZIconName} class="size-3.5 shrink-0" />{/if}
-          <span class="w-[4.5rem] truncate">{status(item)}</span>
+        <span class="min-w-0 flex-1 truncate text-muted-foreground">{info.task || task.summary || item.command}</span>
+        <span class="inline-flex w-[7.5rem] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap text-xs transition-colors duration-300 {task.status === 'failed' ? 'text-destructive' : task.status === 'done' ? 'text-emerald-500' : 'text-primary'}">
+          {#key live(item) ? "live" : task.status}
+            <span class="grid size-3 shrink-0 place-items-center" in:fade={{ duration: 220 }}>{#if live(item)}<ZLoading zLoading zSpinner={LOADER.working} zSize={LOADER_SIZE} zColor="current" />{:else}<ZIcon zType={(task.status === "done" ? "lucideCircleCheck" : "lucideCircleX") as ZIconName} class="size-3" />{/if}</span>
+          {/key}
+          <StatusRoller current={status(item)} sizes={['Working', 'Pending', 'Waiting', 'Completed', 'Failed']} />
+          {#if timeOf(item)}
+            <span class="tabular-nums text-muted-foreground">{timeOf(item)}</span>
+          {/if}
         </span>
         <ZIcon zType="lucideChevronRight" class="size-3.5 shrink-0 text-muted-foreground transition-transform {isOpen ? 'rotate-90' : ''}" />
       </button>
@@ -95,7 +120,7 @@
                         <div class="max-h-[min(40vh,20rem)] overflow-y-auto overscroll-contain">
                           <div class="flex flex-col gap-1.5 px-3 py-2">
                             <pre class="m-0 whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground">{child.command}</pre>
-                            {#if child.output}<pre class="m-0 whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-xs text-foreground/90">{child.output}</pre>{:else if child.status === 'running'}<p class="m-0 text-xs text-muted-foreground">Waiting for tool output…</p>{/if}
+                            {#if child.output}<pre class="m-0 whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-xs text-foreground/90">{jsonInText(child.output)}</pre>{:else if child.status === 'running'}<p class="m-0 text-xs text-muted-foreground">Waiting for tool output…</p>{/if}
                           </div>
                         </div>
                       </div>
@@ -108,7 +133,7 @@
               {/each}
             </div>
           {:else if item.output.trim()}
-            <pre class="m-0 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-xs text-muted-foreground">{item.output}</pre>
+            <pre class="m-0 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-xs text-muted-foreground">{jsonInText(item.output)}</pre>
           {:else if live(item)}
             <p class="m-0 text-muted-foreground/70 italic">The provider has not exposed child logs yet. This task will update here when more activity arrives.</p>
           {:else}

@@ -1,7 +1,7 @@
 //! The chat runs: one agent turn (a CLI, or a custom provider) per chat at a time, forwarded to the UI as
 //! `agent-event`s, and stopped on request.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
@@ -74,6 +74,19 @@ fn stop_run(run: Run) {
 /// The active runs, per visible chat and turn. A foreground listener and a background waiter can coexist in one chat.
 static RUNNING: LazyLock<Mutex<HashMap<(String, String), Run>>> = LazyLock::new(Default::default);
 
+/// Runs that ended before `track` listed them (a turn that finishes at once): `track` must not list those, nothing would
+/// ever remove them. Keyed like `RUNNING`; turn ids are never reused, so an entry only ever meets its own run.
+static FINISHED: LazyLock<Mutex<HashSet<(String, String)>>> = LazyLock::new(Default::default);
+
+/// How many early finishes are remembered. A stopped run is not listed any more when it ends, so its entry is never
+/// claimed; the table is emptied past this size (a run that finishes before it is listed within that is long gone).
+const FINISHED_KEEP: usize = 256;
+
+/// The table of runs. A panic while it was held must not stop every later stop and send: the data is still sound.
+fn running() -> std::sync::MutexGuard<'static, HashMap<(String, String), Run>> {
+    RUNNING.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Keeps one independently addressable run. A new turn never replaces another lane of the same visible chat.
 fn track(
     session: String,
@@ -82,18 +95,30 @@ fn track(
     stop: Option<StopHandle>,
     response: ChatResponseCapabilities,
 ) {
-    if let Ok(mut running) = RUNNING.lock() {
-        let key = (session, turn);
-        if let Some(previous) = running.insert(key, Run { handle, stop, response }) {
-            stop_run(previous);
-        }
+    let mut running = running();
+    let key = (session, turn);
+    let mut finished = FINISHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if finished.remove(&key) {
+        // Already over: `forget` ran first. Nothing to keep or stop.
+        return;
+    }
+    drop(finished);
+    if let Some(previous) = running.insert(key, Run { handle, stop, response }) {
+        stop_run(previous);
     }
 }
 
 /// A run that ended on its own leaves the table, unless a newer turn of the chat already took its place.
 fn forget(session: &str, turn: &str) {
-    if let Ok(mut running) = RUNNING.lock() {
-        running.remove(&(session.to_owned(), turn.to_owned()));
+    let mut running = running();
+    let key = (session.to_owned(), turn.to_owned());
+    if running.remove(&key).is_none() {
+        // Not listed (yet): remember the end, so a `track` that comes after it does not list a run that is over.
+        let mut finished = FINISHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if finished.len() >= FINISHED_KEEP {
+            finished.clear();
+        }
+        finished.insert(key);
     }
 }
 
@@ -250,9 +275,11 @@ pub(crate) async fn agent_send(
         let (stop, token) = StopHandle::new();
         let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, "copilot", req.model.as_deref().unwrap_or("-"));
         let run = crate::copilot::run_turn(app.clone(), session.clone(), turn.clone(), message_id.clone(), req, token);
+        let (chat, this_turn) = (session.clone(), turn.clone());
         let handle = tauri::async_runtime::spawn(async move {
             run.await;
             noted.finish("finished");
+            forget(&chat, &this_turn);
         });
         track(session, turn, handle, Some(stop), response);
         return Ok(());
@@ -274,9 +301,11 @@ pub(crate) async fn agent_send(
         let (stop, token) = StopHandle::new();
         let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, "opencode", req.model.as_deref().unwrap_or("-"));
         let run = crate::opencode_serve::run_turn(app.clone(), session.clone(), turn.clone(), message_id.clone(), req, token);
+        let (chat, this_turn) = (session.clone(), turn.clone());
         let handle = tauri::async_runtime::spawn(async move {
             run.await;
             noted.finish("finished");
+            forget(&chat, &this_turn);
         });
         track(session, turn, handle, Some(stop), response);
         return Ok(());
@@ -358,17 +387,41 @@ pub(crate) async fn custom_send(
     Ok(())
 }
 
+/// Summarizes attachments through a configured OpenAI-compatible vision model before the main agent sees them.
+#[tauri::command]
+pub(crate) async fn prehandle_attachments(
+    kind: String,
+    base_url: String,
+    api_key: Option<String>,
+    model: String,
+    prompt: String,
+    images: Vec<String>,
+    files: Vec<String>,
+) -> Result<String, String> {
+    custom_chat::prehandle_attachments(custom_chat::PrehandleRequest {
+        kind,
+        base_url,
+        api_key,
+        model,
+        prompt,
+        images,
+        files,
+    })
+    .await
+}
+
 /// Hands a message to a running turn only when its provider guarantees a distinct reply for that message. Merged steer
 /// and native queue events stay under AgentDeck's message queue because this command has no independent reply identity.
 #[tauri::command]
 pub(crate) fn agent_inject(session: String, text: String) -> bool {
-    let can_inject = RUNNING.lock().ok().is_some_and(|running| {
+    let can_inject = {
+        let running = running();
         let mut session_runs = running.iter().filter(|((chat, _), _)| chat == &session);
         match (session_runs.next(), session_runs.next()) {
             (Some((_, run)), None) => run.response.can_inject_as_distinct_reply(),
             _ => false,
         }
-    });
+    };
     can_inject && ag_adapters::agent::warm::inject(&session, &text)
 }
 
@@ -380,16 +433,15 @@ pub(crate) fn agent_stop(session: String, turn: Option<String>) {
     if turn.as_deref().is_none_or(|turn| turn.starts_with("auto-")) {
         ag_adapters::agent::tail::interrupt(&session);
     }
-    if let Ok(mut running) = RUNNING.lock() {
-        let keys = running
-            .keys()
-            .filter(|(chat, run_turn)| chat == &session && turn.as_deref().is_none_or(|target| target == run_turn))
-            .cloned()
-            .collect::<Vec<_>>();
-        for key in keys {
-            if let Some(run) = running.remove(&key) {
-                stop_run(run);
-            }
+    let mut running = running();
+    let keys = running
+        .keys()
+        .filter(|(chat, run_turn)| chat == &session && turn.as_deref().is_none_or(|target| target == run_turn))
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in keys {
+        if let Some(run) = running.remove(&key) {
+            stop_run(run);
         }
     }
 }
@@ -397,10 +449,7 @@ pub(crate) fn agent_stop(session: String, turn: Option<String>) {
 /// Stops every active agent turn and warm CLI when the desktop WebView reloads.
 #[tauri::command]
 pub(crate) fn agent_stop_all() {
-    let runs = RUNNING
-        .lock()
-        .map(|mut running| std::mem::take(&mut *running))
-        .unwrap_or_default();
+    let runs = std::mem::take(&mut *running());
     for ((session, turn), run) in runs {
         if turn.starts_with("auto-") {
             ag_adapters::agent::tail::interrupt(&session);

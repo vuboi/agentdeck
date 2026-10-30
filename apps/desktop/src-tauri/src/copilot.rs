@@ -13,6 +13,7 @@ use github_copilot_sdk::handler::{PermissionHandler, PermissionResult};
 use github_copilot_sdk::types::{
     Attachment, DeliveryMode, MessageOptions, PermissionRequestData, ResumeSessionConfig, SessionConfig,
 };
+use github_copilot_sdk::subscription::RecvErrorKind;
 use github_copilot_sdk::{CliProgram, Client, ClientOptions};
 use serde_json::{json, Value};
 use sha2::Digest;
@@ -20,6 +21,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
 use ag_adapters::agent::permission::{verdict, Action, Mode, Verdict};
+use ag_adapters::agent::stall::{Watchdog, DEFAULT_STALL_LIMIT};
 use ag_adapters::agent::{
     begin_file_snapshot, file_change, finish_file_snapshot, AgentEvent, FileSnapshot, TaskStatus, TurnRequest,
 };
@@ -117,6 +119,7 @@ pub(crate) async fn run_turn(
     request: TurnRequest,
     stop: ag_adapters::agent::interrupt::StopToken,
 ) {
+    let refused: Refusals = Arc::default();
     let permissions = Arc::new(CopilotPermissions {
         app: app.clone(),
         chat_id: chat_id.clone(),
@@ -124,9 +127,10 @@ pub(crate) async fn run_turn(
         message_id: message_id.clone(),
         mode: Mode::parse(request.permission_mode.as_deref()),
         allowed: request.allowed_tools.clone(),
+        refused: Arc::clone(&refused),
     });
     let sink = |event: AgentEvent| emit(&app, &chat_id, &turn_id, message_id.as_deref(), event);
-    let result = run_turn_core(&chat_id, request, permissions, stop, sink).await;
+    let result = run_turn_core(&chat_id, request, permissions, stop, refused, sink).await;
     forget_pending(&turn_id);
     if let Err(error) = result {
         emit(&app, &chat_id, &turn_id, message_id.as_deref(), AgentEvent::Error { message: error });
@@ -140,17 +144,28 @@ pub(crate) async fn run_turn_core(
     request: TurnRequest,
     permissions: Arc<dyn PermissionHandler>,
     stop: ag_adapters::agent::interrupt::StopToken,
+    refused: Refusals,
     out: impl FnMut(AgentEvent),
 ) -> Result<(), String> {
     let token = github_token().await?;
     let (id, client) = acquire_client(chat_id, token, request.cwd.as_deref()).await?;
-    let result = run_session(&client, chat_id, request, permissions, stop, out).await;
+    // Gives the client back when this turn ends, also when its task is aborted (a stopped run).
+    let _hold = ClientHold(id);
+    let result = run_session(&client, chat_id, request, permissions, stop, refused, out).await;
     if result.is_err() {
         // The CLI may be the cause (it did not start, or stopped answering): the next turn starts a new one.
         evict_client(id).await;
     }
-    release_client(id).await;
     result
+}
+
+/// A turn's hold on its pooled client: dropping it counts the turn as done (`release_client`).
+struct ClientHold(u64);
+
+impl Drop for ClientHold {
+    fn drop(&mut self) {
+        tauri::async_runtime::spawn(release_client(self.0));
+    }
 }
 
 /// Runs one message on the shared client: a session for it, then its events until the run ends.
@@ -160,6 +175,7 @@ async fn run_session(
     request: TurnRequest,
     permissions: Arc<dyn PermissionHandler>,
     mut stop: ag_adapters::agent::interrupt::StopToken,
+    refused: Refusals,
     mut out: impl FnMut(AgentEvent),
 ) -> Result<(), String> {
     let session_id = request
@@ -219,6 +235,7 @@ async fn run_session(
         Ok(session) => session,
         Err(error) => return Err(error.to_string()),
     };
+    out(AgentEvent::Session { session_id: session_id.clone() });
     let mut events = session.subscribe();
     // A message the user writes while the turn runs is steered into it (`immediate`): the work goes on and reads it at its
     // next model call, as a CLI that takes input at any time would.
@@ -249,6 +266,8 @@ async fn run_session(
     // The main agent went idle but the run did not end (a shell is still detached): how long to wait for what follows.
     let mut lingering: Option<tokio::time::Instant> = None;
     let far = || tokio::time::Instant::now() + Duration::from_secs(24 * 3600);
+    // A run that is alive but says nothing for too long ends with an error instead of hanging the chat.
+    let mut watchdog = Watchdog::new(DEFAULT_STALL_LIMIT);
     loop {
         let abort_deadline = aborting.unwrap_or_else(far);
         let linger_deadline = lingering.unwrap_or_else(far);
@@ -258,6 +277,11 @@ async fn run_session(
                 aborting = Some(tokio::time::Instant::now() + ABORT_GRACE);
             }
             _ = tokio::time::sleep_until(abort_deadline), if aborting.is_some() => break,
+            _ = tokio::time::sleep_until(watchdog.deadline()), if aborting.is_none() => {
+                let _ = session.abort().await;
+                turn_error = Some(watchdog.message());
+                break;
+            }
             _ = tokio::time::sleep_until(linger_deadline), if lingering.is_some() && aborting.is_none() => {
                 // Nothing more came: the shell is still running. The turn ends with its answer; the shell dies with the runtime.
                 finished = true;
@@ -272,14 +296,15 @@ async fn run_session(
             }
             event = events.recv() => match event {
                 Ok(event) => {
+                    watchdog.touch();
                     let root = event.agent_id.as_deref().is_none_or(str::is_empty);
-                    if std::env::var_os("COPILOT_REAL_RAW").is_some() { eprintln!("RAW {} agent={:?} {}", event.event_type, event.agent_id, event.data.to_string().chars().take(160).collect::<String>()); } // DBG
-                    if root && event.event_type == "session.idle" && std::env::var_os("COPILOT_REAL_LINGER").is_none() { // DBG
-                        finished = aborting.is_none();
+                    if root && event.event_type == "session.idle" {
+                        // A stopped run ends here too: `closing` tells it apart from a finished one.
+                        finished = true;
                         break;
                     }
                     if root && event.event_type == "assistant.idle" {
-                        lingering = Some(tokio::time::Instant::now() + std::env::var("COPILOT_REAL_LINGER").ok().and_then(|v| v.parse().ok()).map_or(LINGER, Duration::from_secs)); // DBG
+                        lingering = Some(tokio::time::Instant::now() + LINGER);
                     }
                     if root && matches!(event.event_type.as_str(), "assistant.turn_start" | "system.notification" | "tool.execution_start") {
                         lingering = None;
@@ -287,7 +312,17 @@ async fn run_session(
                     // A sub-agent's events carry its `agentId`: they belong under the call that started it, not in the answer.
                     let task = children.lifecycle(&event.event_type, event.agent_id.as_deref(), &event.data);
                     let parent = children.parent_of(event.agent_id.as_deref(), &event.data);
-                    if let Some(task) = task { out(task); }
+                    if let Some(task) = task {
+                        watchdog.note(&task);
+                        out(task);
+                    }
+                    // A tool a sub-agent starts counts toward its task, as Claude's task progress does.
+                    if event.event_type == "tool.execution_start" {
+                        if let Some(progress) = children.tool_started(event.agent_id.as_deref()) {
+                            watchdog.note(&progress);
+                            out(progress);
+                        }
+                    }
                     if event.event_type == "system.notification" {
                         // A shell that ran on its own finished: Copilot goes on by itself with a new turn.
                         let reason = event.data["kind"]["type"].as_str().unwrap_or("notification").to_string();
@@ -313,7 +348,13 @@ async fn run_session(
                             };
                             let change = file_change(&name, &args);
                             if change.is_none() {
-                                if let Some(snapshot) = begin_file_snapshot(request.cwd.as_deref(), &name, &args) {
+                                // Reads the file from disk: off the async threads.
+                                let (cwd, tool, input) = (request.cwd.clone(), name.clone(), args.clone());
+                                let snapshot = tokio::task::spawn_blocking(move || begin_file_snapshot(cwd.as_deref(), &tool, &input))
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                if let Some(snapshot) = snapshot {
                                     file_snapshots.insert(id.clone(), snapshot);
                                 }
                             }
@@ -330,12 +371,16 @@ async fn run_session(
                             let id = event.data["toolCallId"].as_str().unwrap_or_default().to_string();
                             let is_error = !event.data["error"].is_null();
                             let snapshot = file_snapshots.remove(&id);
+                            let change = match snapshot {
+                                Some(snapshot) if !is_error => tokio::task::spawn_blocking(move || finish_file_snapshot(snapshot)).await.ok().flatten(),
+                                _ => None,
+                            };
                             Some(AgentEvent::ToolResult {
                                 id,
                                 output: event.data["result"]["detailedContent"].as_str().or_else(|| event.data["result"]["content"].as_str()).unwrap_or_default().to_string(),
                                 is_error,
                                 image: None,
-                                change: if is_error { None } else { snapshot.and_then(finish_file_snapshot) },
+                                change,
                             })
                         }
                         "assistant.usage" => Some(AgentEvent::Usage {
@@ -351,25 +396,46 @@ async fn run_session(
                         }
                         _ => None,
                     };
-                    if let Some(mapped) = mapped { out(scoped(parent, mapped)); }
+                    if let Some(mapped) = mapped {
+                        watchdog.note(&mapped);
+                        out(scoped(parent, mapped));
+                    }
                     if turn_error.is_some() { break; }
+                }
+                // Events were dropped because this reader was slow: the run goes on from the next one.
+                Err(error) if matches!(error.kind(), RecvErrorKind::Lagged(_)) => {}
+                // The runtime went away: the turn did not end by itself, so it is an error and not a silent stop.
+                Err(_) if aborting.is_none() => {
+                    turn_error = Some("GitHub Copilot closed the session before the answer was complete".to_string());
+                    break;
                 }
                 Err(_) => break,
             },
         }
     }
     let _ = session.disconnect().await;
+    // The refusals of the turn come before its end, as Claude's `permission_denials` do.
+    let refusals = refused.lock().map(|mut list| std::mem::take(&mut *list)).unwrap_or_default();
+    if !refusals.is_empty() {
+        out(AgentEvent::PermissionDenied { requests: refusals });
+    }
+    if let Some(event) = closing(aborting.is_some(), finished, turn_error, &session_id, last_message.unwrap_or(answer))? {
+        out(event);
+    }
+    Ok(())
+}
+
+/// The event that ends a turn that the run loop left, or `None` when it ends without one. A stopped turn closes as Claude's
+/// and Codex's do (`interrupt::stopped`): an empty `Done` that keeps the conversation, so an error that follows the stop is not
+/// shown. A failure that was not asked for is returned as the turn's error; a finished run is `Done` with its answer.
+fn closing(aborted: bool, finished: bool, turn_error: Option<String>, session_id: &str, text: String) -> Result<Option<AgentEvent>, String> {
+    if aborted {
+        return Ok(Some(ag_adapters::agent::interrupt::stopped(AgentEvent::Error { message: "stopped".into() }, Some(session_id))));
+    }
     if let Some(error) = turn_error {
         return Err(error);
     }
-    if finished {
-        out(AgentEvent::Done {
-            session_id: Some(session_id),
-            text: last_message.unwrap_or(answer),
-            cost_usd: None,
-        });
-    }
-    Ok(())
+    Ok(finished.then(|| AgentEvent::Done { session_id: Some(session_id.to_owned()), text, cost_usd: None }))
 }
 
 /// How long a Copilot CLI stays running with no turn. The same as the CLIs in `warm.rs`.
@@ -399,8 +465,22 @@ static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 /// one stops once no running turn still holds it. When the pool is full, the least recently used idle client makes room.
 async fn acquire_client(chat: &str, token: String, cwd: Option<&Path>) -> Result<(u64, Client), String> {
     let cwd = cwd.map(Path::to_path_buf);
+    {
+        let mut pool = POOL.lock().await;
+        pool.retain(|entry| entry.chat != chat || (entry.token == token && entry.cwd == cwd));
+        if let Some(entry) = pool.iter_mut().find(|entry| entry.chat == chat) {
+            entry.busy += 1;
+            entry.generation += 1;
+            return Ok((entry.id, entry.client.clone()));
+        }
+    }
+    // Started with the pool unlocked: the CLI takes seconds to start (it may be unpacked first), and every other chat
+    // would wait behind it. A limit keeps a CLI that never answers from holding the turn for ever.
+    let client = tokio::time::timeout(CLIENT_START, start_client(token.clone(), cwd.as_deref()))
+        .await
+        .map_err(|_| "GitHub Copilot did not start in time. Its CLI may still be unpacking: try again in a moment".to_string())??;
     let mut pool = POOL.lock().await;
-    pool.retain(|entry| entry.chat != chat || (entry.token == token && entry.cwd == cwd));
+    // Another start for this chat (a prewarm and a first message) may have finished first: its client is the one kept.
     if !pool.iter().any(|entry| entry.chat == chat) {
         if pool.len() >= MAX_CLIENTS {
             let idle = pool.iter().enumerate().filter(|(_, entry)| entry.busy == 0).min_by_key(|(_, entry)| entry.last_used);
@@ -408,7 +488,6 @@ async fn acquire_client(chat: &str, token: String, cwd: Option<&Path>) -> Result
                 pool.remove(index);
             }
         }
-        let client = start_client(token.clone(), cwd.as_deref()).await?;
         let id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
         pool.push(PooledClient { id, chat: chat.to_owned(), token, cwd, client, busy: 0, generation: 0, last_used: tokio::time::Instant::now() });
     }
@@ -418,12 +497,15 @@ async fn acquire_client(chat: &str, token: String, cwd: Option<&Path>) -> Result
     Ok((entry.id, entry.client.clone()))
 }
 
+/// How long the Copilot CLI may take to start.
+const CLIENT_START: Duration = Duration::from_secs(90);
+
 /// Starts the chat's Copilot CLI ahead of its first message and keeps it in the pool. Errors are left to the first turn,
 /// which reports them.
 pub(crate) async fn prewarm(chat: String, cwd: Option<PathBuf>) {
     let Ok(token) = github_token().await else { return };
     if let Ok((id, _client)) = acquire_client(&chat, token, cwd.as_deref()).await {
-        release_client(id).await;
+        drop(ClientHold(id));
     }
 }
 
@@ -462,9 +544,28 @@ const ABORT_GRACE: Duration = Duration::from_secs(5);
 #[derive(Default)]
 struct Children {
     parents: HashMap<String, String>,
+    /// How many tools each sub-agent has started so far.
+    tools: HashMap<String, u32>,
 }
 
 impl Children {
+    /// A tool a sub-agent started: its running count, as a progress step of the task that started it (Claude's task progress
+    /// carries the same count). `None` for the main agent's own tools and for an agent no task was started for.
+    fn tool_started(&mut self, agent_id: Option<&str>) -> Option<AgentEvent> {
+        let agent = agent_id.filter(|id| !id.is_empty())?;
+        let tool_use_id = self.parents.get(agent)?.clone();
+        let count = self.tools.entry(agent.to_owned()).or_default();
+        *count += 1;
+        Some(AgentEvent::Task {
+            id: agent.to_owned(),
+            tool_use_id: Some(tool_use_id),
+            status: TaskStatus::Progress,
+            label: None,
+            summary: None,
+            tools: Some(*count),
+        })
+    }
+
     /// The tool call an event with this `agentId` belongs under; `None` for the main agent's own events.
     fn parent_of(&self, agent_id: Option<&str>, data: &Value) -> Option<String> {
         let agent = agent_id?;
@@ -629,6 +730,19 @@ struct CopilotPermissions {
     message_id: Option<String>,
     mode: Mode,
     allowed: Vec<String>,
+    refused: Refusals,
+}
+
+/// The requests a turn refused without asking the user (plan mode). They become `PermissionDenied` before the turn ends, the
+/// way Claude's `permission_denials` reach the chat, so each can be allowed for the next turn.
+pub(crate) type Refusals = Arc<Mutex<Vec<ag_adapters::agent::PermissionRequest>>>;
+
+/// The `allow` entry of a Copilot request: the same kind, tool and summary later are approved without asking. A hash, so an
+/// entry approves that exact request only.
+fn allow_key(kind: &str, tool: &str, summary: &str) -> String {
+    let digest = sha2::Sha256::digest(format!("{kind}\0{tool}\0{summary}").as_bytes());
+    let digest: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("copilot:{kind}:{digest}")
 }
 
 /// What a Copilot permission kind does, as the modes classify actions.
@@ -674,19 +788,19 @@ impl PermissionHandler for CopilotPermissions {
             Some(reason) => format!("⚠ {reason} {summary}"),
             None => summary,
         };
-        let permission_key = format!("{kind}\0{tool}\0{summary}");
-        let digest = sha2::Sha256::digest(permission_key.as_bytes());
-        let digest = digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let allow = format!("copilot:{kind}:{digest}");
+        let allow = allow_key(&kind, &tool, &summary);
+        // Approved once per request, not `approve_for_session`: the SDK would then approve later requests of the kind without
+        // this handler, and the guard above would not see them.
         if careful.is_none() && self.allowed.contains(&allow) {
             return PermissionResult::approve_once();
         }
         match if careful.is_some() { Verdict::Ask } else { verdict(self.mode, action_of(&kind)) } {
             Verdict::Approve => return PermissionResult::approve_once(),
             Verdict::Refuse => {
+                // Not a card now: a card for a request that is not waiting would not be answered. It is shown when the turn ends.
+                if let Ok(mut refused) = self.refused.lock() {
+                    refused.push(ag_adapters::agent::PermissionRequest { id: request_id.to_string(), tool, summary, allow });
+                }
                 return PermissionResult::reject(Some(
                     "Plan mode is read-only. Describe the change instead of making it.".to_string(),
                 ));
@@ -738,6 +852,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_modes_read_copilot_kinds_as_they_read_the_other_agents() {
+        use github_copilot_sdk::types::PermissionRequestKind as Kind;
+        // The kind is named by its lowercased variant, as `handle` names it.
+        let name = |kind: Kind| format!("{kind:?}").to_lowercase();
+        assert_eq!(action_of(&name(Kind::Read)), Action::Read);
+        assert_eq!(action_of(&name(Kind::Write)), Action::Write);
+        assert_eq!(action_of(&name(Kind::Shell)), Action::Shell);
+        assert_eq!(action_of(&name(Kind::Mcp)), Action::Other);
+        let verdict_of = |mode, kind: Kind| verdict(mode, action_of(&name(kind)));
+        assert_eq!(verdict_of(Mode::Ask, Kind::Read), Verdict::Ask);
+        assert_eq!(verdict_of(Mode::Edits, Kind::Write), Verdict::Approve);
+        assert_eq!(verdict_of(Mode::Edits, Kind::Shell), Verdict::Ask);
+        assert_eq!(verdict_of(Mode::Auto, Kind::Shell), Verdict::Approve);
+        assert_eq!(verdict_of(Mode::Auto, Kind::Mcp), Verdict::Ask);
+        assert_eq!(verdict_of(Mode::Plan, Kind::Read), Verdict::Approve);
+        assert_eq!(verdict_of(Mode::Plan, Kind::Write), Verdict::Refuse);
+        assert_eq!(verdict_of(Mode::Plan, Kind::Shell), Verdict::Refuse);
+        assert_eq!(verdict_of(Mode::Yolo, Kind::Mcp), Verdict::Approve);
+    }
+
+    #[test]
+    fn an_allow_entry_approves_only_its_own_request() {
+        let entry = allow_key("shell", "bash", "git push");
+        assert!(entry.starts_with("copilot:shell:"), "{entry}");
+        assert_eq!(entry, allow_key("shell", "bash", "git push"));
+        assert_ne!(entry, allow_key("shell", "bash", "git push --force"));
+        assert_ne!(entry, allow_key("write", "bash", "git push"));
+    }
+
+    #[test]
+    fn a_stopped_turn_closes_like_claude_and_codex_do() {
+        // A stop ends with an empty `Done` that keeps the session, even when the CLI reported an error after the stop.
+        let stopped = closing(true, false, Some("aborted".into()), "s1", String::new());
+        assert_eq!(
+            stopped,
+            Ok(Some(AgentEvent::Done { session_id: Some("s1".into()), text: String::new(), cost_usd: None }))
+        );
+        // A finished run ends with its answer; a failure that was not asked for is the turn's error.
+        assert_eq!(
+            closing(false, true, None, "s1", "PONG".into()),
+            Ok(Some(AgentEvent::Done { session_id: Some("s1".into()), text: "PONG".into(), cost_usd: None }))
+        );
+        assert_eq!(closing(false, false, Some("boom".into()), "s1", String::new()), Err("boom".to_string()));
+        assert_eq!(closing(false, false, None, "s1", String::new()), Ok(None));
+    }
+
+    #[test]
     fn a_sub_agent_is_a_task_and_its_events_go_under_the_call_that_started_it() {
         let mut children = Children::default();
         let started = json!({ "toolCallId": "call_1", "agentName": "general-purpose", "agentDisplayName": "subdone-agent", "agentDescription": "Return completion marker" });
@@ -769,6 +930,27 @@ mod tests {
         let children = Children::default();
         assert_eq!(children.parent_of(Some("a"), &json!({ "parentToolCallId": "call_9" })), Some("call_9".into()));
         assert_eq!(children.parent_of(Some("a"), &json!({})), Some("a".into()));
+    }
+
+    #[test]
+    fn a_sub_agents_tools_count_up_as_its_task_progress() {
+        let mut children = Children::default();
+        assert!(children.tool_started(Some("agent-1")).is_none(), "no task was started for it yet");
+        children.lifecycle("subagent.started", Some("agent-1"), &json!({ "toolCallId": "call_1" }));
+        assert!(children.tool_started(None).is_none(), "the main agent's tools are not a task's");
+        for expected in 1..=2 {
+            assert_eq!(
+                children.tool_started(Some("agent-1")),
+                Some(AgentEvent::Task {
+                    id: "agent-1".into(),
+                    tool_use_id: Some("call_1".into()),
+                    status: TaskStatus::Progress,
+                    label: None,
+                    summary: None,
+                    tools: Some(expected),
+                })
+            );
+        }
     }
 
     #[test]
@@ -880,7 +1062,7 @@ mod real {
         });
         let result = tokio::time::timeout(
             Duration::from_secs(limit),
-            run_turn_core(&chat, request, Arc::new(ApproveAll), token, sink),
+            run_turn_core(&chat, request, Arc::new(ApproveAll), token, Refusals::default(), sink),
         )
         .await
         .unwrap_or_else(|_| Err(format!("the turn did not end in {limit} s")));

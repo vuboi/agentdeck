@@ -340,7 +340,7 @@ html[data-warming] [data-z-popover] {
 .md-code-head, .md-code-foot { position: relative; display: flex; align-items: center; justify-content: space-between; background: var(--muted); color: var(--muted-foreground); font-size: 0.6875rem; }
 .md-code-head { padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); }
 .md-code-foot { justify-content: flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid var(--border); }
-.md-code-kind { display: inline-grid; place-items: center; height: 1.6rem; color: var(--muted-foreground); }
+.md-code-kind { display: inline-flex; align-items: center; gap: 0.4rem; height: 1.6rem; color: var(--muted-foreground); }
 .md-code-actions { display: flex; align-items: center; gap: 0.1rem; }
 .md-code-head button, .md-code-foot button { position: relative; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; padding: 0; cursor: pointer; border-radius: var(--radius-small); font: inherit; }
 .md-code-head button:hover, .md-code-foot button:hover { background: var(--accent); color: var(--foreground); }
@@ -358,6 +358,20 @@ html[data-warming] [data-z-popover] {
 @keyframes md-check-draw { to { stroke-dashoffset: 0; } }
 .md-code pre { margin: 0; padding: 0.7rem 0.85rem; overflow-x: auto; background: transparent; }
 .md-code code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.78rem; line-height: 1.6; white-space: pre; }
+.md-code-lang { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.7rem; color: var(--muted-foreground); }
+/* Table rows: a light stripe and a hover tint, so a wide table is easy to follow across. */
+.md-table tbody tr:nth-child(even) td { background: color-mix(in oklab, var(--muted) 35%, transparent); }
+.md-table tbody tr:hover td { background: color-mix(in oklab, var(--primary) 7%, transparent); }
+/* A code block or table shown as its answer arrives rises in; table rows follow one after another (--row). */
+.md-reveal { animation: md-block-in 320ms ease-out both; }
+.md-reveal tbody tr { animation: md-block-in 320ms ease-out both; animation-delay: calc(var(--row, 0) * 45ms); }
+@keyframes md-block-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-reveal, .md-reveal tbody tr { animation: none; }
+}
 
 /* Chat opening: an edge-to-edge hairline on a faint primary track; two comet bars with soft tails chase each other.
    It shows at once and the bars start mid-way (negative delays), so even a short load is seen. Only `transform` and

@@ -22,6 +22,9 @@ use super::{AgentEvent, PermissionRequest, Provider, TaskStatus, TurnRequest};
 /// What an approval card hands back for a refused command: `agy:command(<command>)`.
 const ALLOW_PREFIX: &str = "agy:command(";
 
+/// The environment variable that carries a turn's rules, so a change of approvals changes the settings key of the process.
+const RULES_ENV: &str = "AGENTDECK_AGY_RULES";
+
 /// The conversation id for the final event, and which tool steps were already announced.
 #[derive(Default)]
 struct Turn {
@@ -29,8 +32,8 @@ struct Turn {
     started: std::collections::HashSet<u64>,
     root: Option<PathBuf>,
     file_snapshots: std::collections::HashMap<u64, super::FileSnapshot>,
-    /// Commands `agy` refused to run, in order.
-    refused: Vec<String>,
+    /// Commands `agy` refused to run, in order, with the id of the step that asked for each (the id of its tool call).
+    refused: Vec<(String, String)>,
 }
 
 #[derive(Default)]
@@ -92,9 +95,22 @@ fn allow_rule(allowed_tool: &str) -> Option<String> {
     ruleable(command).then(|| format!("command({command})"))
 }
 
+/// The rules a turn's approvals stand for (only the ones of a refused command can be written, see `allow_rule`).
+fn rules_of(req: &TurnRequest) -> Vec<String> {
+    req.allowed_tools
+        .iter()
+        .filter_map(|tool| allow_rule(tool))
+        .collect()
+}
+
 /// Adds the rules that are not there yet to `permissions.allow` in agy's settings file, keeping everything else in
 /// it. The first time, the file is copied to `settings.json.agentdeck.bak`. A file that is not valid JSON is left alone.
 pub fn add_allow_rules(path: &std::path::Path, rules: &[String]) -> Result<(), String> {
+    // One writer at a time in this process: two turns adding rules read the same file and the later write would drop the
+    // earlier one's rules. A panic elsewhere does not matter here, the file is the state.
+    static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static SCRATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let _writing = WRITING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::from("{}"),
@@ -131,13 +147,21 @@ pub fn add_allow_rules(path: &std::path::Path, rules: &[String]) -> Result<(), S
     if path.exists() && !backup.exists() {
         std::fs::copy(path, &backup).map_err(failed)?;
     }
-    let scratch = path.with_extension("json.agentdeck.tmp");
+    // A name of its own, so another AgentDeck process writing at the same time does not share the scratch file.
+    let scratch = path.with_extension(format!(
+        "json.agentdeck.{}-{}.tmp",
+        std::process::id(),
+        SCRATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::write(
         &scratch,
         serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?,
     )
     .map_err(failed)?;
-    std::fs::rename(&scratch, path).map_err(failed)
+    std::fs::rename(&scratch, path).map_err(|error| {
+        let _ = std::fs::remove_file(&scratch);
+        failed(error)
+    })
 }
 
 /// `--mode` for a permission mode of the app (`None`: the default mode of `agy`).
@@ -222,16 +246,24 @@ impl Provider for Antigravity {
         serde_json::json!({ "event": "user", "message": { "role": "user", "content": [{ "type": "text", "text": prompt }] } }).to_string()
     }
 
+    /// The approvals of the turn, as the rules agy's own settings carry. They ride in the environment too: a kept process
+    /// is reused only for the same settings key (`warm.rs`), so a new approval must change the key, as Claude's
+    /// `--allowedTools` does, or the next turn would be sent to a process that was started before the rule.
+    fn environment(&self, req: &TurnRequest) -> Vec<(String, String)> {
+        let rules = rules_of(req);
+        if rules.is_empty() {
+            Vec::new()
+        } else {
+            vec![(RULES_ENV.to_string(), serde_json::json!(rules).to_string())]
+        }
+    }
+
     fn prepare(&self, req: &TurnRequest) -> Result<(), String> {
         if let Ok(mut turn) = self.turn.lock() {
             turn.root = req.cwd.clone();
             turn.file_snapshots.clear();
         }
-        let rules: Vec<String> = req
-            .allowed_tools
-            .iter()
-            .filter_map(|tool| allow_rule(tool))
-            .collect();
+        let rules = rules_of(req);
         if rules.is_empty() {
             return Ok(());
         }
@@ -261,7 +293,10 @@ impl Provider for Antigravity {
                     .as_str()
                     .filter(|id| !id.is_empty())
                     .map(str::to_owned);
-                Vec::new()
+                turn.conversation
+                    .clone()
+                    .map(|session_id| vec![AgentEvent::Session { session_id }])
+                    .unwrap_or_default()
             }
             "step_update" => step(&value["step_update"], &mut turn),
             "result" => finish(&value["result"], &turn),
@@ -330,16 +365,29 @@ fn percent_decode(text: &str) -> String {
 /// `[Resource offloaded to file:///C:/Users/me/.gemini/antigravity-cli/brain/<id>/…/media_0.png]`. It becomes a
 /// `data:` URL for the thumbnail, but only when the file is inside `<home>/.gemini` (the output is text from a tool
 /// and could name any path) and is a picture of at most 12 MB.
-fn offloaded_image_in(output: &str, home: &std::path::Path) -> Option<String> {
-    use base64::Engine;
-    let from = output.find("file://")? + "file://".len();
-    let rest = &output[from..];
-    let address = rest.split([']', '\n', ' ']).next()?;
+/// The local path of a `file://` address (the text after `file://`), with its escapes resolved.
+fn local_path(address: &str) -> String {
     let mut path = percent_decode(address);
     // `file:///C:/x` leaves `/C:/x`: drop the slash before a drive letter.
     if path.len() > 2 && path.starts_with('/') && path.as_bytes()[2] == b':' {
         path.remove(0);
     }
+    path
+}
+
+/// The file a path names, if it is inside `<home>/.gemini` (agy's own folder): the text a tool returns could name any path.
+fn inside_gemini(path: &str, home: &std::path::Path) -> Option<PathBuf> {
+    let path = std::path::Path::new(path).canonicalize().ok()?;
+    path.starts_with(home.join(".gemini").canonicalize().ok()?)
+        .then_some(path)
+}
+
+fn offloaded_image_in(output: &str, home: &std::path::Path) -> Option<String> {
+    use base64::Engine;
+    let from = output.find("file://")? + "file://".len();
+    let rest = &output[from..];
+    let address = rest.split([']', '\n', ' ']).next()?;
+    let path = local_path(address);
     let mime = match path.rsplit('.').next()?.to_ascii_lowercase().as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -347,10 +395,7 @@ fn offloaded_image_in(output: &str, home: &std::path::Path) -> Option<String> {
         "gif" => "image/gif",
         _ => return None,
     };
-    let path = std::path::Path::new(&path).canonicalize().ok()?;
-    if !path.starts_with(home.join(".gemini").canonicalize().ok()?) {
-        return None;
-    }
+    let path = inside_gemini(&path, home)?;
     if std::fs::metadata(&path).ok()?.len() > 12 * 1024 * 1024 {
         return None;
     }
@@ -431,8 +476,8 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
                 let message = info["error"]["message"].as_str().unwrap_or_default();
                 let refused = (state == "ERROR" && message.contains("permission"))
                     || (state == "DONE" && info["output"].is_null());
-                if refused && !turn.refused.contains(&input) {
-                    turn.refused.push(input.clone());
+                if refused && !turn.refused.iter().any(|(_, command)| command == &input) {
+                    turn.refused.push((index.to_string(), input.clone()));
                 }
             }
             if turn.started.insert(index) {
@@ -473,16 +518,7 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
                         Value::String(text) => serde_json::from_str::<Value>(text).unwrap_or(Value::Null),
                         other => other.clone(),
                     };
-                    for agent in listed["subagents"].as_array().into_iter().flatten() {
-                        events.push(AgentEvent::Task {
-                            id: agent["conversation_id"].as_str().map_or_else(|| index.to_string(), str::to_owned),
-                            tool_use_id: Some(index.to_string()),
-                            status: TaskStatus::Done,
-                            label: agent["role"].as_str().or_else(|| agent["type_name"].as_str()).map(str::to_owned),
-                            summary: agent["initial_prompt"].as_str().map(|prompt| prompt.chars().take(200).collect()),
-                            tools: None,
-                        });
-                    }
+                    events.extend(subagents_ended(&listed, &index.to_string(), agy_transcript));
                     let output = info["output"].as_str().unwrap_or_default().to_string();
                     let image = offloaded_image(&output);
                     let change = turn
@@ -535,6 +571,82 @@ fn is_subagent_tool(name: &str) -> bool {
     matches!(name, "invoke_subagent" | "define_subagent" | "browser_subagent")
 }
 
+/// What a sub-agent's own transcript says of its work: the tool calls it made, and the tokens of each of its model calls
+/// (input, output, cache read). The sub-agent's steps are not in the parent's stream, so this is all there is.
+#[derive(Debug, Default, PartialEq)]
+struct Transcript {
+    tools: u32,
+    calls: Vec<(u64, u64, u64)>,
+}
+
+/// Reads a transcript, one JSON step per line. A `PLANNER_RESPONSE` step is a model call: it has its token counts and
+/// the tool calls it made.
+fn read_transcript(text: &str) -> Transcript {
+    let mut transcript = Transcript::default();
+    for step in text.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()) {
+        if step["type"].as_str() != Some("PLANNER_RESPONSE") {
+            continue;
+        }
+        let calls = step["tool_calls"].as_array().map_or(0, Vec::len);
+        transcript.tools = transcript
+            .tools
+            .saturating_add(u32::try_from(calls).unwrap_or(u32::MAX));
+        if let Some(input) = step["input_tokens"].as_u64() {
+            transcript.calls.push((
+                input,
+                step["output_tokens"].as_u64().unwrap_or(0),
+                step["cache_read_tokens"].as_u64().unwrap_or(0),
+            ));
+        }
+    }
+    transcript
+}
+
+/// The text of a sub-agent's transcript, from the `file://` address it is listed under. Only a file inside agy's folder,
+/// and not a huge one.
+fn agy_transcript(uri: &str) -> Option<String> {
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
+    let path = inside_gemini(
+        &local_path(uri.strip_prefix("file://")?),
+        std::path::Path::new(&home),
+    )?;
+    if std::fs::metadata(&path).ok()?.len() > 8 * 1024 * 1024 {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()
+}
+
+/// The end of the sub-agents a step lists. Each task ends with its tool count (when its transcript can be read), and the
+/// model calls of that transcript count toward the turn's usage, as Claude's sub-agent calls do. The parent's own usage
+/// does not include them: its total is the sum of its own steps.
+fn subagents_ended(listed: &Value, call: &str, read: impl Fn(&str) -> Option<String>) -> Vec<AgentEvent> {
+    let mut events = Vec::new();
+    for agent in listed["subagents"].as_array().into_iter().flatten() {
+        let transcript = agent["log_uri"]
+            .as_str()
+            .and_then(&read)
+            .map(|text| read_transcript(&text));
+        events.push(AgentEvent::Task {
+            id: agent["conversation_id"].as_str().map_or_else(|| call.to_string(), str::to_owned),
+            tool_use_id: Some(call.to_string()),
+            status: TaskStatus::Done,
+            label: agent["role"].as_str().or_else(|| agent["type_name"].as_str()).map(str::to_owned),
+            summary: agent["initial_prompt"].as_str().map(|prompt| prompt.chars().take(200).collect()),
+            tools: transcript.as_ref().map(|found| found.tools),
+        });
+        for (input, output, cache_read) in transcript.into_iter().flat_map(|found| found.calls) {
+            events.push(AgentEvent::Usage {
+                input_tokens: input,
+                output_tokens: output,
+                cache_read_tokens: cache_read,
+                cache_write_tokens: 0,
+                new_call: true,
+            });
+        }
+    }
+    events
+}
+
 fn finish(result: &Value, turn: &Turn) -> Vec<AgentEvent> {
     if result["status"].as_str().unwrap_or("SUCCESS") != "SUCCESS" {
         // The error can list every model it would have taken: the first line says what went wrong.
@@ -547,6 +659,14 @@ fn finish(result: &Value, turn: &Turn) -> Vec<AgentEvent> {
         }];
     }
     let mut events = Vec::new();
+    if let Some(session_id) = result["conversation_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .or_else(|| turn.conversation.clone())
+    {
+        events.push(AgentEvent::Session { session_id });
+    }
     // Only refused shell commands can be approved: `agy` names the action, and a command is the one kind whose
     // exact text we know (from its step) and can put in a rule.
     let asked = result["denied_actions"]
@@ -557,10 +677,10 @@ fn finish(result: &Value, turn: &Turn) -> Vec<AgentEvent> {
     let denied: Vec<PermissionRequest> = if asked {
         turn.refused
             .iter()
-            .filter(|command| ruleable(command))
-            .enumerate()
-            .map(|(index, command)| PermissionRequest {
-                id: format!("denied-{index}"),
+            .filter(|(_, command)| ruleable(command))
+            .map(|(id, command)| PermissionRequest {
+                // The id of the refused step's tool call, as Claude's denials carry the id of theirs.
+                id: id.clone(),
                 tool: "Bash".to_string(),
                 summary: command.clone(),
                 allow: format!("{ALLOW_PREFIX}{command})"),
@@ -755,7 +875,8 @@ mod tests {
     #[test]
     fn a_plain_answer_streams_text_then_finishes() {
         let events = run(include_str!("../../tests/fixtures/agy/plain.jsonl"));
-        assert!(matches!(events.first(), Some(AgentEvent::Delta { .. })));
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::Session { .. })));
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::Delta { .. })));
         let text: String = events
             .iter()
             .filter_map(|event| {
@@ -981,5 +1102,95 @@ mod tests {
             None
         );
         assert_eq!(percent_decode("a%20b%2Fc%zz"), "a b/c%zz");
+    }
+
+    #[test]
+    fn a_refusal_carries_the_id_of_the_tool_call_it_belongs_to() {
+        let events = run(include_str!("../../tests/fixtures/agy/tool_denied.jsonl"));
+        let call = events.iter().find_map(|event| match event {
+            AgentEvent::ToolCall { id, name, .. } if name == "Bash" => Some(id.clone()),
+            _ => None,
+        });
+        let request = events.iter().find_map(|event| match event {
+            AgentEvent::PermissionDenied { requests } => requests.first().map(|request| request.id.clone()),
+            _ => None,
+        });
+        assert_eq!(call.as_deref(), Some("4"));
+        assert_eq!(request, call, "the request is linked to its tool call, as Claude's denials are");
+    }
+
+    #[test]
+    fn the_approvals_of_a_turn_ride_in_the_environment_only_when_there_are_some() {
+        let mut request = req(true);
+        assert!(Antigravity::default().environment(&request).is_empty());
+        // A Claude-style approval is not a rule agy has, so it adds nothing.
+        request.allowed_tools = vec!["Bash(git status)".into()];
+        assert!(Antigravity::default().environment(&request).is_empty());
+        request.allowed_tools = vec!["agy:command(echo hi)".into()];
+        let one = Antigravity::default().environment(&request);
+        assert_eq!(one, vec![(RULES_ENV.to_string(), r#"["command(echo hi)"]"#.to_string())]);
+        // A new approval changes the value, so it changes the settings key of the kept process.
+        request.allowed_tools.push("agy:command(ls)".into());
+        assert_ne!(Antigravity::default().environment(&request), one);
+    }
+
+    #[test]
+    fn a_sub_agents_transcript_gives_its_tool_calls_and_its_model_calls() {
+        // The lines of a real sub-agent transcript: a model call that made one tool call, then one that answered.
+        let text = r#"{"step_index":0,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","content":"hi"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","input_tokens":10925,"cache_read_tokens":0,"output_tokens":54,"tool_calls":[{"name":"send_message","args":{"Message":"\"51\""}}]}
+{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","content":"Message sent."}
+{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","input_tokens":11089,"cache_read_tokens":512,"output_tokens":2,"content":"51"}
+not json"#;
+        assert_eq!(
+            read_transcript(text),
+            Transcript { tools: 1, calls: vec![(10925, 54, 0), (11089, 2, 512)] }
+        );
+        assert_eq!(read_transcript("nothing here"), Transcript::default());
+    }
+
+    #[test]
+    fn a_finished_sub_agent_reports_its_tools_and_adds_its_model_calls_to_the_usage() {
+        let listed = serde_json::json!({ "subagents": [{
+            "conversation_id": "kid", "role": "Math Calculator", "initial_prompt": "17*3",
+            "log_uri": "file:///C:/x/transcript.jsonl"
+        }] });
+        let transcript = r#"{"type":"PLANNER_RESPONSE","tool_calls":[{"name":"a"},{"name":"b"}],"input_tokens":5,"output_tokens":1}"#;
+        let events = subagents_ended(&listed, "2", |uri| {
+            assert_eq!(uri, "file:///C:/x/transcript.jsonl");
+            Some(transcript.to_string())
+        });
+        assert_eq!(
+            events,
+            vec![
+                AgentEvent::Task {
+                    id: "kid".into(),
+                    tool_use_id: Some("2".into()),
+                    status: TaskStatus::Done,
+                    label: Some("Math Calculator".into()),
+                    summary: Some("17*3".into()),
+                    tools: Some(2),
+                },
+                AgentEvent::Usage { input_tokens: 5, output_tokens: 1, cache_read_tokens: 0, cache_write_tokens: 0, new_call: true },
+            ]
+        );
+        // Without a readable transcript the task still ends, with no count and no usage.
+        let unread = subagents_ended(&listed, "2", |_| None);
+        assert!(matches!(unread.as_slice(), [AgentEvent::Task { tools: None, .. }]));
+    }
+
+    #[test]
+    fn only_a_file_inside_agys_folder_is_read_for_a_sub_agent() {
+        let home = std::env::temp_dir().join(format!("agentdeck-agy-transcript-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let inside = home.join(".gemini").join("brain").join("t.jsonl");
+        std::fs::create_dir_all(inside.parent().expect("has a parent")).expect("makes folders");
+        std::fs::write(&inside, "{}").expect("writes");
+        std::fs::write(home.join("other.jsonl"), "{}").expect("writes");
+        let as_text = |path: &std::path::Path| path.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+        assert!(inside_gemini(&as_text(&inside), &home).is_some());
+        assert!(inside_gemini(&as_text(&home.join("other.jsonl")), &home).is_none());
+        assert_eq!(local_path("C%3A/a%20b.jsonl"), "C:/a b.jsonl");
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

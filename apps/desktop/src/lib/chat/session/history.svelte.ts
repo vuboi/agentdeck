@@ -7,8 +7,11 @@ import { splitAttachments, attachmentBlocks } from '../content/attachments';
 import { isHandbackPrompt, stripLead } from '../runs/handback';
 import { joinContinuations } from '../runs/continuations';
 import { MODELS, NO_PROJECT, addedProjects, addedReady, draftElements, draftFiles, draftImages, draftMentions, drafts, isEmptyDraft, localMessages, localSessions, mockIds, newSession, noProjectRow, parents, rememberParents, restored, workspace, type Project, type SessionItem } from './state.svelte';
-import { messagesOf, withLive } from './run.svelte';
+import { liveAsks, liveReplies, messagesOf, replies, sessionLanes, withLive } from './run.svelte';
 import { hidden, signature } from './sending.svelte';
+import { lastPrompt, queuePaused, queued, stopTurn, turns } from './turns.svelte';
+import { lastEventAt, lastEventKind, recoveries, resumes } from './events.svelte';
+import { backlog } from './delegate-task.svelte';
 
 // ---------- real history (Claude Code and Codex, read-only) ----------
 export const chat = $state({
@@ -269,6 +272,10 @@ export function keepOtherTurn(session: SessionItem, reply: Message) {
     if (!kept.some((item) => item.id === message.id))
       kept.push($state.snapshot(message) as Message);
   }
+  saveOtherTurns();
+}
+
+function saveOtherTurns() {
   const saved = Object.fromEntries(
     Object.entries(otherTurns).map(([id, list]) => [
       id,
@@ -276,6 +283,26 @@ export function keepOtherTurn(session: SessionItem, reply: Message) {
     ]),
   );
   setPref('chat.otherTurns', saved);
+}
+
+/**
+ * A permission card was answered on screen: the copies of its message that are read back when the chat is reopened
+ * (the kept turns and the transcript cache) must say so too, or the card asks again after a switch to another chat.
+ */
+export function settleKeptPermission(
+  sessionId: string,
+  messageId: string,
+  blockIndex: number,
+  state: 'allowed' | 'denied' | 'expired',
+) {
+  const settle = (list: Message[] | undefined) => {
+    const block = list?.find((message) => message.id === messageId)?.blocks[blockIndex];
+    if (block?.kind !== 'permission' || block.state === state) return false;
+    block.state = state;
+    return true;
+  };
+  settle(transcripts.get(sessionId)?.messages);
+  if (settle(otherTurns[sessionId])) saveOtherTurns();
 }
 
 /**
@@ -464,6 +491,8 @@ export async function loadOlder(
         chat.messages[0]?.at,
       ),
     );
+    // Another chat may have been opened while the page was read: it must not get this chat's older messages.
+    if (workspace.activeId !== session.id) return 0;
     chat.messages = [...added, ...chat.messages];
     chat.older = page.start;
     const cached = transcripts.get(session.id);
@@ -529,16 +558,31 @@ export async function prefetchTranscript(session: SessionItem | undefined) {
   }
 }
 
+let transcriptDone: Promise<void> = Promise.resolve();
+/** Settles when the open chat's transcript is complete, the fresh read included: a saved copy can be older than the chat. */
+export function transcriptSettled(): Promise<void> {
+  return transcriptDone;
+}
+
 /** Fills the chat with the transcript of a session: from cache when it is current, from disk otherwise. */
-export async function openTranscript(session: SessionItem | undefined) {
+export function openTranscript(session: SessionItem | undefined): Promise<void> {
+  let finish = () => {};
+  transcriptDone = new Promise<void>((resolve) => (finish = resolve));
+  return readTranscript(session).finally(finish);
+}
+
+async function readTranscript(session: SessionItem | undefined) {
   const token = ++transcriptToken;
   chat.error = '';
   chat.older = 0;
   if (!session) {
     chat.messages = [];
+    chat.loading = false;
     return;
   }
   if (!session.path || !session.source) {
+    // A read of the chat before may still be loading: its result is dropped, so it can no longer clear the flag.
+    chat.loading = false;
     const messages = await restoreCommandImages(
       session.id,
       localMessages[session.id] ??
@@ -627,6 +671,8 @@ export async function renameSession(id: string, title: string) {
 export async function deleteSession(id: string) {
   const session = workspace.sessions.find((item) => item.id === id);
   if (!session) return;
+  // A run of the chat ends with it: its CLI is stopped and the events that still arrive have nowhere to go.
+  stopTurn(id);
   if (session.path && session.source)
     await deleteHistory(session.source, session.path);
   // Forks of it move up to its own parent.
@@ -639,6 +685,24 @@ export async function deleteSession(id: string) {
   delete draftFiles[id];
   delete draftElements[id];
   delete localMessages[id];
+  // What the chat kept in memory for its runs, queue and recoveries: nothing reads it again, and it would only grow.
+  delete queued[id];
+  delete queuePaused[id];
+  delete turns[id];
+  delete lastPrompt[id];
+  delete replies[id];
+  delete liveReplies[id];
+  delete liveAsks[id];
+  delete sessionLanes[id];
+  delete recoveries[id];
+  delete resumes[id];
+  delete otherTurns[id];
+  delete hidden[id];
+  transcripts.delete(id);
+  backlog.delete(id);
+  lastEventAt.delete(id);
+  lastEventKind.delete(id);
+  saveOtherTurns();
   deleteCommandImages(id);
   patchCache((list) => list.filter((item) => item.id !== id));
   if (workspace.activeId === id) {

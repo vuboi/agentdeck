@@ -168,6 +168,9 @@ impl Provider for Claude {
             args.push("--disallowedTools".to_string());
             args.push(tool);
         }
+        // Claude's own question tool waits for a click that no AgentDeck card can give: the agentdeck-ask block replaces it.
+        args.push("--disallowedTools".to_string());
+        args.push("AskUserQuestion".to_string());
         args
     }
 

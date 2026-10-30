@@ -1,10 +1,11 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
-  import { ZIcon, ZShimmerText } from '@shival99/z-ui-svelte';
+  import { ZIcon } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { LOADER, LOADER_SIZE } from '../../app/platform/loaders';
   import AgentLogo from '../ui/AgentLogo.svelte';
   import ActivityIndicator from '../ui/ActivityIndicator.svelte';
+  import StatusRoller from '../ui/StatusRoller.svelte';
   import { elapsed, type CommandBlock } from '../../chat/content/blocks';
   import { ticker } from '../../app/platform/clock.svelte';
   import { showSession } from '../../app/ui/content-tabs.svelte';
@@ -74,15 +75,15 @@
           <span class="inline-flex min-w-0 shrink items-center gap-1 overflow-hidden whitespace-nowrap {TONE[card.state]}">
             {#if card.state === 'running' || card.state === 'background' || card.state === 'queued'}
               <ActivityIndicator spinner={card.state === 'queued' ? LOADER.queued : LOADER.background} size={LOADER_SIZE} color="current" />
-              <span class="stream-label block min-w-0 truncate [&>*]:block [&>*]:truncate"><ZShimmerText zBase="var(--primary)" zPeak="var(--foreground)" zText={STATUS[card.state]} /></span>
+              <span class="min-w-0 truncate"><StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} /></span>
             {:else if card.state === 'approval'}
-              <ZIcon zType={'lucideShieldAlert' as ZIconName} class="size-3.5" /> {STATUS[card.state]}
+              <ZIcon zType={'lucideShieldAlert' as ZIconName} class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} />
             {:else if card.state === 'done'}
-              <ZIcon zType="lucideCircleCheck" class="size-3.5" /> {STATUS[card.state]}
+              <ZIcon zType="lucideCircleCheck" class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} />
             {:else if card.state === 'stopped'}
-              <ZIcon zType="lucideBan" class="size-3.5" /> {STATUS[card.state]}
+              <ZIcon zType="lucideBan" class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} />
             {:else}
-              <ZIcon zType="lucideCircleX" class="size-3.5" /> {STATUS[card.state]}
+              <ZIcon zType="lucideCircleX" class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} />
             {/if}
             {#if took(card)}<span class="text-muted-foreground tabular-nums">{took(card)}</span>{/if}
           </span>

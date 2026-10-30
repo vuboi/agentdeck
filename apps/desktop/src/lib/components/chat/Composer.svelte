@@ -1,18 +1,18 @@
 <script lang="ts">
-  import { fade } from 'svelte/transition';
+  import RunActionButton from './RunActionButton.svelte';
   import ProjectBar from '../layout/ProjectBar.svelte';
   import { untrack } from 'svelte';
   import { getPref, setPref } from '../../app/platform/prefs';
   import { ZButton, ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import PickerPopover, { type PickerItem } from '../ui/PickerPopover.svelte';
-  import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
+  import type { ZIconName } from '@shival99/z-ui-svelte';
   import { loadSlash, slash, type SlashItem } from '../../chat/slash.svelte';
   import { prepare, search } from '../../app/ui/palette';
   import ElementCard from '../browser/ElementCard.svelte';
   import { TRIGGER_ON } from '../../app/ui/popover';
   import { agyBlocks, agyModes, loadAgyModes } from '../../agents/agy-modes.svelte';
-  import { AGENTS, draftElements, draftImages, draftFiles, draftMentions, drafts, isRunning, needsUserInput, lastChat, rememberMixed, queued, queuePaused, type Queued, sendMessage, canListenToSession, prewarmChat, stopTurnForResume, resumeStoppedTurn, manuallyStopped, turnOptions, workspace, type Agent, type Effort, type Attachment, type FileAttachment, type Mention, type Permission } from '../../chat/sessions.svelte';
-  import Menu from '../ui/Menu.svelte';
+  import { accountEpoch } from '../../chat/runs/account-epoch.svelte';
+  import { AGENTS, draftElements, draftImages, draftFiles, draftMentions, drafts, replies, isRunning, messagesOf, needsUserInput, lastChat, rememberMixed, queued, queuePaused, type Queued, sendMessage, prewarmChat, stopTurnForResume, resumeStoppedTurn, manuallyStopped, turnOptions, chatTurnOptions, workspace, type Agent, type Effort, type Attachment, type FileAttachment, type Mention, type Permission } from '../../chat/sessions.svelte';
   import TextEditContextMenu from '../ui/TextEditContextMenu.svelte';
   import { clipFromContents, clipFromPaste, imageMime, isImageName } from '../../chat/content/attachments';
   import { createTextHistory, type TextHistory } from '../../app/text/text-history';
@@ -21,6 +21,9 @@
   import { toast } from '../../app/platform/toast';
   import ModelPicker from './ModelPicker.svelte';
   import ComposerQueue from './ComposerQueue.svelte';
+  import BackgroundTasks from './BackgroundTasks.svelte';
+  import { chatWork } from '../../chat/session/work.svelte';
+  import { hasTurnWork } from '../../chat/session/turns.svelte';
   import ComposerChips from './ComposerChips.svelte';
   import { editorText, editorSelection, setEditorSelection, replaceEditorRange, renderEditor } from './composer-editor';
   import ComposerQuota from './ComposerQuota.svelte';
@@ -50,8 +53,9 @@
     draftFiles[sessionId] = value;
   };
   const elements = $derived(draftElements[sessionId] ?? []);
-  const running = $derived(isRunning(sessionId));
-  const listenerReady = $derived(canListenToSession(sessionId));
+  // Only this message's reply counts: a background task that keeps listening does not keep the box spinning.
+  const running = $derived(isRunning(sessionId) || Boolean(replies[sessionId]));
+  const backgroundWork = $derived(chatWork(sessionId));
   const mac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
   const waiting = $derived(queued[sessionId] ?? []);
   const waitingForUser = $derived(needsUserInput(sessionId));
@@ -86,6 +90,9 @@
   }
   const hasInput = $derived(draft.trim().length > 0 || images.length > 0 || elements.length > 0 || attached.length > 0);
   const action = $derived(running && !hasInput ? 'stop' : manuallyStopped[sessionId] && !hasInput ? 'resume' : 'send');
+  const willQueue = $derived(!waitingForUser && (hasTurnWork(sessionId) || waiting.length > 0));
+  // The foreground reply owns the Stop ring. Background activity has its own indicator above the composer.
+  const spinning = $derived(action === 'stop' && !waitingForUser);
   let detail = $state<string | null>(null);
   // The card stays mounted after it closes, so its exit animation can play: it keeps the last element shown.
   let lastDetail = $state<string | null>(null);
@@ -174,12 +181,16 @@
   $effect(() => {
     turnOptions.permission = permission;
     turnOptions.effort = effort;
+    chatTurnOptions[sessionId] = { permission, effort };
   });
 
   // Antigravity's modes depend on the account. Find out which ones this account has, and never leave the chat on one
   // it lacks (agy would ignore it and ask for every command): fall back to asking, the one setting that always exists.
   $effect(() => {
-    if (agent === 'antigravity') void loadAgyModes();
+    if (agent === 'antigravity') {
+      const switched = (accountEpoch.antigravity ?? 0) > 0;
+      void loadAgyModes(switched);
+    }
   });
   $effect(() => {
     if (agent === 'antigravity' && agyModes.loaded && agyBlocks(permission)) permission = 'ask';
@@ -557,19 +568,10 @@
     void addFiles(files);
   }
 
-  let queueChoiceOpen = $state(false);
-
-  function submit(whileRunning: 'queue' | 'next' | 'interrupt' | 'resume' = 'queue', resumeChoice = false) {
+  function submit(whileRunning: 'queue' | 'next' | 'interrupt' = 'queue') {
     if (!hasInput) return;
-    // Handing work to an agent needs words that say what the work is.
-    if (queuePaused[sessionId] && !resumeChoice) {
-      queueChoiceOpen = true;
-      return;
-    }
     delete manuallyStopped[sessionId];
     sendMessage(draft, images, elements, mentions, whileRunning, attached);
-    // Sent by hand: the chat goes to its newest content, even if it was scrolled up.
-    window.dispatchEvent(new Event('agentdeck:scrolltoend'));
     draftElements[sessionId] = [];
     detail = null;
     setDraft('', { sent: true });
@@ -577,23 +579,6 @@
     setImages([]);
     setFiles([]);
   }
-
-  const queueChoiceItems = $derived<ZDropdownMenuItem[]>([
-    {
-      label: 'Send now · keep queue paused',
-      icon: 'lucideSend' as ZIconName,
-      iconSize: 12,
-      class: 'text-sm! py-1',
-      onClick: () => submit('interrupt', true),
-    },
-    {
-      label: 'Add to queue & resume',
-      icon: 'lucideListChecks' as ZIconName,
-      iconSize: 12,
-      class: 'text-sm! py-1',
-      onClick: () => submit('resume', true),
-    },
-  ]);
 
   function onKeydown(event: KeyboardEvent) {
     // An open picker takes the arrows, Enter, Tab and Escape.
@@ -621,13 +606,16 @@
       }
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      // Enter queues at the end; Alt+Enter queues next without interrupting; Ctrl/Cmd+Enter stops and sends now.
+      // Enter queues normally; Alt+Enter queues next; Ctrl/Cmd+Enter requests priority without cancelling older work.
       submit(event.altKey ? 'next' : event.ctrlKey || event.metaKey ? 'interrupt' : 'queue');
     }
   }
 </script>
 
 <svelte:window bind:innerWidth={innerW} />
+{#if backgroundWork.length > 0}
+  <BackgroundTasks items={backgroundWork} {sessionId} />
+{/if}
 {#if waiting.length > 0 || queuePaused[sessionId]}
   <ComposerQueue {sessionId} {waiting} {waitingForUser} onedit={editQueued} />
 {/if}
@@ -695,12 +683,11 @@
       onpaste={onPaste}
       oncontextmenu={onTextAreaContextMenu}
       aria-label="Message"
-      data-placeholder={running ? (listenerReady ? `Enter starts a new reply · Alt+Enter queues · ${mac ? '⌘' : 'Ctrl'}+Enter interrupts` : `Enter queues · Alt+Enter queues next · ${mac ? '⌘' : 'Ctrl'}+Enter sends now`) : 'Do anything…'}
+      data-placeholder={waitingForUser ? 'Answer the pending request…' : willQueue ? `Enter queues · Alt+Enter queues next · ${mac ? '⌘' : 'Ctrl'}+Enter sends now` : 'Do anything…'}
       class="composer-editor relative max-h-45 min-h-[50px] w-[calc(100%+0.5rem)] overflow-x-hidden break-words border-0 bg-transparent pt-0 pr-3 pb-1 pl-0.5 text-sm leading-normal text-foreground caret-foreground selection:bg-primary/25 outline-none"
     ></div>
   </div>
   <TextEditContextMenu bind:this={textEditMenu} onPasteText={routePastedText} onPasteClipboard={onMenuPaste} />
-  <Menu items={queueChoiceItems} bind:open={queueChoiceOpen} anchor={area ?? null} position="top-right" width={248} label="Choose how to send" />
 
   <div class="flex min-w-0 items-center justify-between gap-2">
     <div class="flex min-w-0 flex-1 items-center gap-1">
@@ -722,42 +709,24 @@
       </ZButton>
       <ModelPicker bind:agent bind:model bind:effort bind:fast bind:permission />
     </div>
-    <!-- Keep one button mounted so stop, resume and send trade icons with the same gentle cross-fade. -->
-    <span class="relative grid shrink-0 place-items-center">
-      {#if action === 'stop'}
-        <span class="pointer-events-none absolute -inset-[3px] animate-spin rounded-full [background:conic-gradient(from_0deg,transparent_0_55%,var(--color-primary)_100%)] [mask:radial-gradient(farthest-side,transparent_calc(100%-2px),#000_calc(100%-2px))] motion-reduce:hidden" aria-hidden="true"></span>
-        <span class="pointer-events-none absolute inset-0 animate-ping rounded-full bg-primary/25 [animation-duration:1.8s] motion-reduce:hidden" aria-hidden="true"></span>
-      {/if}
-      <ZButton
-        zWave={false}
+    <!-- Composer and workers share a control whose icons never enter the flex layout. -->
+    {#if running && hasInput}
+      <ZButton zWave={false} type="button" zType="ghost" zSize="sm" class="size-7! shrink-0 rounded-full p-0 text-muted-foreground" aria-label="Pause current reply" title="Pause current reply · keep draft" onclick={() => stopTurnForResume(sessionId)}>
+        <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
+      </ZButton>
+    {/if}
+      <RunActionButton
+        {action}
+        {spinning}
         type={action === 'send' ? 'submit' : 'button'}
-        zType="default"
-        zSize="default"
-        class="relative size-7! shrink-0 rounded-full p-0"
         disabled={action === 'send' && !hasInput}
-        aria-label={action === 'stop' ? 'Stop' : action === 'resume' ? 'Continue' : queuePaused[sessionId] ? 'Choose how to send' : running ? (listenerReady ? 'Start a new reply while background work continues' : 'Queue the message') : 'Send message'}
-        {@attach zTooltip({
-          content: action === 'stop' ? 'Stop' : action === 'resume' ? 'Continue' : queuePaused[sessionId] ? 'Queue paused · choose Send now or Add & resume' : running ? `One answer per message · Alt+Enter queues next · ${mac ? '⌘' : 'Ctrl'}+Enter stops and sends now` : 'Send',
-          position: 'top',
-        })}
+        label={action === 'stop' ? 'Pause current reply' : action === 'resume' ? 'Resume' : willQueue ? 'Queue the message' : 'Send message'}
+        tooltip={action === 'stop' ? 'Working · Pause' : action === 'resume' ? 'Resume' : willQueue ? `Send to queue · Alt+Enter queues next · ${mac ? '⌘' : 'Ctrl'}+Enter sends now` : 'Send'}
         onclick={() => {
           if (action === 'stop') stopTurnForResume(sessionId);
           else if (action === 'resume') resumeStoppedTurn(sessionId);
         }}
-      >
-        {#key action}
-          <span in:fade={{ duration: 120 }} out:fade={{ duration: 120 }} class="grid size-full place-items-center motion-reduce:transition-none">
-            {#if action === 'stop'}
-              <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
-            {:else if action === 'resume'}
-              <svg class="size-3.5" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.7a1 1 0 0 1 1.52-.85l8 5.3a1 1 0 0 1 0 1.7l-8 5.3A1 1 0 0 1 4 13.3z" fill="currentColor" /></svg>
-            {:else}
-              <ZIcon zType="lucideArrowUp" class="size-3.5" />
-            {/if}
-          </span>
-        {/key}
-      </ZButton>
-    </span>
+      />
   </div>
 </form>
 <ComposerQuota {agent} {model} />

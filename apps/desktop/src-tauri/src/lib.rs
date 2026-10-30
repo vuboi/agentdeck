@@ -2404,6 +2404,7 @@ pub fn run() {
             agent_runs::agent_prewarm,
             awake::keep_awake_set,
             agent_runs::custom_send,
+            agent_runs::prehandle_attachments,
             agent_runs::agent_stop,
             agent_runs::agent_stop_all,
             agent_runs::agent_inject,

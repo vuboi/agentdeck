@@ -56,6 +56,8 @@ pub enum AgentEvent {
     ToolOutputDelta { id: String, delta: String },
     /// The CLI refused tools that need the user's approval. Allow them and send a follow-up turn to continue.
     PermissionDenied { requests: Vec<PermissionRequest> },
+    /// The provider has created or resumed the conversation. Emitted before the turn ends so a stopped turn can resume.
+    Session { session_id: String },
     /// The turn finished. `session_id` is the CLI's id for the conversation, to resume next turn.
     Done {
         session_id: Option<String>,

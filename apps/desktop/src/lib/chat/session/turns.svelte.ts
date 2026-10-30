@@ -13,11 +13,12 @@ import { customProviderName } from '../../agents/models.svelte';
 import { agentDisplayName } from '../../agents/provider-registry';
 import { isHandbackPrompt } from '../runs/handback';
 import { MODELS, advanceRun, nextId, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type Mention, type PageElement, type Permission, type SessionItem } from './state.svelte';
-import { liveReplies, messagesOf, needsUserInput, renderWaiters, replies, runReplies, sendNextQueued, sessionLanes } from './run.svelte';
+import { liveReplies, messagesOf, needsUserInput, replies, runReplies, sendNextQueued, sessionLanes } from './run.svelte';
 import { cancelAutoSwitch, handleAgentEvent, recoveries } from './events.svelte';
 import { delegateRuns } from './delegation.svelte';
-import { delegateTasks, isWorkerChat, taskRuns } from './delegate-task.svelte';
+import { delegateTasks, isWorkerChat, stopDelegateTask, taskRuns } from './delegate-task.svelte';
 import { clipText } from './orchestration.svelte';
+import { closeRunningActivity } from '../runs/activity.svelte';
 
 /**
  * Said to the agent when a message is about running or opening something. Agents follow the project's own notes
@@ -230,11 +231,20 @@ export const turnOptions = $state<{ permission: Permission; effort: Effort }>({
   effort: 'medium',
 });
 
+/**
+ * The same settings per chat, written by that chat's composer. A turn that starts in the background (a queued message,
+ * a recovery, a worker) reads its own chat's settings, never those of the chat that happens to be on screen.
+ */
+export const chatTurnOptions: Record<string, { permission: Permission; effort: Effort }> = {};
+export const turnOptionsOf = (sessionId: string) => chatTurnOptions[sessionId] ?? turnOptions;
+
 /** The run of each chat that is current: events of an older (stopped) run are ignored. */
 export const turns: Record<string, string> = {};
 
 /** Messages typed while the agent was still busy, waiting their turn. */
 export type Queued = {
+  /** Explicit Send now request waiting for an available provider lane. */
+  priority?: boolean;
   /** Stable transcript identity retained from enqueue until dispatch. */
   messageId?: string;
   text: string;
@@ -298,12 +308,11 @@ export function failSessionWork(sessionId: string) {
   if (batch) batch.failed = true;
 }
 
-/** The chat's own turn is busy: a reply streams, a lane runs, a reply is still drawn, or the user must answer. Background delegation does not count, so a queued message starts while an agent still works. */
+/** Provider execution or a pending user answer blocks delivery. Drawing a finished reply must not block the queue. */
 export function hasTurnWork(sessionId: string): boolean {
   if ((sessionLanes[sessionId]?.length ?? 0) > 0) return true;
   return Boolean(
     replies[sessionId] ||
-      renderWaiters[sessionId] ||
       needsUserInput(sessionId),
   );
 }
@@ -371,8 +380,12 @@ export const isRunning = (sessionId: string) =>
  *  message (sent while the reply ran, an edit), not the user's Stop button: the reply does not say "You stopped after". */
 export function stopTurn(sessionId: string, quiet = false) {
   cancelAutoSwitch(sessionId);
+  if (!quiet && (queued[sessionId]?.length ?? 0) > 0)
+    queuePaused[sessionId] = 'interrupted';
   if (!quiet) {
-    const listener = [...runReplies.entries()].find(([, run]) => run.sessionId === sessionId && run.listener);
+    const listeners = [...runReplies.entries()].filter(([, run]) => run.sessionId === sessionId && run.listener);
+    // Prefer the user's side request. An unsolicited report must not steal Stop from the foreground conversation.
+    const listener = listeners.findLast(([, run]) => Boolean(run.ask)) ?? (!liveReplies[sessionId]?.live ? listeners.at(-1) : undefined);
     if (listener) {
       const [turn] = listener;
       void stopAgentTurn(sessionId, turn).catch(() => {});
@@ -387,9 +400,10 @@ export function stopTurn(sessionId: string, quiet = false) {
       handleAgentEvent(sessionId, { kind: 'error', message: 'stopped' }, turn);
     }
   }
-  if (!quiet && (queued[sessionId]?.length ?? 0) > 0)
-    queuePaused[sessionId] = 'interrupted';
   logFlow(sessionId, 'stop', `turn=${turns[sessionId] ?? '-'} quiet=${quiet} live=${Boolean(liveReplies[sessionId]?.live)}`);
+  // The user's own Stop ends everything of this chat. An interrupt for a new message (quiet) does not: the work that
+  // already runs in the background goes on, and a stop aimed at one side lane returned above.
+  if (!quiet) closeRunningActivity(sessionId);
   // Stopped by the user: a retry or a hand-over waiting to start does not start.
   delete recoveries[sessionId];
   advanceRun(sessionId, { type: 'cancel' });
@@ -398,7 +412,14 @@ export function stopTurn(sessionId: string, quiet = false) {
     if (run.main !== sessionId || run.endedAt) continue;
     run.cancelled = true;
     for (const node of run.nodes) {
-      if (node.state === 'running') stopTurn(node.childId);
+      // Queued workers are still live task runs: stopping only the running
+      // nodes leaves their slot waiter armed, so they can start after the
+      // lead chat has already been stopped.
+      if (node.state !== 'running' && node.state !== 'idle') continue;
+      // Through its task when it has one: a worker stopped on its own handed its report back to a lead the user had just stopped.
+      const task = Object.values(delegateTasks).find((item) => item.childId === node.childId && taskRuns.has(item.id));
+      if (task) stopDelegateTask(task.id);
+      else stopTurn(node.childId);
     }
   }
   if (!replies[sessionId]) {
@@ -412,6 +433,10 @@ export function stopTurn(sessionId: string, quiet = false) {
     const stuck = workspace.sessions.find((item) => item.id === sessionId);
     if (stuck?.status === 'working')
       stuck.status = 'idle';
+    // A lost `done` left the foreground lane behind: with it the chat counts as running for good, its queue stays
+    // blocked and Stop did nothing. Side lanes (a hand-back, a background report) are not this chat's reply.
+    if (sessionLanes[sessionId]?.some((lane) => lane.role === 'primary'))
+      sessionLanes[sessionId] = sessionLanes[sessionId].filter((lane) => lane.role !== 'primary');
     return;
   }
   const turn = turns[sessionId];

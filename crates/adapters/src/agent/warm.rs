@@ -196,6 +196,8 @@ pub fn reset(agent: Option<&str>) {
         chats.into_iter().filter_map(|chat| pool.remove(&chat)).collect()
     };
     drop(gone);
+    // A process a tail is reading keeps its sign-in too.
+    super::tail::discard(agent);
 }
 
 /// Whether a kept process can take a turn: same settings, still running, and the turn's conversation (a turn that
@@ -436,6 +438,12 @@ pub async fn prewarm(binary: OsString, provider: &dyn Provider, req: &TurnReques
         return;
     };
     if provider.prepare(req).is_err() {
+        return;
+    }
+    // The chat's lock, as a turn takes it (and `codex_server::prewarm`): a process is not started beside one a turn is using.
+    let lock = lock_of(&chat);
+    let _turn = lock.lock().await;
+    if super::tail::holds(&chat) {
         return;
     }
     let env = provider.environment(req);

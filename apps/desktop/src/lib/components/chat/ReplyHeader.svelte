@@ -14,6 +14,9 @@
   let { message, agent, usage }: { message: Message; agent: string; usage: RunUsage | undefined } = $props();
 </script>
 
+{#if message.autoTurn && message.taskTitle}
+  <p class="mb-1 mt-0 max-w-full truncate text-xs text-muted-foreground">Task result · {message.taskTitle}</p>
+{/if}
 <div class="mb-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-sm">
   <span class="inline-flex items-center gap-1 font-semibold {agentText[agent as keyof typeof agentText]}">
     <AgentLogo agent={agent} model={message.model} class="size-3 shrink-0" />

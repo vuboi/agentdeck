@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prehandle-attachments"
+description = "Enables the prehandle_attachments command without any pre-configured scope."
+commands.allow = ["prehandle_attachments"]
+
+[[permission]]
+identifier = "deny-prehandle-attachments"
+description = "Denies the prehandle_attachments command without any pre-configured scope."
+commands.deny = ["prehandle_attachments"]

@@ -1,5 +1,7 @@
 <script lang="ts">
   import { answerPermission, answerQuestions, activeSession, chat, forkSession, isRunning, projectOf, replyBlockRendered, replyRendering, workspace } from '../../chat/sessions.svelte';
+  import { fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import { runPosition } from '../../chat/content/chat-dividers';
   import { runUsage } from '../../chat/runs/run-usage';
   import { elapsed, segments } from '../../chat/content/blocks';
@@ -61,14 +63,16 @@
   <!-- One status line for the whole reply: what the agent is doing now (thinking, running a command,
        editing…), as in Claude and Codex; the steps above stay plain, finished lines. -->
   {#if message.stoppedAfter !== undefined && !message.live}
-    <p class="m-0 text-sm text-muted-foreground">You stopped after {elapsed(message.stoppedAfter)}</p>
+    <!-- Rises into place as the reply ends, so the text above moves up with it instead of jumping. -->
+    <p class="m-0 text-sm text-muted-foreground" in:fly={{ y: 8, duration: 260, easing: cubicOut }}>You stopped after {elapsed(message.stoppedAfter)}</p>
   {/if}
 </div>
 <!-- The status line and the footer share one fixed-height slot, so the row does not jump when the reply ends. -->
 {#if showLive || ((message.blocks.length > 0 || message.stoppedAfter !== undefined) && lastOfRun)}
   <div class="relative h-[30px] w-full shrink-0">
     {#if showLive}
-      <div class="absolute inset-x-0 bottom-0 flex h-5 items-center"><LiveStatus {message} /></div>
+      <!-- Before any content, match the first response line's gap and line height below the agent header. -->
+      <div class="absolute inset-x-0 flex items-center {parts.length ? 'bottom-0 h-5' : 'top-0 [&_[role=status]]:leading-relaxed'}"><LiveStatus {message} /></div>
     {:else if typing}
       <!-- Nothing yet: the slot keeps its height. -->
     {:else}

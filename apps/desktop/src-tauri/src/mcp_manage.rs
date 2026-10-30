@@ -944,10 +944,11 @@ pub async fn ensure_agy_link() {
             .join(".gemini")
             .join("antigravity-cli")
             .join("settings.json");
-        let _ = ag_adapters::agent::antigravity::add_allow_rules(
-            &settings,
-            &["mcp(agentdeck/*)".to_string()],
-        );
+        // Reads and writes a file: off the async threads.
+        let _ = tokio::task::spawn_blocking(move || {
+            ag_adapters::agent::antigravity::add_allow_rules(&settings, &["mcp(agentdeck/*)".to_string()])
+        })
+        .await;
     }
     if let Ok(mut checked) = AGY_LINK_CHECKED.lock() {
         *checked = Some((url, Instant::now()));

@@ -12,6 +12,7 @@ export type AgentEvent =
   | { kind: 'tool_result'; id: string; output: string; is_error: boolean; image?: string; change?: FileChange | null }
   | { kind: 'tool_output_delta'; id: string; delta: string }
   | { kind: 'permission_denied'; requests: PermissionRequest[] }
+  | { kind: 'session'; session_id: string }
   | { kind: 'done'; session_id: string | null; text: string; cost_usd: number | null }
   | { kind: 'usage'; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number; new_call: boolean }
   | { kind: 'error'; message: string }
@@ -95,6 +96,20 @@ export async function sendCustomTurn(args: {
 }): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('custom_send', args);
+}
+
+/** Extracts a compact text memo from attached images/files through a configured lightweight vision provider. */
+export async function prehandleAttachments(args: {
+  kind: string;
+  baseUrl: string;
+  apiKey: string | null;
+  model: string;
+  prompt: string;
+  images: string[];
+  files: string[];
+}): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('prehandle_attachments', args);
 }
 
 /** Saves an image (base64, no prefix) where the agent CLI can open it, and returns its path. */
@@ -295,10 +310,10 @@ export async function replyDelegateCall(callId: string, text: string, isError: b
   await invoke('delegate_reply', { callId, text, isError });
 }
 
-/** A worker is about to start: true when it may (fewer than 3 run), false when it is queued until a place frees. */
-export async function enterWorkerSlot(taskId: string): Promise<boolean> {
+/** A worker is about to start: true when it may (the asking chat has a free place), false when it is queued until one frees. */
+export async function enterWorkerSlot(taskId: string, owner: string): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core');
-  return invoke<boolean>('delegate_enter', { taskId });
+  return invoke<boolean>('delegate_enter', { taskId, owner });
 }
 
 /** A task ended: its place goes to the next queued one. */

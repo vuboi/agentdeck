@@ -15,9 +15,8 @@
   import { inTauri } from '../../app/platform/history';
   import { toast } from '../../app/platform/toast';
   import { openInViewer } from '../../files/file-viewer.svelte';
-  import { parseDiff } from '../../files/diff';
   import { imageMimeOf, readProjectFile } from '../../files/files';
-  import { diffCache, fileKey, rememberText } from '../../files/file-cache';
+  import { fileKey, invalidateDiffCache, preloadDiff, rememberText } from '../../files/file-cache';
   import PickerPopover, { compact, type PickerItem } from '../ui/PickerPopover.svelte';
 
   // Narrow: the labels of the header's buttons go, their icons stay (with a tooltip).
@@ -112,9 +111,7 @@
     const at = warmed.get(key);
     if (at !== undefined && Date.now() - at < 3000) return;
     warmed.set(key, Date.now());
-    void call<string>('change_diff', { root: from, path: change.path })
-      .then((diff) => diffCache.set(key, { diff, rows: parseDiff(diff) }))
-      .catch(() => {});
+    void preloadDiff(key, from, change.path);
     void readProjectFile(from, path)
       .then((raw) => rememberText(key, raw))
       .catch(() => {});
@@ -169,11 +166,16 @@
   }
 
   // The project changed, a file was written, or a turn ended (status back to idle): read git again.
+  let observedWriteTick = fileWrites.tick;
   $effect(() => {
     void root;
-    void fileWrites.tick;
+    const writeTick = fileWrites.tick;
     void (session?.status === 'idle');
     untrack(() => {
+      if (writeTick !== observedWriteTick) {
+        observedWriteTick = writeTick;
+        invalidateDiffCache();
+      }
       // Another project: its last list shows now, not the previous project's.
       if (shownFor !== root) {
         shownFor = root;

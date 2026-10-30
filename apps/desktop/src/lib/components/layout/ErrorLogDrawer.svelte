@@ -7,6 +7,7 @@
   import { showSession } from '../../app/ui/content-tabs.svelte';
   import { workspace } from '../../chat/sessions.svelte';
   import { toast } from '../../app/platform/toast';
+  import { jsonInText } from '../../app/text/json-text';
 
   // The error log in a floating drawer, its rows as the background-process drawer's: icon, what happened, where, when,
   // an arrow for the detail. The file itself is saved with the button in the footer.
@@ -215,7 +216,8 @@
         {#if opened[key]}
           <div class="grid w-full min-w-0 transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none {expanded[key] ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}" aria-hidden={!expanded[key]} inert={!expanded[key]}>
             <div class="flex min-h-0 min-w-0 flex-col gap-1.5 overflow-hidden pt-2">
-              <pre class="m-0 max-h-56 overflow-auto rounded-md bg-muted/50 p-2 text-[0.6875rem] leading-snug whitespace-pre-wrap break-words">{JSON.stringify({ detail: entry.detail, ...entry.ctx }, null, 2)}</pre>
+              {#if entry.detail}<pre class="scrollbar-slim m-0 max-h-56 overflow-auto rounded-md bg-muted/50 p-2 text-[0.6875rem] leading-snug whitespace-pre-wrap break-words [--scrollbar-width:6px]">{jsonInText(entry.detail)}</pre>{/if}
+              {#if entry.ctx && Object.keys(entry.ctx).length}<pre class="scrollbar-slim m-0 max-h-56 overflow-auto rounded-md bg-muted/50 p-2 text-[0.6875rem] leading-snug whitespace-pre-wrap break-words [--scrollbar-width:6px]">{JSON.stringify(entry.ctx, null, 2)}</pre>{/if}
             <div class="flex gap-1.5">
               <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-sm" onclick={() => copy(entry)}><ZIcon zType={'lucideCopy' as ZIconName} class="size-3.5" /> Copy</ZButton>
               {#if typeof entry.ctx?.chat === 'string'}

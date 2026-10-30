@@ -165,12 +165,29 @@ fn list(root: &str) -> Result<Vec<Change>, String> {
 fn diff(root: &str, path: &str) -> Result<String, String> {
     let top = toplevel(root)?;
     let path = checked(path)?;
-    let tracked = git(&top, &["ls-files", "--error-unmatch", "--", path])?.0;
-    let output = if tracked && has_head(&top) {
-        git_ok(
-            &top,
-            &["diff", "HEAD", "--no-color", "--no-renames", "--", path],
-        )?
+    // Let the normal diff answer in one Git process. Only fall back to the slower no-index path when the
+    // repository has no HEAD or the file is untracked; the old implementation always performed extra probes first.
+    let normal = git(
+        &top,
+        &["diff", "HEAD", "--no-color", "--no-renames", "--", path],
+    )?;
+    let output = if normal.0 {
+        if normal.1.is_empty()
+            && !git(
+                &top,
+                &["ls-files", "--error-unmatch", "--", path],
+            )?
+            .0
+        {
+            let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+            git(
+                &top,
+                &["diff", "--no-index", "--no-color", "--", null, path],
+            )?
+            .1
+        } else {
+            normal.1
+        }
     } else {
         // Untracked, or no commit yet: diff against nothing. `--no-index` exits 1 when the files differ.
         let null = if cfg!(windows) { "NUL" } else { "/dev/null" };

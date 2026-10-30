@@ -20,7 +20,9 @@
     "quota": "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
   },
   "web": {
-    "search": "https://html.duckduckgo.com/html/"
+    "search": "https://search.brave.com/search",
+    "bing": "https://www.bing.com/search",
+    "duckduckgo": "https://html.duckduckgo.com/html/"
   },
   "providerKinds": {
     "openai": "http://127.0.0.1:1234/v1",

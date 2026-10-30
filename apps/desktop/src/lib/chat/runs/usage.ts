@@ -131,7 +131,8 @@ export function recordUsage(record: UsageRecord) {
     log.push(record);
     setPref(LOG_KEY, log.length > LOG_LIMIT ? log.slice(-LOG_LIMIT) : log);
     for (const listener of listeners) listener();
-  });
+    // One failed write (or a listener that throws) must not leave the chain rejected: every later record was skipped.
+  }).catch(() => undefined);
 }
 
 export const usageLog = async () => (await getPref<UsageRecord[]>(LOG_KEY)) ?? [];

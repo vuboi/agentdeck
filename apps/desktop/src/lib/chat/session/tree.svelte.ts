@@ -152,7 +152,10 @@ export function buildTree(
       ordered(
         workspace.sessions.filter(
           (item) =>
-            item.projectId === project.id && !item.parentId && shown(item),
+            item.projectId === project.id &&
+            !item.parentId &&
+            !isPinnedSession(item.id) &&
+            shown(item),
         ),
       ),
       LIST_LIMIT,

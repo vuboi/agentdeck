@@ -94,6 +94,14 @@ export class ProviderForm {
     this.probing = true;
     this.probeNote = null;
     try {
+      // Workers AI's OpenAI-compatible address answers POST only: GET `/models` gets 405. Its model is the preset's.
+      const preset = this.freePreset;
+      if (preset?.base.includes('{account_id}') && preset.model) {
+        draft.models = [preset.model];
+        draft.defaultModel = preset.model;
+        this.probeNote = { ok: true, text: '1 model (Workers AI preset)' };
+        return;
+      }
       const active = draft.keys.find((key) => key.id === draft.activeKeyId) ?? draft.keys[0];
       const result = await probeProvider(draft.kind, draft.baseUrl, active?.apiKey ?? '', active?.keyEnv ?? draft.keyEnv);
       if (result.ok) {

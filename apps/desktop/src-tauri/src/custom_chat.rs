@@ -27,6 +27,8 @@ const MAX_STEPS: usize = 40;
 /// A local model that repeats the same tool call is not making progress. Stop the turn early instead of
 /// spending the remaining requests until `MAX_STEPS`.
 const REPEATED_CALL_LIMIT: usize = 3;
+/// Web searches refused with 429 in one turn before the turn stops.
+const SEARCH_LIMIT_HITS: usize = 3;
 /// Give a tool-heavy model a chance to hand back its result before the hard stop.
 const FINAL_NUDGE_AT: usize = 30;
 /// Characters of a tool's output kept for the model.
@@ -59,7 +61,7 @@ const TEXT_EXTENSIONS: &[&str] = &[
 
 /// A message as the provider takes it: the text with the attached documents after it, and the pictures in the
 /// OpenAI image format when there are any.
-fn wire_message(message: &ChatMessage) -> Value {
+fn wire_message(message: &ChatMessage, text_only: bool) -> Value {
     let mut text = message.content.clone();
     for path in &message.files {
         let file = std::path::Path::new(path);
@@ -92,7 +94,14 @@ fn wire_message(message: &ChatMessage) -> Value {
             )),
         }
     }
-    if message.images.is_empty() {
+    // Workers AI takes `content` as a string only, so a text-only API gets the pictures named rather than sent.
+    if text_only && !message.images.is_empty() {
+        text.push_str(&format!(
+            "\n\n[{} image(s) attached: this model reads text only]",
+            message.images.len()
+        ));
+    }
+    if message.images.is_empty() || text_only {
         return json!({ "role": message.role, "content": text });
     }
     let mut parts = vec![json!({ "type": "text", "text": text })];
@@ -161,6 +170,151 @@ pub(crate) fn chat_url(kind: &str, base: &str) -> String {
     match kind {
         "ollama" => format!("{base}/v1/chat/completions"),
         _ => format!("{base}/chat/completions"),
+    }
+}
+
+pub struct PrehandleRequest {
+    pub kind: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub model: String,
+    pub prompt: String,
+    pub images: Vec<String>,
+    pub files: Vec<String>,
+}
+
+/// Runs a short, stateless vision pass. It deliberately has no tools or chat history: the result is only a compact memo
+/// that the main agent can use instead of paying to ingest the original pictures on every provider.
+pub async fn prehandle_attachments(request: PrehandleRequest) -> Result<String, String> {
+    if request.images.is_empty() && request.files.is_empty() {
+        return Ok(String::new());
+    }
+    if request.kind == "anthropic" {
+        return Err("Attachment pre-handle needs an OpenAI-compatible provider".to_owned());
+    }
+
+    use base64::Engine;
+    let mut parts = Vec::new();
+    let mut image_count = 0usize;
+    for path in request.images.iter().take(4) {
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|error| format!("could not read attachment: {error}"))?;
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err("an attached image is larger than 8 MB".to_owned());
+        }
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("png")
+            .to_ascii_lowercase();
+        let mime = match ext.as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            "png" => "image/png",
+            _ => "application/octet-stream",
+        };
+        if mime == "application/octet-stream" {
+            continue;
+        }
+        image_count += 1;
+        parts.push(json!({
+            "type": "image_url",
+            "image_url": {
+                "url": format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+            }
+        }));
+    }
+
+    let mut text = format!(
+        "You are AgentDeck's attachment pre-handler. Extract only useful facts from the attached images/files for another coding agent. \
+Return a compact plain-text memo with these headings: Visible facts, Text/OCR, User intent, Uncertainty. \
+Do not invent details, do not repeat secrets, and keep it under 1200 words. User message:\n{}",
+        request.prompt.trim()
+    );
+    for path in request.files.iter().take(8) {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.clone());
+        if crate::privacy::sensitive_file(path) {
+            text.push_str(&format!("\n\nAttached file {name}: [content omitted because it may contain secrets]"));
+            continue;
+        }
+        let extension = std::path::Path::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if TEXT_EXTENSIONS.contains(&extension.as_str()) {
+            if let Ok(body) = tokio::fs::read_to_string(path).await {
+                let cut: String = body.chars().take(12_000).collect();
+                text.push_str(&format!("\n\nAttached text file {name}:\n{cut}"));
+            } else {
+                text.push_str(&format!("\n\nAttached file: {name}"));
+            }
+        } else {
+            text.push_str(&format!("\n\nAttached file: {name}"));
+        }
+    }
+    if image_count == 0 && request.files.is_empty() {
+        return Ok(String::new());
+    }
+    parts.insert(0, json!({ "type": "text", "text": text }));
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|error| format!("could not create pre-handler client: {error}"))?;
+    let mut builder = client
+        .post(chat_url(&request.kind, &request.base_url))
+        .json(&json!({
+            "model": request.model,
+            "messages": [{ "role": "user", "content": parts }],
+            "temperature": 0.1,
+            "max_tokens": 1400,
+            "stream": false
+        }));
+    if let Some(key) = request.api_key.filter(|value| !value.trim().is_empty()) {
+        builder = builder.bearer_auth(key);
+    }
+    let response = builder
+        .send()
+        .await
+        .map_err(|error| format!("pre-handler request failed: {error}"))?;
+    let status = response.status();
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|error| format!("invalid pre-handler response: {error}"))?;
+    if !status.is_success() {
+        return Err(value["error"]["message"]
+            .as_str()
+            .unwrap_or("pre-handler provider returned an error")
+            .to_owned());
+    }
+    let content = value["choices"][0]["message"]["content"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| {
+            value["choices"][0]["message"]["content"]
+                .as_array()
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|part| part["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+        })
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if content.is_empty() {
+        Err("pre-handler returned an empty memo".to_owned())
+    } else {
+        Ok(content)
     }
 }
 
@@ -295,23 +449,20 @@ async fn run_bash(command: &str, cwd: Option<&Path>) -> Outcome {
     if let Some(pid) = child.id() {
         crate::process_guard::adopt_pid(pid);
     }
-    let (mut stdout, mut stderr) = (child.stdout.take(), child.stderr.take());
+    // The whole tree ends when the command times out or the turn is stopped (the task is dropped), not just the shell.
+    let mut tree = BashTree(child.id());
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
     let collect = async {
-        let (mut out, mut err) = (String::new(), String::new());
-        if let Some(pipe) = stdout.as_mut() {
-            let mut bytes = Vec::new();
-            let _ = pipe.read_to_end(&mut bytes).await;
-            out = String::from_utf8_lossy(&bytes).into_owned();
-        }
-        if let Some(pipe) = stderr.as_mut() {
-            let mut bytes = Vec::new();
-            let _ = pipe.read_to_end(&mut bytes).await;
-            err = String::from_utf8_lossy(&bytes).into_owned();
-        }
+        // Both pipes are read at once: one nobody reads fills up and blocks the command.
+        let (out, err) = tokio::join!(read_capped(stdout), read_capped(stderr));
         let status = child.wait().await;
         (out, err, status)
     };
-    match tokio::time::timeout(Duration::from_secs(120), collect).await {
+    let finished = tokio::time::timeout(Duration::from_secs(120), collect).await;
+    if finished.is_ok() {
+        tree.disarm();
+    }
+    match finished {
         Ok((out, err, status)) => {
             let text = [out.trim_end(), err.trim_end()]
                 .iter()
@@ -337,6 +488,48 @@ async fn run_bash(command: &str, cwd: Option<&Path>) -> Outcome {
         Err(_) => failed("the command ran for more than 120 seconds and was stopped"),
     }
 }
+
+/// Ends the process tree of a command that is dropped or timed out before it finished.
+struct BashTree(Option<u32>);
+
+impl BashTree {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for BashTree {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            crate::process_guard::kill_tree(pid);
+        }
+    }
+}
+
+/// Reads a pipe to its end, keeping only the last `BASH_KEEP` bytes so a command that prints for ever cannot fill memory.
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) -> String {
+    let Some(mut pipe) = pipe else { return String::new() };
+    let mut kept: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 8192];
+    while let Ok(read) = pipe.read(&mut chunk).await {
+        if read == 0 {
+            break;
+        }
+        kept.extend_from_slice(&chunk[..read]);
+        if kept.len() > BASH_KEEP * 2 {
+            let extra = kept.len() - BASH_KEEP;
+            kept.drain(..extra);
+        }
+    }
+    if kept.len() > BASH_KEEP {
+        let extra = kept.len() - BASH_KEEP;
+        kept.drain(..extra);
+    }
+    String::from_utf8_lossy(&kept).into_owned()
+}
+
+/// The most of one stream of a command that is kept in memory.
+const BASH_KEEP: usize = 256 * 1024;
 
 const SKIPPED_DIRS: [&str; 7] = [
     ".git",
@@ -507,6 +700,11 @@ fn page_text(html: &str) -> String {
         .join("\n")
 }
 
+/// `text` with every run of whitespace (tag gaps included) as one space.
+fn collapse_spaces(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// `restricted`: a free-tier provider's fetch, which never follows a redirect into this machine or its network.
 async fn web_fetch(args: &Value, restricted: bool) -> Outcome {
     let Some(url) = args["url"]
@@ -664,7 +862,7 @@ fn delete_path(args: &Value, cwd: Option<&Path>) -> Outcome {
     }
 }
 
-/// A web search through DuckDuckGo's plain HTML page: title, address and snippet of the first results.
+/// A web search through Brave's plain HTML page: title, address and snippet of the first results.
 async fn web_search(args: &Value) -> Outcome {
     let Some(query) = args["query"]
         .as_str()
@@ -680,56 +878,148 @@ async fn web_search(args: &Value) -> Outcome {
         Ok(client) => client,
         Err(error) => return failed(error.to_string()),
     };
-    let page = match client
-        .get(crate::endpoints::ENDPOINTS.web.search.as_str())
+    // Three engines at once: their rows are merged, so one that refuses (429) still leaves the others.
+    type Parse = fn(&str) -> Vec<(String, String, String)>;
+    let engines: [(&str, &str, Parse); 3] = [
+        ("Brave", crate::endpoints::ENDPOINTS.web.search.as_str(), brave_results),
+        ("Bing", crate::endpoints::ENDPOINTS.web.bing.as_str(), bing_results),
+        ("DuckDuckGo", crate::endpoints::ENDPOINTS.web.duckduckgo.as_str(), duckduckgo_results),
+    ];
+    let pages = futures_util::future::join_all(engines.iter().map(|(name, address, read)| {
+        let client = &client;
+        async move { (*name, engine_page(client, address, query).await.map(|page| read(&page))) }
+    }))
+    .await;
+    let mut lists = Vec::new();
+    let mut problems = Vec::new();
+    for (name, result) in pages {
+        match result {
+            Ok(rows) => lists.push(rows),
+            Err(error) => problems.push(format!("{name}: {error}")),
+        }
+    }
+    if lists.iter().all(Vec::is_empty) && !problems.is_empty() {
+        let limited = problems.iter().any(|problem| problem.contains("429"));
+        let advice = if limited { " Do not search again in this turn; answer from what you have or say what you could not check." } else { "" };
+        return failed(format!("the searches failed: {}.{advice}", problems.join("; ")));
+    }
+    // Round by round, one row from each engine, the same address kept once.
+    let mut seen = std::collections::HashSet::new();
+    let mut merged = Vec::new();
+    let longest = lists.iter().map(Vec::len).max().unwrap_or(0);
+    for index in 0..longest {
+        for list in &lists {
+            if let Some((title, target, snippet)) = list.get(index) {
+                if seen.insert(target.trim_end_matches('/').to_lowercase()) {
+                    merged.push(format!("{}. {title}\n   {target}\n   {snippet}", merged.len() + 1));
+                }
+            }
+        }
+    }
+    merged.truncate(8);
+    ok(if merged.is_empty() {
+        "no results".to_string()
+    } else {
+        merged.join("\n")
+    })
+}
+
+/// The page of one search engine for a query. A refusal (429) is said as it is, so the turn can stop asking.
+async fn engine_page(client: &reqwest::Client, address: &str, query: &str) -> Result<String, String> {
+    let response = client
+        .get(address)
         .query(&[("q", query)])
         .send()
         .await
-    {
-        Ok(response) if response.status().is_success() => response.text().await.unwrap_or_default(),
-        Ok(response) => return failed(format!("the search answered {}", response.status())),
-        Err(error) => return failed(error.to_string()),
+        .map_err(|error| error.to_string())?;
+    let status = response.status();
+    if status.as_u16() == 429 {
+        return Err("429 Too Many Requests".into());
+    }
+    if !status.is_success() {
+        return Err(status.to_string());
+    }
+    response.text().await.map_err(|error| error.to_string())
+}
+
+/// The results on a Bing search page: (title, address, snippet) of each `b_algo` block.
+fn bing_results(page: &str) -> Vec<(String, String, String)> {
+    let (Ok(link), Ok(snippet)) = (
+        regex::Regex::new(r#"(?s)<h2><a href="(https?://[^"]+)"[^>]*>(.*?)</a></h2>"#),
+        regex::Regex::new(r#"(?s)<p[^>]*>(.*?)</p>"#),
+    ) else {
+        return Vec::new();
     };
+    page.split(r#"class="b_algo""#)
+        .skip(1)
+        .filter_map(|block| {
+            let found = link.captures(block)?;
+            let target = found[1].replace("&amp;", "&");
+            let title = collapse_spaces(&page_text(&found[2]));
+            let snippet = snippet
+                .captures(block)
+                .map(|found| collapse_spaces(&page_text(&found[1])))
+                .unwrap_or_default();
+            Some((title, target, snippet))
+        })
+        .collect()
+}
+
+/// The results on a DuckDuckGo HTML page: (title, address, snippet) of each `result__a` link, its snippet by order.
+fn duckduckgo_results(page: &str) -> Vec<(String, String, String)> {
     let (Ok(link), Ok(snippet)) = (
         regex::Regex::new(r#"(?s)class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#),
         regex::Regex::new(r#"(?s)class="result__snippet"[^>]*>(.*?)</a>"#),
     ) else {
-        return failed("search is unavailable");
+        return Vec::new();
     };
-    let clean = |html: &str| page_text(html).replace('\n', " ");
     let snippets: Vec<String> = snippet
-        .captures_iter(&page)
-        .map(|found| clean(&found[1]))
+        .captures_iter(page)
+        .map(|found| page_text(&found[1]).replace('\n', " "))
         .collect();
-    let mut rows = Vec::new();
-    for (index, found) in link.captures_iter(&page).take(8).enumerate() {
-        let href = found[1].replace("&amp;", "&");
-        let href = if href.starts_with("//") {
-            format!("https:{href}")
-        } else {
-            href
-        };
-        // The result address is wrapped in a redirect: `?uddg=<the real address>`.
-        let target = tauri::Url::parse(&href)
-            .ok()
-            .and_then(|url| {
-                url.query_pairs()
-                    .find(|(key, _)| key == "uddg")
-                    .map(|(_, value)| value.into_owned())
-            })
-            .unwrap_or(href);
-        rows.push(format!(
-            "{}. {}\n   {target}\n   {}",
-            index + 1,
-            clean(&found[2]),
-            snippets.get(index).cloned().unwrap_or_default()
-        ));
+    link.captures_iter(page)
+        .enumerate()
+        .filter_map(|(index, found)| {
+            let target = duckduckgo_target(&found[1])?;
+            let title = page_text(&found[2]).replace('\n', " ");
+            Some((title, target, snippets.get(index).cloned().unwrap_or_default()))
+        })
+        .collect()
+}
+
+/// The address a DuckDuckGo result link leads to: its `uddg` parameter when the link goes through DuckDuckGo.
+fn duckduckgo_target(href: &str) -> Option<String> {
+    let href = href.replace("&amp;", "&");
+    let full = if href.starts_with("//") { format!("https:{href}") } else { href };
+    let url = reqwest::Url::parse(&full).ok()?;
+    if url.host_str() == Some("duckduckgo.com") && url.path().starts_with("/l/") {
+        return url.query_pairs().find(|pair| pair.0 == "uddg").map(|pair| pair.1.into_owned());
     }
-    ok(if rows.is_empty() {
-        "no results".to_string()
-    } else {
-        rows.join("\n")
-    })
+    full.starts_with("http").then_some(full)
+}
+
+/// The results on a Brave search page: (title, address, snippet) of each result block that has a title and an address.
+/// DuckDuckGo's HTML page answers 202 with a bot check to this client, so it returned no results.
+fn brave_results(page: &str) -> Vec<(String, String, String)> {
+    let (Ok(link), Ok(title), Ok(description)) = (
+        regex::Regex::new(r#"<a href="(https?://[^"]+)""#),
+        regex::Regex::new(r#"class="title search-snippet-title[^"]*" title="([^"]*)""#),
+        regex::Regex::new(r#"(?s)class="description[^"]*"[^>]*>(.*?)</div>"#),
+    ) else {
+        return Vec::new();
+    };
+    page.split(r#"data-type="web""#)
+        .skip(1)
+        .filter_map(|block| {
+            let target = link.captures(block)?[1].replace("&amp;", "&");
+            let title = page_text(&title.captures(block)?[1]).replace('\n', " ");
+            let snippet = description
+                .captures(block)
+                .map(|found| page_text(&found[1]).replace('\n', " "))
+                .unwrap_or_default();
+            Some((title, target, snippet))
+        })
+        .collect()
 }
 
 /// The file change a Write or Edit makes. A Write over an existing file shows what it replaces, so the diff is
@@ -1289,6 +1579,10 @@ async fn model_call(
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools.to_vec());
     }
+    // Workers AI cuts an answer short at its own small default, so ask for a fixed ceiling.
+    if turn.base_url.contains("api.cloudflare.com") {
+        body["max_tokens"] = json!(2048);
+    }
     // Servers differ in how they take this, and one ignores what it does not know: `reasoning_effort` (LM Studio,
     // OpenAI-style, Ollama), `chat_template_kwargs` (llama.cpp, vLLM) and `think` (Ollama).
     match turn.effort.as_deref() {
@@ -1307,7 +1601,12 @@ async fn model_call(
     if let Some(key) = turn.api_key.as_deref().filter(|key| !key.is_empty()) {
         request = request.bearer_auth(key);
     }
-    let mut response = match request.send().await {
+    // A local model reads a long prompt before it answers, so the wait for the first byte is generous but not endless.
+    let sent = match tokio::time::timeout(Duration::from_secs(300), request.send()).await {
+        Ok(sent) => sent,
+        Err(_) => return Err("the server did not answer within 5 minutes".into()),
+    };
+    let mut response = match sent {
         Ok(response) => response,
         Err(error) if error.is_connect() => {
             return Err("could not connect: is the server running?".into())
@@ -1347,21 +1646,36 @@ async fn model_call(
             Ok(Some(bytes)) => {
                 pending.extend_from_slice(&bytes);
                 while let Some(line) = take_line(&mut pending) {
-                    let Some(data) = line.trim().strip_prefix("data:") else {
-                        continue;
-                    };
-                    let data = data.trim();
-                    if data == "[DONE]" {
+                    if handle_sse_line(&line, &mut step, emit) {
                         break 'stream;
                     }
-                    read_chunk(data, &mut step, emit);
                 }
             }
-            Ok(None) => break,
+            Ok(None) => {
+                // The stream can end on a line without its newline: that last `data:` line still holds text.
+                if !pending.is_empty() {
+                    let rest = String::from_utf8_lossy(&pending).into_owned();
+                    handle_sse_line(&rest, &mut step, emit);
+                }
+                break;
+            }
             Err(error) => return Err(error.to_string()),
         }
     }
     Ok(step)
+}
+
+/// Reads one SSE line. `true` when it is the end of the stream (`data: [DONE]`).
+fn handle_sse_line(line: &str, step: &mut Step, emit: &mut impl FnMut(AgentEvent)) -> bool {
+    let Some(data) = line.trim().strip_prefix("data:") else {
+        return false;
+    };
+    let data = data.trim();
+    if data == "[DONE]" {
+        return true;
+    }
+    read_chunk(data, step, emit);
+    false
 }
 
 /// The next complete SSE line (including its newline), decoded as UTF-8; incomplete bytes stay buffered.
@@ -1561,7 +1875,9 @@ pub async fn run_turn(
     let mut messages: Vec<Value> = vec![
         json!({ "role": "system", "content": if turn.restricted { RESTRICTED_PROMPT.to_string() } else { system_prompt(turn.cwd.as_deref(), &skills) } }),
     ];
-    messages.extend(history.iter().map(wire_message));
+    // Workers AI's OpenAI-compatible route checks each message against its own schema: only text content, never null.
+    let text_only = turn.base_url.contains("api.cloudflare.com");
+    messages.extend(history.iter().map(|message| wire_message(message, text_only)));
     // A message the user writes while this turn runs goes into the conversation at the next step, as a CLI that reads
     // its input at any time would take it: the work goes on, and the answer covers it.
     let (_inbox_slot, mut inbox) = InjectSlot::open(&turn.chat);
@@ -1578,6 +1894,8 @@ pub async fn run_turn(
     let mut finish_nudged = false;
     let mut last_call_signature = String::new();
     let mut repeated_calls = 0;
+    // Searches the engine refused with 429 this turn: after a few the turn stops instead of asking again.
+    let mut rate_limited_searches = 0;
     // A model that spends its whole answer on thinking (some local ones do, with big prompts): it is asked again, then asked
     // again with thinking off, before the turn is called a failure.
     let mut silent = 0;
@@ -1677,7 +1995,7 @@ pub async fn run_turn(
             .collect();
         messages.push(json!({
             "role": "assistant",
-            "content": if step.text.is_empty() { Value::Null } else { Value::String(step.text.clone()) },
+            "content": step.text.clone(),
             "tool_calls": calls.iter().zip(&ids).map(|(call, id)| json!({ "id": id, "type": "function", "function": { "name": call.name, "arguments": if call.arguments.is_empty() { "{}" } else { call.arguments.as_str() } } })).collect::<Vec<_>>(),
         }));
 
@@ -1853,6 +2171,9 @@ pub async fn run_turn(
                     },
                 }
             };
+            if call.name == "WebSearch" && outcome.is_error && outcome.text.contains("429") {
+                rate_limited_searches += 1;
+            }
             emit(AgentEvent::ToolResult {
                 id: id.clone(),
                 output: outcome.text.clone(),
@@ -1861,6 +2182,9 @@ pub async fn run_turn(
                 change: None,
             });
             messages.push(json!({ "role": "tool", "tool_call_id": id, "content": outcome.text }));
+        }
+        if rate_limited_searches >= SEARCH_LIMIT_HITS {
+            return emit(AgentEvent::Error { message: "the web search was refused (429 Too Many Requests) again and again; the turn stopped instead of retrying. Try again later or with another search.".into() });
         }
         if !denied.is_empty() {
             emit(AgentEvent::PermissionDenied { requests: denied });
@@ -2063,6 +2387,35 @@ mod tests {
     }
 
     #[test]
+    fn a_text_only_api_gets_string_content_and_pictures_named() {
+        let message = ChatMessage {
+            role: "user".into(),
+            content: "look".into(),
+            images: vec!["data:image/png;base64,AAAA".into()],
+            files: Vec::new(),
+        };
+        let text = wire_message(&message, true);
+        assert_eq!(text["content"], "look\n\n[1 image(s) attached: this model reads text only]");
+        let parts = wire_message(&message, false);
+        assert_eq!(parts["content"][1]["type"], "image_url");
+    }
+
+    #[test]
+    fn an_sse_line_without_its_newline_still_counts() {
+        let mut step = Step::default();
+        let mut shown = String::new();
+        let mut emit = |event: AgentEvent| {
+            if let AgentEvent::Delta { text } = event {
+                shown.push_str(&text);
+            }
+        };
+        let last = r#"data: {"choices":[{"delta":{"content":"hết."}}]}"#;
+        assert!(!handle_sse_line(last, &mut step, &mut emit));
+        assert_eq!(step.text, "hết.");
+        assert_eq!(shown, "hết.");
+    }
+
+    #[test]
     fn chunks_give_text_reasoning_tool_calls_and_usage() {
         let mut step = Step::default();
         let mut events = Vec::new();
@@ -2242,5 +2595,39 @@ mod tests {
         assert!(!edit("b").is_error);
         assert_eq!(std::fs::read_to_string(dir.join("f.txt")).unwrap(), "a z a");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_brave_results_page_gives_title_address_and_snippet() {
+        let page = r#"<div class="snippet svelte-1" data-pos="1" data-type="web"><a href="https://www.cloudflare.com/products/workers-ai/" target="_self">x</a><div class="title search-snippet-title line-clamp-1" title="Cloudflare Workers AI &amp; more">t</div><div class="description t-secondary">Pay for inference.</div></div><div class="snippet" data-type="web"><a href="https://developers.cloudflare.com/workers-ai/" target="_self">y</a><div class="title search-snippet-title" title="Overview">t</div></div>"#;
+        let results = brave_results(page);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "Cloudflare Workers AI & more");
+        assert_eq!(results[0].1, "https://www.cloudflare.com/products/workers-ai/");
+        assert_eq!(results[0].2, "Pay for inference.");
+        assert_eq!(results[1].2, "");
+        assert!(brave_results("<html>bot check</html>").is_empty());
+    }
+
+    #[test]
+    fn a_bing_page_gives_title_address_and_snippet() {
+        let page = r#"<ol><li class="b_algo"><h2><a href="https://example.com/a?x=1&amp;y=2">First <strong>page</strong></a></h2><div class="b_caption"><p>Snippet one.</p></div></li><li class="b_algo"><h2><a href="https://example.com/b">Second</a></h2></li></ol>"#;
+        let results = bing_results(page);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "First page");
+        assert_eq!(results[0].1, "https://example.com/a?x=1&y=2");
+        assert_eq!(results[0].2, "Snippet one.");
+        assert_eq!(results[1].2, "");
+    }
+
+    #[test]
+    fn a_duckduckgo_page_gives_the_real_address_of_each_result() {
+        let page = r#"<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fc&amp;rut=1">Third</a><a class="result__snippet" href="x">Snippet three.</a><a class="result__a" href="https://example.org/d">Fourth</a>"#;
+        let results = duckduckgo_results(page);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].1, "https://example.com/c");
+        assert_eq!(results[0].2, "Snippet three.");
+        assert_eq!(results[1].1, "https://example.org/d");
+        assert!(duckduckgo_results("<html>anomaly</html>").is_empty());
     }
 }

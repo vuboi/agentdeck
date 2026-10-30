@@ -8,12 +8,14 @@ import { customModelId, modelLabel } from '../../agents/models.svelte';
 import { logFlow } from '../../tasks/flow-log';
 import { inTauri } from '../../app/platform/history';
 import { startPageMemoryBridge } from '../../browser/page-memory-bridge';
-import { MODELS, persistLocal, workspace, type Agent, type SessionItem } from './state.svelte';
-import { agentLabel, failSessionWork, hiddenPrompt, stopTurn } from './turns.svelte';
-import { NO_HANDOUT, askText, liveReplies, messagesOf, replies } from './run.svelte';
-import { addWorkflowWorker, delegateRuns, firstLineOf, needsApproval, updateWorkflowWorker } from './delegation.svelte';
+import { MODELS, localMessages, persistLocal, workspace, type Agent, type SessionItem } from './state.svelte';
+import { agentLabel, chatTurnOptions, failSessionWork, hasTurnWork, hiddenPrompt, queuePaused, queued, stopTurn, turnOptionsOf } from './turns.svelte';
+import { NO_HANDOUT, askText, liveAsks, liveReplies, messagesOf, replies, runReplies, sendNextQueued } from './run.svelte';
+import { addWorkflowWorker, delegateRuns, firstLineOf, needsApproval, settleWorkflowRun, updateWorkflowWorker } from './delegation.svelte';
 import { LANGUAGE_RULE, shorten, taskWaiters } from './orchestration.svelte';
 import { handbackPrompt, send } from './sending.svelte';
+import { manuallyStopped } from './events.svelte';
+import { continuePrompt } from '../recovery/turn-failure';
 
 // ---------- delegate_task: an agent hands a task to another agent during its own turn ----------
 // Claude, Codex, Antigravity and local models can call the app's `delegate_task` tool (src-tauri/src/delegate.rs). The Rust
@@ -30,10 +32,19 @@ const TASK_LIMIT = 200;
 
 type Ending = 'user' | 'caller' | 'timeout' | 'abort';
 /** What a running task needs besides its record: the tool call that waits for its report, the timer, why it is ending. */
-export const taskRuns = new Map<
-  string,
-  { callId?: string; timer?: ReturnType<typeof setTimeout>; ending?: Ending }
->();
+type TaskRun = {
+  callId?: string;
+  timer?: ReturnType<typeof setTimeout>;
+  ending?: Ending;
+  remainingMs: number;
+  deadline: number;
+  started?: boolean;
+  start?: () => void;
+  slotRequest?: Promise<boolean>;
+  release?: Promise<void>;
+  generation: number;
+};
+export const taskRuns = new Map<string, TaskRun>();
 
 // Tasks outlive a reload as cards: a task whose worker was running then has no run any more, so it reads as stopped.
 const taskStore = $state({ ready: false });
@@ -49,7 +60,9 @@ void getPref<TaskRecord[]>(TASKS_KEY)
             endedAt: item.endedAt ?? Date.now(),
             note: 'Stopped: AgentDeck was closed or reloaded while it ran.',
           }
-        : item;
+        : item.reportState === 'running' || item.reportState === 'waiting'
+          ? { ...item, reportState: 'failed', note: 'Worker result saved; returning its report was interrupted by reload.' }
+          : item;
     }
   })
   .catch(() => undefined)
@@ -62,7 +75,9 @@ $effect.root(() => {
     const all = (
       JSON.parse(JSON.stringify(Object.values(delegateTasks))) as TaskRecord[]
     ).sort((a, b) => a.startedAt - b.startedAt);
-    setPref(TASKS_KEY, all.slice(-TASK_LIMIT));
+    const active = all.filter((item) => ['queued', 'running', 'approval'].includes(item.state) || item.reportState === 'waiting' || item.reportState === 'running');
+    const activeIds = new Set(active.map((item) => item.id));
+    setPref(TASKS_KEY, [...active, ...all.filter((item) => !activeIds.has(item.id)).slice(-TASK_LIMIT)]);
   });
 });
 
@@ -98,13 +113,14 @@ function callerOf(chatId: string): SessionItem | undefined {
 /** The agents `list_agents` shows and `delegate_task` takes: the installed CLIs, then each local provider. */
 function agentRows(): AgentRow[] {
   const installed = (tool: string) =>
-    connectors.detected?.tools.find((item) => item.id === tool)?.path !== null;
+    Boolean(connectors.detected?.tools.find((item) => item.id === tool)?.path);
   const rows: AgentRow[] = [];
   for (const [id, tool] of [
     ['claude', 'claude'],
     ['codex', 'codex'],
     ['antigravity', 'agy'],
     ['opencode', 'opencode'],
+    ['copilot', 'gh'],
   ] as const) {
     const models = (MODELS[id] ?? []).map((item) => ({
       value: item.value,
@@ -257,7 +273,8 @@ function startTask(
     row.id === 'claude' ||
     row.id === 'codex' ||
     row.id === 'antigravity' ||
-    row.id === 'opencode'
+    row.id === 'opencode' ||
+    row.id === 'copilot'
       ? row.id
       : 'custom';
   const model =
@@ -266,23 +283,30 @@ function startTask(
   while (delegateTasks[taskId]) taskId = newTaskId();
 
   const uuid = crypto.randomUUID();
-  const id = `claude:${uuid}`;
+  const id = `${agent}:${uuid}`;
   const label = `${agentLabel(agent, model)} · ${modelLabel(model)}`;
+  const originatingRun = [...runReplies.values()].find((run) => run.sessionId === caller.id && run.reply.blocks.some((block) => block.kind === 'command' && kindOfCommand(block.command) === 'delegate_task' && argsOfCall(block.command.replace(/^\S+\s*/, '')).task === task));
+  const source = originatingRun?.ask ?? liveAsks[caller.id];
   workspace.sessions.push({
     id,
     projectId: caller.projectId,
     title: `@${agentLabel(agent, model)}: ${firstLineOf(task, 50)}`,
     agent,
-    agentSession: uuid,
+    agentSession: agent === 'claude' ? uuid : undefined,
     model,
     gitBranch: caller.gitBranch,
     status: 'idle',
     parentId: caller.id,
     draft: false,
   });
+  // A chat with no messages and no draft flag is not a local chat: the next history import rebuilt the list without it, and a
+  // worker waiting for a free place then had no chat to start in.
+  localMessages[id] = [];
   delegateTasks[taskId] = {
     id: taskId,
     caller: caller.id,
+    sourceMessageId: source?.id,
+    sourceTask: source ? askText(source) : task,
     childId: id,
     state: 'queued',
     wait,
@@ -294,11 +318,7 @@ function startTask(
     startedAt: Date.now(),
   };
   delegateTasks[taskId].workflowRunId = addWorkflowWorker(caller.id, id, agent, model, label, task, true);
-  const run: {
-    callId?: string;
-    timer?: ReturnType<typeof setTimeout>;
-    ending?: Ending;
-  } = { callId: wait ? call.callId : undefined };
+  const run: TaskRun = { callId: wait ? call.callId : undefined, remainingMs: timeoutS * 1000, deadline: Date.now() + timeoutS * 1000, generation: 0 };
   taskRuns.set(taskId, run);
   run.timer = setTimeout(
     () =>
@@ -309,12 +329,19 @@ function startTask(
       ),
     timeoutS * 1000,
   );
+  // The worker runs with the settings of the chat that called it, not with those of whichever chat is on screen.
+  chatTurnOptions[id] = { ...turnOptionsOf(caller.id) };
   bindTasks(caller.id);
 
   // The worker's end: its report, or why there is none. A worker stopped on an approval card waits for the user's yes.
   const settle = (answer: string, error: string | null, workerReply?: import('../mock').Message) => {
     const record = delegateTasks[taskId];
     if (!record || !taskRuns.has(taskId)) return;
+    // Pausing ends only the provider turn. Keep the task's completion waiter for Resume.
+    if (record.pausedAt !== undefined && !run.ending) {
+      taskWaiters.set(id, settle);
+      return;
+    }
     if (!run.ending && !error && needsApproval(id)) {
       record.state = 'approval';
       taskWaiters.set(id, settle);
@@ -335,20 +362,24 @@ function startTask(
   const brief = `You were asked by another agent (${agentLabel(caller.agent, caller.model)}), who is working for the user in this project, to do the task below on your own. Answer fully, as you would for the user. ${REPORT_RULE} ${LANGUAGE_RULE}`;
   // At most MAX_PARALLEL_WORKERS run at once (delegate.rs keeps the line); the rest wait as `queued`. A free place
   // starts the worker at once, so three calls of one turn run side by side.
-  slotStarts.set(taskId, () => {
+  run.start = () => {
     const record = delegateTasks[taskId];
-    if (!record || record.state !== 'queued' || !taskRuns.has(taskId)) return;
+    if (!record || record.pausedAt !== undefined || record.state !== 'queued' || !taskRuns.has(taskId)) return;
     record.state = 'running';
-    record.startedAt = Date.now();
+    if (!run.started) record.startedAt = Date.now();
     updateWorkflowWorker(record.workflowRunId, record.childId, 'running');
-    send(id, task, [], [], [], { preface: `${brief}\n\n` });
+    delete manuallyStopped[id];
+    if (run.started) send(id, '', [], [], [], { prompt: continuePrompt('the user paused this worker', true, record.task), silent: NO_HANDOUT });
+    if (!run.started) send(id, task, [], [], [], { preface: `${brief}\n\n` });
+    run.started = true;
     persistLocal();
-  });
+  };
+  slotStarts.set(taskId, run.start);
   persistLocal();
   logFlow(id, 'worker slot', `task=${taskId} asks for a place`);
-  void enterWorkerSlot(taskId)
-    // A gate that cannot answer must not block the work.
-    .catch(() => true)
+  run.slotRequest = enterWorkerSlot(taskId, caller.id).catch(() => true);
+  const generation = run.generation;
+  void run.slotRequest
     .then((granted) => {
       logFlow(id, 'worker slot', `task=${taskId} ${granted ? 'granted' : 'waits in line'}`);
       // Ended (stopped, timed out) before the gate answered: its release came first and freed nothing, so the place
@@ -358,6 +389,7 @@ function startTask(
         return;
       }
       if (!wait) reply(startedText({ taskId, childId: id, label }, !granted));
+      if (generation !== run.generation) return;
       if (granted) startQueued(taskId);
     });
 }
@@ -391,6 +423,7 @@ function finishTask(
   void releaseWorkerSlot(taskId).catch(() => undefined);
   taskWaiters.delete(record.childId);
   record.endedAt = Date.now();
+  delete record.pausedAt;
   record.state =
     verdict === 'done' ? 'done' : verdict === 'stopped' ? 'stopped' : 'failed';
   const detailOf =
@@ -404,6 +437,13 @@ function finishTask(
   if (verdict === 'done') record.digest = body;
   else record.note = body;
   updateWorkflowWorker(record.workflowRunId, record.childId, verdict === 'done' ? 'done' : 'failed', body, workerReply);
+  // Stopped by the user or the caller: no report is delivered, so nothing else would ever close the flow run.
+  if (run.ending === 'user' || run.ending === 'caller') {
+    const sameRun = (other: TaskRecord) => other.id !== taskId && other.workflowRunId === record.workflowRunId;
+    const pending = Object.values(delegateTasks).some((other) => sameRun(other) && (other.reportState === 'waiting' || other.reportState === 'running'))
+      || (backlog.get(record.caller) ?? []).some((report) => report.taskId !== taskId && delegateTasks[report.taskId]?.workflowRunId === record.workflowRunId);
+    settleWorkflowRun(record.workflowRunId, pending);
+  }
   const text = formatTaskResult(
     {
       taskId,
@@ -425,6 +465,9 @@ function finishTask(
   // A task in the background: its report goes to the caller, unless the user or the caller itself stopped it.
   if (run.ending !== 'user' && run.ending !== 'caller')
     deliverReport(record.caller, {
+      taskId,
+      sourceMessageId: record.sourceMessageId,
+      sourceTask: record.sourceTask ?? record.task,
       label: `${record.label} (task ${taskId})`,
       text: verdict === 'done' ? body : reasonLine(verdict, detailOf),
     });
@@ -448,20 +491,79 @@ export function stopDelegateTask(taskId: string) {
   stopTask(taskId, 'user');
 }
 
+/** The user answered an approval card in a worker's chat: "no" ends its task, "yes" puts it back to running. */
+export function answerWorkerApproval(childId: string, allowed: boolean) {
+  const record = Object.values(delegateTasks).find((item) => item.childId === childId && item.state === 'approval');
+  if (!record) return;
+  if (allowed) record.state = 'running';
+  else stopTask(record.id, 'user');
+}
+
+/** Pauses one worker without completing its task or returning a partial report to the caller. */
+export function pauseDelegateTask(taskId: string): void {
+  const record = delegateTasks[taskId];
+  const run = taskRuns.get(taskId);
+  if (!record || !run || record.pausedAt !== undefined || !['queued', 'running'].includes(record.state)) return;
+  record.pausedAt = Date.now();
+  run.remainingMs = Math.max(1, run.deadline - Date.now());
+  clearTimeout(run.timer);
+  run.generation++;
+  slotStarts.delete(taskId);
+  manuallyStopped[record.childId] = true;
+  if (run.started) stopTurn(record.childId);
+  // Wait for an outstanding grant before releasing it; a quick Resume must not lose its new slot.
+  run.release = (run.slotRequest ?? Promise.resolve(false)).then(() => releaseWorkerSlot(taskId)).catch(() => undefined);
+  updateWorkflowWorker(record.workflowRunId, record.childId, 'idle', 'Paused by you');
+}
+
+/** Resumes in the same child conversation and returns the final result to the original task. */
+export async function resumeDelegateTask(taskId: string): Promise<void> {
+  const record = delegateTasks[taskId];
+  const run = taskRuns.get(taskId);
+  if (!record || !run || record.pausedAt === undefined || !run.start) return;
+  delete record.pausedAt;
+  record.state = 'queued';
+  const generation = ++run.generation;
+  run.deadline = Date.now() + run.remainingMs;
+  run.timer = setTimeout(() => stopTask(taskId, 'timeout', 'Worker time limit reached.'), run.remainingMs);
+  await run.release;
+  if (!taskRuns.has(taskId) || generation !== run.generation) return;
+  slotStarts.set(taskId, run.start);
+  run.slotRequest = enterWorkerSlot(taskId, record.caller).catch(() => true);
+  const granted = await run.slotRequest;
+  if (generation !== run.generation) return;
+  if (!taskRuns.has(taskId)) {
+    void releaseWorkerSlot(taskId).catch(() => undefined);
+    return;
+  }
+  if (granted) startQueued(taskId);
+}
+
 /** Reports of background tasks waiting for their caller to be idle, per caller. */
-export const backlog = new Map<string, { label: string; text: string }[]>();
+type BackgroundReport = { label: string; text: string; taskId: string; sourceMessageId?: string; sourceTask: string };
+export const backlog = new Map<string, BackgroundReport[]>();
 
 function deliverReport(
   callerId: string,
-  report: { label: string; text: string },
+  report: BackgroundReport,
 ) {
   const list = backlog.get(callerId) ?? [];
+  if (list.some((item) => item.taskId === report.taskId)) return;
   list.push(report);
   backlog.set(callerId, list);
-  if (list.length === 1) flushReports(callerId, 0);
+  const record = delegateTasks[report.taskId];
+  if (record) record.reportState = 'waiting';
+  sendNextQueued(callerId);
 }
 
-/** Sends the waiting reports to their caller as one silent hand-back turn, once it is idle (an hour at most). */
+/** Returns a saved worker result without rerunning the completed work after an interrupted summary. */
+export function returnTaskResult(taskId: string): void {
+  const record = delegateTasks[taskId];
+  if (!record || record.state !== 'done' || record.reportState !== 'failed' || !record.digest) return;
+  deliverReport(record.caller, { taskId, sourceMessageId: record.sourceMessageId, sourceTask: record.sourceTask ?? record.task, label: record.label, text: record.digest });
+}
+
+/** Delivers reports from one original request when the chat is idle; unrelated requests are never merged. */
 export function flushReports(callerId: string, tries: number) {
   const list = backlog.get(callerId);
   if (!list?.length) return;
@@ -469,23 +571,26 @@ export function flushReports(callerId: string, tries: number) {
     backlog.delete(callerId);
     return;
   }
-  if (replies[callerId]) {
-    if (tries < 3600) setTimeout(() => flushReports(callerId, tries + 1), 1000);
-    else backlog.delete(callerId);
-    return;
-  }
-  backlog.delete(callerId);
-  const asked = messagesOf(callerId).findLast(
-    (message) => message.role === 'user' && !hiddenPrompt(message),
-  );
-  const task =
-    shorten(
-      askText(asked ?? { id: '', role: 'user', time: '', blocks: [] }),
-      1500,
-    ) || 'the one you were working on';
+  if (hasTurnWork(callerId) || queuePaused[callerId] || queued[callerId]?.length) return;
+  const origin = list[0];
+  const batch = list.filter((report) => report.sourceMessageId === origin.sourceMessageId && report.sourceTask === origin.sourceTask);
+  const rest = list.filter((report) => !batch.includes(report));
+  if (rest.length) backlog.set(callerId, rest);
+  else backlog.delete(callerId);
+  const taskIds = batch.map((report) => report.taskId);
+  for (const id of taskIds) if (delegateTasks[id]) delegateTasks[id].reportState = 'running';
   send(callerId, '', [], [], [], {
-    prompt: handbackPrompt({ results: list, task }),
+    prompt: handbackPrompt({ results: batch, task: origin.sourceTask }),
     silent: NO_HANDOUT,
+    report: { triggeredByMessageId: origin.sourceMessageId, taskTitle: origin.sourceTask, taskIds, workflowRunId: delegateTasks[taskIds[0]]?.workflowRunId },
+    // A reply started before this hand-back could (a deferred send woke late): the report waits in line again and goes
+    // out when the chat is idle, instead of being lost with its task stuck on "returning".
+    onDropped: () => {
+      const again = backlog.get(callerId) ?? [];
+      for (const report of batch) if (!again.some((item) => item.taskId === report.taskId)) again.unshift(report);
+      backlog.set(callerId, again);
+      for (const id of taskIds) if (delegateTasks[id]) delegateTasks[id].reportState = 'waiting';
+    },
   });
 }
 

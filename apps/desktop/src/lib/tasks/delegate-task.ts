@@ -295,8 +295,14 @@ export type TaskRecord = {
   workflowRunId?: string;
   /** The chat that called delegate_task. */
   caller: string;
+  /** Request that created the work, captured before later prompts can change the active conversation. */
+  sourceMessageId?: string;
+  sourceTask?: string;
+  reportState?: 'waiting' | 'running' | 'done' | 'failed';
   childId: string;
   state: TaskState;
+  /** User pause keeps this task and its result destination alive. */
+  pausedAt?: number;
   wait: boolean;
   label: string;
   /** The kind of agent (`claude`, `codex`, `antigravity`, `custom`) and the id the caller named it by (`list_agents`). */

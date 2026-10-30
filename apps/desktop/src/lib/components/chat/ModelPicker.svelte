@@ -10,6 +10,7 @@
   import { findModel, freeFirst, modelSources, modelsReady } from '../../agents/models.svelte';
   import { CREDIT_PREFIX } from '../../agents/credit-model';
   import { automation, fallbackOn, setFallback } from '../../app/platform/automation.svelte';
+  import { accountEpoch } from '../../chat/runs/account-epoch.svelte';
   import SectionTitle from '../ui/SectionTitle.svelte';
 
   let {
@@ -152,8 +153,15 @@
   );
   // A model that does not take the chosen level falls back to its own default.
   $effect(() => {
+    void accountEpoch[agent];
     const levels = efforts.map((item) => item.value);
     if (!levels.includes(effort)) effort = (findModel(agent, model)?.defaultEffort ?? levels[Math.min(1, levels.length - 1)]) as Effort;
+  });
+  $effect(() => {
+    void accountEpoch[agent];
+    if (!modelsReady[currentSource.provider]) return;
+    const available = currentSource.models();
+    if (available.length && !available.some((item) => item.value === model)) model = available[0].value;
   });
 
   // The approval modes every agent CLI offers in some form.
@@ -316,6 +324,7 @@
             { key: 'compress', icon: 'lucideShrink', title: 'Auto-compress context', note: 'Claude: compact a long chat before it runs out of room', on: automation.compress, set: (value: boolean) => (automation.compress = value) },
             { key: 'fallback', icon: 'lucideRoute', title: 'Auto fallback', note: 'At a limit or a server error, the next agent carries on', on: fallbackOn(), set: setFallback },
             { key: 'orchestrate', icon: 'lucideWorkflow', title: 'Auto-orchestrate', note: 'Proactively delegate independent work to other agents', on: automation.orchestrate, set: (value: boolean) => (automation.orchestrate = value) },
+            { key: 'prehandle', icon: 'lucideScanText', title: 'Pre-handle attachments', note: 'Summarize images and files with a lightweight vision model before the main agent', on: automation.prehandle, set: (value: boolean) => (automation.prehandle = value) },
           ] as row (row.key)}
             <div class="flex items-center justify-between gap-6">
               <div class="min-w-0">

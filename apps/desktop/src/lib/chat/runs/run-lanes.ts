@@ -21,8 +21,13 @@ export function deliveryFor(lanes: readonly RunLane[]): MessageDelivery {
 
   const listenerActive = active.some((lane) => lane.role === 'listener');
   const hasBackgroundWait = active.some(
-    (lane) => lane.role === 'primary' && (lane.state === 'waiting' || lane.backgroundWork),
+    (lane) => lane.role === 'primary' && lane.state === 'waiting' && lane.backgroundWork,
   );
   if (hasBackgroundWait && !listenerActive) return 'listener';
   return 'queue';
+}
+
+/** Only an explicit provider wait releases a foreground slot; spawning a child alone does not mean the lead is idle. */
+export function isBackgroundWait(name: string): boolean {
+  return /(?:^|[._/])(?:wait|wait_agent|wait_agents|wait_task|wait_for_completion)$/i.test(name);
 }

@@ -9,24 +9,25 @@ import { classifyLimitGate, type LimitGateKind } from '../recovery/limit-gate';
 import { type AgentEvent, listenAgentEvents } from '../agent';
 import { logError } from '../../app/platform/error-log.svelte';
 import { hangTraceOn, logFlow, markStep } from '../../tasks/flow-log';
-import { trackActivity } from '../runs/activity.svelte';
+import { activity, trackActivity } from '../runs/activity.svelte';
 import { guide } from '../../app/ui/guide.svelte';
-import { addUsage, applyAgentEvent } from '../agent-reply';
+import { addUsage, applyAgentEvent, updateHistoricalTask } from '../agent-reply';
 import { finishCommandImages, persistCommandImage } from '../content/command-images';
 import { recordUsage, estimateCost } from '../runs/usage';
 import { toolKindOf } from '../../tasks/delegate-task';
 import { archiveTurn } from '../content/archive';
 import { MODELS, advanceRun, nextId, persistLocal, runEpochs, workspace, type Agent, type SessionItem } from './state.svelte';
 import { agentLabel, continuationGroups, failSessionWork, hiddenPrompt, isRunning, openServedPage, queued, stopTurn, turns } from './turns.svelte';
-import { NO_HANDOUT, RENDER_WAIT_LIMIT_MS, liveAsks, liveHandouts, liveReplies, messagesOf, needsUserInput, renderWaiters, replies, runReplies, sendNextQueued, sessionLanes, updateLane } from './run.svelte';
+import { NO_HANDOUT, RENDER_WAIT_LIMIT_MS, askText, liveAsks, liveHandouts, liveReplies, messagesOf, needsUserInput, renderWaiters, replies, runReplies, sendNextQueued, sessionLanes, updateLane } from './run.svelte';
 import { finishWorkflowTurn, onDelegateDone } from './delegation.svelte';
-import { bindTasks, delegateTasks, endWaitingTasks } from './delegate-task.svelte';
+import { bindTasks, delegateTasks, endWaitingTasks, pauseDelegateTask, resumeDelegateTask, taskRuns } from './delegate-task.svelte';
 import { handoffFor, send } from './sending.svelte';
-import { clipText } from './orchestration.svelte';
+import { clipText, taskWaiters } from './orchestration.svelte';
 import { finishWorkflowIntegration } from './delegation.svelte';
 import { importHistory, keepOtherTurn, rememberMixed, transcripts } from './history.svelte';
 import { parseCustomModel } from '../../agents/models.svelte';
 import type { CredentialAttempt } from '../../agents/credential-switch';
+import { isBackgroundWait } from '../runs/run-lanes';
 
 const credentialAttempts = new Map<string, CredentialAttempt & { controller: AbortController }>();
 /** A user request or Stop invalidates every pending continuation for the previous task. */
@@ -40,12 +41,25 @@ export const manuallyStopped = $state<Record<string, boolean>>({});
 
 /** Stops the active turn and exposes the composer's one-click continuation action. */
 export function stopTurnForResume(sessionId: string) {
+  const task = Object.values(delegateTasks).find((item) => item.childId === sessionId && taskRuns.has(item.id) && ['queued', 'running'].includes(item.state));
+  if (task) {
+    pauseDelegateTask(task.id);
+    return;
+  }
+  const waiter = taskWaiters.get(sessionId);
+  taskWaiters.delete(sessionId);
   stopTurn(sessionId);
+  if (waiter) taskWaiters.set(sessionId, waiter);
   manuallyStopped[sessionId] = true;
 }
 
 /** Continues a user-stopped turn with a hidden prompt that preserves the original request in context. */
 export function resumeStoppedTurn(sessionId: string) {
+  const task = Object.values(delegateTasks).find((item) => item.childId === sessionId && taskRuns.has(item.id) && item.pausedAt !== undefined);
+  if (task) {
+    void resumeDelegateTask(task.id);
+    return;
+  }
   if (!manuallyStopped[sessionId] || isRunning(sessionId)) return;
   delete manuallyStopped[sessionId];
   send(sessionId, '', [], [], [], {
@@ -154,6 +168,8 @@ async function runRecovery(sessionId: string, plan: Recovery, reason: string) {
   if (plan.action === 'retry') {
     state.retries++;
     await new Promise((resolve) => setTimeout(resolve, plan.delayMs));
+    // The user may have sent something meanwhile: their turn runs now, so the conversation is not reset under it.
+    if (replies[sessionId] || recoveries[sessionId] !== state) return;
     forgetUnstartedConversation(session);
   } else {
     moveChatTo(session, plan.agent as Agent);
@@ -221,18 +237,30 @@ async function runAutoSwitch(sessionId: string, reason: string, reply: Message, 
       send(sessionId, '', [], [], [], { prompt: continuePrompt('the account or API key reached its limit', true, lastRequest(sessionId)), silent: NO_HANDOUT });
       return;
     }
+    if (selected && session && replies[sessionId]) {
+      // The user's own message started a reply while the account was being switched: theirs wins, and the switch is done.
+      if (current) {
+        current.status = 'ok';
+        current.output = `Switched to ${selected}.`;
+      }
+      cancelAutoSwitch(sessionId);
+      return;
+    }
     if (current) {
       current.status = 'fail';
       current.output = `No available account or API key. Elapsed ${Math.floor((Date.now() - started) / 1000)}s`;
     }
     if (session) scheduleResume(session, reason);
     cancelAutoSwitch(sessionId);
+    // The failed turn skipped the queue while this switch ran: nothing else will start it, so it goes on now.
+    if (!replies[sessionId]) sendNextQueued(sessionId);
   } catch (error) {
     const current = block();
     const cancelled = !isCurrent() || (error instanceof Error && error.name === 'AbortError');
     if (current) { current.status = 'fail'; current.output = cancelled ? 'Account switching cancelled' : 'Account verification failed. Resume manually after checking the account.'; }
     if (!cancelled) scheduleResume(session, reason);
     cancelAutoSwitch(sessionId);
+    if (!cancelled && !replies[sessionId]) sendNextQueued(sessionId);
   } finally {
     clearInterval(timer);
     persistLocal();
@@ -305,13 +333,15 @@ function scheduleResume(session: SessionItem, message: string) {
 /** Carries on now (the "Try again" button, or the time has come). */
 export function resumeNow(sessionId: string) {
   const resume = resumes[sessionId];
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  // A reply is running: "Try again" must not throw the card away and send nothing; it stays until the chat is idle.
+  if (resume && session && replies[sessionId]) return;
   delete resumes[sessionId];
   if (resume) {
     resumeAutoChoice[sessionId] = resume.auto;
     resumeSince[sessionId] = resume.since;
   }
-  const session = workspace.sessions.find((item) => item.id === sessionId);
-  if (!resume || !session || replies[sessionId]) return;
+  if (!resume || !session) return;
   send(sessionId, '', [], [], [], { prompt: continuePrompt(resume.reason, true, lastRequest(sessionId)), silent: NO_HANDOUT });
 }
 export const cancelResume = (sessionId: string) => {
@@ -466,12 +496,13 @@ function recordAgentEvent(sessionId: string, event: AgentEvent) {
  */
 function beginAutoTurn(sessionId: string, turn: string, messageId?: string) {
   const session = workspace.sessions.find((item) => item.id === sessionId);
-  if (!session || liveReplies[sessionId]?.live) return;
+  if (!session || runReplies.has(turn)) return;
+  const besideForeground = Boolean(liveReplies[sessionId]?.live);
   const list = messagesOf(sessionId);
-  const previous = list.at(-1);
-  const runGroup = continuationGroups[sessionId] ?? (previous?.role === 'assistant' ? previous.runGroup : undefined) ?? nextId();
-  if (previous?.role === 'assistant') previous.runGroup = runGroup;
-  continuationGroups[sessionId] = runGroup;
+  const candidates = activity.filter((item) => item.sessionId === sessionId && item.background && item.sourceMessageId && (!item.endedAt || Date.now() - item.endedAt < 10_000));
+  const sources = new Set(candidates.map((item) => item.sourceMessageId));
+  const source = messageId ?? (sources.size === 1 ? candidates[0]?.sourceMessageId : undefined);
+  const runGroup = list.find((item) => item.id === source)?.runGroup ?? nextId();
   list.push({
     id: nextId(),
     role: 'assistant',
@@ -483,10 +514,18 @@ function beginAutoTurn(sessionId: string, turn: string, messageId?: string) {
     agent: session.agent,
     model: session.model,
     autoTurn: true,
-    triggeredByMessageId: messageId ?? (previous?.role === 'assistant' ? previous.replyTo ?? previous.triggeredByMessageId : undefined),
+    triggeredByMessageId: source,
+    taskTitle: candidates.find((item) => item.sourceMessageId === source)?.sourceTitle ?? 'Background work report',
     runGroup,
   });
   const reply = list[list.length - 1];
+  // A provider's unsolicited report owns a separate lane when the user is already talking to another run.
+  runReplies.set(turn, { sessionId, reply, listener: besideForeground, backgroundTools: new Set() });
+  updateLane(sessionId, { id: turn, role: besideForeground ? 'listener' : 'primary', state: 'running', backgroundWork: false });
+  if (besideForeground) {
+    session.status = 'working';
+    return;
+  }
   liveReplies[sessionId] = reply; // the stored (reactive) object
   replies[sessionId] = reply.id;
   turns[sessionId] = turn;
@@ -511,9 +550,18 @@ function flushQueued(onlySession?: string) {
     streamQueue.delete(sessionId);
     const started = performance.now();
     markStep(`apply ${items.length} streamed event(s) of ${sessionId}`);
-    for (const item of items) handleEventNow(sessionId, item.event, item.turn, item.messageId);
+    // One event that throws must not drop the rest of its chat's queue (a `done` could follow), nor another chat's.
+    for (const item of items) applyEvent(sessionId, item.event, item.turn, item.messageId);
     const ms = Math.round(performance.now() - started);
     if (ms >= 50 || hangTraceOn()) logFlow(sessionId, 'applied', `${items.length} event(s) in ${ms} ms, last=${items.at(-1)?.event.kind}`);
+  }
+}
+/** `handleEventNow` that never throws: a failing handler is logged and the next event still runs. */
+function applyEvent(sessionId: string, event: AgentEvent, turn?: string, messageId?: string) {
+  try {
+    handleEventNow(sessionId, event, turn, messageId);
+  } catch (error) {
+    logError('turn', `event handler failed (${event.kind})`, error, logCtx(sessionId));
   }
 }
 if (typeof window !== 'undefined') window.addEventListener('pagehide', () => flushQueued());
@@ -530,12 +578,17 @@ export function handleAgentEvent(
     streamQueue.set(sessionId, items);
     flushTimer ??= setTimeout(() => {
       flushTimer = undefined;
-      flushQueued();
+      try {
+        flushQueued();
+      } finally {
+        // Whatever stayed queued (a failure above) is applied on the next tick, not left until the next delta.
+        if (streamQueue.size > 0) flushTimer = setTimeout(() => ((flushTimer = undefined), flushQueued()), COALESCE_MS);
+      }
     }, COALESCE_MS);
     return;
   }
   flushQueued(sessionId);
-  handleEventNow(sessionId, event, turn, messageId);
+  applyEvent(sessionId, event, turn, messageId);
 }
 
 function handleEventNow(
@@ -545,8 +598,13 @@ function handleEventNow(
   messageId?: string,
 ) {
   const ownedRun = turn ? runReplies.get(turn) : undefined;
+  // Task ids correlate to their original cards even after the user has started a newer turn.
+  if (event.kind === 'task') {
+    updateHistoricalTask(messagesOf(sessionId), event);
+  }
   const startsTailReply = event.kind === 'auto_turn' && turn?.startsWith('auto-');
   if (turn !== undefined && turns[sessionId] !== turn && !ownedRun && !startsTailReply) {
+    if (event.kind === 'task') trackActivity(sessionId, '', '', event, turn);
     // Late auto-turn markers are stale too: they must not start a reply after a newer user message.
     if (event.kind === 'done' || event.kind === 'error' || event.kind === 'auto_turn') {
       logFlow(sessionId, 'event dropped', `turn=${turn} is not the current turn (${turns[sessionId] ?? '-'}) kind=${event.kind}`);
@@ -558,12 +616,18 @@ function handleEventNow(
     if (turn !== undefined) beginAutoTurn(sessionId, turn, messageId);
     return;
   }
+  const currentReply = ownedRun?.reply ?? liveReplies[sessionId];
+  const expectedMessage = currentReply?.autoTurn ? currentReply.triggeredByMessageId : currentReply?.replyTo;
+  if (messageId && expectedMessage && messageId !== expectedMessage) {
+    logFlow(sessionId, 'event dropped', `turn=${turn ?? '-'} message=${messageId} does not belong to reply ${currentReply?.id ?? '-'}`);
+    return;
+  }
   if (ownedRun) {
     if (event.kind === 'tool_call' && event.background) {
       ownedRun.backgroundTools.add(event.id);
-      updateLane(sessionId, { id: turn!, role: ownedRun.listener ? 'listener' : 'primary', state: 'waiting', backgroundWork: true });
+      updateLane(sessionId, { id: turn!, role: ownedRun.listener ? 'listener' : 'primary', state: 'running', backgroundWork: true });
     } else if (event.kind === 'tool_result' && ownedRun.backgroundTools.delete(event.id)) {
-      updateLane(sessionId, { id: turn!, role: ownedRun.listener ? 'listener' : 'primary', state: ownedRun.backgroundTools.size ? 'waiting' : 'running', backgroundWork: ownedRun.backgroundTools.size > 0 });
+      updateLane(sessionId, { id: turn!, role: ownedRun.listener ? 'listener' : 'primary', state: 'running', backgroundWork: ownedRun.backgroundTools.size > 0 });
     } else if (event.kind === 'task') {
       if (event.status === 'started' || event.status === 'progress') {
         ownedRun.backgroundTools.add(event.id);
@@ -572,14 +636,16 @@ function handleEventNow(
         ownedRun.backgroundTools.delete(event.id);
         if (event.tool_use_id) ownedRun.backgroundTools.delete(event.tool_use_id);
       }
-      updateLane(sessionId, { id: turn!, role: ownedRun.listener ? 'listener' : 'primary', state: ownedRun.backgroundTools.size ? 'waiting' : 'running', backgroundWork: ownedRun.backgroundTools.size > 0 });
+      const wasWaiting = sessionLanes[sessionId]?.find((lane) => lane.id === turn)?.state === 'waiting';
+      updateLane(sessionId, { id: turn!, role: ownedRun.listener ? 'listener' : 'primary', state: wasWaiting && ownedRun.backgroundTools.size ? 'waiting' : 'running', backgroundWork: ownedRun.backgroundTools.size > 0 });
     }
-  }
-  const currentReply = ownedRun?.reply ?? liveReplies[sessionId];
-  const expectedMessage = currentReply?.autoTurn ? currentReply.triggeredByMessageId : currentReply?.replyTo;
-  if (messageId && expectedMessage && messageId !== expectedMessage) {
-    logFlow(sessionId, 'event dropped', `turn=${turn ?? '-'} message=${messageId} does not belong to reply ${currentReply?.id ?? '-'}`);
-    return;
+    if (event.kind === 'tool_call' && isBackgroundWait(event.name) && ownedRun.backgroundTools.size) {
+      updateLane(sessionId, { id: turn!, role: ownedRun.listener ? 'listener' : 'primary', state: 'waiting', backgroundWork: true });
+      sendNextQueued(sessionId);
+    }
+    if (event.kind === 'delta' || event.kind === 'thinking') {
+      updateLane(sessionId, { id: turn!, role: ownedRun.listener ? 'listener' : 'primary', state: 'running', backgroundWork: ownedRun.backgroundTools.size > 0 });
+    }
   }
   if (event.kind === 'done' || event.kind === 'error') logFlow(sessionId, 'reply end', `turn=${turn ?? '-'} ${event.kind}${event.kind === 'error' ? ` ${event.message.slice(0, 120)}` : ''} live=${Boolean(liveReplies[sessionId]?.live)} queued=${queued[sessionId]?.length ?? 0}`);
   recordAgentEvent(sessionId, event);
@@ -610,6 +676,8 @@ function handleEventNow(
     workspace.projects.find((project) => project.id === session.projectId)
       ?.name ?? '',
     event,
+    turn,
+    { agent: reply?.agent ?? session.agent, model: reply?.model ?? session.model, messageId: ownedRun?.ask?.id ?? reply?.replyTo ?? reply?.triggeredByMessageId, request: ownedRun?.ask ? askText(ownedRun.ask) : liveAsks[sessionId] ? askText(liveAsks[sessionId]) : undefined },
   );
   noteSilence(sessionId, session, event);
   const documentTask = guide.tasks[sessionId];
@@ -646,8 +714,12 @@ function handleEventNow(
     if (reply.startedAt) reply.ms = Date.now() - reply.startedAt;
     updateLane(sessionId, { id: turn!, role: 'listener', state: event.kind === 'error' ? 'failed' : 'done', backgroundWork: false });
     runReplies.delete(turn!);
+    archiveTurn({ id: sessionId, title: session.title, agent: reply.agent ?? session.agent, model: reply.model ?? session.model, projectPath: workspace.projects.find((project) => project.id === session.projectId)?.path ?? null }, [ownedRun.ask, reply].filter((message): message is Message => Boolean(message)));
     void finishCommandImages(sessionId, reply);
-    if (session.path) keepOtherTurn(session, reply);
+    if (session.path) {
+      if (ownedRun.ask) keepOtherTurn(session, ownedRun.ask);
+      keepOtherTurn(session, reply);
+    }
     if (reply.tokens) recordUsage({
       at: new Date().toISOString(), sessionId, agent: reply.agent ?? session.agent,
       model: reply.model ?? session.model, projectId: session.projectId, ms: reply.ms,
@@ -671,15 +743,17 @@ function handleEventNow(
   // The CLI has the conversation once it answers; only then is `--resume` valid for the next turn.
   const first = session.source ?? session.agents?.[0] ?? session.agent;
   const agent = reply.agent ?? session.agent;
-  if (agent === first) {
+  if (update.agentSession && agent === first) {
+    session.agentSession = update.agentSession;
+    session.agentStarted = true;
+  } else if (agent === first) {
     if (event.kind !== 'error') session.agentStarted = true;
-    if (update.agentSession) session.agentSession = update.agentSession;
   } else if (
-    event.kind !== 'error' &&
-    (update.agentSession || session.agentIds?.[agent])
+    update.agentSession ||
+    (event.kind !== 'error' &&
+      session.agentIds?.[agent])
   ) {
     const id = update.agentSession ?? session.agentIds?.[agent]?.id;
-    // The rest of the entry (the account epoch) stays: only the id and its start change here.
     if (id) (session.agentIds ??= {})[agent] = { ...session.agentIds?.[agent], id, started: true };
   }
   // A failed turn that can be carried on (retry, another account, the next agent) does not end the work: the chat
@@ -716,6 +790,9 @@ function handleEventNow(
     reply.blocks = [...reply.blocks, { kind: 'command', id: autoSwitchBlockId, command: 'AgentDeck · waiting for account switch', output: 'Elapsed 0s', status: 'running' }];
   }
   if (update.finished) {
+    for (const id of reply.taskIds ?? []) {
+      if (delegateTasks[id]) delegateTasks[id].reportState = event.kind === 'error' ? 'failed' : 'done';
+    }
     updateLane(sessionId, { id: turn!, role: 'primary', state: event.kind === 'error' ? 'failed' : 'done', backgroundWork: false });
     runReplies.delete(turn!);
     if (documentTask?.status === 'working' && !recovering) {
@@ -797,7 +874,7 @@ function handleEventNow(
       session.updatedAt = new Date().toISOString();
       transcripts.delete(sessionId);
       if (!session.path) void importHistory({ refresh: true });
-      // The final Markdown animation can outlast the CLI turn. Keep queued work behind the last rendered response.
+      // Track the final Markdown animation independently of provider execution and queue delivery.
       const responseBlocks = reply.blocks.flatMap((block, index) =>
         block.kind === 'response' && block.text ? [index] : [],
       );
@@ -814,16 +891,17 @@ function handleEventNow(
           messageId: reply.id,
           blocks: new Set(responseBlocks),
         };
-        // A block that is not on screen (scrolled out of the virtual list, a block that threw) never reports: the queue
-        // behind this reply must not wait for it for ever.
+        // An offscreen virtual block never reports: expire its presentation state without blocking delivery.
         const waitingFor = renderWaiters[sessionId];
-        logFlow(sessionId, 'render wait', `reply ${reply.id}: queue waits for ${responseBlocks.length} block(s) to draw`);
+        logFlow(sessionId, 'render wait', `reply ${reply.id}: tracking ${responseBlocks.length} block(s) drawing`);
         setTimeout(() => {
           if (renderWaiters[sessionId] !== waitingFor) return;
           delete renderWaiters[sessionId];
-          logFlow(sessionId, 'render wait timed out', `reply ${reply.id} was not drawn in ${RENDER_WAIT_LIMIT_MS} ms: the queue goes on`);
+          logFlow(sessionId, 'render wait timed out', `reply ${reply.id} was not drawn in ${RENDER_WAIT_LIMIT_MS} ms: clearing presentation state`);
           sendNextQueued(sessionId);
         }, RENDER_WAIT_LIMIT_MS);
+        // Rendering is presentation only: an offscreen virtual block must not add 15 seconds between queued turns.
+        sendNextQueued(sessionId);
       } else sendNextQueued(sessionId);
     }
   }

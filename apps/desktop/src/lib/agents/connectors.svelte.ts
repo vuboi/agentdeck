@@ -240,7 +240,13 @@ export const tool = (id: string) => connectors.detected?.tools.find((item) => it
 
 /** Reloads the account-specific Copilot model list after GitHub sign-in or account switching. */
 function refreshCopilotModels() {
-  void import('./models.svelte').then(({ loadModels }) => loadModels(['copilot']));
+  void import('./models.svelte').then(({ reloadModels }) => reloadModels(['copilot']));
+}
+
+/** Refreshes the model list exposed by the account-backed CLI after its credentials change. */
+async function refreshAccountModels(provider: AccountProvider | 'antigravity') {
+  const { reloadModels } = await import('./models.svelte');
+  await reloadModels([provider]);
 }
 export const installed = (id: string) => Boolean(tool(id)?.path);
 
@@ -371,6 +377,7 @@ export async function switchAgyAccount(account: AgyAccount): Promise<boolean> {
     accountSwitched('antigravity');
     toast.success(`Now using ${account.email}`);
     await Promise.all([refreshAgyAccounts(), refreshDetect(), refreshAgyQuota()]);
+    await refreshAccountModels('antigravity');
   }
   return ok;
 }
@@ -474,7 +481,7 @@ export async function switchAccount(provider: AccountProvider, account: Account)
     accountSwitched(provider);
     toast.success(`Now using ${account.email}`);
     await refreshAll();
-    if (provider === 'copilot') refreshCopilotModels();
+    await refreshAccountModels(provider);
   }
   return ok;
 }
@@ -515,7 +522,10 @@ async function restoreConnectorAccount(connector: ConnectorId, id: string | unde
     catch { /* Confirm the actual native profile below even if the command reported an error. */ }
     finally { connectors.accounts.agy = await callWithTimeout<AgyAccount[]>('antigravity_accounts_list', undefined, 65_000); void saveAccountCache(); }
     const active = connectors.accounts.agy.find((item) => item.active)?.id;
-    if (active !== before) accountSwitched('antigravity');
+    if (active !== before) {
+      accountSwitched('antigravity');
+      await refreshAccountModels('antigravity');
+    }
     if (active !== id) throw new Error('Could not restore original account');
   } else {
     const before = connectors.accounts[connector]?.accounts.find((item) => item.active)?.id;
@@ -526,7 +536,10 @@ async function restoreConnectorAccount(connector: ConnectorId, id: string | unde
       void saveAccountCache();
     }
     const active = connectors.accounts[connector]?.accounts.find((item) => item.active)?.id;
-    if (active !== before) accountSwitched(connector);
+    if (active !== before) {
+      accountSwitched(connector);
+      await refreshAccountModels(connector);
+    }
     if (active !== id) throw new Error('Could not restore original account');
   }
   void refreshDetect();
@@ -568,6 +581,7 @@ async function switchConnectorCandidate(connector: ConnectorId, attempt: Credent
           connectors.agyQuota = quota;
           connectors.accounts.agy = verifiedAccounts;
           accountSwitched('antigravity');
+          await refreshAccountModels('antigravity');
           void saveAccountCache();
           void refreshDetect();
           return { email: account.email };
@@ -615,9 +629,9 @@ async function switchConnectorCandidate(connector: ConnectorId, attempt: Credent
       if (verified.accounts.some((item) => item.id === account.id && item.active && !item.expired && hasRoom(item, Date.now()))) {
         connectors.accounts[provider] = verified;
         accountSwitched(provider);
+        await refreshAccountModels(provider);
         void saveAccountCache();
         void refreshDetect();
-        if (provider === 'copilot') void refreshCopilotModels();
         return { email: account.email };
       }
       throw new Error('Account check failed');

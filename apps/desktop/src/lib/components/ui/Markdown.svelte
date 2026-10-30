@@ -269,7 +269,19 @@
   });
 
 
+  // A code block or table that is shown in the moment its answer is read reveals itself (rows one after another). The
+  // same block mounted again later (a scroll back into view) carries an old time and does not replay.
+  const REVEAL_MS = 2000;
+  function reveal(container: HTMLElement) {
+    for (const block of container.querySelectorAll<HTMLElement>('.md-code[data-at], .md-table[data-at]')) {
+      if (block.classList.contains('md-reveal') || Date.now() - Number(block.dataset.at) > REVEAL_MS) continue;
+      block.classList.add('md-reveal');
+      [...block.querySelectorAll<HTMLElement>('tbody tr')].forEach((row, index) => row.style.setProperty('--row', String(Math.min(index, 12))));
+    }
+  }
+
   async function colour(container: HTMLElement, dark: boolean) {
+    reveal(container);
     // A block coloured for the other theme (the theme changed, or the app was still settling) is coloured again.
     const blocks = [...container.querySelectorAll<HTMLElement>(`.md-code:not([data-coloured="${dark ? 'dark' : 'light'}"])`)];
     if (blocks.length === 0) return;

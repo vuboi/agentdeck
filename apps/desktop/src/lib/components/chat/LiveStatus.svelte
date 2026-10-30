@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { fade, fly } from 'svelte/transition';
   import ActivityIndicator from '../ui/ActivityIndicator.svelte';
+  import StatusRoller from '../ui/StatusRoller.svelte';
   import { LOADER_SIZE } from '../../app/platform/loaders';
   import { ticker } from '../../app/platform/clock.svelte';
   import { elapsed, liveState } from '../../chat/content/blocks';
   import type { Message } from '../../chat/mock';
 
-  // "Thinking 24s": what the agent is doing, with a light sweeping across the words, and how long it has taken.
+  // "Thinking 24s": what the agent is doing, and how long it has taken.
   let { message }: { message: Message } = $props();
 
   const live = $derived(liveState(message.blocks));
@@ -30,16 +30,7 @@
   {#key live.spinner}
     <ActivityIndicator spinner={live.spinner} size={LOADER_SIZE} color="primary" />
   {/key}
-  <!-- Old and new label share one grid cell: the box keeps the wider of the two, so the time after it never moves. -->
-  <span class="relative inline-grid">
-    {#key shown}
-      <!-- The words rise one after another, from below, each a little after the one before. -->
-      <span class="col-start-1 row-start-1 whitespace-nowrap" out:fade={{ duration: 120 }}>
-        {#each shown.split(' ') as word, i (i)}
-          <span class="inline-block" in:fly={{ y: 10, duration: 260, delay: i * 45 }}>{word}{i < shown.split(' ').length - 1 ? ' ' : ''}</span>
-        {/each}
-      </span>
-    {/key}
-  </span>
-  <span class="tabular-nums">{seconds}</span>
+  <StatusRoller current={shown} />
+  <!-- A fixed box for the seconds: their width changes with each tick, the box does not, so the text does not shift. -->
+  <span class="inline-block min-w-[6ch] text-left tabular-nums">{seconds}</span>
 </div>

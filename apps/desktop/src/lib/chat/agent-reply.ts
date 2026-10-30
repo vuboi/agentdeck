@@ -35,6 +35,27 @@ function findCommand(blocks: Block[], id: string): Extract<Block, { kind: 'comma
   return undefined;
 }
 
+/** Updates the original task card when its provider reports progress in a later automatic turn. */
+export function updateHistoricalTask(messages: readonly Message[], event: Extract<AgentEvent, { kind: 'task' }>): boolean {
+  const id = event.tool_use_id ?? event.id;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const call = findCommand(messages[index].blocks, id);
+    if (!call) continue;
+    // Delayed progress from a completed task cannot reopen its pinned activity indicator.
+    if (call.task?.status === 'done' || call.task?.status === 'failed') return true;
+    call.task = {
+      status: event.status,
+      startedAt: call.task?.startedAt ?? Date.now(),
+      endedAt: event.status === 'done' || event.status === 'failed' ? Date.now() : undefined,
+      label: event.label ?? call.task?.label,
+      summary: event.summary ?? call.task?.summary,
+      tools: event.tools ?? call.task?.tools,
+    };
+    return true;
+  }
+  return false;
+}
+
 export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdate {
   // The loading placeholder goes as soon as anything real arrives. Otherwise the list is changed in place: copying it
   // for every delta of a long reply, and assigning the copy back, redrew every block of the reply for each token.
@@ -97,6 +118,8 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
       close(blocks, false);
       blocks.push({ kind: 'permission', requests: event.requests, state: 'pending' });
       return { blocks, finished: false };
+    case 'session':
+      return { blocks, finished: false, agentSession: event.session_id };
     case 'done': {
       close(blocks, true);
       // Streamed text already shows the answer; the final result only fills in when nothing streamed.
@@ -111,10 +134,14 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
       return { blocks, finished: false };
     }
     case 'task': {
-      const call = event.tool_use_id ? findCommand(blocks, event.tool_use_id) : undefined;
+      const call = findCommand(blocks, event.tool_use_id ?? event.id);
+      if (call?.task?.status === 'done' || call?.task?.status === 'failed') return { blocks, finished: false };
       if (call) {
         call.task = {
           status: event.status,
+          // Set once, when the task first shows: the activity card counts from here.
+          startedAt: call.task?.startedAt ?? Date.now(),
+          endedAt: event.status === 'done' || event.status === 'failed' ? Date.now() : undefined,
           label: event.label ?? call.task?.label,
           summary: event.summary ?? call.task?.summary,
           tools: event.tools ?? call.task?.tools,

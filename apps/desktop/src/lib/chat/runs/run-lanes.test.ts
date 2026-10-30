@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deliveryFor, isRedundantAgentWait, type RunLane } from './run-lanes.ts';
+import { deliveryFor, isBackgroundWait, isRedundantAgentWait, type RunLane } from './run-lanes.ts';
 
 const lane = (
   role: RunLane['role'],
@@ -9,8 +9,16 @@ const lane = (
 ): RunLane => ({ id: `${role}-${state}`, role, state, backgroundWork });
 
 test('a background waiter releases one independent listener lane', () => {
-  assert.equal(deliveryFor([lane('primary', 'waiting')]), 'listener');
-  assert.equal(deliveryFor([lane('primary', 'running', true)]), 'listener');
+  assert.equal(deliveryFor([lane('primary', 'waiting', true)]), 'listener');
+  assert.equal(deliveryFor([lane('primary', 'running', true)]), 'queue');
+  assert.equal(deliveryFor([lane('primary', 'waiting')]), 'queue');
+});
+
+test('only explicit provider waits release a slot, never an ordinary shell command', () => {
+  assert.equal(isBackgroundWait('functions.wait'), true);
+  assert.equal(isBackgroundWait('wait_agent'), true);
+  assert.equal(isBackgroundWait('Bash'), false);
+  assert.equal(isBackgroundWait('awaiting_response'), false);
 });
 
 test('an actively generating foreground listener keeps later messages in the queue', () => {

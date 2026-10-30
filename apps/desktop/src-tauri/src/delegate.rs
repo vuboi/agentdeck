@@ -37,7 +37,7 @@ pub fn tool_defs() -> Vec<Value> {
     vec![
         json!({
             "name": DELEGATE_TOOL,
-            "description": format!("Hands a task to another AI agent running in AgentDeck (Claude, Codex, Antigravity or a local model) and returns its short report. Use this for cross-provider handoffs or independent work that benefits from another AgentDeck agent. If your CLI already has native sub-agents, use those for its own internal orchestration; do not replace them with this cross-provider tool. Keep ordinary Q&A, a small edit, a quick command or a simple artifact action in the current chat; do not invent work just to delegate. Use 1-4 workers for genuinely independent capabilities such as investigation, implementation on disjoint files, verification, browser or artifact work; never assign overlapping write scopes. Give each worker a self-contained goal, paths/resources, constraints and evidence-first handoff: it sees nothing of this conversation. Independent tasks go out together in ONE turn with wait=false so they work in the background while you continue the main task; use wait=true only when the next step depends on a report. At most {MAX_PARALLEL_WORKERS} workers run at a time; more wait in line and start as others finish. Keep ownership of the main task and final integration. Never delegate merely to relay the user's message or to produce the final answer. Reuse worker conversations for corrections and replan only after evidence shows a real gap. Call list_agents first when unsure which agent or model to use. A FREE TIER agent sees no file or project and may train on the task: send it only public, non-sensitive text."),
+            "description": format!("Hands a task to another AI agent running in AgentDeck (Claude, Codex, Antigravity or a local model) and returns its short report. Use this for cross-provider handoffs or independent work that benefits from another AgentDeck agent. If your CLI already has native sub-agents, use those for its own internal orchestration; do not replace them with this cross-provider tool. Do NOT delegate small things: keep ordinary Q&A, a small edit, a quick command or a simple artifact action in the current chat, and do not invent work just to delegate. Use 1-4 workers for genuinely independent capabilities such as investigation, implementation on disjoint files, verification, browser or artifact work; never assign overlapping write scopes. Give each worker a self-contained goal, paths/resources, constraints and evidence-first handoff: it sees nothing of this conversation. Independent tasks go out together in ONE turn with wait=false so they work in the background while you continue the main task; use wait=true only when the next step depends on a report. At most {MAX_PARALLEL_WORKERS} workers run at a time; more wait in line and start as others finish. Keep ownership of the main task and final integration. Never delegate merely to relay the user's message; never delegate the final answer. Reuse worker conversations for corrections and replan only after evidence shows a real gap. Call list_agents first when unsure which agent or model to use. A FREE TIER agent sees no file or project and may train on the task: send it only public, non-sensitive text."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -186,28 +186,31 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 static PENDING: LazyLock<Mutex<HashMap<String, oneshot::Sender<Reply>>>> =
     LazyLock::new(Default::default);
 
+/// The calls waiting for the webview. A panic while it was held must not stop later calls from being answered: the map is
+/// still sound, so its guard is taken back.
+fn pending() -> std::sync::MutexGuard<'static, HashMap<String, oneshot::Sender<Reply>>> {
+    PENDING.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The cap on running workers. Taken back after a panic too: the gate fails open, never stuck.
+fn gate() -> std::sync::MutexGuard<'static, Gate> {
+    GATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn register() -> (String, oneshot::Receiver<Reply>) {
     let id = format!("dlg-{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let (sender, receiver) = oneshot::channel();
-    if let Ok(mut pending) = PENDING.lock() {
-        pending.insert(id.clone(), sender);
-    }
+    pending().insert(id.clone(), sender);
     (id, receiver)
 }
 
 fn resolve(id: &str, reply: Reply) -> bool {
-    let sender = PENDING
-        .lock()
-        .ok()
-        .and_then(|mut pending| pending.remove(id));
+    let sender = pending().remove(id);
     sender.is_some_and(|sender| sender.send(reply).is_ok())
 }
 
 fn fail_all(reason: &str) -> usize {
-    let all: Vec<_> = PENDING
-        .lock()
-        .map(|mut pending| pending.drain().collect())
-        .unwrap_or_default();
+    let all: Vec<_> = pending().drain().collect();
     let count = all.len();
     for (_, sender) in all {
         let _ = sender.send(Reply {
@@ -231,13 +234,11 @@ impl Drop for Abandon<'_> {
         if self.done {
             return;
         }
-        if let Ok(mut pending) = PENDING.lock() {
-            pending.remove(&self.id);
-        }
+        pending().remove(&self.id);
         if self.notify {
             let _ = self
                 .app
-                .emit("agent-delegate-abort", json!({ "callId": self.id }));
+                .emit_to("main", "agent-delegate-abort", json!({ "callId": self.id }));
         }
     }
 }
@@ -271,7 +272,9 @@ pub async fn call(app: &AppHandle, tool: &str, args: &Value, chat: &str) -> Valu
         notify: tool == DELEGATE_TOOL && args["wait"] == true,
         done: false,
     };
-    if let Err(error) = app.emit(
+    // Only the main window: a Preview page is a copy of this app and must not answer the chats' calls.
+    if let Err(error) = app.emit_to(
+        "main",
         "agent-delegate",
         json!({ "callId": id, "tool": tool, "caller": chat, "args": args }),
     ) {
@@ -302,55 +305,63 @@ pub fn delegate_reply(call_id: String, text: String, is_error: bool) -> bool {
 /// The webview just (re)loaded: the chats and workers of the page before it are gone, so no call can be answered.
 #[tauri::command]
 pub fn delegate_ready() -> usize {
-    if let Ok(mut gate) = GATE.lock() {
-        *gate = Gate::default();
-    }
+    *gate() = Gate::default();
     fail_all("AgentDeck was reloaded while this task ran; the task is lost. Start it again if it is still needed.")
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // The cap on workers running at once
 
-/// How many delegated workers run at the same time, whoever asked and however (wait=true or false). The webview asks
-/// for a place before it starts a worker (`delegate_enter`) and gives it back when the task ends (`delegate_release`).
+/// How many delegated workers run at the same time for one asking chat (wait=true or false). The cap is per chat: a
+/// chat whose workers hang or pile up never takes a place from another chat. The webview asks for a place before it
+/// starts a worker (`delegate_enter`) and gives it back when the task ends (`delegate_release`).
 pub const MAX_PARALLEL_WORKERS: usize = 4;
 
-/// Workers running and workers waiting for a place, in the order they asked. Holds task ids only, no I/O: a place is
-/// given by `enter` or, once one is released, by the list `release` returns.
+/// Workers running and workers waiting for a place, in the order they asked, each with the chat that asked. Holds ids
+/// only, no I/O: a place is given by `enter` or, once one is released, by the list `release` returns.
 #[derive(Debug, Default)]
 struct Gate {
-    running: Vec<String>,
-    waiting: VecDeque<String>,
+    running: Vec<(String, String)>,
+    waiting: VecDeque<(String, String)>,
 }
 
 impl Gate {
+    fn used_by(&self, owner: &str) -> usize {
+        self.running.iter().filter(|(_, who)| who == owner).count()
+    }
+
     /// `true`: the task may start now. `false`: it waits, and `release` names it when its turn comes.
-    fn enter(&mut self, id: &str) -> bool {
-        if self.running.iter().any(|item| item == id) {
+    fn enter(&mut self, id: &str, owner: &str) -> bool {
+        if self.running.iter().any(|(item, _)| item == id) {
             return true;
         }
-        if self.waiting.iter().any(|item| item == id) {
+        if self.waiting.iter().any(|(item, _)| item == id) {
             return false;
         }
-        if self.running.len() < MAX_PARALLEL_WORKERS {
-            self.running.push(id.to_owned());
+        if self.used_by(owner) < MAX_PARALLEL_WORKERS {
+            self.running.push((id.to_owned(), owner.to_owned()));
             return true;
         }
-        self.waiting.push_back(id.to_owned());
+        self.waiting.push_back((id.to_owned(), owner.to_owned()));
         false
     }
 
     /// Frees the task's place (or its place in the line) and returns the waiting tasks that may start now.
     fn release(&mut self, id: &str) -> Vec<String> {
-        self.running.retain(|item| item != id);
-        self.waiting.retain(|item| item != id);
+        self.running.retain(|(item, _)| item != id);
+        self.waiting.retain(|(item, _)| item != id);
         let mut started = Vec::new();
-        while self.running.len() < MAX_PARALLEL_WORKERS {
-            let Some(next) = self.waiting.pop_front() else {
-                break;
-            };
-            self.running.push(next.clone());
-            started.push(next);
+        let mut index = 0;
+        while index < self.waiting.len() {
+            let owner = self.waiting[index].1.clone();
+            if self.used_by(&owner) < MAX_PARALLEL_WORKERS {
+                if let Some(entry) = self.waiting.remove(index) {
+                    started.push(entry.0.clone());
+                    self.running.push(entry);
+                }
+            } else {
+                index += 1;
+            }
         }
         started
     }
@@ -361,19 +372,17 @@ static GATE: LazyLock<Mutex<Gate>> = LazyLock::new(Default::default);
 /// A worker is about to start: `true` when it may, `false` when it is queued behind `MAX_PARALLEL_WORKERS` others (the
 /// webview is then told with `agent-delegate-slot` `{ taskId }` when its turn comes).
 #[tauri::command]
-pub fn delegate_enter(task_id: String) -> bool {
-    GATE.lock().map_or(true, |mut gate| gate.enter(&task_id))
+pub fn delegate_enter(task_id: String, owner: Option<String>) -> bool {
+    let owner = owner.unwrap_or_default();
+    gate().enter(&task_id, &owner)
 }
 
 /// A task ended (done, failed, stopped, timed out or never started): its place goes to the next one waiting.
 #[tauri::command]
 pub fn delegate_release(app: AppHandle, task_id: String) {
-    let started = GATE
-        .lock()
-        .map(|mut gate| gate.release(&task_id))
-        .unwrap_or_default();
+    let started = gate().release(&task_id);
     for id in started {
-        let _ = app.emit("agent-delegate-slot", json!({ "taskId": id }));
+        let _ = app.emit_to("main", "agent-delegate-slot", json!({ "taskId": id }));
     }
 }
 
@@ -517,13 +526,13 @@ mod tests {
         let mut gate = Gate::default();
         let running: Vec<String> = (0..MAX_PARALLEL_WORKERS).map(|n| format!("w{n}")).collect();
         for id in &running {
-            assert!(gate.enter(id));
+            assert!(gate.enter(id, "chat"));
         }
-        assert!(!gate.enter("x"));
-        assert!(!gate.enter("y"));
+        assert!(!gate.enter("x", "chat"));
+        assert!(!gate.enter("y", "chat"));
         // Asking twice does not take a second place, nor lose the one in line.
-        assert!(gate.enter(&running[0]));
-        assert!(!gate.enter("x"));
+        assert!(gate.enter(&running[0], "chat"));
+        assert!(!gate.enter("x", "chat"));
         assert_eq!(gate.release(&running[1]), ["x"]);
         assert_eq!(gate.running.len(), MAX_PARALLEL_WORKERS);
         // Completion order, not start order: the next place goes to the next in line.
@@ -533,14 +542,27 @@ mod tests {
     }
 
     #[test]
+    fn one_chat_full_of_workers_does_not_block_another_chat() {
+        let mut gate = Gate::default();
+        for n in 0..MAX_PARALLEL_WORKERS {
+            assert!(gate.enter(&format!("a{n}"), "chat-a"));
+        }
+        assert!(!gate.enter("a-extra", "chat-a"));
+        assert!(gate.enter("b0", "chat-b"));
+        // A place freed in chat B never starts chat A's waiting task.
+        assert!(gate.release("b0").is_empty());
+        assert_eq!(gate.release("a0"), ["a-extra"]);
+    }
+
+    #[test]
     fn a_task_stopped_in_line_leaves_the_line_and_an_unknown_release_is_harmless() {
         let mut gate = Gate::default();
         let running: Vec<String> = (0..MAX_PARALLEL_WORKERS).map(|n| format!("w{n}")).collect();
         for id in &running {
-            assert!(gate.enter(id));
+            assert!(gate.enter(id, "chat"));
         }
-        assert!(!gate.enter("x"));
-        assert!(!gate.enter("y"));
+        assert!(!gate.enter("x", "chat"));
+        assert!(!gate.enter("y", "chat"));
         assert!(gate.release("x").is_empty());
         assert!(gate.release("nobody").is_empty());
         assert_eq!(gate.release(&running[0]), ["y"]);

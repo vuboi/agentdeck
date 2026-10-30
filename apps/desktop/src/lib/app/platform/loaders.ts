@@ -24,6 +24,8 @@ export const LOADER = {
   background: 'matrix-orbit',
   /** A delegated task waiting for an available worker. */
   queued: 'lift',
+  /** Work in the background bar and the activity cards: the x-shaped dot loader, not the square grid. */
+  working: 'matrix-grid',
   /** The scroll-to-latest button while a reply is running. */
   scroll: 'conic',
 } as const satisfies Record<string, ZLoadingSpinner>;

@@ -2,6 +2,7 @@
   import ProjectSelect from '../ui/ProjectSelect.svelte';
   import ErrorLogDrawer from '../layout/ErrorLogDrawer.svelte';
   import { errorLog } from '../../app/platform/error-log.svelte';
+  import { jsonInText } from '../../app/text/json-text';
   import DevEmpty from '../browser/DevEmpty.svelte';
   import LiveCommand from '../chat/LiveCommand.svelte';
   import PhyllotaxisLoader from '../ui/PhyllotaxisLoader.svelte';
@@ -416,9 +417,9 @@
         </span>
         {#if live(item)}
           <!-- The step label keeps its shimmer; the compact spinner at the left marks it as running. -->
-          <span class="shrink-0 text-[0.8125rem] leading-4 font-medium text-primary" title={item.name}>{kind.label || item.name}</span>
+          <span class="shrink-0 text-[0.8125rem] leading-4 font-medium text-primary">{kind.label || item.name}</span>
         {:else}
-          <span class="shrink-0 text-[0.8125rem] leading-4 font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}" title={item.name}>{kind.label || item.name}</span>
+          <span class="shrink-0 text-[0.8125rem] leading-4 font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}">{kind.label || item.name}</span>
         {/if}
         {#if detailOf(item.name)}<span class="shrink-0 text-[0.6875rem] leading-4 {item.status === 'fail' ? 'text-destructive/80' : 'text-muted-foreground'}">{detailOf(item.name)}</span>{/if}
         {#if item.background}<span class="shrink-0 rounded bg-primary/10 px-1 text-[10px] text-primary">bg</span>{/if}
@@ -459,7 +460,7 @@
                 <div class="border-t {failed ? 'border-destructive/30' : 'border-border'}"></div>
               {/if}
               {#if item.output}
-                <pre class="m-0 max-h-48 overflow-auto py-1 pr-7 pl-2 font-mono whitespace-pre-wrap break-all {failed ? 'text-destructive' : 'text-muted-foreground'}">{live(item) ? tailOf(item.output) : item.output}</pre>
+                <pre class="m-0 max-h-48 overflow-auto py-1 pr-7 pl-2 font-mono whitespace-pre-wrap break-all {failed ? 'text-destructive' : 'text-muted-foreground'}">{live(item) ? tailOf(item.output) : jsonInText(item.output)}</pre>
               {/if}
               {@render copyButton([askedOf(item.input), item.output].filter(Boolean).join('\n'), failed ? 'Error' : item.input && item.output ? 'Command and output' : item.output ? 'Output' : 'Command')}
             </div>
@@ -534,8 +535,8 @@
             {:else if entry.kind === 'chat'}
               <div class="flex items-center gap-2 border-b border-border px-1.5 py-1.5 text-sm">
                 <ZIcon zType={'lucideLoaderCircle' as ZIconName} class="size-3 shrink-0 animate-spin text-primary" />
-                <span class="min-w-0 flex-1 truncate" title={entry.chat.text}>{entry.chat.text || 'Working…'}</span>
-                <span class="max-w-[35%] shrink-0 truncate text-[10px] text-muted-foreground" title={entry.chat.title}>{entry.chat.title}</span>
+                <span class="min-w-0 flex-1 truncate">{entry.chat.text || 'Working…'}</span>
+                <span class="max-w-[35%] shrink-0 truncate text-[10px] text-muted-foreground">{entry.chat.title}</span>
               </div>
             {:else if entry.kind === 'empty'}
               <div class="flex items-center justify-center gap-2 border-b border-border px-1.5 py-1.5 text-sm text-muted-foreground">

@@ -14,6 +14,7 @@
   import { findModel, freeFirst, modelSources, modelsReady, parseCustomModel, type ProviderId } from '../../agents/models.svelte';
   import { activeProviderKey, connectors, providerKeyEnv } from '../../agents/connectors.svelte';
   import { inTauri } from '../../app/platform/history';
+  import { accountEpoch } from '../../chat/runs/account-epoch.svelte';
   import { toast } from '../../app/platform/toast';
   import SectionTitle from '../ui/SectionTitle.svelte';
   import TextEditContextMenu from '../ui/TextEditContextMenu.svelte';
@@ -141,12 +142,16 @@
     return levels.map((value) => ({ value, label: EFFORT_LABEL[value] ?? value }));
   });
   $effect(() => {
+    void accountEpoch[promptProvider];
     const levels = effortTabs.map((item) => item.value);
     if (!levels.includes(effort)) effort = findModel(promptProvider, promptModel)?.defaultEffort ?? levels[Math.min(1, levels.length - 1)];
   });
+
   const promptModelLabel = $derived(promptModels.find((item) => item.value === promptModel)?.label ?? promptModel);
 
   $effect(() => {
+    void accountEpoch[promptProvider];
+    if (Object.values(modelsReady).some((ready) => !ready)) return;
     if (!promptModels.some((item) => item.value === promptModel)) promptModel = promptModels[0]?.value ?? '';
   });
 
@@ -357,7 +362,7 @@
 
 <!-- A ring that turns around a round button while its work runs, with a soft ripple; both stop for reduced motion. -->
 {#snippet busyRing()}
-  <span class="pointer-events-none absolute -inset-[2px] animate-spin rounded-full [background:conic-gradient(from_0deg,transparent_0_55%,var(--color-primary)_100%)] [mask:radial-gradient(farthest-side,transparent_calc(100%-2px),#000_calc(100%-2px))] motion-reduce:hidden" aria-hidden="true"></span>
+  <span class="pointer-events-none absolute -inset-[2px] animate-spin rounded-full [background:conic-gradient(from_0deg,transparent_0_55%,var(--color-primary)_100%)] [mask:radial-gradient(farthest-side,transparent_calc(100%_-_2px),#000_calc(100%_-_2px))] motion-reduce:hidden" aria-hidden="true"></span>
   <span class="pointer-events-none absolute inset-0 animate-ping rounded-full bg-primary/25 [animation-duration:1.8s] motion-reduce:hidden" aria-hidden="true"></span>
 {/snippet}
 
@@ -382,9 +387,9 @@
 
   <ImageHistoryDrawer bind:open={historyOpen} />
 
-  <div class="min-h-0 flex-1 overflow-y-auto p-1.5">
-    <div class="flex min-h-full flex-col gap-3">
-      <div class="relative min-w-0 rounded-2xl border border-input bg-card p-2 shadow-lg transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-ring/20 focus-within:ring-2">
+  <div class="min-h-0 flex-1 overflow-hidden p-1.5">
+    <div class="flex h-full min-h-0 flex-col gap-3">
+      <div class="relative min-w-0 shrink-0 rounded-2xl border border-input bg-card p-2 shadow-lg transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-ring/20 focus-within:ring-2">
         {#if references.length > 0}
           <div class="mb-2 flex flex-wrap gap-2" aria-label="Reference images">
             {#each references as reference (reference.id)}
@@ -731,7 +736,7 @@
       </div>
 
       <!-- The settings under the prompt: sent with it, and suggested with it by the prompt model. -->
-      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Image settings">
+      <div class="flex shrink-0 flex-wrap items-center gap-1.5" role="group" aria-label="Image settings">
         {#each SETTINGS as setting (setting.key)}
           {@const chosen = settings[setting.key]}
           <button
@@ -770,7 +775,7 @@
       />
 
       <div class="-mx-1.5 flex min-h-0 flex-1 flex-col border-t border-border pt-3">
-        <div class="flex min-h-0 flex-1 flex-col px-1.5">
+        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-1.5" role="region" aria-label="Image candidate results">
           <ImageResults />
         </div>
       </div>
