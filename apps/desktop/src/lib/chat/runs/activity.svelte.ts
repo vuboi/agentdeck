@@ -345,6 +345,8 @@ export function trackActivity(sessionId: string, title: string, project: string,
     const sameTask = (entry: Activity) => entry.sessionId === sessionId && entry.nativeTaskId === event.id;
     const matchingCalls = activity.filter((entry) => entry.sessionId === sessionId && entry.callId === callId && (!entry.nativeTaskId || entry.nativeTaskId === event.id));
     let item = activity.findLast(sameTask) ?? matchingCalls.findLast((entry) => entry.turn === turn) ?? (matchingCalls.length === 1 ? matchingCalls[0] : undefined);
+    // A foreground call the CLI also reports as a task (a plain Bash) keeps its own row: only a background call takes the task.
+    if (item && item.launchedInBackground === false && !item.nativeTaskId) return;
     if (!item) {
       item = { key: `${sessionId}:task:${event.id}`, sessionId, turn, callId, title, project, name: 'Agent', input: event.label ?? 'Background task', background: true, status: 'background', startedAt: Date.now(), agent: context?.agent, model: context?.model, sourceMessageId: context?.messageId, sourceTitle: context?.request };
       activity.push(item);

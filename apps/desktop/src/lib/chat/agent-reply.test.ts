@@ -73,3 +73,18 @@ test('a task completing in a later turn closes its original card and ignores lat
   assert.deepEqual(messages[1].blocks, [{ kind: 'response', text: 'New answer' }]);
   assert.equal(updateHistoricalTask(messages, { ...event, tool_use_id: 'unknown' }), false);
 });
+
+test('a foreground Bash that the CLI also reports as a task stays an ordinary command row', () => {
+  const foreground = run([
+    { kind: 'tool_call', id: 'fg', name: 'Bash', input: 'cargo test', background: false },
+    { kind: 'task', id: 'bash-1', tool_use_id: 'fg', status: 'started', label: 'Run tests' },
+  ] as AgentEvent[]);
+  const call = foreground.find((block) => block.kind === 'command');
+  assert.equal(call?.kind === 'command' && call.task, undefined, 'no task row for a foreground call');
+  const background = run([
+    { kind: 'tool_call', id: 'bg', name: 'Bash', input: 'pnpm dev', background: true },
+    { kind: 'task', id: 'bash-2', tool_use_id: 'bg', status: 'started', label: 'Dev server' },
+  ] as AgentEvent[]);
+  const shell = background.find((block) => block.kind === 'command');
+  assert.equal(shell?.kind === 'command' && shell.task?.status, 'started', 'a background call takes its task');
+});

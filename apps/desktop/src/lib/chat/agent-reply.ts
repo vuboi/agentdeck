@@ -41,6 +41,7 @@ export function updateHistoricalTask(messages: readonly Message[], event: Extrac
   for (let index = messages.length - 1; index >= 0; index--) {
     const call = findCommand(messages[index].blocks, id);
     if (!call) continue;
+    if (!call.background) return true;
     // Delayed progress from a completed task cannot reopen its pinned activity indicator.
     if (call.task?.status === 'done' || call.task?.status === 'failed') return true;
     call.task = {
@@ -89,6 +90,7 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
         command: `${event.name}  ${event.input}`.trim(),
         output: '',
         status: 'running',
+        ...(event.background ? { background: true } : {}),
         ...(event.change ? { change: { ...event.change, create: /^(Write|write_file|writefile|create_file|createfile)$/i.test(event.name) && event.change.removed === 0 } } : {}),
       });
       return { blocks, finished: false };
@@ -136,7 +138,8 @@ export function applyAgentEvent(current: Block[], event: AgentEvent): ReplyUpdat
     case 'task': {
       const call = findCommand(blocks, event.tool_use_id ?? event.id);
       if (call?.task?.status === 'done' || call?.task?.status === 'failed') return { blocks, finished: false };
-      if (call) {
+      // A foreground call (a Bash the CLI also reports as a task) stays an ordinary command row: only background calls get a task.
+      if (call?.background) {
         call.task = {
           status: event.status,
           // Set once, when the task first shows: the activity card counts from here.
