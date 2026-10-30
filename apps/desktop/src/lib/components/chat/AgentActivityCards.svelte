@@ -13,7 +13,10 @@
   import StatusRoller from '../ui/StatusRoller.svelte';
   import { fade } from 'svelte/transition';
 
-  let { items, agent = 'codex' }: { items: CommandBlock[]; agent?: string } = $props();
+  import { stopTurn } from '../../chat/session/turns.svelte';
+
+  // `sessionId`: the chat the items run in; a live item can be stopped from its row (its chat's background run ends).
+  let { items, agent = 'codex', sessionId }: { items: CommandBlock[]; agent?: string; sessionId?: string } = $props();
   let expanded = $state<Record<string, boolean>>({});
   let logOpen = $state<Record<string, boolean>>({});
   const keyOf = (item: CommandBlock, index: number) => item.id ?? String(index);
@@ -62,7 +65,8 @@
     {@const info = identity(item)}
     {@const children = logs(item)}
     <div class="{index > 0 ? 'border-t border-border' : ''}">
-      <button type="button" class="flex min-h-9 w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/60" aria-expanded={isOpen} onclick={() => (expanded[key] = !isOpen)}>
+      <div class="flex min-h-9 w-full items-center">
+      <button type="button" class="flex min-h-9 min-w-0 flex-1 cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/60" aria-expanded={isOpen} onclick={() => (expanded[key] = !isOpen)}>
         <AgentLogo agent={info.agent} model={info.model} class="size-3.5 shrink-0" />
         <span class="min-w-0 max-w-[40%] truncate font-medium">
           {#if live(item)}<ZShimmerText zBase="var(--primary)" zPeak="var(--foreground)" zText={info.name} />{:else}{info.name}{/if}
@@ -77,6 +81,13 @@
         <span class="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{timeOf(item)}</span>
         <ZIcon zType="lucideChevronRight" class="size-3.5 shrink-0 text-muted-foreground transition-transform {isOpen ? 'rotate-90' : ''}" />
       </button>
+      {#if live(item) && sessionId}
+        <button type="button" class="mr-2 inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.6875rem] text-muted-foreground outline-none transition-colors hover:bg-destructive/15 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring/60" aria-label="Stop {info.name}" title="Stop this task: its chat's background run ends" onclick={() => stopTurn(sessionId)}>
+          <svg class="size-2.5" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="currentColor" /></svg>
+          Stop
+        </button>
+      {/if}
+      </div>
       <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
         <div class="min-h-0 overflow-hidden" inert={!isOpen}>
           <div class="border-t border-border/70 bg-muted/20">

@@ -52,7 +52,7 @@
     {:else if segment.kind === 'tasks'}
       <TaskCards items={segment.items} />
     {:else if segment.kind === 'agent_activity'}
-      <AgentActivityCards items={segment.items} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent ?? 'codex'} />
+      <AgentActivityCards items={segment.items} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent ?? 'codex'} sessionId={activeSession()?.id} />
     {:else}
       <ChatBlock block={segment.block} running={Boolean(message.live) && isRunning(workspace.activeId)} flush={chat.messages.at(-1)?.id !== message.id} agent={message.agent ?? activeSession()?.source ?? activeSession()?.agent} onanswer={(answer) => answerPermission(message.id, message.blocks.indexOf(segment.block), answer)} onquestions={(text) => answerQuestions(workspace.activeId, text)} onrendered={segment.block.kind === 'response' ? () => replyBlockRendered(workspace.activeId, message.id, message.blocks.indexOf(segment.block)) : undefined} answered={!message.live && questionMessageId !== message.id} showQuestions={false} />
     {/if}
