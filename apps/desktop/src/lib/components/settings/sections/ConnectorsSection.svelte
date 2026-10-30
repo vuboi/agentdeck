@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fade } from 'svelte/transition';
+  import { fade, slide } from 'svelte/transition';
   import { ZButton, ZIcon, ZSwitch, ZTabs, ZTextMorph } from '@shival99/z-ui-svelte';
   import type { ZIconName, ZTab } from '@shival99/z-ui-svelte';
   import { toast } from '../../../app/platform/toast';
@@ -263,21 +263,26 @@
                       </p>
                     </div>
                     <div class="flex shrink-0 items-center gap-1.5">
+                      <!-- The buttons cross-fade when the state changes (install → installing → signed in) instead of cutting over. -->
                       {#if connectors.detected && !path}
-                        <ZButton zWave={false} zSize="sm" class="h-8 gap-1.5 px-3 text-sm" disabled={Boolean(working)} onclick={() => void install(card.id, card.label)}>
-                          <ZIcon zType={icon(working ? 'lucideLoaderCircle' : 'lucideDownload')} class="size-3.5 {working ? 'animate-spin' : ''}" /> Install
-                        </ZButton>
+                        <span class="inline-flex" in:fade={{ duration: 180, delay: 60 }} out:fade={{ duration: 120 }}>
+                          <ZButton zWave={false} zSize="sm" class="h-8 gap-1.5 px-3 text-sm" disabled={Boolean(working)} onclick={() => void install(card.id, card.label)}>
+                            <ZIcon zType={icon(working ? 'lucideLoaderCircle' : 'lucideDownload')} class="size-3.5 {working ? 'animate-spin' : ''}" /> <ZTextMorph zText={working ? 'Installing…' : 'Install'} />
+                          </ZButton>
+                        </span>
                       {:else if path && (card.id !== 'agy' || info?.logged_in !== true || connectors.busy[`login:${card.id}`])}
                         {@const waiting = Boolean(connectors.busy[`login:${card.id}`])}
-                        {#if waiting}
-                          <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-sm" onclick={() => void cancelLogin(card.id)}>
-                            Cancel
+                        <span class="inline-flex items-center gap-1.5" in:fade={{ duration: 180, delay: 60 }} out:fade={{ duration: 120 }}>
+                          {#if waiting}
+                            <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-sm" onclick={() => void cancelLogin(card.id)}>
+                              Cancel
+                            </ZButton>
+                          {/if}
+                          <ZButton zWave={false} zType={info?.logged_in || card.id === 'agy' ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-sm" disabled={waiting || Boolean(working)} onclick={() => void login(card.id, card.label)}>
+                            <ZIcon zType={icon(waiting ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {waiting ? 'animate-spin' : ''}" />
+                            <ZTextMorph zText={waiting ? 'Waiting for login…' : info?.logged_in ? 'Sign in again' : 'Sign in'} />
                           </ZButton>
-                        {/if}
-                        <ZButton zWave={false} zType={info?.logged_in || card.id === 'agy' ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-sm" disabled={waiting || Boolean(working)} onclick={() => void login(card.id, card.label)}>
-                          <ZIcon zType={icon(waiting ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3.5 {waiting ? 'animate-spin' : ''}" />
-                          {waiting ? 'Waiting for login…' : info?.logged_in ? 'Sign in again' : 'Sign in'}
-                        </ZButton>
+                        </span>
                       {/if}
                     </div>
                   </div>
@@ -415,7 +420,8 @@
                     {@const provider = card.accounts}
                     {@const manager = card.manager}
                     {@const managerInstalled = installed(manager.id)}
-                    <div class="border-t border-border/70 px-4 py-3">
+                    <!-- Appears with the CLI: the accounts area slides in under the header rather than popping in. -->
+                    <div class="border-t border-border/70 px-4 py-3" in:slide={{ duration: 220 }} out:slide={{ duration: 160 }}>
                       <div class="mb-2 flex flex-wrap items-center gap-2">
                         <h4 class="text-sm font-semibold tracking-wide text-muted-foreground uppercase">Accounts</h4>
                         {#if managerInstalled}

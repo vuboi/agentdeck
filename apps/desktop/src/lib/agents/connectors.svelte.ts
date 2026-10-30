@@ -391,7 +391,11 @@ export async function refreshAll(refresh = false) {
 
 export async function install(id: string, label: string) {
   connectors.logs[id] = [];
-  const ok = await task(`install:${id}`, `Installing ${label}`, () => call('connector_install', { id }));
+  // The busy state stays until the new CLI is detected, so the card does not flash back to "Install" in between.
+  const ok = await task(`install:${id}`, `Installing ${label}`, async () => {
+    await call('connector_install', { id });
+    await refreshDetect();
+  });
   if (ok) {
     toast.success(`${label} installed`);
     await refreshAll();
@@ -887,6 +891,11 @@ export function saveProvider(provider: CustomProvider, automatic = false) {
 
 export function removeProvider(id: string) {
   cancelCredentialRotations(id);
+  const removed = connectors.custom.find((item) => item.id === id);
+  // A Claude Console key removed from the list is no longer the credit key either (the Claude card shows it as not added).
+  if (removed?.kind === 'anthropic' && connectors.claudeCredit.apiKey && removed.keys.some((entry) => entry.apiKey === connectors.claudeCredit.apiKey)) {
+    connectors.claudeCredit = { ...connectors.claudeCredit, apiKey: '' };
+  }
   connectors.custom = connectors.custom.filter((item) => item.id !== id);
 }
 

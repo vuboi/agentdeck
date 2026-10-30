@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { ZButton, ZIcon, ZModal, ZSwitch } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZModal } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import AgentLogo from '../ui/AgentLogo.svelte';
   import SecretInput from '../ui/SecretInput.svelte';
   import { openExternal } from '../../browser/browser.svelte';
-  import { claudeCreditOn, claudeCreditState, connectors, probeProvider, refreshClaudeCredit } from '../../agents/connectors.svelte';
+  import { claudeCreditOn, claudeCreditState, connectors, newProviderId, probeProvider, refreshClaudeCredit, saveProvider, type CustomProvider } from '../../agents/connectors.svelte';
   import { usd } from '../../chat/runs/usage';
   import { ENDPOINTS } from '../../agents/endpoints';
   import { TRIGGER_ON } from '../../app/ui/popover';
@@ -20,13 +20,16 @@
   let testing = $state(false);
   let note = $state<{ ok: boolean; text: string } | null>(null);
 
+  // Added means a Claude Console key is listed under Custom providers, so removing that row brings back the +.
+  const added = $derived(connectors.custom.some((item) => item.kind === 'anthropic' && item.baseUrl === ENDPOINTS.anthropic.api));
   const credit = $derived(claudeCreditState.reading);
   const top = $derived(Math.max(claudeCreditState.top, credit?.granted ?? 0, credit?.balance ?? 0));
   const left = $derived(credit && top > 0 ? Math.max(0, Math.min(100, (credit.balance / top) * 100)) : null);
   const expires = $derived(credit?.expires_at ? new Date(credit.expires_at).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) : null);
 
-  function edit() {
-    apiKey = connectors.claudeCredit.apiKey;
+  // The + always adds another key (each one becomes a row under Custom providers), so the field starts empty.
+  function add() {
+    apiKey = '';
     sessionKey = connectors.claudeCredit.sessionKey;
     note = null;
     open = true;
@@ -45,8 +48,30 @@
       return;
     }
     connectors.claudeCredit = { ...connectors.claudeCredit, apiKey: key, sessionKey: sessionKey.trim().replace(/^sessionKey=/, ''), enabled: true };
+    // Each key is also a provider of its own, listed under Custom providers (switch, auto switch, edit, delete), so an
+    // account can hold several Console keys. A key already listed is not added twice.
+    if (!connectors.custom.some((item) => item.keys.some((entry) => entry.apiKey === key))) saveProvider(claudeKeyProvider(key));
     open = false;
     void refreshClaudeCredit();
+  }
+
+  function claudeKeyProvider(key: string): CustomProvider {
+    const id = newProviderId();
+    const keyId = `${id}-key`;
+    const count = connectors.custom.filter((item) => item.kind === 'anthropic' && item.baseUrl === ENDPOINTS.anthropic.api).length + 1;
+    return {
+      id,
+      name: 'Claude Console',
+      kind: 'anthropic',
+      baseUrl: ENDPOINTS.anthropic.api,
+      keyEnv: '',
+      keys: [{ id: keyId, label: `Key ${count}`, apiKey: key }],
+      activeKeyId: keyId,
+      autoSwitch: false,
+      models: [],
+      defaultModel: '',
+      enabled: true,
+    };
   }
 
   function remove() {
@@ -74,9 +99,6 @@
       {:else}Key saved · credit left unknown{/if}
     </span>
   </span>
-  {#if connectors.claudeCredit.apiKey}
-    <ZSwitch zVariant="dot" checked={connectors.claudeCredit.enabled} zSize="sm" onChange={(value) => (connectors.claudeCredit.enabled = value)} />
-  {/if}
   {#if connectors.claudeCredit.sessionKey}
     <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Read the credit again" title="Read the credit again" disabled={claudeCreditState.busy} onclick={() => void refreshClaudeCredit()}>
       <ZIcon zType={'lucideRefreshCw' as ZIconName} class="size-3.5 {claudeCreditState.busy ? 'animate-spin' : ''}" />
@@ -85,9 +107,16 @@
   <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Create a Claude API key" title="Create an API key ({KEYS_URL.replace('https://', '')})" onclick={() => void openExternal(KEYS_URL)}>
     <ZIcon zType={'lucideKeyRound' as ZIconName} class="size-3.5" />
   </ZButton>
-  <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0 {open ? TRIGGER_ON : ''}" aria-label={connectors.claudeCredit.apiKey ? 'Edit Claude API credit' : 'Add Claude API credit'} title={connectors.claudeCredit.apiKey ? 'Edit' : 'Add an API key'} onclick={edit}>
-    <ZIcon zType={(connectors.claudeCredit.apiKey ? 'lucidePencil' : 'lucidePlus') as ZIconName} class="size-3.5" />
-  </ZButton>
+  <!-- A check once a key is saved, as the other providers show; the button still adds another key. -->
+  {#if added}
+    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0 text-primary {open ? TRIGGER_ON : ''}" aria-label="Add another Claude API key" title="Added · add another key" onclick={add}>
+      <ZIcon zType={'lucideCheck' as ZIconName} class="size-3.5" />
+    </ZButton>
+  {:else}
+    <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0 {open ? TRIGGER_ON : ''}" aria-label="Add a Claude API key" title="Add an API key" onclick={add}>
+      <ZIcon zType={'lucidePlus' as ZIconName} class="size-3.5" />
+    </ZButton>
+  {/if}
   {#if left !== null && claudeCreditOn()}
     <!-- The credit left, along the row's bottom edge. -->
     <div class="absolute inset-x-0 bottom-0 h-0.5 bg-muted" role="progressbar" aria-label="Claude credit left" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(left)}>

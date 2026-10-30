@@ -5,7 +5,7 @@
   import SecretInput from '../../ui/SecretInput.svelte';
   import { ENDPOINTS } from '../../../agents/endpoints';
   import { brandLogoFor } from '../../../agents/brand-icons';
-  import { connectors, removeProvider } from '../../../agents/connectors.svelte';
+  import { connectors } from '../../../agents/connectors.svelte';
   import { KINDS, type ProviderForm } from './provider-form.svelte';
 
   let { form }: { form: ProviderForm } = $props();
@@ -19,12 +19,6 @@
     });
   });
 </script>
-
-<ZModal open={form.confirmDelete !== ''} zTitle="Delete provider" zWidth="440px" zBodyClass="min-h-0! py-3" zOkText="Delete" zCancelText="Cancel" onOk={() => { removeProvider(form.confirmDelete); form.confirmDelete = ''; }} onCancel={() => (form.confirmDelete = '')}>
-  <p class="text-[0.75rem] text-muted-foreground">
-    Remove <b class="text-foreground">{connectors.custom.find((item) => item.id === form.confirmDelete)?.name ?? 'this provider'}</b> from AgentDeck? The server itself is not touched.
-  </p>
-</ZModal>
 
 <!-- The provider form, over the settings (as adding an MCP server is). -->
 <ZModal bind:open={form.providerModal} zTitle={form.draft && connectors.custom.some((item) => item.id === form.draft?.id) ? `Edit ${form.draft.name || 'provider'}` : form.freePreset ? `Add ${form.freePreset.name}` : 'New provider'} zWidth="640px" zBodyClass="scrollbar-full py-4" zOkText="Save provider" zCancelText="Cancel" zOkDisabled={!form.draft?.baseUrl.trim() || form.probing} zLoading={form.probing} onOk={() => void form.commit()} onClosed={() => (form.draft = null)}>

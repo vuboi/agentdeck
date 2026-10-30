@@ -36,7 +36,6 @@ export class ProviderForm {
   draft = $state<CustomProvider | null>(null);
   probing = $state(false);
   probeNote = $state<{ ok: boolean; text: string } | null>(null);
-  confirmDelete = $state('');
   /** The key the provider being edited was saved with: shown hidden, never in the field (SecretInput). */
   keptKey = $state('');
   keptKeys = $state<Record<string, string>>({});
