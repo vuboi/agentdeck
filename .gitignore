@@ -10,6 +10,8 @@
 !*.env.example
 /apps/desktop/src-tauri/gen/
 /.tauri/
+# TEMP redirection of a dev run (see .tmp/run-dev.cmd)
+/.tmp/
 
 # files an agent makes at the root to try something (clean what is left with `pnpm clean:junk`)
 /*.docx
