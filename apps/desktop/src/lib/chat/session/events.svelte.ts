@@ -1,4 +1,4 @@
-import { connectors, agentHasRoom, limitResetAt } from '../../agents/connectors.svelte';
+import { connectors, agentHasRoom, autoSwitchConnectorAccount, autoSwitchProviderKey, limitResetAt, refreshProviderQuota, type ConnectorId } from '../../agents/connectors.svelte';
 import { type FailureKind, type Recovery, classifyFailure, planRecovery, continuePrompt, recoveryNote } from '../recovery/turn-failure';
 import { inTauri, isPreviewCopy, clock } from '../../app/platform/history';
 import { type Message, type Block } from '../mock';
@@ -17,7 +17,7 @@ import { recordUsage, estimateCost } from '../runs/usage';
 import { toolKindOf } from '../../tasks/delegate-task';
 import { archiveTurn } from '../content/archive';
 import { MODELS, advanceRun, nextId, persistLocal, runEpochs, workspace, type Agent, type SessionItem } from './state.svelte';
-import { agentLabel, continuationGroups, failSessionWork, hiddenPrompt, isRunning, openServedPage, queued, turns } from './turns.svelte';
+import { agentLabel, continuationGroups, failSessionWork, hiddenPrompt, isRunning, openServedPage, queued, stopTurn, turns } from './turns.svelte';
 import { NO_HANDOUT, RENDER_WAIT_LIMIT_MS, liveAsks, liveHandouts, liveReplies, messagesOf, needsUserInput, renderWaiters, replies, runReplies, sendNextQueued, sessionLanes, updateLane } from './run.svelte';
 import { finishWorkflowTurn, onDelegateDone } from './delegation.svelte';
 import { bindTasks, delegateTasks, endWaitingTasks } from './delegate-task.svelte';
@@ -25,6 +25,34 @@ import { handoffFor, send } from './sending.svelte';
 import { clipText } from './orchestration.svelte';
 import { finishWorkflowIntegration } from './delegation.svelte';
 import { importHistory, keepOtherTurn, rememberMixed, transcripts } from './history.svelte';
+import { parseCustomModel } from '../../agents/models.svelte';
+import type { CredentialAttempt } from '../../agents/credential-switch';
+
+const credentialAttempts = new Map<string, CredentialAttempt & { controller: AbortController }>();
+/** A user request or Stop invalidates every pending continuation for the previous task. */
+export function cancelAutoSwitch(sessionId: string): void {
+  credentialAttempts.get(sessionId)?.controller.abort();
+  credentialAttempts.delete(sessionId);
+}
+
+/** A turn the user stopped can be continued from the composer without adding a visible user message. */
+export const manuallyStopped = $state<Record<string, boolean>>({});
+
+/** Stops the active turn and exposes the composer's one-click continuation action. */
+export function stopTurnForResume(sessionId: string) {
+  stopTurn(sessionId);
+  manuallyStopped[sessionId] = true;
+}
+
+/** Continues a user-stopped turn with a hidden prompt that preserves the original request in context. */
+export function resumeStoppedTurn(sessionId: string) {
+  if (!manuallyStopped[sessionId] || isRunning(sessionId)) return;
+  delete manuallyStopped[sessionId];
+  send(sessionId, '', [], [], [], {
+    prompt: continuePrompt('the user stopped the reply', true, lastRequest(sessionId)),
+    silent: NO_HANDOUT,
+  });
+}
 
 // ---------- keeping work going when a turn fails ----------
 // A turn that ends in an error is not the end of the work: a passing fault is tried again, and otherwise (a usage
@@ -137,6 +165,78 @@ async function runRecovery(sessionId: string, plan: Recovery, reason: string) {
   if (replies[sessionId] || recoveries[sessionId] !== state) return;
   const same = plan.action !== 'fallback';
   send(sessionId, '', [], [], [], { prompt: continuePrompt(reason, same, lastRequest(sessionId)), silent: NO_HANDOUT });
+}
+
+/** Rotates the credential for a limit/auth failure, then resumes the original request invisibly. */
+async function runAutoSwitch(sessionId: string, reason: string, reply: Message, blockId: string) {
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  const scope = session.agent === 'custom' ? parseCustomModel(session.model)?.providerId : session.agent === 'antigravity' ? 'agy' : session.agent;
+  const expectedModel = session.model;
+  const modelId = session.agent === 'custom' ? parseCustomModel(session.model)?.model ?? '' : session.model ?? '';
+  let attempt = credentialAttempts.get(sessionId);
+  if (attempt && (attempt.scope !== scope || attempt.model !== modelId)) { cancelAutoSwitch(sessionId); attempt = undefined; }
+  if (!attempt) {
+    const controller = new AbortController();
+    attempt = { controller, signal: controller.signal, tried: new Set(), model: modelId, scope };
+    credentialAttempts.set(sessionId, attempt);
+  }
+  const currentAttempt = attempt;
+  currentAttempt.failedId = reply.credentialId;
+  if (reply.credentialId) currentAttempt.tried.add(reply.credentialId);
+  const isCurrent = () => !currentAttempt.signal.aborted && credentialAttempts.get(sessionId) === currentAttempt && workspace.sessions.some((item) => item.id === sessionId) && session.model === expectedModel && (session.agent === 'custom' ? parseCustomModel(session.model)?.providerId : session.agent === 'antigravity' ? 'agy' : session.agent) === scope;
+  const block = () => reply.blocks.find((item): item is Extract<Block, { kind: 'command' }> => item.kind === 'command' && item.id === blockId);
+  const started = Date.now();
+  const timer = setInterval(() => {
+    if (!isCurrent()) currentAttempt.controller.abort();
+    const current = block();
+    if (current?.status === 'running') current.output = `Waiting for an available account or API key…\nElapsed ${Math.floor((Date.now() - started) / 1000)}s`;
+  }, 1000);
+  let selected: string | null = null;
+  try {
+    if (!session) return;
+    if (session.agent === 'custom') {
+      const providerId = parseCustomModel(session.model)?.providerId;
+      const provider = connectors.custom.find((item) => item.id === providerId);
+      if (provider) {
+        const switched = await autoSwitchProviderKey(provider, currentAttempt);
+        if (switched) {
+          selected = switched.label;
+          const current = connectors.custom.find((item) => item.id === provider.id);
+          if (current) void refreshProviderQuota(current);
+        }
+      }
+    } else {
+      const connector = (session.agent === 'antigravity' ? 'agy' : session.agent) as ConnectorId;
+      const switched = await autoSwitchConnectorAccount(connector, currentAttempt);
+      if (switched) selected = switched.email;
+    }
+    const current = block();
+    if (!isCurrent()) { if (current) { current.status = 'fail'; current.output = 'Account switching cancelled'; } return; }
+    if (selected && session && !replies[sessionId]) {
+      if (current) {
+        current.status = 'ok';
+        current.output = `Switched to ${selected}. Continuing work…`;
+      }
+      send(sessionId, '', [], [], [], { prompt: continuePrompt('the account or API key reached its limit', true, lastRequest(sessionId)), silent: NO_HANDOUT });
+      return;
+    }
+    if (current) {
+      current.status = 'fail';
+      current.output = `No available account or API key. Elapsed ${Math.floor((Date.now() - started) / 1000)}s`;
+    }
+    if (session) scheduleResume(session, reason);
+    cancelAutoSwitch(sessionId);
+  } catch (error) {
+    const current = block();
+    const cancelled = !isCurrent() || (error instanceof Error && error.name === 'AbortError');
+    if (current) { current.status = 'fail'; current.output = cancelled ? 'Account switching cancelled' : 'Account verification failed. Resume manually after checking the account.'; }
+    if (!cancelled) scheduleResume(session, reason);
+    cancelAutoSwitch(sessionId);
+  } finally {
+    clearInterval(timer);
+    persistLocal();
+  }
 }
 
 // ---------- carrying on when a usage limit ends ----------
@@ -584,10 +684,19 @@ function handleEventNow(
   }
   // A failed turn that can be carried on (retry, another account, the next agent) does not end the work: the chat
   // gets a line saying what happens, and the steps below that close the work (failure, reports) are skipped.
-  const recovery =
-    update.finished && event.kind === 'error' ? recoveryFor(session, event.message) : null;
-  const recovering = recovery !== null && recovery.plan.action !== 'stop';
+  const failureKind = event.kind === 'error' ? classifyFailure(event.message) : null;
+  const customProviderId = session.agent === 'custom' ? parseCustomModel(session.model)?.providerId : undefined;
+  const autoSwitchConnector = session.agent === 'antigravity' ? 'agy' : session.agent;
+  const autoSwitchRequested = Boolean(update.finished && event.kind === 'error' && (failureKind === 'limit' || failureKind === 'auth') && (
+    session.agent === 'custom'
+      ? connectors.custom.some((provider) => provider.id === customProviderId && provider.autoSwitch)
+      : ['claude', 'codex', 'copilot', 'agy'].includes(autoSwitchConnector) && connectors.autoSwitch[autoSwitchConnector as ConnectorId]
+  ));
+  const recovery = update.finished && event.kind === 'error' && !autoSwitchRequested ? recoveryFor(session, event.message) : null;
+  const recovering = autoSwitchRequested || (recovery !== null && recovery.plan.action !== 'stop');
+  let autoSwitchBlockId: string | null = null;
   if (update.finished && event.kind !== 'error') {
+    cancelAutoSwitch(sessionId);
     delete recoveries[sessionId];
     delete resumeAutoChoice[sessionId];
     delete resumeSince[sessionId];
@@ -601,6 +710,10 @@ function handleEventNow(
       to: plan.action === 'fallback' ? agentLabel(plan.agent as Agent) : undefined,
     });
     reply.blocks = [...reply.blocks, { kind: 'response', text: `> ↻ ${note}` }];
+  }
+  if (autoSwitchRequested) {
+    autoSwitchBlockId = nextId();
+    reply.blocks = [...reply.blocks, { kind: 'command', id: autoSwitchBlockId, command: 'AgentDeck · waiting for account switch', output: 'Elapsed 0s', status: 'running' }];
   }
   if (update.finished) {
     updateLane(sessionId, { id: turn!, role: 'primary', state: event.kind === 'error' ? 'failed' : 'done', backgroundWork: false });
@@ -688,7 +801,9 @@ function handleEventNow(
       const responseBlocks = reply.blocks.flatMap((block, index) =>
         block.kind === 'response' && block.text ? [index] : [],
       );
-      if (recovering && recovery && event.kind === 'error')
+      if (autoSwitchRequested && autoSwitchBlockId && event.kind === 'error')
+        void runAutoSwitch(sessionId, clipText(event.message, 200), reply, autoSwitchBlockId);
+      else if (recovering && recovery && event.kind === 'error')
         void runRecovery(sessionId, recovery.plan, clipText(event.message, 200));
       else if (
         sessionId === workspace.activeId &&

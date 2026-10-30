@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fade } from 'svelte/transition';
   import ProjectBar from '../layout/ProjectBar.svelte';
   import { untrack } from 'svelte';
   import { getPref, setPref } from '../../app/platform/prefs';
@@ -10,7 +11,7 @@
   import ElementCard from '../browser/ElementCard.svelte';
   import { TRIGGER_ON } from '../../app/ui/popover';
   import { agyBlocks, agyModes, loadAgyModes } from '../../agents/agy-modes.svelte';
-  import { AGENTS, draftElements, draftImages, draftFiles, draftMentions, drafts, isRunning, needsUserInput, lastChat, rememberMixed, queued, queuePaused, type Queued, sendMessage, canListenToSession, prewarmChat, stopTurn, turnOptions, workspace, type Agent, type Effort, type Attachment, type FileAttachment, type Mention, type Permission } from '../../chat/sessions.svelte';
+  import { AGENTS, draftElements, draftImages, draftFiles, draftMentions, drafts, isRunning, needsUserInput, lastChat, rememberMixed, queued, queuePaused, type Queued, sendMessage, canListenToSession, prewarmChat, stopTurnForResume, resumeStoppedTurn, manuallyStopped, turnOptions, workspace, type Agent, type Effort, type Attachment, type FileAttachment, type Mention, type Permission } from '../../chat/sessions.svelte';
   import Menu from '../ui/Menu.svelte';
   import TextEditContextMenu from '../ui/TextEditContextMenu.svelte';
   import { clipFromContents, clipFromPaste, imageMime, isImageName } from '../../chat/content/attachments';
@@ -84,6 +85,7 @@
     });
   }
   const hasInput = $derived(draft.trim().length > 0 || images.length > 0 || elements.length > 0 || attached.length > 0);
+  const action = $derived(running && !hasInput ? 'stop' : manuallyStopped[sessionId] && !hasInput ? 'resume' : 'send');
   let detail = $state<string | null>(null);
   // The card stays mounted after it closes, so its exit animation can play: it keeps the last element shown.
   let lastDetail = $state<string | null>(null);
@@ -564,6 +566,7 @@
       queueChoiceOpen = true;
       return;
     }
+    delete manuallyStopped[sessionId];
     sendMessage(draft, images, elements, mentions, whileRunning, attached);
     // Sent by hand: the chat goes to its newest content, even if it was scrolled up.
     window.dispatchEvent(new Event('agentdeck:scrolltoend'));
@@ -719,32 +722,42 @@
       </ZButton>
       <ModelPicker bind:agent bind:model bind:effort bind:fast bind:permission />
     </div>
-    {#if running && !hasInput}
-      <!-- A reply is being written and nothing is typed: this stops it. A ring turns around it while the reply runs. -->
-      <span class="relative grid shrink-0 place-items-center">
+    <!-- Keep one button mounted so stop, resume and send trade icons with the same gentle cross-fade. -->
+    <span class="relative grid shrink-0 place-items-center">
+      {#if action === 'stop'}
         <span class="pointer-events-none absolute -inset-[3px] animate-spin rounded-full [background:conic-gradient(from_0deg,transparent_0_55%,var(--color-primary)_100%)] [mask:radial-gradient(farthest-side,transparent_calc(100%-2px),#000_calc(100%-2px))] motion-reduce:hidden" aria-hidden="true"></span>
         <span class="pointer-events-none absolute inset-0 animate-ping rounded-full bg-primary/25 [animation-duration:1.8s] motion-reduce:hidden" aria-hidden="true"></span>
-        <ZButton zWave={false} zType="default" zSize="default" class="relative size-7! shrink-0 rounded-full p-0" aria-label="Stop" {@attach zTooltip({ content: 'Stop', position: 'top' })} onclick={() => stopTurn(sessionId)}>
-          <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
-        </ZButton>
-      </span>
-    {:else}
+      {/if}
       <ZButton
         zWave={false}
-        type="submit"
+        type={action === 'send' ? 'submit' : 'button'}
         zType="default"
         zSize="default"
-        class="size-7! shrink-0 rounded-full p-0"
-        disabled={!hasInput}
-        aria-label={queuePaused[sessionId] ? 'Choose how to send' : running ? (listenerReady ? 'Start a new reply while background work continues' : 'Queue the message') : 'Send message'}
+        class="relative size-7! shrink-0 rounded-full p-0"
+        disabled={action === 'send' && !hasInput}
+        aria-label={action === 'stop' ? 'Stop' : action === 'resume' ? 'Continue' : queuePaused[sessionId] ? 'Choose how to send' : running ? (listenerReady ? 'Start a new reply while background work continues' : 'Queue the message') : 'Send message'}
         {@attach zTooltip({
-          content: queuePaused[sessionId] ? 'Queue paused · choose Send now or Add & resume' : running ? `One answer per message · Alt+Enter queues next · ${mac ? '⌘' : 'Ctrl'}+Enter stops and sends now` : 'Send',
+          content: action === 'stop' ? 'Stop' : action === 'resume' ? 'Continue' : queuePaused[sessionId] ? 'Queue paused · choose Send now or Add & resume' : running ? `One answer per message · Alt+Enter queues next · ${mac ? '⌘' : 'Ctrl'}+Enter stops and sends now` : 'Send',
           position: 'top',
         })}
+        onclick={() => {
+          if (action === 'stop') stopTurnForResume(sessionId);
+          else if (action === 'resume') resumeStoppedTurn(sessionId);
+        }}
       >
-        <ZIcon zType="lucideArrowUp" class="size-3.5" />
+        {#key action}
+          <span in:fade={{ duration: 120 }} out:fade={{ duration: 120 }} class="grid size-full place-items-center motion-reduce:transition-none">
+            {#if action === 'stop'}
+              <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
+            {:else if action === 'resume'}
+              <svg class="size-3.5" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.7a1 1 0 0 1 1.52-.85l8 5.3a1 1 0 0 1 0 1.7l-8 5.3A1 1 0 0 1 4 13.3z" fill="currentColor" /></svg>
+            {:else}
+              <ZIcon zType="lucideArrowUp" class="size-3.5" />
+            {/if}
+          </span>
+        {/key}
       </ZButton>
-    {/if}
+    </span>
   </div>
 </form>
 <ComposerQuota {agent} {model} />

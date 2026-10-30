@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fade } from 'svelte/transition';
-  import { ZButton, ZIcon, ZSwitch, ZTabs } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZSwitch, ZTabs, ZTextMorph } from '@shival99/z-ui-svelte';
   import type { ZIconName, ZTab } from '@shival99/z-ui-svelte';
   import { toast } from '../../../app/platform/toast';
   import { ticker } from '../../../app/platform/clock.svelte';
@@ -19,6 +19,7 @@
     removeAccount,
     retrySaveAgyAccount,
     setCodexAutoSwitch,
+    setConnectorAutoSwitch,
     switchAccount,
     switchAgyAccount,
     tool,
@@ -89,11 +90,11 @@
     {
       id: 'copilot',
       label: 'GitHub Copilot',
-      binary: 'gh',
+      binary: 'copilot',
       brand: 'lucideBot',
       svg: GITHUB_SVG,
       tone: 'bg-foreground/10 text-foreground',
-      note: 'GitHub Copilot coding models. Sign in and switch accounts with GitHub CLI.',
+      note: 'GitHub Copilot coding models. The Copilot CLI is installed here; sign in and switch accounts with GitHub CLI.',
       accounts: 'copilot',
       manager: { id: 'gh', label: 'GitHub CLI', why: 'Uses the active gh auth account for Copilot access.' },
     },
@@ -121,15 +122,17 @@
   const TAB_NAME: Record<string, string> = { claude: 'Claude', copilot: 'Copilot' };
   const cardTabs = $derived<ZTab[]>(CARDS.map((card) => ({ value: card.id, label: TAB_NAME[card.id] ?? card.label, iconTemplate: tabIcon, badge: accountCount(card) || undefined })));
 
+  // Counts down second by second under two days, as the account menu does; longer waits show days, hours and minutes.
   function countdown(resetsAt: number | null, now: number): string {
     if (resetsAt === null) return 'No reset scheduled';
     const seconds = resetsAt - Math.floor(now / 1000);
     if (seconds <= 0) return 'No reset pending';
-    const minutes = Math.round(seconds / 60);
-    if (minutes < 60) return `resets in ${minutes}m`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 48) return `resets in ${hours}h ${minutes % 60}m`;
-    return `resets in ${Math.round(hours / 24)}d`;
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (seconds >= 2 * 86400) return `resets in ${days}d ${hours}h ${minutes}m`;
+    const secs = seconds % 60;
+    return hours ? `resets in ${hours}h ${minutes}m ${secs}s` : `resets in ${minutes}m ${secs}s`;
   }
 
   // One colour per plan, so the tier reads at a glance.
@@ -235,28 +238,29 @@
                 {@const link = urlIn(connectors.logs[card.id] ?? [])}
                 {@const code = codeIn(connectors.logs[card.id] ?? [])}
                 <section class="min-w-0 rounded-xl border border-border bg-card/40" aria-label={card.label}>
-                  <div class="flex items-start gap-3 p-4">
+                  <div class="flex h-[4.5rem] items-start gap-3 p-4">
                     <span class="grid size-10 shrink-0 place-items-center rounded-lg {card.tone}">{#if card.svg}<ZIcon zSvg={card.svg} class="size-5" />{:else}<ZIcon zType={icon(card.brand)} class="size-5" />{/if}</span>
                     <div class="min-w-0 flex-1">
                       <div class="flex flex-wrap items-center gap-2">
                         <h3 class="text-sm font-semibold">{card.label}</h3>
-                        {#if !connectors.detected}
-                          <span class="text-sm text-muted-foreground">checking…</span>
-                        {:else if !path}
-                          <span class="rounded-full bg-muted px-2 py-0.5 text-[0.75rem] text-muted-foreground">Not installed</span>
-                        {:else if info?.logged_in === true}
-                          <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[0.6875rem] text-emerald-600 dark:text-emerald-400"><span class="size-1.5 rounded-full bg-emerald-500"></span>Signed in</span>
-                        {:else if info?.logged_in === false}
-                          <span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.6875rem] text-amber-600 dark:text-amber-400">Not signed in</span>
+                        {#if !connectors.detected || path}
+                          <!-- Grey while the version is read; the text morphs into the checked version in green. -->
+                          <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.6875rem] tabular-nums transition-colors duration-300 {connectors.detected && version ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}">
+                            <ZIcon zType={icon('lucideCheck')} class="size-3" />
+                            <ZTextMorph zText={!connectors.detected ? 'Checking…' : (version ?? 'Installed')} />
+                          </span>
                         {:else}
-                          <span class="rounded-full bg-muted px-2 py-0.5 text-[0.75rem] text-muted-foreground">Installed</span>
+                          <span class="rounded-full bg-muted px-2 py-0.5 text-[0.75rem] text-muted-foreground">Not installed</span>
                         {/if}
-                        {#if version}<span class="text-[0.75rem] text-muted-foreground tabular-nums">{version}</span>{/if}
+                        {#if path && info?.logged_in === true}
+                          <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[0.6875rem] text-emerald-600 dark:text-emerald-400"><span class="size-1.5 rounded-full bg-emerald-500"></span>Signed in</span>
+                        {:else if path && info?.logged_in === false}
+                          <span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.6875rem] text-amber-600 dark:text-amber-400">Not signed in</span>
+                        {/if}
                       </div>
-                      <p class="mt-0.5 text-[0.75rem] text-muted-foreground">
-                        {#if info?.email}Account: <span class="text-foreground">{info.email}</span>{#if info.plan}{" · " + info.plan}{/if}{#if info.detail}{" · " + info.detail}{/if}{:else}{card.note}{/if}
+                      <p class="mt-0.5 truncate text-[0.75rem] text-muted-foreground">
+                        {#if info?.email}Account: {#key info.email}<span class="text-foreground" in:fade={{ duration: 180 }}>{info.email}</span>{/key}{#if info.plan}{" · " + info.plan}{/if}{#if info.detail}{" · " + info.detail}{/if}{:else}{card.note}{/if}
                       </p>
-                      {#if path}<p class="mt-0.5 truncate text-[0.75rem] text-muted-foreground/70" title={path}>{path}</p>{/if}
                     </div>
                     <div class="flex shrink-0 items-center gap-1.5">
                       {#if connectors.detected && !path}
@@ -276,6 +280,12 @@
                         </ZButton>
                       {/if}
                     </div>
+                  </div>
+
+                  <div class="flex items-center gap-3 border-t border-border/70 px-4 py-2.5">
+                    <span class="min-w-0 flex-1 text-[0.75rem] text-muted-foreground">{card.id === 'opencode' ? 'Automatic account switching is unavailable for OpenCode.' : 'Rotate to another saved account when quota or sign-in fails.'}</span>
+                    <span class="text-xs font-medium {card.id === 'opencode' ? 'text-muted-foreground' : ''}">Auto switch</span>
+                    <ZSwitch zVariant="dot" checked={card.id !== 'opencode' && Boolean(connectors.autoSwitch[card.id])} zSize="sm" zDisabled={card.id === 'opencode'} onChange={(value) => setConnectorAutoSwitch(card.id, value)} />
                   </div>
 
                   {#if working || log.length > 0 || connectors.errors[`install:${card.id}`] || connectors.errors[`login:${card.id}`] || connectors.errors[`add:${card.id}`]}
@@ -317,17 +327,77 @@
                       {:else if connectors.accounts.agy.length === 0}
                         <p class="mb-3 rounded-lg border border-dashed border-border p-3 text-[0.75rem] text-muted-foreground">The signed-in account is being saved to Windows Credential Manager…</p>
                       {:else}
-                        <ul class="mb-3 divide-y divide-border overflow-hidden rounded-lg border border-border">
+                        <!-- One card per saved account, as for Codex: its switch button and its own usage, read with its own sign-in. -->
+                        <ul class="mb-3 grid gap-2 sm:grid-cols-2">
                           {#each connectors.accounts.agy as account (account.id)}
-                            <li class="flex min-h-12 min-w-0 items-center gap-2.5 px-3 py-2">
-                              <span class="min-w-0 flex-1 truncate text-sm font-medium" title={account.email}>{account.email}</span>
-                              {#if account.active}<span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">IN USE</span>{/if}
-                              {#if account.expired}<span class="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive" title={account.status ?? 'Sign in again required'}>Needs sign-in</span>{:else if account.status}<span class="max-w-36 truncate text-[0.75rem] text-muted-foreground" title={account.status}>{account.status}</span>{/if}
-                              {#if !account.active}
-                                {@const switching = Boolean(connectors.busy['switch:agy']?.endsWith(account.email))}
-                                <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Use {account.email}" title="Use this account" disabled={Boolean(connectors.busy['switch:agy'])} onclick={() => void switchAgyAccount(account)}>
-                                  <ZIcon zType={icon(switching ? 'lucideLoaderCircle' : 'lucideArrowLeftRight')} class="size-3 {switching ? 'animate-spin' : ''}" />
-                                </ZButton>
+                            {@const quota = connectors.agyAccountQuotas.find((item) => item.id === account.id)}
+                            {@const switching = Boolean(connectors.busy['switch:agy']?.endsWith(account.email))}
+                            <li class="min-w-0 rounded-lg border p-3 {account.active ? 'border-primary/50 bg-primary/5' : 'border-border'}">
+                              <div class="flex items-center gap-2">
+                                <span class="min-w-0 flex-1 truncate text-sm font-medium" title={account.email}>{account.email}</span>
+                                {#if account.active}<span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">IN USE</span>{/if}
+                                {#if account.expired || quota?.error}
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0 text-destructive" aria-label="Sign in again {account.email}" title={account.status ?? quota?.error ?? 'Sign in again'} disabled={Boolean(connectors.busy['login:agy'])} onclick={() => void login('agy', card.label)}>
+                                    <ZIcon zType={icon(connectors.busy['login:agy'] ? 'lucideLoaderCircle' : 'lucideLogIn')} class="size-3 {connectors.busy['login:agy'] ? 'animate-spin' : ''}" />
+                                  </ZButton>
+                                {/if}
+                                {#if !account.active}
+                                  <ZButton zWave={false} zType="outline" zSize="sm" class="size-6! shrink-0 p-0" aria-label="Use {account.email}" title="Use this account" disabled={Boolean(connectors.busy['switch:agy'])} onclick={() => void switchAgyAccount(account)}>
+                                    <ZIcon zType={icon(switching ? 'lucideLoaderCircle' : 'lucideArrowLeftRight')} class="size-3 {switching ? 'animate-spin' : ''}" />
+                                  </ZButton>
+                                {/if}
+                              </div>
+                              {#if quota?.quota && quota.quota.groups.length > 0}
+                                <div class="mt-2.5 grid gap-2.5">
+                                  {#each quota.quota.groups as group (group.id)}
+                                    <div>
+                                      <div class="mb-1.5 flex items-center gap-1.5 text-[0.75rem] font-medium">
+                                        <ZIcon zType={icon(group.id === 'gemini' ? 'brandGemini' : 'lucideLayers')} class="size-3 shrink-0" />
+                                        <span class="truncate">{group.label}</span>
+                                      </div>
+                                      <div class="grid gap-y-2">
+                                        {#each group.windows as window (window.label)}
+                                          {@const pct = shown(window, ticker.sec)}
+                                          <div>
+                                            <div class="mb-1 flex items-baseline justify-between gap-2 text-[0.6875rem]">
+                                              <span class="text-muted-foreground">{window.label} window</span>
+                                              <span class="tabular-nums {pct >= 90 ? 'font-medium text-destructive' : ''}">{Math.round(pct)}%</span>
+                                            </div>
+                                            <div class="h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin="0" aria-valuemax="100" aria-label="{account.email} {group.label} {window.label} usage">
+                                              <div class="h-full rounded-full transition-[width] duration-500 {barColor(pct)}" style:width="{pct}%"></div>
+                                            </div>
+                                            {#if countdown(window.resets_at, ticker.sec)}
+                                              <div class="mt-1 text-[0.75rem] text-muted-foreground tabular-nums">{countdown(window.resets_at, ticker.sec)}</div>
+                                            {/if}
+                                          </div>
+                                        {/each}
+                                      </div>
+                                    </div>
+                                  {/each}
+                                </div>
+                                {#if quota.quota.observed_at}<p class="mt-2 text-[0.6875rem] text-muted-foreground">{observedAgo(quota.quota.observed_at, ticker.min)}</p>{/if}
+                              {:else}
+                                <!-- No figures yet: the same bars, greyed and empty, so the card keeps its shape. -->
+                                <div class="mt-2.5 grid gap-2.5 opacity-50">
+                                  {#each ['Gemini models', 'Claude and GPT-OSS models'] as label (label)}
+                                    <div>
+                                      <div class="mb-1.5 flex items-center gap-1.5 text-[0.75rem] font-medium">
+                                        <span class="truncate">{label}</span>
+                                      </div>
+                                      <div class="grid gap-y-2">
+                                        {#each ['5h', '7d'] as window (window)}
+                                          <div>
+                                            <div class="mb-1 flex items-baseline justify-between gap-2 text-[0.6875rem]">
+                                              <span class="text-muted-foreground">{window} window</span>
+                                              <span class="tabular-nums text-muted-foreground">—</span>
+                                            </div>
+                                            <div class="h-1.5 overflow-hidden rounded-full bg-muted"></div>
+                                          </div>
+                                        {/each}
+                                      </div>
+                                    </div>
+                                  {/each}
+                                </div>
                               {/if}
                             </li>
                           {/each}
@@ -337,48 +407,6 @@
                         <div class="mb-3 flex items-center gap-2 text-sm text-destructive" role="alert">
                           <p class="min-w-0 flex-1">{connectors.errors['accounts:agy'] ?? connectors.errors['switch:agy'] ?? ''}</p>
                         </div>
-                      {/if}
-                      <h4 class="mt-4 mb-2 flex items-center gap-2 text-sm font-semibold tracking-wide text-muted-foreground uppercase">
-                        Usage
-                        {#if connectors.agyQuota?.observed_at}
-                          <span class="font-normal tracking-normal normal-case">{observedAgo(connectors.agyQuota.observed_at, ticker.min)}</span>
-                        {/if}
-                      </h4>
-                      {#if !connectors.agyQuota || connectors.agyQuota.groups.length === 0}
-                        <p class="rounded-lg border border-dashed border-border p-3 text-[0.75rem] text-muted-foreground">
-                          No usage figures yet. agy only reports its limits to its status line, and AgentDeck does not change that setting. A tool that saves them (such as AI Usage Meter) fills this in.
-                        </p>
-                      {:else}
-                        <div class="grid gap-2 sm:grid-cols-2">
-                          {#each connectors.agyQuota.groups as group (group.id)}
-                            <div class="min-w-0 rounded-lg border border-border p-3">
-                              <div class="mb-2 flex items-center gap-2 text-sm font-medium">
-                                <ZIcon zType={icon(group.id === 'gemini' ? 'brandGemini' : 'lucideLayers')} class="size-3.5 shrink-0" />
-                                <span class="truncate">{group.label}</span>
-                              </div>
-                              <div class="grid gap-y-2.5">
-                                {#each group.windows as window (window.label)}
-                                  {@const pct = shown(window, ticker.min)}
-                                  <div>
-                                    <div class="mb-1 flex items-baseline justify-between gap-2 text-[0.6875rem]">
-                                      <span class="text-muted-foreground">{window.label} window</span>
-                                      <span class="tabular-nums {pct >= 90 ? 'font-medium text-destructive' : ''}">{Math.round(pct)}% used</span>
-                                    </div>
-                                    <div class="h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin="0" aria-valuemax="100" aria-label="{group.label} {window.label} usage">
-                                      <div class="h-full rounded-full transition-[width] duration-500 {barColor(pct)}" style:width="{pct}%"></div>
-                                    </div>
-                                    {#if countdown(window.resets_at, ticker.min)}
-                                      <div class="mt-1 text-[0.75rem] text-muted-foreground tabular-nums">{countdown(window.resets_at, ticker.min)}</div>
-                                    {/if}
-                                  </div>
-                                {/each}
-                              </div>
-                            </div>
-                          {/each}
-                        </div>
-                        {#if connectors.agyQuota.observed_at && ticker.min / 1000 - connectors.agyQuota.observed_at > 15 * 60}
-                          <p class="mt-1.5 text-[0.75rem] text-muted-foreground">Figures are older than 15 minutes.</p>
-                        {/if}
                       {/if}
                     </div>
                   {/if}
@@ -456,7 +484,7 @@
                               {#if account.usage.length > 0}
                                 <div class="mt-2.5 grid gap-y-2.5">
                                   {#each account.usage as window (window.label)}
-                                    {@const pct = shown(window, ticker.min)}
+                                    {@const pct = shown(window, ticker.sec)}
                                     <div>
                                       <div class="mb-1 flex items-baseline justify-between gap-2 text-[0.6875rem]">
                                         <span class="text-muted-foreground">{window.label} window</span>
@@ -465,8 +493,8 @@
                                       <div class="h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin="0" aria-valuemax="100" aria-label="{window.label} usage">
                                         <div class="h-full rounded-full transition-[width] duration-500 {barColor(pct)}" style:width="{pct}%"></div>
                                       </div>
-                                      {#if countdown(window.resets_at, ticker.min)}
-                                        <div class="mt-1 text-[0.75rem] text-muted-foreground tabular-nums">{countdown(window.resets_at, ticker.min)}</div>
+                                      {#if countdown(window.resets_at, ticker.sec)}
+                                        <div class="mt-1 text-[0.75rem] text-muted-foreground tabular-nums">{countdown(window.resets_at, ticker.sec)}</div>
                                       {/if}
                                     </div>
                                   {/each}

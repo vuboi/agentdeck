@@ -3,10 +3,10 @@
 // happen off the UI thread. Keys are the index: the collection is picked from the key's prefix (storeOf).
 
 export const DB_NAME = 'agentdeck';
-export const DB_VERSION = 5;
+export const DB_VERSION = 6;
 
 /** The collections. `prefs` keeps what has no collection of its own (pickers, last session, hidden projects…). */
-export const STORES = ['prefs', 'transcripts', 'chats', 'tabs', 'terminal', 'layout', 'chatmeta', 'permissions', 'archive', 'images', 'index'] as const;
+export const STORES = ['prefs', 'transcripts', 'chats', 'tabs', 'terminal', 'layout', 'chatmeta', 'permissions', 'archive', 'images', 'index', 'accounts', 'providers'] as const;
 export type StoreName = (typeof STORES)[number];
 
 const IMAGE_INDEX = 'chat.toolImages.';
@@ -19,6 +19,8 @@ export function storeOf(key: string): StoreName {
   if (key.startsWith('layout.')) return 'layout';
   if (key.startsWith(IMAGE_INDEX)) return 'images'; // where each screenshot's file is, per chat (command-images.ts)
   if (key.startsWith('index.')) return 'index'; // cached listings read at start-up: the chat history, folders of the file tree
+  if (key.startsWith('accounts.')) return 'accounts'; // native account identities and cached quota/status snapshots
+  if (key.startsWith('providers.')) return 'providers'; // custom provider definitions and their local API keys
   if (key.startsWith('chat.')) return 'chatmeta'; // hidden turns, agent switches
   if (key.startsWith('permissions.')) return 'permissions';
   if (key.startsWith('archive.')) return 'archive'; // the chat archive (archive.ts)
@@ -58,6 +60,20 @@ export function openDb(): Promise<IDBDatabase> {
             if (cursor.value != null) transaction.objectStore(target).put(cursor.value, cursor.key);
             cursor.delete();
           } else if (cursor.value == null) {
+            cursor.delete();
+          }
+          cursor.continue();
+        };
+      }
+      // Version 6 moves provider settings (including API keys) out of the general preferences collection.
+      if (event.oldVersion >= 2 && event.oldVersion < 6 && transaction) {
+        const source = transaction.objectStore('prefs');
+        const target = transaction.objectStore('providers');
+        source.openCursor().onsuccess = (found) => {
+          const cursor = (found.target as IDBRequest<IDBCursorWithValue | null>).result;
+          if (!cursor) return;
+          if (String(cursor.key).startsWith('providers.')) {
+            target.put(cursor.value, cursor.key);
             cursor.delete();
           }
           cursor.continue();

@@ -1,3 +1,5 @@
+import { credentialBusy, waitForCredential } from '../../agents/credential-switch';
+import { parseCustomModel } from '../../agents/models.svelte';
 import { type Message } from '../mock';
 import { parseHandoff, agentdeckLead } from '../../tasks/delegate-task';
 import { HANDBACK_HEAD } from '../runs/handback';
@@ -12,7 +14,7 @@ import { needsContext } from '../recovery/context-need';
 import { activeSession, localMessages, nextId, persistLocal, workspace, type Attachment, type Effort, type FileAttachment, type Mention, type PageElement, type SessionItem } from './state.svelte';
 import { afterSwitch, beginSessionWork, continuationGroups, hiddenPrompt, isRunning, modelFor, queuePaused, queued, stopTurn, switchingAgent, turnOptions, withElements, type Queued } from './turns.svelte';
 import { SKIPPED_PERMISSION, SKIPPED_QUESTIONS, SKIPPED_REQUIRED, canListenToSession, closePendingPermissions, continueCurrentRun, liveReplies, messagesOf, needsUserInput, openQuestions, pendingInput, pendingNew, replies, sendNextQueued, startTurn } from './run.svelte';
-import { recoveries, resumeAutoChoice, resumeSince, resumes } from './events.svelte';
+import { cancelAutoSwitch, recoveries, resumeAutoChoice, resumeSince, resumes } from './events.svelte';
 import { beginWorkflowIntegration, beginWorkflowRun, delegateRuns, mentionContext, statsOf, type DelegateReports } from './delegation.svelte';
 import { LANGUAGE_RULE } from './orchestration.svelte';
 import { otherTurns, transcripts } from './history.svelte';
@@ -375,6 +377,12 @@ export function send(
   } = {},
 ) {
   const session = workspace.sessions.find((item) => item.id === sessionId);
+  if (!extra.silent) cancelAutoSwitch(sessionId);
+  const credentialScope = session?.agent === 'custom' ? parseCustomModel(session.model)?.providerId : session?.agent === 'antigravity' ? 'agy' : session?.agent;
+  if (credentialScope && credentialBusy(credentialScope)) {
+    void waitForCredential(credentialScope).then(() => send(sessionId, text, images, elements, mentions, extra));
+    return;
+  }
   const flowMention = mentions.find((mention) => mention.kind === 'workflow');
   const requestedFlow = flowMention ? presetById(flowMention.id) : undefined;
   const rawBody = text.trim();
@@ -396,7 +404,7 @@ export function send(
     delete resumeSince[sessionId];
   }
   const messages = messagesOf(sessionId);
-  if (extra.silent && extra.prompt && inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'opencode' || session.agent === 'custom')) {
+  if (extra.silent && extra.prompt && inTauri() && (session.agent === 'claude' || session.agent === 'codex' || session.agent === 'antigravity' || session.agent === 'opencode' || session.agent === 'copilot' || session.agent === 'custom')) {
     beginWorkflowIntegration(sessionId);
     startTurn(session, extra.prompt, [], [], extra.preface ?? '', [], extra.silent, extra.runGroup);
     if (!session.path) localMessages[session.id] = messages;

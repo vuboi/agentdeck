@@ -19,6 +19,8 @@ export type Block =
   | { kind: 'permission'; requests: { id: string; tool: string; summary: string; allow: string }[]; state: 'pending' | 'allowed' | 'denied' | 'expired' };
 
 export type Message = {
+  /** Local credential identity used by this turn, for coordinating quota recovery. Never a token. */
+  credentialId?: string;
   id: string;
   role: 'user' | 'assistant';
   time: string;

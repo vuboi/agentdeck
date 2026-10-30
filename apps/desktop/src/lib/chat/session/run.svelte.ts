@@ -1,7 +1,8 @@
+import { credentialBusy } from '../../agents/credential-switch';
 import { inTauri, clock } from '../../app/platform/history';
 import { accountEpoch } from '../runs/account-epoch.svelte';
 import { pictureData, prewarmAgent, saveAttachment, sendCustomTurn, sendAgentTurn, answerCopilotPermission } from '../agent';
-import { connectors } from '../../agents/connectors.svelte';
+import { activeProviderKey, connectors, currentCredentialId } from '../../agents/connectors.svelte';
 import { type Message, messages as mockMessages } from '../mock';
 import { guide } from '../../app/ui/guide.svelte';
 import { logFlow } from '../../tasks/flow-log';
@@ -54,8 +55,10 @@ function accountConversationId(sessionId: string, epoch: number): string {
  * new conversation (another model, another account) is left to start on its own.
  */
 export function prewarmChat(sessionId: string) {
+  const selected = workspace.sessions.find((item) => item.id === sessionId);
+  if (selected && credentialBusy(selected.agent === 'antigravity' ? 'agy' : selected.agent)) return;
   const session = workspace.sessions.find((item) => item.id === sessionId);
-  if (!session || !inTauri() || !['claude', 'codex', 'antigravity'].includes(session.agent) || isRunning(session.id)) return;
+  if (!session || !inTauri() || !['claude', 'codex', 'antigravity', 'copilot'].includes(session.agent) || isRunning(session.id)) return;
   const selectedModel = modelFor(session);
   const now = Date.now();
   const epoch = accountEpoch[session.agent] ?? 0;
@@ -294,6 +297,7 @@ export function startTurn(
     host.startedAt = Date.now() - (host.ms ?? 0);
     host.callOutput = 0;
   }
+  reply.credentialId = currentCredentialId(session.agent, parseCustomModel(selectedModel ?? session.model)?.providerId);
   // A silent turn (the hand-back) has no message of its own: its reply simply follows the message that handed work out.
   const context = listener
     ? preface
@@ -382,7 +386,7 @@ export function startTurn(
         messageId: asked?.role === 'user' ? asked.id : undefined,
         kind: provider.kind,
         baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey || null,
+        apiKey: activeProviderKey(provider)?.apiKey || null,
         model: target.model,
         messages: [
           ...history,

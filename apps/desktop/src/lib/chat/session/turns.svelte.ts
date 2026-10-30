@@ -13,7 +13,7 @@ import { agentDisplayName } from '../../agents/provider-registry';
 import { isHandbackPrompt } from '../runs/handback';
 import { MODELS, advanceRun, nextId, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type Mention, type PageElement, type Permission, type SessionItem } from './state.svelte';
 import { liveReplies, messagesOf, needsUserInput, renderWaiters, replies, runReplies, sendNextQueued, sessionLanes } from './run.svelte';
-import { handleAgentEvent, recoveries } from './events.svelte';
+import { cancelAutoSwitch, handleAgentEvent, recoveries } from './events.svelte';
 import { delegateRuns } from './delegation.svelte';
 import { delegateTasks, isWorkerChat, taskRuns } from './delegate-task.svelte';
 import { clipText } from './orchestration.svelte';
@@ -364,6 +364,7 @@ export const isRunning = (sessionId: string) =>
 /** Stops the reply of a chat now. What was written so far stays. `quiet`: the stop is only to make room for a newer
  *  message (sent while the reply ran, an edit), not the user's Stop button: the reply does not say "You stopped after". */
 export function stopTurn(sessionId: string, quiet = false) {
+  cancelAutoSwitch(sessionId);
   if (!quiet) {
     const listener = [...runReplies.entries()].find(([, run]) => run.sessionId === sessionId && run.listener);
     if (listener) {

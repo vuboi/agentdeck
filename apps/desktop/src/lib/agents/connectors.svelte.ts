@@ -1,3 +1,4 @@
+import { cancelCredentialRotations, credentialBusy, credentialDelay, exclusiveCredential, waitForCredential, rotateCredential, type CredentialAttempt } from './credential-switch';
 import { inTauri } from '../app/platform/history';
 import { getPref, setPref } from '../app/platform/prefs';
 import { toast } from '../app/platform/toast';
@@ -35,18 +36,32 @@ export type Accounts = {
   auto_switch: { enabled: boolean; five_hour: number; weekly: number } | null;
   error: string | null;
 };
+type SavedAccountCache = {
+  savedAt: number;
+  refreshedAt?: Partial<Record<ConnectorId, number>>;
+  accounts: Partial<Record<AccountProvider, Accounts | null>>;
+  agyAccounts: AgyAccount[];
+  agyQuota: AgyQuota | null;
+};
 export type QuotaGroup = { id: string; label: string; windows: UsageWindow[] };
 export type AgyQuota = { observed_at: number | null; groups: QuotaGroup[] };
+/** One saved Antigravity account with its own quota; `error` says why there is none. */
+export type AgyAccountQuota = { id: string; email: string; active: boolean; quota: AgyQuota | null; error: string | null };
 export type AgyAccount = { id: string; email: string; active: boolean; expired: boolean; status: string | null };
 export type ProviderKind = 'openai' | 'anthropic' | 'ollama';
+export type ProviderApiKey = { id: string; label: string; apiKey: string; keyEnv?: string };
 export type CustomProvider = {
   id: string;
   name: string;
   kind: ProviderKind;
   baseUrl: string;
-  /** Optional environment variable to read the key from when no key is typed. */
+  /** Kept for older provider records; normalized into the first key's keyEnv on hydration. */
   keyEnv: string;
-  /** The API key. Kept only in this app's local storage on this computer; never part of the source or a build. */
+  /** Keys stay only in this app's local IndexedDB on this computer; never in source or a build. */
+  keys: ProviderApiKey[];
+  activeKeyId: string | null;
+  autoSwitch: boolean;
+  /** Legacy single key, migrated to `keys` on hydration. */
   apiKey?: string;
   /** A logo the user uploaded, as a small `data:` image. Without one the provider shows a server icon. */
   logo?: string;
@@ -74,6 +89,7 @@ export function openSettings(section: Section = 'connectors') {
 export const connectors = $state({
   detected: null as Detected | null,
   accounts: { claude: null, codex: null, copilot: null, agy: [] } as Record<AccountProvider, Accounts | null> & { agy: AgyAccount[] },
+  autoSwitch: { claude: false, codex: false, copilot: false, agy: false, opencode: false } as Record<ConnectorId, boolean>,
   /** What is running right now, by key (`install:codex`, `login:claude`, `switch:codex`…), with a label for it. */
   busy: {} as Record<string, string>,
   /** Last lines of an install or sign-in, by connector id. */
@@ -89,9 +105,46 @@ export const connectors = $state({
   local: [] as LocalServer[],
   /** What agy last reported per model family, read from the file a status-line tool saves. `null`: none saved. */
   agyQuota: null as AgyQuota | null,
+  agyAccountQuotas: [] as AgyAccountQuota[],
   scanning: false,
   manualRefreshing: false,
 });
+
+const ACCOUNT_CACHE_KEY = 'accounts.quota-cache';
+const ACCOUNT_AUTO_SWITCH_KEY = 'accounts.auto-switch';
+const accountCacheAt: Partial<Record<ConnectorId, number>> = {};
+/** Account lists and quota snapshots are hydrated from IndexedDB before a live refresh replaces them. */
+const accountCacheReady = getPref<SavedAccountCache>(ACCOUNT_CACHE_KEY)
+  .then((saved) => {
+    if (!saved) return;
+    Object.assign(accountCacheAt, saved.refreshedAt ?? {});
+    for (const provider of ['claude', 'codex', 'copilot'] as const) {
+      const cached = saved.accounts[provider];
+      if (cached) connectors.accounts[provider] = cached;
+    }
+    if (Array.isArray(saved.agyAccounts)) connectors.accounts.agy = saved.agyAccounts;
+    if (saved.agyQuota) connectors.agyQuota = saved.agyQuota;
+  })
+  .catch(() => undefined);
+const autoSwitchReady = getPref<Partial<Record<ConnectorId, boolean>>>(ACCOUNT_AUTO_SWITCH_KEY)
+  .then((saved) => {
+    if (saved) Object.assign(connectors.autoSwitch, saved);
+  })
+  .catch(() => undefined);
+
+function saveAccountCache() {
+  return setPref(ACCOUNT_CACHE_KEY, {
+    savedAt: Date.now(),
+    refreshedAt: { ...accountCacheAt },
+    accounts: {
+      claude: connectors.accounts.claude,
+      codex: connectors.accounts.codex,
+      copilot: connectors.accounts.copilot,
+    },
+    agyAccounts: connectors.accounts.agy,
+    agyQuota: connectors.agyQuota,
+  } satisfies SavedAccountCache);
+}
 
 const activeLoginRuns = new Map<ConnectorId, number>();
 const cancelledLoginRuns = new Set<number>();
@@ -103,6 +156,51 @@ const call = async <T>(command: string, args?: Record<string, unknown>): Promise
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<T>(command, args);
 };
+
+type StoredCustomProvider = Omit<Partial<CustomProvider>, 'id' | 'name' | 'kind' | 'baseUrl' | 'keyEnv' | 'models' | 'defaultModel' | 'enabled'> &
+  Pick<CustomProvider, 'id' | 'name' | 'kind' | 'baseUrl' | 'models' | 'defaultModel' | 'enabled'> & { keyEnv?: string };
+
+/** Converts the old single-key provider shape to a stable key list without changing provider identity or settings. */
+export function normalizeCustomProvider(provider: StoredCustomProvider): CustomProvider {
+  const keys = Array.isArray(provider.keys)
+    ? provider.keys.map((item, index) => ({
+        id: item.id || `${provider.id}-key-${index + 1}`,
+        label: item.label?.trim() || `Key ${index + 1}`,
+        apiKey: item.apiKey ?? '',
+        ...(item.keyEnv ? { keyEnv: item.keyEnv } : {}),
+      }))
+    : [{
+        id: `${provider.id}-key-1`,
+        label: 'Key 1',
+        apiKey: provider.apiKey ?? '',
+        ...(provider.keyEnv ? { keyEnv: provider.keyEnv } : {}),
+      }];
+  const activeKeyId = keys.some((item) => item.id === provider.activeKeyId) ? provider.activeKeyId! : keys[0]?.id ?? null;
+  const { apiKey: _legacyApiKey, ...saved } = provider;
+  return {
+    ...saved,
+    keyEnv: provider.keyEnv ?? '',
+    keys,
+    activeKeyId,
+    autoSwitch: Boolean(provider.autoSwitch),
+  } as CustomProvider;
+}
+
+export function activeProviderKey(provider: CustomProvider): ProviderApiKey | undefined {
+  return provider.keys.find((key) => key.id === provider.activeKeyId) ?? provider.keys[0];
+}
+
+export function providerKeyEnv(provider: CustomProvider, key = activeProviderKey(provider)) {
+  return key?.keyEnv || provider.keyEnv || '';
+}
+
+/** Captures identity only, never a secret, for the credential that actually starts a turn. */
+export function currentCredentialId(agent: string, providerId?: string): string | undefined {
+  if (agent === 'custom') return connectors.custom.find((item) => item.id === providerId)?.activeKeyId ?? undefined;
+  if (agent === 'antigravity') return connectors.accounts.agy.find((item) => item.active)?.id;
+  if (agent === 'claude' || agent === 'codex' || agent === 'copilot') return connectors.accounts[agent]?.accounts.find((item) => item.active)?.id;
+  return undefined;
+}
 
 /** Stops a connector screen from waiting forever if its native command never answers. */
 const callWithTimeout = async <T>(command: string, args: Record<string, unknown> | undefined, timeoutMs: number): Promise<T> => {
@@ -180,8 +278,10 @@ export async function refreshDetect() {
 
 let adopted = false;
 
-export async function refreshAccounts(provider: AccountProvider, refresh = false) {
+export async function refreshAccounts(provider: AccountProvider, refresh = false, duringSwitch = false) {
+  if (!duringSwitch && credentialBusy(provider)) await waitForCredential(provider);
   if (!inTauri()) return;
+  await Promise.all([accountCacheReady, autoSwitchReady]);
   const timeoutMs = provider === 'claude' ? 90_000 : 65_000;
   await task(`accounts:${provider}`, refresh ? 'Refreshing usage' : 'Reading accounts', async () => {
     const next = await callWithTimeout<Accounts>('accounts_list', { provider, refresh }, timeoutMs);
@@ -196,11 +296,15 @@ export async function refreshAccounts(provider: AccountProvider, refresh = false
       }
     }
     connectors.accounts[provider] = next;
+    accountCacheAt[provider] = Date.now();
+    void saveAccountCache();
   });
 }
 
-export async function refreshAgyQuota() {
+export async function refreshAgyQuota(duringSwitch = false) {
+  if (!duringSwitch && credentialBusy('agy')) await waitForCredential('agy');
   if (!inTauri()) return;
+  await accountCacheReady;
   // The local status-line cache is immediate; do not leave the Usage cards blank while the live API request waits.
   if (!connectors.agyQuota) {
     try {
@@ -211,19 +315,31 @@ export async function refreshAgyQuota() {
   }
   try {
     const live = await call<AgyQuota | null>('antigravity_quota');
-    if (live) connectors.agyQuota = live;
+    if (live) {
+      connectors.agyQuota = live;
+      void saveAccountCache();
+    }
   } catch {
     // Preserve saved figures when the live quota endpoint is unavailable.
+  }
+  try {
+    connectors.agyAccountQuotas = await call<AgyAccountQuota[]>('antigravity_quotas');
+  } catch {
+    // Keep the last figures of each account.
   }
 }
 
 let agyAccountsRefresh: Promise<boolean> | undefined;
 
-export async function refreshAgyAccounts() {
+export async function refreshAgyAccounts(duringSwitch = false) {
+  if (!duringSwitch && credentialBusy('agy')) await waitForCredential('agy');
   if (!inTauri()) return;
+  await accountCacheReady;
   if (agyAccountsRefresh) return agyAccountsRefresh;
   const refresh = task('accounts:agy', 'Reading Antigravity accounts', async () => {
     connectors.accounts.agy = await call<AgyAccount[]>('antigravity_accounts_list');
+    accountCacheAt.agy = Date.now();
+    void saveAccountCache();
   });
   agyAccountsRefresh = refresh;
   try {
@@ -238,6 +354,7 @@ export async function retrySaveAgyAccount(): Promise<boolean> {
   const ok = await task('save:agy', 'Saving Antigravity account', async () => {
     await call('antigravity_account_adopt');
     connectors.accounts.agy = await call<AgyAccount[]>('antigravity_accounts_list');
+    accountCacheAt.agy = Date.now();
   });
   if (ok) {
     delete connectors.errors['login:agy'];
@@ -247,7 +364,8 @@ export async function retrySaveAgyAccount(): Promise<boolean> {
 }
 
 export async function switchAgyAccount(account: AgyAccount): Promise<boolean> {
-  const ok = await task('switch:agy', `Switching to ${account.email}`, () => call('antigravity_account_switch', { id: account.id }));
+  cancelCredentialRotations('agy');
+  const ok = await task('switch:agy', `Switching to ${account.email}`, () => exclusiveCredential('agy', () => call('antigravity_account_switch', { id: account.id })));
   if (ok) {
     accountSwitched('antigravity');
     toast.success(`Now using ${account.email}`);
@@ -258,6 +376,7 @@ export async function switchAgyAccount(account: AgyAccount): Promise<boolean> {
 
 export async function refreshAll(refresh = false) {
   if (refresh && connectors.manualRefreshing) return;
+  await Promise.all([accountCacheReady, autoSwitchReady]);
   if (refresh) connectors.manualRefreshing = true;
   try {
     // Keep Claude detection first because account adoption depends on its signed-in state.
@@ -344,7 +463,8 @@ export async function cancelAccountAdd(provider: AccountProvider): Promise<void>
 }
 
 export async function switchAccount(provider: AccountProvider, account: Account): Promise<boolean> {
-  const ok = await task(`switch:${provider}`, `Switching to ${account.email}`, () => call('account_switch', { provider, id: account.id }));
+  cancelCredentialRotations(provider);
+  const ok = await task(`switch:${provider}`, `Switching to ${account.email}`, () => exclusiveCredential(provider, () => call('account_switch', { provider, id: account.id })));
   if (ok) {
     accountSwitched(provider);
     toast.success(`Now using ${account.email}`);
@@ -366,6 +486,143 @@ export async function removeAccount(provider: AccountProvider, account: Account)
 export async function setCodexAutoSwitch(enabled: boolean, fiveHour: number, weekly: number) {
   const ok = await task('auto:codex', 'Saving', () => call('codex_auto_switch', { enabled, fiveHour, weekly }));
   if (ok) await refreshAccounts('codex');
+}
+
+/** Persists the independent automatic account-switch preference for one connector. */
+export async function setConnectorAutoSwitch(connector: ConnectorId, enabled: boolean) {
+  await autoSwitchReady;
+  if (!enabled) cancelCredentialRotations(connector);
+  connectors.autoSwitch[connector] = enabled;
+  void setPref(ACCOUNT_AUTO_SWITCH_KEY, { ...connectors.autoSwitch });
+}
+
+/** Tries eligible connector profiles in quota order. Each candidate is only committed after a live usage read succeeds. */
+export async function autoSwitchConnectorAccount(connector: ConnectorId, attempt: CredentialAttempt): Promise<{ email: string } | null> {
+  return rotateCredential(connector, attempt, (signal) => switchConnectorCandidate(connector, attempt, signal));
+}
+
+/** Restores the original profile and confirms native state before another attempt can start. */
+async function restoreConnectorAccount(connector: ConnectorId, id: string | undefined): Promise<void> {
+  if (!id || connector === 'opencode') throw new Error('No original account available to restore');
+  if (connector === 'agy') {
+    const before = connectors.accounts.agy.find((item) => item.active)?.id;
+    try { await call('antigravity_account_switch', { id }); }
+    catch { /* Confirm the actual native profile below even if the command reported an error. */ }
+    finally { connectors.accounts.agy = await callWithTimeout<AgyAccount[]>('antigravity_accounts_list', undefined, 65_000); void saveAccountCache(); }
+    const active = connectors.accounts.agy.find((item) => item.active)?.id;
+    if (active !== before) accountSwitched('antigravity');
+    if (active !== id) throw new Error('Could not restore original account');
+  } else {
+    const before = connectors.accounts[connector]?.accounts.find((item) => item.active)?.id;
+    try { await call('account_switch', { provider: connector, id }); }
+    catch { /* The fresh account list below decides whether restoration succeeded. */ }
+    finally {
+      connectors.accounts[connector] = await callWithTimeout<Accounts>('accounts_list', { provider: connector, refresh: true }, 65_000);
+      void saveAccountCache();
+    }
+    const active = connectors.accounts[connector]?.accounts.find((item) => item.active)?.id;
+    if (active !== before) accountSwitched(connector);
+    if (active !== id) throw new Error('Could not restore original account');
+  }
+  void refreshDetect();
+}
+
+async function switchConnectorCandidate(connector: ConnectorId, attempt: CredentialAttempt, signal: AbortSignal): Promise<{ email: string } | null> {
+  await Promise.all([accountCacheReady, autoSwitchReady]);
+  if (!connectors.autoSwitch[connector] || !inTauri()) return null;
+  signal.throwIfAborted();
+  if (connector === 'agy') {
+    const alreadySelected = connectors.accounts.agy.find((item) => item.active && !item.expired);
+    if (attempt.failedId && alreadySelected && alreadySelected.id !== attempt.failedId && !attempt.tried.has(alreadySelected.id)) return { email: alreadySelected.email };
+
+    if (Date.now() - (accountCacheAt.agy ?? 0) > 60_000) await Promise.all([refreshAgyAccounts(true), refreshAgyQuota(true)]);
+    let accounts = connectors.accounts.agy.filter((item) => !item.active && !item.expired);
+    if (accounts.length === 0) {
+      await Promise.all([refreshAgyAccounts(true), refreshAgyQuota(true)]);
+      accounts = connectors.accounts.agy.filter((item) => !item.active && !item.expired);
+    }
+    attempt.originalId ??= connectors.accounts.agy.find((item) => item.active)?.id;
+    const original = attempt.originalId;
+    if (!original) return null;
+    const failed = connectors.accounts.agy.find((item) => item.active)?.id;
+    if (failed) attempt.tried.add(failed);
+    for (const account of accounts) {
+      if (attempt.tried.has(account.id)) continue;
+      await credentialDelay(signal);
+      attempt.tried.add(account.id);
+      try {
+        await call('antigravity_account_switch', { id: account.id });
+        const quota = await call<AgyQuota | null>('antigravity_quota');
+        signal.throwIfAborted();
+        const family = attempt.model.startsWith('gemini-') ? 'gemini' : '3p';
+        const windows = quota?.groups.find((group) => group.id === family)?.windows;
+        if (!windows?.length || windows.some((window) => liveWindow(window, Date.now()) && window.pct >= 98)) throw new Error('No usable model quota');
+        const verifiedAccounts = await call<AgyAccount[]>('antigravity_accounts_list');
+        signal.throwIfAborted();
+        if (verifiedAccounts.some((item) => item.id === account.id && item.active && !item.expired)) {
+          connectors.agyQuota = quota;
+          connectors.accounts.agy = verifiedAccounts;
+          accountSwitched('antigravity');
+          void saveAccountCache();
+          void refreshDetect();
+          return { email: account.email };
+        }
+        throw new Error('Account check failed');
+      } catch {
+        await restoreConnectorAccount(connector, original);
+        signal.throwIfAborted();
+      }
+    }
+    await restoreConnectorAccount(connector, original);
+    return null;
+  }
+  if (connector === 'opencode') return null;
+  const provider = connector as AccountProvider;
+  if (Date.now() - (accountCacheAt[provider] ?? 0) > 60_000) await refreshAccounts(provider, true, true);
+  const current = connectors.accounts[provider];
+  if (!current) return null;
+  const alreadySelected = current.accounts.find((item) => item.active && hasRoom(item, Date.now()));
+  if (attempt.failedId && alreadySelected && alreadySelected.id !== attempt.failedId && !attempt.tried.has(alreadySelected.id)) return { email: alreadySelected.email };
+  const now = Date.now();
+  const rank = (accounts: Account[]) => accounts.filter((account) => !account.active && !account.expired && hasRoom(account, Date.now()) && !attempt.tried.has(account.id)).sort((a, b) => {
+    const remaining = (account: Account) => account.usage.reduce((min, window) => !liveWindow(window, now) ? min : Math.min(min, 100 - window.pct), 100);
+    return Number(b.usage.length > 0) - Number(a.usage.length > 0) || remaining(b) - remaining(a);
+  });
+  let candidates = rank(current.accounts);
+  if (candidates.length === 0) {
+    await refreshAccounts(provider, true, true);
+    candidates = rank(connectors.accounts[provider]?.accounts ?? []);
+  }
+  attempt.originalId ??= current.accounts.find((account) => account.active)?.id;
+  const original = attempt.originalId;
+  if (!original) return null;
+  const failed = current.accounts.find((account) => account.active)?.id;
+  if (failed) attempt.tried.add(failed);
+  for (const account of candidates) {
+    await credentialDelay(signal);
+    attempt.tried.add(account.id);
+    try {
+      await call('account_switch', { provider, id: account.id });
+      const verified = await callWithTimeout<Accounts>('accounts_list', { provider, refresh: true }, 65_000);
+      signal.throwIfAborted();
+      // Managers may retain old account/quota rows alongside a failed live connection check.
+      if (verified.error) throw new Error('Live account verification failed');
+      if (verified.accounts.some((item) => item.id === account.id && item.active && !item.expired && hasRoom(item, Date.now()))) {
+        connectors.accounts[provider] = verified;
+        accountSwitched(provider);
+        void saveAccountCache();
+        void refreshDetect();
+        if (provider === 'copilot') void refreshCopilotModels();
+        return { email: account.email };
+      }
+      throw new Error('Account check failed');
+    } catch {
+      await restoreConnectorAccount(connector, original);
+      signal.throwIfAborted();
+    }
+  }
+  await restoreConnectorAccount(connector, original);
+  return null;
 }
 
 /** Redeems one Codex reset credit after the user confirms the action. */
@@ -498,14 +755,21 @@ export function startWatching() {
 /** What a provider says about the spending left on a key (OpenRouter), by provider id. */
 export type ProviderQuota = { used: number; limit: number | null; remaining: number | null; free_tier: boolean; at: number };
 export const providerQuotas = $state<Record<string, ProviderQuota>>({});
+const providerQuotaCacheReady = getPref<Record<string, ProviderQuota>>('providers.quota-cache').then((saved) => {
+  if (saved) Object.assign(providerQuotas, saved);
+}).catch(() => undefined);
 
 /** Reads the spending left on a custom provider's key, when the provider tells it; leaves it unset otherwise. */
 export async function refreshProviderQuota(provider: CustomProvider) {
   if (!inTauri()) return;
+  await providerQuotaCacheReady;
+  const key = activeProviderKey(provider);
   try {
-    const found = await call<Omit<ProviderQuota, 'at'> | null>('provider_quota', { baseUrl: provider.baseUrl, apiKey: provider.apiKey || null, keyEnv: provider.keyEnv || null });
-    if (found) providerQuotas[provider.id] = { ...found, at: Date.now() / 1000 };
-    else delete providerQuotas[provider.id];
+    const found = await call<Omit<ProviderQuota, 'at'> | null>('provider_quota', { baseUrl: provider.baseUrl, apiKey: key?.apiKey || null, keyEnv: providerKeyEnv(provider, key) || null });
+    const cacheKey = `${provider.id}:${key?.id ?? 'default'}`;
+    if (found) providerQuotas[cacheKey] = { ...found, at: Date.now() / 1000 };
+    else delete providerQuotas[cacheKey];
+    void setPref('providers.quota-cache', { ...providerQuotas });
   } catch {
     // No reading: the footer then shows what the app counted itself.
   }
@@ -548,6 +812,61 @@ export async function probeProvider(kind: ProviderKind, baseUrl: string, apiKey:
   return call<Probe>('provider_probe', { kind, baseUrl, apiKey: apiKey || null, keyEnv: keyEnv || null });
 }
 
+/** Finds and verifies another API key, preferring cached keys with the most remaining quota. */
+export async function autoSwitchProviderKey(provider: CustomProvider, attempt: CredentialAttempt): Promise<{ label: string } | null> {
+  return rotateCredential(provider.id, attempt, (signal) => {
+    const current = connectors.custom.find((item) => item.id === provider.id);
+    return current ? switchProviderCandidate(current, attempt, signal) : Promise.resolve(null);
+  });
+}
+
+async function switchProviderCandidate(provider: CustomProvider, attempt: CredentialAttempt, signal: AbortSignal): Promise<{ label: string } | null> {
+  if (!provider.autoSwitch || provider.keys.length < 2) return null;
+  await providerQuotaCacheReady;
+  signal.throwIfAborted();
+  const currentId = provider.activeKeyId;
+  const alreadySelected = activeProviderKey(provider);
+  if (attempt.failedId && alreadySelected && currentId !== attempt.failedId && !attempt.tried.has(alreadySelected.id)) return { label: alreadySelected.label };
+  attempt.originalId ??= currentId ?? undefined;
+  if (currentId) attempt.tried.add(currentId);
+  const keys = provider.keys.filter((item) => item.id !== currentId && !attempt.tried.has(item.id)).sort((a, b) => {
+    const qa = providerQuotas[`${provider.id}:${a.id}`]?.remaining;
+    const qb = providerQuotas[`${provider.id}:${b.id}`]?.remaining;
+    return (qb ?? -1) - (qa ?? -1);
+  });
+  for (const key of keys) {
+    await credentialDelay(signal);
+    attempt.tried.add(key.id);
+    const cacheKey = `${provider.id}:${key.id}`;
+    let quota = providerQuotas[cacheKey];
+    if (!quota || Date.now() / 1000 - quota.at > 60) {
+      try {
+        const found = await call<Omit<ProviderQuota, 'at'> | null>('provider_quota', { baseUrl: provider.baseUrl, apiKey: key.apiKey || null, keyEnv: key.keyEnv || provider.keyEnv || null });
+        if (found) {
+          quota = { ...found, at: Date.now() / 1000 };
+          providerQuotas[cacheKey] = quota;
+          void setPref('providers.quota-cache', { ...providerQuotas });
+        }
+      } catch {
+        // Not all provider endpoints expose key quota; the connection probe remains authoritative for auth.
+      }
+    }
+    if (quota?.remaining !== null && quota?.remaining !== undefined && quota.remaining <= 0) continue;
+    signal.throwIfAborted();
+    const result = await probeProvider(provider.kind, provider.baseUrl, key.apiKey, key.keyEnv ?? provider.keyEnv).catch(() => null);
+    signal.throwIfAborted();
+    if (!provider.autoSwitch) return null;
+    if (!connectors.custom.some((item) => item.id === provider.id && item.keys.some((saved) => saved.id === key.id && saved.apiKey === key.apiKey))) continue;
+    if (result?.ok && (!result.models.length || result.models.includes(attempt.model))) {
+      provider.activeKeyId = key.id;
+      saveProvider($state.snapshot(provider) as CustomProvider, true);
+      return { label: key.label || `••••${key.apiKey.slice(-4)}` };
+    }
+  }
+  if (provider.keys.some((key) => key.id === attempt.originalId)) provider.activeKeyId = attempt.originalId!;
+  return null;
+}
+
 export async function scanLocal() {
   if (!inTauri() || connectors.scanning) return;
   connectors.scanning = true;
@@ -558,13 +877,16 @@ export async function scanLocal() {
   }
 }
 
-export function saveProvider(provider: CustomProvider) {
+export function saveProvider(provider: CustomProvider, automatic = false) {
+  if (!automatic) cancelCredentialRotations(provider.id);
+  provider = normalizeCustomProvider(provider);
   const index = connectors.custom.findIndex((item) => item.id === provider.id);
   if (index >= 0) connectors.custom[index] = provider;
   else connectors.custom.push(provider);
 }
 
 export function removeProvider(id: string) {
+  cancelCredentialRotations(id);
   connectors.custom = connectors.custom.filter((item) => item.id !== id);
 }
 
@@ -573,8 +895,8 @@ export const newProviderId = () => `custom-${Date.now().toString(36)}`;
 // --- Saved settings ---------------------------------------------------------------------------------------
 
 let hydrated = false;
-Promise.all([getPref<CustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts'), getPref<typeof connectors.recovery>('connectors.recovery'), getPref<ClaudeCredit>('providers.claudeCredit')]).then(([custom, alerts, recovery, credit]) => {
-  if (custom) connectors.custom = custom;
+Promise.all([getPref<StoredCustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts'), getPref<typeof connectors.recovery>('connectors.recovery'), getPref<ClaudeCredit>('providers.claudeCredit')]).then(([custom, alerts, recovery, credit]) => {
+  if (custom) connectors.custom = custom.map(normalizeCustomProvider);
   if (credit) connectors.claudeCredit = { ...connectors.claudeCredit, ...credit };
   if (recovery) connectors.recovery = { ...connectors.recovery, ...recovery };
   // Moving to another agent used to run by itself: it is off now until the user switches it on (model popover).

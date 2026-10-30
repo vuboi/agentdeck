@@ -6,7 +6,8 @@ export const EXPORT_FORMAT = 'agentdeck-export';
 export const EXPORT_VERSION = 1;
 
 /** The collections of prefs.ts an export carries: settings always, chat history when asked. Open tabs and terminals stay. */
-export const SETTINGS_STORES = ['prefs', 'permissions', 'layout'] as const;
+/** `accounts` holds the automatic switching of each connector and the saved usage of its accounts (emails, no tokens). */
+export const SETTINGS_STORES = ['prefs', 'permissions', 'layout', 'providers', 'accounts'] as const;
 export const HISTORY_STORES = ['chats', 'chatmeta', 'transcripts', 'archive'] as const;
 /** localStorage keys that hold settings (the theme). */
 export const LOCAL_KEYS = ['agentdeck.theme'];
@@ -21,7 +22,7 @@ export type ExportFile = {
   local: Record<string, string>;
 };
 
-type Provider = { id?: string; apiKey?: string };
+type Provider = { id?: string; apiKey?: string; keys?: { id?: string; apiKey?: string }[] };
 const PROVIDERS_KEY = 'providers.custom';
 /** The Claude Console credit: its API key and Console sign-in are keys too. */
 const CREDIT_KEY = 'providers.claudeCredit';
@@ -32,7 +33,7 @@ export function buildExport(stores: Record<string, [string, unknown][]>, local: 
   const strip = (entries: [string, unknown][]) =>
     entries.map(([key, value]): [string, unknown] =>
       key === PROVIDERS_KEY && Array.isArray(value) && !withKeys
-        ? [key, (value as Provider[]).map((provider) => ({ ...provider, apiKey: '' }))]
+        ? [key, (value as Provider[]).map((provider) => ({ ...provider, apiKey: '', keys: provider.keys?.map((item) => ({ ...item, apiKey: '' })) }))]
         : key === CREDIT_KEY && value && typeof value === 'object' && !withKeys
           ? [key, { ...(value as Credit), apiKey: '', sessionKey: '' }]
           : [key, value],
@@ -71,8 +72,16 @@ export function parseExport(text: string): { ok: true; file: ExportFile } | { ok
  */
 export function mergeProviders(incoming: unknown, current: unknown): unknown {
   if (!Array.isArray(incoming)) return incoming;
-  const saved = new Map((Array.isArray(current) ? (current as Provider[]) : []).map((provider) => [provider.id, provider.apiKey]));
-  return (incoming as Provider[]).map((provider) => (provider.apiKey ? provider : { ...provider, apiKey: saved.get(provider.id) ?? '' }));
+  const saved = new Map((Array.isArray(current) ? (current as Provider[]) : []).map((provider) => [provider.id, provider]));
+  return (incoming as Provider[]).map((provider) => {
+    const existing = saved.get(provider.id);
+    if (!existing) return provider;
+    if (provider.keys) {
+      const oldKeys = new Map((existing.keys ?? []).map((key) => [key.id, key.apiKey]));
+      return { ...provider, keys: provider.keys.map((key) => key.apiKey ? key : { ...key, apiKey: oldKeys.get(key.id) ?? '' }) };
+    }
+    return provider.apiKey ? provider : { ...provider, apiKey: existing.apiKey ?? '' };
+  });
 }
 
 /** The Claude credit to save on import: a key left out of the export keeps the one saved here. */
@@ -86,7 +95,7 @@ export function mergeCredit(incoming: unknown, current: unknown): unknown {
 /** "12 settings, 3 providers, 40 chats" for the note after an import or export. */
 export function describeExport(file: ExportFile): string {
   const count = (name: string) => file.stores[name]?.length ?? 0;
-  const providers = file.stores.prefs?.find(([key]) => key === PROVIDERS_KEY)?.[1];
+  const providers = file.stores.providers?.find(([key]) => key === PROVIDERS_KEY)?.[1];
   const chats = count('chats');
   const parts = [`${count('prefs') + count('permissions') + count('layout')} settings`];
   if (Array.isArray(providers)) parts.push(`${providers.length} provider${providers.length === 1 ? '' : 's'}`);

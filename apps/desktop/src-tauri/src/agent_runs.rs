@@ -185,7 +185,9 @@ pub(crate) async fn agent_prewarm(
     api_key: Option<String>,
 ) -> Result<(), String> {
     if agent == "copilot" {
-        // The SDK starts a scoped Copilot runtime when the user sends the first turn.
+        // The Copilot CLI is pooled per chat (copilot.rs), so the first turn does not wait for it to start.
+        let cwd = working_directory(cwd);
+        tauri::async_runtime::spawn(crate::copilot::prewarm(session, cwd));
         return Ok(());
     }
     let provider = provider_for(&agent)?;
@@ -248,6 +250,30 @@ pub(crate) async fn agent_send(
         let (stop, token) = StopHandle::new();
         let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, "copilot", req.model.as_deref().unwrap_or("-"));
         let run = crate::copilot::run_turn(app.clone(), session.clone(), turn.clone(), message_id.clone(), req, token);
+        let handle = tauri::async_runtime::spawn(async move {
+            run.await;
+            noted.finish("finished");
+        });
+        track(session, turn, handle, Some(stop), response);
+        return Ok(());
+    }
+    if agent == "opencode" {
+        let response = ChatResponseCapabilities::custom();
+        let req = TurnRequest {
+            prompt,
+            session_id: agent_session,
+            resume,
+            model,
+            permission_mode,
+            effort,
+            allowed_tools,
+            cwd: working_directory(cwd),
+            owner: Some(session.clone()),
+            api_key,
+        };
+        let (stop, token) = StopHandle::new();
+        let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, "opencode", req.model.as_deref().unwrap_or("-"));
+        let run = crate::opencode_serve::run_turn(app.clone(), session.clone(), turn.clone(), message_id.clone(), req, token);
         let handle = tauri::async_runtime::spawn(async move {
             run.await;
             noted.finish("finished");

@@ -27,6 +27,7 @@ mod image_gen;
 mod image_history;
 mod index;
 mod mcp;
+mod opencode_serve;
 mod mcp_client;
 mod mcp_manage;
 mod mcp_providers;
@@ -2326,6 +2327,7 @@ pub fn run() {
             mcp_manage::mcp_agy_link,
             connectors::antigravity_quota,
             connectors::antigravity_quota_cached,
+            connectors::antigravity_quotas,
             connectors::antigravity_accounts_list,
             connectors::antigravity_account_adopt,
             connectors::antigravity_account_switch,

@@ -12,7 +12,7 @@
   import { openImages } from '../../browser/preview.svelte';
   import { clearSuggestions, draft, gen, refreshHistory, runSuggest, startRun, stopRun } from '../../files/image-gen.svelte';
   import { findModel, freeFirst, modelSources, modelsReady, parseCustomModel, type ProviderId } from '../../agents/models.svelte';
-  import { connectors } from '../../agents/connectors.svelte';
+  import { activeProviderKey, connectors, providerKeyEnv } from '../../agents/connectors.svelte';
   import { inTauri } from '../../app/platform/history';
   import { toast } from '../../app/platform/toast';
   import SectionTitle from '../ui/SectionTitle.svelte';
@@ -43,14 +43,18 @@
   } from './image-generator-options';
 
   /** The enabled Gemini provider with a key (typed or in its environment variable), if the user set one up. */
-  const geminiProvider = $derived(connectors.custom.find((item) => item.enabled && item.baseUrl.includes(GEMINI_HOST) && (item.apiKey || item.keyEnv)));
+  const geminiProvider = $derived(connectors.custom.find((item) => {
+    const key = activeProviderKey(item);
+    return item.enabled && item.baseUrl.includes(GEMINI_HOST) && (key?.apiKey || providerKeyEnv(item, key));
+  }));
+  const geminiKey = $derived(geminiProvider ? activeProviderKey(geminiProvider) : undefined);
   const geminiReady = $derived(!!geminiProvider);
   const gemini = $derived<ImageModel[]>(
     geminiProvider
       ? geminiModels.map((item) => ({
           ...item,
           backend: 'gemini' as const,
-          custom: { kind: geminiProvider.kind, base_url: geminiProvider.baseUrl, api_key: geminiProvider.apiKey || null, key_env: geminiProvider.keyEnv || null },
+          custom: { kind: geminiProvider.kind, base_url: geminiProvider.baseUrl, api_key: geminiKey?.apiKey || null, key_env: providerKeyEnv(geminiProvider, geminiKey) || null },
         }))
       : [],
   );
@@ -200,7 +204,7 @@
       prompt: prompt.trim(),
       model: target?.model ?? promptModel,
       provider: custom ? 'custom' : promptProvider,
-      custom: custom ? { kind: custom.kind, baseUrl: custom.baseUrl, apiKey: custom.apiKey || null, keyEnv: custom.keyEnv || null } : undefined,
+      custom: custom ? { kind: custom.kind, baseUrl: custom.baseUrl, apiKey: activeProviderKey(custom)?.apiKey || null, keyEnv: providerKeyEnv(custom) || null } : undefined,
       referencePaths,
       settings: settingsPayload(),
     });

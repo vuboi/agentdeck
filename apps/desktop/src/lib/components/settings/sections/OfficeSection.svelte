@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fade } from 'svelte/transition';
-  import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZTextMorph } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { toast } from '../../../app/platform/toast';
   import { inTauri } from '../../../app/platform/history';
@@ -48,13 +48,13 @@
                 </div>
                 <p class="mt-3 flex flex-wrap items-center gap-1.5 text-[0.75rem] text-muted-foreground">
                   {#if !inTauri()}Needs the desktop app.
-                  {:else if office === null}Checking…
-                  {:else if !office.supported}No OfficeCLI release for this system.
-                  {:else if office.installed}
-                    <span class="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-px text-[0.6875rem] font-medium text-emerald-600 dark:text-emerald-400">
-                      <ZIcon zType={icon('lucideCheck')} class="size-3" /> Installed
+                  {:else if office === null || office.installed}
+                    <!-- Grey while the version is read; the text morphs into the checked version in green. -->
+                    <span class="inline-flex items-center gap-1 rounded px-1.5 py-px text-[0.6875rem] tabular-nums transition-colors duration-300 {office?.installed ? 'bg-emerald-500/15 font-medium text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}">
+                      <ZIcon zType={icon('lucideCheck')} class="size-3" />
+                      <ZTextMorph zText={office ? (office.version ?? 'Installed') : 'Checking…'} />
                     </span>
-                    {#if office.version}<span class="rounded bg-muted px-1.5 py-px font-mono text-[0.6875rem] text-foreground/80">{office.version}</span>{/if}
+                  {:else if !office.supported}No OfficeCLI release for this system.
                   {:else}<span class="rounded bg-muted px-1.5 py-px text-[0.6875rem] font-medium">Not installed</span>{/if}
                 </p>
                 {#if officeNote}<p class="mt-2 text-[0.75rem] text-muted-foreground">{officeNote}</p>{/if}

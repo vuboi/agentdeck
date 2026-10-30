@@ -94,7 +94,7 @@
 
               <section class="rounded-xl border border-border p-4" aria-label="Export and import">
                 <div class="text-sm font-medium">Export and import</div>
-                <p class="mt-0.5 text-[0.75rem] text-muted-foreground">Until sync is ready: save settings, custom providers, flows, permissions, layout and theme to a file, and import it on another computer or after a reinstall.</p>
+                <p class="mt-0.5 text-[0.75rem] text-muted-foreground">Until sync is ready: save settings, custom providers, flows, permissions, account switching, layout and theme to a file, and import it on another computer or after a reinstall.</p>
                 <fieldset class="m-0 mt-3 flex flex-col gap-2 border-0 p-0" aria-label="What the export holds">
                   <div class="flex min-h-9 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm">
                     <ZIcon zType={icon('lucideMessagesSquare')} class="size-4 shrink-0 text-muted-foreground" />

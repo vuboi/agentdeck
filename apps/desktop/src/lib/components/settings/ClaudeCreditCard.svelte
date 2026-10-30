@@ -66,8 +66,8 @@
   <span class="grid size-5 shrink-0 place-items-center"><AgentLogo agent="claude" class="size-4" /></span>
   <span class="min-w-0 flex-1">
     <span class="flex min-w-0 items-center gap-1.5 text-sm font-medium"><span class="truncate">Claude Console</span><span class="shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400" title="Paid with API credit: a grant or a top-up">Credit</span></span>
-    <span class="block truncate text-muted-foreground" title={claudeCreditState.error ?? undefined}>
-      {#if !connectors.claudeCredit.apiKey}API credit (a grant or a top-up)
+    <span class="block truncate text-[0.6875rem] text-muted-foreground" title={claudeCreditState.error ?? undefined}>
+      {#if !connectors.claudeCredit.apiKey}Claude models, prepaid credit
       {:else if credit}{usd(credit.balance)} left{expires ? ` · expires ${expires}` : ''}
       {:else if claudeCreditState.error}<span class="text-destructive">{claudeCreditState.error}</span>
       {:else if connectors.claudeCredit.sessionKey}Reading the credit…

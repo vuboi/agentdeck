@@ -9,6 +9,7 @@
     "dev:web": "vite --host 127.0.0.1",
     "build": "vite build",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test:account-switch": "node --experimental-strip-types --experimental-vm-modules --test src/lib/agents/credential-switch.test.ts src/lib/agents/account-rotation.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
