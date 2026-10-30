@@ -41,9 +41,9 @@
                 <span class="min-w-0 flex-1 text-muted-foreground">{item.label}</span>
                 <span class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                   {#each item.keys as combo, index (index)}
-                    {#if index > 0}<span class="text-xs text-muted-foreground">{item.then ? 'then' : 'or'}</span>{/if}
+                    {#if index > 0}<span class="text-sm text-muted-foreground">{item.then ? 'then' : 'or'}</span>{/if}
                     <span class="flex items-center gap-0.5">
-                      {#each combo as cap, n (n)}<kbd class="min-w-6 rounded border border-border bg-muted px-1.5 py-0.5 text-center font-sans text-[11px] leading-4 text-foreground shadow-[inset_0_-1px_0_var(--border)]">{cap}</kbd>{/each}
+                      {#each combo as cap, n (n)}<kbd class="min-w-6 rounded border border-border bg-muted px-1.5 py-0.5 text-center font-sans text-[0.6875rem] leading-4 text-foreground shadow-[inset_0_-1px_0_var(--border)]">{cap}</kbd>{/each}
                     </span>
                   {/each}
                 </span>
@@ -52,7 +52,7 @@
           </ul>
         </section>
       {:else}
-        <p class="py-8 text-center text-sm text-muted-foreground">No shortcut matches “{query}”.</p>
+        <p class="py-8 text-center text-[0.75rem] text-muted-foreground">No shortcut matches “{query}”.</p>
       {/each}
     </div>
   </div>

@@ -139,7 +139,7 @@
       <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground">
         <ZIcon zType={icon('lucidePlug')} zSize="28" class="size-7 opacity-60" />
         <h3 class="m-0 text-sm font-medium text-foreground">Desktop app only</h3>
-        <p class="m-0 max-w-56 text-xs leading-normal">The MCP list is read from your agents' config files.</p>
+        <p class="m-0 max-w-56 text-sm leading-normal">The MCP list is read from your agents' config files.</p>
       </div>
     {:else}
       <!-- Totals from the Tasks log -->
@@ -157,8 +157,8 @@
         <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground" role="alert">
           <ZIcon zType={icon('lucideUnplug')} zSize="28" class="size-7 opacity-60" />
           <h3 class="m-0 text-sm font-medium text-foreground">Could not read the MCP list</h3>
-          <p class="m-0 max-w-64 text-xs leading-normal">{mcp.error}</p>
-          <ZButton zWave={false} zType="outline" zSize="sm" class="mt-1 h-7 gap-1.5 px-3 text-xs" onclick={() => void loadMcp()}>
+          <p class="m-0 max-w-64 text-sm leading-normal">{mcp.error}</p>
+          <ZButton zWave={false} zType="outline" zSize="sm" class="mt-1 h-7 gap-1.5 px-3 text-sm" onclick={() => void loadMcp()}>
             <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5" /> Try again
           </ZButton>
         </div>
@@ -168,7 +168,7 @@
         <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground">
           <ZIcon zType={icon('lucidePlug')} zSize="28" class="size-7 opacity-60" />
           <h3 class="m-0 text-sm font-medium text-foreground">No MCP server yet</h3>
-          <p class="m-0 max-w-56 text-xs leading-normal">Give your agents tools: press +.</p>
+          <p class="m-0 max-w-56 text-sm leading-normal">Give your agents tools: press +.</p>
         </div>
       {:else if entries.length === 0}
         <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center text-muted-foreground">
@@ -196,7 +196,7 @@
                       {#if entry.builtin}<span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">BUILT IN</span>{/if}
                       {#if entry.disabled}<span class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">DISABLED</span>{/if}
                     </span>
-                    <span class="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground" title={entry.target}>{entry.target}</span>
+                    <span class="mt-0.5 block truncate font-mono text-[0.75rem] text-muted-foreground" title={entry.target}>{entry.target}</span>
                     <span class="mt-1 flex flex-wrap items-center gap-x-2 text-[10px]">
                       <span class="rounded border border-border px-1 uppercase text-muted-foreground">{entry.transport}</span>
 
@@ -230,12 +230,12 @@
 
               {#if open[entry.id]}
                 <div class="overflow-hidden" transition:slide={{ duration: 200 }}>
-                <div class="flex flex-col gap-3 border-t border-border/70 px-3 py-3 text-[11px]">
+                <div class="flex flex-col gap-3 border-t border-border/70 px-3 py-3 text-[0.6875rem]">
                   {#if entry.builtin}
                     {@const auto = mcp.overview?.agy_auto ?? true}
                     <div class="flex items-center gap-3 rounded-md bg-muted/50 p-2.5">
                       <div class="min-w-0 flex-1">
-                        <div class="text-xs font-medium">Use it in Antigravity</div>
+                        <div class="text-sm font-medium">Use it in Antigravity</div>
                         <div class="mt-1 leading-snug text-muted-foreground">
                           Claude, Codex, OpenCode and your custom providers always have it. Antigravity gets it by itself before each turn, so "debug the page" works there too. Turn it off to keep agy on its own browser.
                         </div>
@@ -271,7 +271,7 @@
                       <div class="grid grid-cols-4 gap-2 text-center">
                         {#each [{ label: 'Calls', value: String(stats.calls) }, { label: 'Failed', value: String(stats.failed) }, { label: 'Tokens ≈', value: compact(stats.tokens) }, { label: 'Last', value: ago(stats.lastAt, ticker.min) }] as cell (cell.label)}
                           <div class="rounded-md bg-muted/50 px-1 py-1.5">
-                            <div class="truncate text-xs font-semibold tabular-nums {cell.label === 'Failed' && stats.failed ? 'text-destructive' : ''}">{cell.value}</div>
+                            <div class="truncate text-sm font-semibold tabular-nums {cell.label === 'Failed' && stats.failed ? 'text-destructive' : ''}">{cell.value}</div>
                             <div class="text-[10px] text-muted-foreground">{cell.label}</div>
                           </div>
                         {/each}
@@ -331,30 +331,30 @@
         onTabChange={(value) => (form.transport = value as 'stdio' | 'http')}
       />
     </div>
-    <label class="flex flex-col gap-1 text-[11px]">
+    <label class="flex flex-col gap-1 text-[0.6875rem]">
       {@render caption("Name")}
       <ZInput bind:value={form.name} autofocus zPlaceholder="github" />
     </label>
     {#if form.transport === 'stdio'}
-      <label class="flex flex-col gap-1 text-[11px]">
+      <label class="flex flex-col gap-1 text-[0.6875rem]">
         {@render caption("Command")}
         <ZInput bind:value={form.target} zPlaceholder="npx" />
       </label>
-      <label class="flex flex-col gap-1 text-[11px]">
+      <label class="flex flex-col gap-1 text-[0.6875rem]">
         {@render caption("Arguments", "Space-separated; quote values containing spaces")}
         <ZInput bind:value={form.args} zPlaceholder="-y @modelcontextprotocol/server-github" />
       </label>
     {:else}
-      <label class="flex flex-col gap-1 text-[11px]">
+      <label class="flex flex-col gap-1 text-[0.6875rem]">
         {@render caption("Address")}
         <ZInput bind:value={form.target} zPlaceholder="https://example.com/mcp" />
       </label>
-      <label class="flex flex-col gap-1 text-[11px]">
+      <label class="flex flex-col gap-1 text-[0.6875rem]">
         {@render caption("Headers", "Name: value, one per line")}
         <ZInput bind:value={form.headers} zType="textarea" zPlaceholder="Authorization: Bearer …" />
       </label>
     {/if}
-    <label class="flex flex-col gap-1 text-[11px]">
+    <label class="flex flex-col gap-1 text-[0.6875rem]">
       {@render caption("Environment", "KEY=value, one per line")}
       <ZInput bind:value={form.env} zType="textarea" zPlaceholder="GITHUB_TOKEN=…" />
     </label>
@@ -366,7 +366,7 @@
     </ZDivider>
     <fieldset class="m-0 flex flex-col gap-2 border-0 p-0" aria-label="Agents">
       {#each Object.keys(form.agents) as agent (agent)}
-        <div class="flex min-h-9 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs">
+        <div class="flex min-h-9 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm">
           {#if agent === 'codex'}
             <ZIcon zSvg={OPENAI_SVG} class="size-4 shrink-0 text-foreground" />
           {:else if agent === 'copilot'}
@@ -379,7 +379,7 @@
         </div>
       {/each}
     </fieldset>
-    <p class="m-0 text-[11px] leading-snug text-muted-foreground">Each agent saves its own MCP config. Copilot servers are saved in <code>~/.copilot/mcp-config.json</code>; environment values remain local.</p>
-    {#if problem && form.name}<p class="m-0 text-[11px] text-muted-foreground" role="status">{problem}</p>{/if}
+    <p class="m-0 text-[0.6875rem] leading-snug text-muted-foreground">Each agent saves its own MCP config. Copilot servers are saved in <code>~/.copilot/mcp-config.json</code>; environment values remain local.</p>
+    {#if problem && form.name}<p class="m-0 text-[0.75rem] text-muted-foreground" role="status">{problem}</p>{/if}
   </div>
 </ZModal>

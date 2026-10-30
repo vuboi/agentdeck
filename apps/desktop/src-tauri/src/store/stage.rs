@@ -26,7 +26,7 @@ pub enum Source {
 }
 
 pub fn staging_root(home: &Path) -> PathBuf {
-    home.join(".agentdeck").join("staging")
+    home.join(crate::channel::home_folder_name()).join("staging")
 }
 
 /// A new job id: the time in hex plus the process id, unique enough for one user's machine.

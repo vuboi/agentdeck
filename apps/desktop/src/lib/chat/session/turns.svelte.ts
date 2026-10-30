@@ -13,12 +13,10 @@ import { agentDisplayName } from '../../agents/provider-registry';
 import { isHandbackPrompt } from '../runs/handback';
 import { MODELS, advanceRun, nextId, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type Mention, type PageElement, type Permission, type SessionItem } from './state.svelte';
 import { liveReplies, messagesOf, needsUserInput, renderWaiters, replies, runReplies, sendNextQueued, sessionLanes } from './run.svelte';
-import { handleAgentEvent, recoveries } from './events.svelte';
+import { cancelAutoSwitch, handleAgentEvent, recoveries } from './events.svelte';
 import { delegateRuns } from './delegation.svelte';
 import { delegateTasks, isWorkerChat, taskRuns } from './delegate-task.svelte';
-import { askingCards, stepWaiters } from './workflow.svelte';
-import { teamStates } from './team.svelte';
-import { clipText, hasSideTurn, sideTurns } from './sending.svelte';
+import { clipText } from './orchestration.svelte';
 
 /**
  * Said to the agent when a message is about running or opening something. Agents follow the project's own notes
@@ -303,7 +301,6 @@ export function hasOutstandingSessionWork(sessionId: string): boolean {
   if ((sessionLanes[sessionId]?.length ?? 0) > 0) return true;
   if (
     replies[sessionId] ||
-    hasSideTurn(sessionId) ||
     renderWaiters[sessionId] ||
     needsUserInput(sessionId)
   )
@@ -362,11 +359,12 @@ export function toggleNotifyDone(sessionId: string) {
 /** Whether a chat has a reply in progress (for the send / stop button). */
 export const isRunning = (sessionId: string) =>
   workspace.sessions.find((item) => item.id === sessionId)?.status ===
-    'working' || hasSideTurn(sessionId) || (sessionLanes[sessionId]?.length ?? 0) > 0;
+    'working' || (sessionLanes[sessionId]?.length ?? 0) > 0;
 
 /** Stops the reply of a chat now. What was written so far stays. `quiet`: the stop is only to make room for a newer
  *  message (sent while the reply ran, an edit), not the user's Stop button: the reply does not say "You stopped after". */
 export function stopTurn(sessionId: string, quiet = false) {
+  cancelAutoSwitch(sessionId);
   if (!quiet) {
     const listener = [...runReplies.entries()].find(([, run]) => run.sessionId === sessionId && run.listener);
     if (listener) {
@@ -389,37 +387,13 @@ export function stopTurn(sessionId: string, quiet = false) {
   // Stopped by the user: a retry or a hand-over waiting to start does not start.
   delete recoveries[sessionId];
   advanceRun(sessionId, { type: 'cancel' });
-  for (const [id, side] of sideTurns) {
-    if (side.main !== sessionId) continue;
-    void stopAgentTurn(id, side.turn).catch(() => {});
-    side.reply.live = false;
-    sideTurns.delete(id);
-  }
-  // Work handed to other agents (a flow's steps, `@agent`) stops with the chat that handed it out, all at once.
+  // Delegated workers stop with the lead chat that started them.
   for (const run of delegateRuns) {
-    if (run.main !== sessionId || run.endedAt || run.handback === 'running')
-      continue;
+    if (run.main !== sessionId || run.endedAt) continue;
     run.cancelled = true;
     for (const node of run.nodes) {
-      if (node.state !== 'running') continue;
-      const waiter = stepWaiters.get(node.childId);
-      // A step that waits for the user's answers has no reply to stop: it ends here.
-      if (!replies[node.childId] && waiter) {
-        stepWaiters.delete(node.childId);
-        askingCards.delete(node.childId);
-        waiter('', 'stopped', {
-          id: nextId(),
-          role: 'assistant',
-          time: '',
-          blocks: [],
-        });
-      } else stopTurn(node.childId);
+      if (node.state === 'running') stopTurn(node.childId);
     }
-  }
-  // A team run of this chat: its members' turns stop too (the run is cancelled above, so none starts another).
-  for (const state of Object.values(teamStates)) {
-    if (state.main !== sessionId || state.endedAt) continue;
-    for (const member of state.members) if (replies[member.childId]) stopTurn(member.childId);
   }
   if (!replies[sessionId]) {
     // Nothing is running any more but the chat still says so (a lost event): clear it, and close the reply that was
@@ -431,7 +405,7 @@ export function stopTurn(sessionId: string, quiet = false) {
     }
     const stuck = workspace.sessions.find((item) => item.id === sessionId);
     if (stuck?.status === 'working')
-      stuck.status = hasSideTurn(sessionId) ? 'working' : 'idle';
+      stuck.status = 'idle';
     return;
   }
   const turn = turns[sessionId];

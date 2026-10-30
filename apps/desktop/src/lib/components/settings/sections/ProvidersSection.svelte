@@ -16,24 +16,24 @@
             <div class="flex flex-col gap-5" in:fade={{ duration: 200 }}>
               <section aria-label="Local servers">
                 <div class="mb-2 flex items-center gap-2">
-                  <h3 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">On this computer</h3>
+                  <h3 class="text-sm font-semibold tracking-wide text-muted-foreground uppercase">On this computer</h3>
                   <span class="ml-auto"></span>
-                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" disabled={connectors.scanning} onclick={() => void scanLocal()}>
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-sm" disabled={connectors.scanning} onclick={() => void scanLocal()}>
                     <ZIcon zType={icon('lucideRefreshCw')} class="size-3.5 {connectors.scanning ? 'animate-spin' : ''}" /> Scan
                   </ZButton>
                 </div>
                 {#if connectors.local.length === 0}
-                  <p class="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{connectors.scanning ? 'Looking for Ollama, LM Studio and llama.cpp…' : 'No local model server found (looked for Ollama :11434, LM Studio :1234, llama.cpp :8080). Start one and scan again.'}</p>
+                  <p class="rounded-lg border border-dashed border-border p-3 text-[0.75rem] text-muted-foreground">{connectors.scanning ? 'Looking for Ollama, LM Studio and llama.cpp…' : 'No local model server found (looked for Ollama :11434, LM Studio :1234, llama.cpp :8080). Start one and scan again.'}</p>
                 {:else}
                   <ul class="grid gap-2 sm:grid-cols-2">
                     {#each connectors.local as server (server.base_url)}
                       <li class="flex items-center gap-3 rounded-lg border border-border p-3">
                         <span class="grid size-8 place-items-center rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"><ZIcon zType={icon('lucideCpu')} class="size-4" /></span>
-                        <span class="min-w-0 flex-1 text-xs">
+                        <span class="min-w-0 flex-1 text-sm">
                           <span class="block text-sm font-medium">{server.label}</span>
                           <span class="block truncate text-muted-foreground">{server.models.length} models · {server.base_url}</span>
                         </span>
-                        <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-2.5 text-xs" onclick={() => form.useLocal(server)}>Add</ZButton>
+                        <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-2.5 text-sm" onclick={() => form.useLocal(server)}>Add</ZButton>
                       </li>
                     {/each}
                   </ul>
@@ -41,16 +41,16 @@
               </section>
 
               <section aria-label="Cloud providers">
-                <h3 class="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Cloud providers</h3>
-                <p class="mb-2 text-xs text-muted-foreground">Claude Console API credit, and official APIs with a free tier for small jobs (an email, a summary, a quick search). The key button opens the page where you create a key; then press + , paste it and Save. Free limits change often.</p>
+                <h3 class="mb-2 text-sm font-semibold tracking-wide text-muted-foreground uppercase">Cloud providers</h3>
+                <p class="mb-2 text-[0.75rem] text-muted-foreground">Claude Console API credit, and official APIs with a free tier for small jobs (an email, a summary, a quick search). The key button opens the page where you create a key; then press + , paste it and Save. Free limits change often.</p>
                 <ul class="grid gap-2 sm:grid-cols-2">
                   <ClaudeCreditCard />
                   {#each FREE_CLOUD as preset (preset.name)}
-                    <li class="flex min-w-0 items-center gap-2.5 rounded-lg border border-border px-3 py-2 text-xs">
+                    <li class="flex min-w-0 items-center gap-2.5 rounded-lg border border-border px-3 py-2 text-sm">
                       <img src={brandLogoFor(preset.base)} alt="" class="size-5 shrink-0 rounded-sm object-contain" />
                       <span class="min-w-0 flex-1">
                         <span class="flex min-w-0 items-center gap-1.5 text-sm font-medium"><span class="truncate">{preset.name.replace(/ \(free\)$/, '')}</span><span class="shrink-0 rounded bg-emerald-500/15 px-1.5 py-px text-[10px] font-medium text-emerald-600 dark:text-emerald-400" title="Free tier: gets web search only, never project data">Free</span></span>
-                        <span class="block truncate text-muted-foreground" title={preset.note}>{preset.note}</span>
+                        <span class="block truncate text-[0.6875rem] text-muted-foreground" title={preset.note}>{preset.note}</span>
                       </span>
                       <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Get a {preset.name} API key" title="Get a free API key ({preset.keyUrl.replace('https://', '')})" onclick={() => void openExternal(preset.keyUrl)}>
                         <ZIcon zType={icon('lucideKeyRound')} class="size-3.5" />
@@ -69,24 +69,25 @@
 
               <section aria-label="Custom providers">
                 <div class="mb-2 flex items-center gap-2">
-                  <h3 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Custom providers</h3>
+                  <h3 class="text-sm font-semibold tracking-wide text-muted-foreground uppercase">Custom providers</h3>
                   <span class="ml-auto"></span>
-                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-xs" onclick={() => form.edit()}>
+                  <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-sm" onclick={() => form.edit()}>
                     <ZIcon zType={icon('lucidePlus')} class="size-3.5" /> Add provider
                   </ZButton>
                 </div>
 
 
                 {#if connectors.custom.length === 0}
-                  <p class="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">No custom provider yet. Add any OpenAI- or Anthropic-compatible endpoint, or a local Ollama.</p>
+                  <p class="rounded-lg border border-dashed border-border p-4 text-center text-[0.75rem] text-muted-foreground">No custom provider yet. Add any OpenAI- or Anthropic-compatible endpoint, or a local Ollama.</p>
                 {:else}
                   <ul class="flex flex-col gap-2">
                     {#each connectors.custom as provider (provider.id)}
+                      {@const activeKey = provider.keys.find((key) => key.id === provider.activeKeyId) ?? provider.keys[0]}
                       <li class="flex items-center gap-3 rounded-lg border border-border p-3">
                         <span class="grid size-8 shrink-0 place-items-center rounded-md bg-muted">{#if providerLogo(provider)}<img src={providerLogo(provider)} alt="" class="size-5 object-contain" />{:else}<ZIcon zType={icon('lucideServer')} class="size-4" />{/if}</span>
                         <span class="min-w-0 flex-1">
-                          <span class="flex items-center gap-1.5 truncate text-sm font-medium">{provider.name}{#if provider.restricted}<span class="shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400" title="May train on what it is sent: gets no project data">Free tier</span>{/if}</span>
-                          <span class="block truncate text-[11px] text-muted-foreground">{KINDS.find((kind) => kind.value === provider.kind)?.label} · {provider.baseUrl}{provider.defaultModel ? ` · ${provider.defaultModel}` : ''}{provider.apiKey ? ` · key ••••${provider.apiKey.slice(-4)}` : ''}</span>
+                          <span class="flex items-center gap-1.5 truncate text-sm font-medium">{provider.name}{#if provider.restricted}<span class="shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400" title="May train on what it is sent: gets no project data">Free tier</span>{/if}{#if provider.autoSwitch}<span class="shrink-0 rounded bg-primary/10 px-1.5 py-px text-[10px] font-medium text-primary">Auto switch</span>{/if}</span>
+                          <span class="block truncate text-[0.75rem] text-muted-foreground">{KINDS.find((kind) => kind.value === provider.kind)?.label} · {provider.baseUrl}{provider.defaultModel ? ` · ${provider.defaultModel}` : ''}{activeKey?.apiKey ? ` · ${activeKey.label || 'key'} ••••${activeKey.apiKey.slice(-4)}` : ''}{provider.keys.length > 1 ? ` · ${provider.keys.length} keys` : ''}</span>
                         </span>
                         <ZSwitch zVariant="dot" bind:checked={provider.enabled} zSize="sm" />
                         <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Edit {provider.name}" onclick={() => form.edit(provider)}>
@@ -98,7 +99,7 @@
                       </li>
                     {/each}
                   </ul>
-                  <p class="mt-3 text-[11px] leading-snug text-muted-foreground">Saved only on this computer: the key never goes into the source or a build. Enabled providers and their models appear in the chat's model picker.</p>
+                  <p class="mt-3 text-[0.6875rem] leading-snug text-muted-foreground">Saved only on this computer: the key never goes into the source or a build. Enabled providers and their models appear in the chat's model picker.</p>
                 {/if}
               </section>
             </div>

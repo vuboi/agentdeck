@@ -75,7 +75,7 @@
       <ZIcon zType={'lucidePencil' as ZIconName} zSize="14" class="size-[14px]!" />
     </ZButton>
   {/if}
-  <span class="mx-1 flex items-center gap-1.5 text-[11px]">
+  <span class="mx-1 flex items-center gap-1.5 text-[0.6875rem]">
     {#if message.ms}<span class="tabular-nums">Worked for {elapsed(message.ms)}</span><span aria-hidden="true">·</span>{/if}
     {#if message.at}
       <span {@attach zTooltip({ content: fullDate(message.at), position: 'top' })}>{ago(new Date(new Date(message.at).getTime() + (message.ms ?? 0)).toISOString(), ticker.min)}</span>

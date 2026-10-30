@@ -2,6 +2,7 @@
 import type { ZCommandGroup, ZCommandItem, ZIconName } from '@shival99/z-ui-svelte';
 import type { PickerItem } from '../ui/PickerPopover.svelte';
 import type { SlashItem } from '../../chat/slash.svelte';
+import { allPresets } from '../../tasks/workflows.svelte';
 import {
   AGENTS,
   MODELS,
@@ -14,6 +15,7 @@ export const chipIcon: Record<Mention['kind'], ZIconName> = {
   session: 'lucideMessageSquare' as ZIconName,
   project: 'lucideFolder' as ZIconName,
   ai: 'lucideBot' as ZIconName,
+  workflow: 'lucideWorkflow' as ZIconName,
 };
 
 /** The agent's own commands and skills, plus AgentDeck's, grouped under headings. */
@@ -55,14 +57,14 @@ export function flatten<T>(
   );
 }
 
-/** Sessions, projects and agents that `@` can mention. */
-export function buildMentionGroups(): ZCommandGroup<Mention>[] {
+/** Chats, projects and model targets that can be inserted inline in a prompt. */
+export function buildMentionGroups(kind?: Mention['kind']): ZCommandGroup<Mention>[] {
   const projectNames = new Map(
     workspace.projects.map((project) => [project.id, project.name]),
   );
   return [
   {
-    heading: 'Sessions',
+    heading: 'Chats',
     items: workspace.sessions
       .filter((item) => item.id !== workspace.activeId)
       .map((item) => ({
@@ -98,7 +100,7 @@ export function buildMentionGroups(): ZCommandGroup<Mention>[] {
     })),
   },
   {
-    heading: 'Hand to an agent',
+    heading: 'Models',
     items: AGENTS.flatMap((entry) =>
       MODELS[entry.value].map((entryModel) => ({
         id: `ai:${entry.value}/${entryModel.value}`,
@@ -112,5 +114,15 @@ export function buildMentionGroups(): ZCommandGroup<Mention>[] {
       })),
     ),
   },
-  ];
+  {
+    heading: 'Flows',
+    items: allPresets().map((preset) => ({
+      id: `workflow:${preset.id}`,
+      label: preset.name,
+      icon: 'lucideWorkflow' as ZIconName,
+      keywords: [preset.description, ...preset.agents.map((agent) => agent.name)],
+      data: { kind: 'workflow' as const, id: preset.id, label: preset.name },
+    })),
+  },
+  ].filter((group) => !kind || (kind === 'session' ? group.heading === 'Chats' : kind === 'project' ? group.heading === 'Projects' : kind === 'workflow' ? group.heading === 'Flows' : group.heading === 'Models'));
 }

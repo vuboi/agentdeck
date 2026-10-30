@@ -105,13 +105,13 @@
   const tabContextItems = $derived<ZDropdownMenuItem[]>(
     menuTab
       ? [
-          ...(menuTab.dirty ? [{ label: 'Save', icon: 'lucideSave', iconSize: '12', shortcut: 'Ctrl+S', divide: 'after', class: 'text-xs! py-1', onClick: () => void saveTab(menuTab.id, menuTab) } as ZDropdownMenuItem] : []),
-          { label: 'Open in a main tab', icon: 'lucideSquareArrowUpRight', iconSize: '12', class: 'text-xs! py-1', onClick: () => openFileTab(menuTab.path, menuTab.root, menuTab.view) },
+          ...(menuTab.dirty ? [{ label: 'Save', icon: 'lucideSave', iconSize: '12', shortcut: 'Ctrl+S', divide: 'after', class: 'text-sm! py-1', onClick: () => void saveTab(menuTab.id, menuTab) } as ZDropdownMenuItem] : []),
+          { label: 'Open in a main tab', icon: 'lucideSquareArrowUpRight', iconSize: '12', class: 'text-sm! py-1', onClick: () => openFileTab(menuTab.path, menuTab.root, menuTab.view) },
           ...openWithItem(menuTab.path, openWithList, () => loadTabOpenWith(menuTab.path, menuTab.id)),
-          { label: 'Copy path', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', divide: 'after', onClick: () => void navigator.clipboard.writeText(menuTab.path) },
-          { label: 'Close tab', icon: 'lucideX', iconSize: '12', class: 'text-xs! py-1', onClick: () => closeViewerTab(menuTab.id) },
-          { label: 'Close other tabs', icon: 'lucideX', iconSize: '12', class: 'text-xs! py-1', disabled: viewer.tabs.length < 2, onClick: () => closeOtherViewerTabs(menuTab.id) },
-          { label: 'Close all tabs', icon: 'lucideListX', iconSize: '12', divide: 'before', class: 'text-xs! py-1', onClick: () => closeAllViewerTabs() },
+          { label: 'Copy path', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', divide: 'after', onClick: () => void navigator.clipboard.writeText(menuTab.path) },
+          { label: 'Close tab', icon: 'lucideX', iconSize: '12', class: 'text-sm! py-1', onClick: () => closeViewerTab(menuTab.id) },
+          { label: 'Close other tabs', icon: 'lucideX', iconSize: '12', class: 'text-sm! py-1', disabled: viewer.tabs.length < 2, onClick: () => closeOtherViewerTabs(menuTab.id) },
+          { label: 'Close all tabs', icon: 'lucideListX', iconSize: '12', divide: 'before', class: 'text-sm! py-1', onClick: () => closeAllViewerTabs() },
         ]
       : [],
   );
@@ -176,11 +176,11 @@
 
 {#snippet sidePane()}
   <div class="flex h-10 shrink-0 items-center border-b border-border px-1.5">
-    <div class="relative grid h-8 w-full grid-cols-2 rounded-md border border-border bg-muted p-0.5 text-xs" role="radiogroup" aria-label="Show">
+    <div class="relative grid h-8 w-full grid-cols-2 rounded-md border border-border bg-muted p-0.5 text-sm" role="radiogroup" aria-label="Show">
       <span class="pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-background shadow-sm transition-transform duration-200 ease-out" style:transform={viewer.side.mode === 'changes' ? 'translateX(100%)' : 'translateX(0)'} aria-hidden="true"></span>
       {#each [{ value: 'files', label: 'Files', glyph: 'lucideFolder' }, { value: 'changes', label: 'Changes', glyph: 'lucideGitCompare' }] as item (item.value)}
         <button type="button" role="radio" aria-checked={viewer.side.mode === item.value} aria-label={item.label} title={tightTree ? item.label : undefined} class="relative z-10 inline-flex cursor-pointer items-center justify-center gap-1.5 rounded outline-none transition-colors {viewer.side.mode === item.value ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (viewer.side.mode = item.value as 'files' | 'changes')}>
-          <ZIcon zType={icon(item.glyph)} zSize="14" /> {#if !tightTree}{item.label}{/if}
+          <ZIcon zType={icon(item.glyph)} zSize="16" /> {#if !tightTree}{item.label}{/if}
         </button>
       {/each}
     </div>
@@ -193,7 +193,7 @@
 <div bind:clientWidth={width} class="flex h-full min-h-0 w-full flex-1 flex-col bg-background" aria-label="Files">
   <div class="flex h-10 shrink-0 items-center gap-1 border-b border-border px-1.5">
     {#if viewer.tabs.length === 0}
-      <span class="min-w-0 flex-1 truncate px-1.5 text-xs font-medium text-foreground">Files</span>
+      <span class="min-w-0 flex-1 truncate px-1.5 text-sm font-medium text-foreground">Files</span>
     {:else}
       <div class="relative flex min-w-0 flex-1 items-center">
         <div bind:this={strip} class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden" role="tablist" aria-label="Open files" tabindex="-1" onscroll={measure} onwheel={onWheel}>
@@ -204,7 +204,7 @@
               role="tab"
               tabindex="0"
               aria-selected={selected}
-              class="group/tab flex h-7 max-w-48 shrink-0 cursor-pointer items-center gap-1 rounded-md pr-1 pl-2.5 text-xs outline-none {selected ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+              class="group/tab flex h-7 max-w-48 shrink-0 cursor-pointer items-center gap-1 rounded-md pr-1 pl-2 text-sm outline-none {selected ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
               title={tab.path}
               onclick={() => (viewer.active = tab.id)}
               onauxclick={(event) => event.button === 1 && closeViewerTab(tab.id)}
@@ -261,7 +261,7 @@
             <ZIcon zType={icon('lucideFolder')} zSize="28" class="size-7 text-muted-foreground/70" />
             <div class="flex flex-col gap-1">
               <p class="m-0 text-sm font-medium text-foreground">Open files appear here</p>
-              <p class="m-0 max-w-56 text-xs leading-relaxed text-muted-foreground">Pick a file in the tree, or click a file path in the conversation.</p>
+              <p class="m-0 max-w-56 text-sm leading-relaxed text-muted-foreground">Pick a file in the tree, or click a file path in the conversation.</p>
             </div>
           </div>
         {/if}

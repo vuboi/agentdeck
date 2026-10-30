@@ -14,14 +14,14 @@
 <!-- A drop target for floating tool windows, and where those tools live once docked here. -->
 <div data-dock-zone={zone} class="flex h-full w-full min-h-0 min-w-0 flex-1 overflow-hidden bg-background {row ? 'flex-row' : 'flex-col'}">
   {#if tools.length === 0}
-    <div class="flex flex-1 items-center justify-center p-2 text-center text-xs text-muted-foreground">Drop a tool here</div>
+    <div class="flex flex-1 items-center justify-center p-2 text-center text-sm text-muted-foreground">Drop a tool here</div>
   {/if}
   {#each tools as tool (tool)}
     {@const current = toolOf(tool)}
     <div class="flex min-h-0 min-w-0 flex-1 flex-col {row ? 'border-r' : 'border-b'} border-border last:border-0">
       <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2">
         <ZIcon zType={current.icon} class="size-3.5 text-muted-foreground" />
-        <span class="truncate text-xs font-medium">{current.label}</span>
+        <span class="truncate text-sm font-medium">{current.label}</span>
         <span class="ml-auto"></span>
         <!-- Grip: press and drag to pull the tool out of this zone into a floating window, or dock it elsewhere. -->
         <span

@@ -22,7 +22,7 @@
       <ZIcon zType={kind.icon as ZIconName} class="size-3.5" />
     </span>
     <span class="flex min-w-0 flex-col gap-1 leading-tight">
-      <span class="truncate text-xs font-medium text-foreground">{name}</span>
+      <span class="truncate text-sm font-medium text-foreground">{name}</span>
       <span class="truncate text-[10px] text-muted-foreground">{kind.label}{size ? ` · ${fileSizeLabel(size)}` : ''}</span>
     </span>
   </button>

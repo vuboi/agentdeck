@@ -86,15 +86,15 @@
   }
 
   const fileItems = $derived<ZDropdownMenuItem[]>([
-    { label: 'Open file', icon: 'lucideFile', iconSize: '12', class: 'text-xs! py-1', onClick: () => openInViewer(linkMenu.file, linkMenu.root) },
+    { label: 'Open file', icon: 'lucideFile', iconSize: '12', class: 'text-sm! py-1', onClick: () => openInViewer(linkMenu.file, linkMenu.root) },
     ...openWithItem(linkMenu.file, openWithOptions),
-    { label: 'Save as…', icon: 'lucideDownload', iconSize: '12', class: 'text-xs! py-1', onClick: () => void saveAs() },
-    { label: 'Copy file contents', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => void copyContents() },
+    { label: 'Save as…', icon: 'lucideDownload', iconSize: '12', class: 'text-sm! py-1', onClick: () => void saveAs() },
+    { label: 'Copy file contents', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', onClick: () => void copyContents() },
     {
       label: 'Open containing folder',
       icon: 'lucideFolder',
       iconSize: '12',
-      class: 'text-xs! py-1',
+      class: 'text-sm! py-1',
       onClick: async () => {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
@@ -109,7 +109,7 @@
       label: 'Copy path',
       icon: 'lucideCopy',
       iconSize: '12',
-      class: 'text-xs! py-1',
+      class: 'text-sm! py-1',
       onClick: () => {
         // As this system writes it: backslashes on Windows, slashes on macOS and Linux.
         void navigator.clipboard.writeText(nativePath(linkMenu.file, hostPlatform()));
@@ -120,7 +120,7 @@
       label: 'Copy as file:// URL',
       icon: 'lucideLink',
       iconSize: '12',
-      class: 'text-xs! py-1',
+      class: 'text-sm! py-1',
       onClick: () => {
         void navigator.clipboard.writeText(fileUrl(linkMenu.file));
         toast.success('URL copied');
@@ -131,15 +131,15 @@
       icon: 'lucideTrash2',
       iconSize: '12',
       divide: 'before',
-      class: 'text-xs! py-1 text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive!',
+      class: 'text-sm! py-1 text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive!',
       onClick: () => void deleteFile(),
     },
   ]);
 
   const webItems = $derived<ZDropdownMenuItem[]>([
-    { label: 'Open in AgentDeck browser', icon: 'lucideGlobe', iconSize: '12', class: 'text-xs! py-1', onClick: () => openInPreview(linkMenu.url) },
-    { label: 'Open in external browser', icon: 'lucideExternalLink', iconSize: '12', class: 'text-xs! py-1', onClick: () => void openExternal(linkMenu.url) },
-    { label: 'Copy link', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', divide: 'before', onClick: () => void navigator.clipboard.writeText(linkMenu.url).then(() => toast.success('Link copied')) },
+    { label: 'Open in AgentDeck browser', icon: 'lucideGlobe', iconSize: '12', class: 'text-sm! py-1', onClick: () => openInPreview(linkMenu.url) },
+    { label: 'Open in external browser', icon: 'lucideExternalLink', iconSize: '12', class: 'text-sm! py-1', onClick: () => void openExternal(linkMenu.url) },
+    { label: 'Copy link', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', divide: 'before', onClick: () => void navigator.clipboard.writeText(linkMenu.url).then(() => toast.success('Link copied')) },
   ]);
 </script>
 

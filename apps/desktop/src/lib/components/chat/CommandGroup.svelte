@@ -207,7 +207,7 @@
   </span>
 {/snippet}
 
-<div class="block-in flex flex-col text-xs">
+<div class="block-in flex flex-col text-sm">
   <button
     type="button"
     class="flex w-fit max-w-full cursor-pointer items-center gap-2 rounded-md py-0.5 text-left text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -368,7 +368,7 @@
                     {@const diffKey = `${stateKey}:${item.id ?? index}:${item.change.path}`}
                     {@const visibleCount = visibleDiffCounts[diffKey] ?? INITIAL_DIFF_ROWS}
                     {@const pathLabel = displayPath(projectRoot(), item.change.path)}
-                    <div class="flex max-h-60 flex-col overflow-hidden rounded-lg border border-border bg-background font-mono text-[11px] leading-relaxed">
+                    <div class="flex max-h-60 flex-col overflow-hidden rounded-lg border border-border bg-background font-mono text-[0.6875rem] leading-relaxed">
                       <!-- The path stays put; only the diff under it scrolls, with the scrollbar beside the diff. -->
                       <div class="flex min-w-0 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-3 py-1.5">
                       <!-- Only the path: the file opens from its name in the step line above. -->
@@ -396,7 +396,7 @@
                     </div>
                   {:else}
                     <!-- A question the agent asked shows its questions and options (the output), not its command line. -->
-                    {#if !ASK.test(toolOf(item.command))}<pre class="m-0 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all">{shown(item)}</pre>{/if}
+                    {#if !ASK.test(toolOf(item.command))}<pre class="m-0 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap break-all">{shown(item)}</pre>{/if}
                   {/if}
                   {#if item.image}
                     <button type="button" class="w-fit max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border outline-none hover:ring-2 hover:ring-primary/50" aria-label="See the screenshot" onclick={(event) => showShot(event, item.image!)}>
@@ -419,15 +419,15 @@
                           {/if}
                         </div>
                         {#if markdown && (readModes[key] ?? 'preview') === 'preview'}
-                          <div class="max-h-60 overflow-auto px-3 py-2 text-xs leading-relaxed"><Markdown text={content} /></div>
+                          <div class="max-h-60 overflow-auto px-3 py-2 text-sm leading-relaxed"><Markdown text={content} /></div>
                         {:else if !markdown}
-                          <div class="h-60 max-h-60 overflow-auto text-[11px] leading-5"><CodeView text={content} lang={lang} wrap /></div>
+                          <div class="h-60 max-h-60 overflow-auto text-[0.6875rem] leading-5"><CodeView text={content} lang={lang} wrap /></div>
                         {:else}
-                          <pre class="m-0 max-h-60 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all">{content}</pre>
+                          <pre class="m-0 max-h-60 overflow-auto px-3 py-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap break-all">{content}</pre>
                         {/if}
                       </div>
                     {:else}
-                      <pre class="m-0 max-h-60 overflow-auto px-1 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
+                      <pre class="m-0 max-h-60 overflow-auto px-1 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap break-all {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
                     {/if}
                   {/if}
                 </div>

@@ -5,4 +5,7 @@ import endpoints from './endpoints.json';
 export type LocalEndpoint = { kind: 'openai' | 'anthropic' | 'ollama'; label: string; base: string };
 export type FreeCloudEndpoint = { name: string; base: string; keyEnv: string; model: string; note: string; keyUrl: string };
 
-export const ENDPOINTS = endpoints as Omit<typeof endpoints, 'local' | 'freeCloud'> & { local: LocalEndpoint[]; freeCloud: FreeCloudEndpoint[] };
+export const ENDPOINTS = endpoints as Omit<typeof endpoints, 'local' | 'freeCloud'> & {
+  local: LocalEndpoint[];
+  freeCloud: FreeCloudEndpoint[];
+};

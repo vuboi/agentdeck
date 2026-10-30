@@ -91,13 +91,13 @@
   const copyItems = $derived<ZDropdownMenuItem[]>(
     tab === 'console'
       ? [
-          { label: 'Copy console (as shown)', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => copyConsole(false) },
-          { label: 'Copy errors only', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => copyConsole(true) },
+          { label: 'Copy console (as shown)', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', onClick: () => copyConsole(false) },
+          { label: 'Copy errors only', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', onClick: () => copyConsole(true) },
         ]
       : [
-          { label: 'Copy failed requests and responses', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => copyRequests('failed') },
-          { label: 'Copy successful requests and responses', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', onClick: () => copyRequests('ok') },
-          { label: 'Copy all requests', icon: 'lucideCopy', iconSize: '12', class: 'text-xs! py-1', divide: 'before', onClick: () => copyRequests('all') },
+          { label: 'Copy failed requests and responses', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', onClick: () => copyRequests('failed') },
+          { label: 'Copy successful requests and responses', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', onClick: () => copyRequests('ok') },
+          { label: 'Copy all requests', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', divide: 'before', onClick: () => copyRequests('all') },
         ],
   );
 
@@ -121,7 +121,7 @@
         type="button"
         role="tab"
         aria-selected={tab === value}
-        class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2.5 text-xs outline-none {tab === value ? ACTIVE_ON : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+        class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2.5 text-sm outline-none {tab === value ? ACTIVE_ON : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
         onclick={() => (tab = value as Tab)}
       >
         {label}
@@ -130,7 +130,7 @@
     {/each}
     <input
       bind:value={filter}
-      class="mx-1 h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 text-xs outline-none focus:border-primary"
+      class="mx-1 h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus:border-primary"
       placeholder="Filter"
       aria-label="Filter"
     />
@@ -138,7 +138,7 @@
       <button
         bind:this={levelButton}
         type="button"
-        class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs outline-none hover:bg-primary/10 {levelOpen ? `border-primary/50 ${TRIGGER_ON_PLAIN}` : ''}"
+        class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-sm outline-none hover:bg-primary/10 {levelOpen ? `border-primary/50 ${TRIGGER_ON_PLAIN}` : ''}"
         aria-haspopup="listbox"
         aria-expanded={levelOpen}
         aria-label="Level"
@@ -152,7 +152,7 @@
       <button
         bind:this={typeButton}
         type="button"
-        class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs outline-none hover:bg-primary/10 {typeOpen ? `border-primary/50 ${TRIGGER_ON_PLAIN}` : ''}"
+        class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-sm outline-none hover:bg-primary/10 {typeOpen ? `border-primary/50 ${TRIGGER_ON_PLAIN}` : ''}"
         aria-haspopup="listbox"
         aria-expanded={typeOpen}
         aria-label="Type"
@@ -175,7 +175,7 @@
   </div>
 
   {#if tab === 'console'}
-    <div class="min-h-0 flex-1 overflow-auto font-mono text-[11px]" role="log" aria-label="console">
+    <div class="min-h-0 flex-1 overflow-auto font-mono text-[0.6875rem]" role="log" aria-label="console">
       {#each lines as line, index (index)}
         <div class="group relative flex gap-2 border-b border-border/50 py-0.5 pr-7 pl-2 hover:bg-muted/40 {tone(line.level)}">
           <span class="shrink-0 tabular-nums opacity-70">{clock(line.at)}</span>

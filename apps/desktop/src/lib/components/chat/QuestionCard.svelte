@@ -96,12 +96,12 @@
 {#if quick}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (keys 1-3 answer) -->
   <section class="block-in w-full max-w-full rounded-lg border border-border bg-card px-2.5 py-2 text-sm shadow-sm" aria-label="Question" tabindex="0" {onkeydown}>
-    <p class="m-0 flex items-start gap-1.5 text-[13px] font-medium text-foreground">
+    <p class="m-0 flex items-start gap-1.5 text-[0.8125rem] font-medium text-foreground">
       <ZIcon zType={icon(done ? 'lucideCircleCheck' : 'lucideMessageCircleQuestion')} class="mt-0.5 size-3.5 shrink-0 {done ? 'text-success' : 'text-primary'}" />
       <span class="min-w-0">{current.question}</span>
     </p>
     {#if done}
-      <p class="m-0 mt-1 pl-5 text-xs text-muted-foreground">{chosenLabel || 'Answered'}</p>
+      <p class="m-0 mt-1 pl-5 text-sm text-muted-foreground">{chosenLabel || 'Answered'}</p>
     {:else}
       <div class="mt-2 flex flex-col gap-y-2">
         {#each current.options as option, index (option.label)}
@@ -110,11 +110,11 @@
             class="flex min-h-10 w-full min-w-0 cursor-pointer flex-col justify-center rounded-md border px-2.5 py-1.5 text-left outline-none sm:min-h-9 transition-colors focus-visible:ring-2 focus-visible:ring-ring {index === 0 ? 'border-primary/50 bg-primary/10 hover:bg-primary/15' : 'border-border hover:border-primary/40 hover:bg-muted/40'}"
             onclick={() => choose(option.label)}
           >
-            <span class="flex items-start gap-2 text-xs font-medium {index === 0 ? 'text-primary' : 'text-foreground'}">
+            <span class="flex items-start gap-2 text-sm font-medium {index === 0 ? 'text-primary' : 'text-foreground'}">
               <span class="min-w-0 flex-1 break-words whitespace-normal">{option.label}</span>
               <kbd class="mt-px shrink-0 rounded border border-border px-1 font-mono text-[10px] font-normal text-muted-foreground max-sm:hidden">{index + 1}</kbd>
             </span>
-            {#if option.description}<span class="mt-0.5 break-words whitespace-normal text-[11px] leading-snug text-muted-foreground">{option.description}</span>{/if}
+            {#if option.description}<span class="mt-0.5 break-words whitespace-normal text-[0.6875rem] leading-snug text-muted-foreground">{option.description}</span>{/if}
           </button>
         {/each}
         <!-- "Other..." turns into the field itself, in the same place and as tall as the options: the two cross-fade in one
@@ -125,7 +125,7 @@
               <ZInput zSize="default" bind:value={answers[0].text} zPlaceholder="Type your own answer…" onEnter={sendOther} />
             </div>
           {:else}
-            <button type="button" class="col-start-1 row-start-1 flex min-h-10 w-full cursor-pointer items-center rounded-md border border-dashed sm:min-h-9 border-border px-2.5 py-1.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-primary/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" out:fade={{ duration: motion(110) }} onclick={() => (other = true)}>Other…</button>
+            <button type="button" class="col-start-1 row-start-1 flex min-h-10 w-full cursor-pointer items-center rounded-md border border-dashed sm:min-h-9 border-border px-2.5 py-1.5 text-left text-sm text-muted-foreground outline-none transition-colors hover:border-primary/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" out:fade={{ duration: motion(110) }} onclick={() => (other = true)}>Other…</button>
           {/if}
         </div>
         <div class="-mt-2 grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none {other ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}" inert={!other}>
@@ -138,13 +138,13 @@
       </div>
     {/if}
     {#if oncancel && !done}
-      <button type="button" class="mt-1 ml-auto block cursor-pointer rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground outline-none transition-colors hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring" onclick={oncancel}>Cancel</button>
+      <button type="button" class="mt-1 ml-auto block cursor-pointer rounded-md px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground outline-none transition-colors hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring" onclick={oncancel}>Cancel</button>
     {/if}
   </section>
 {:else}
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (keys 1-4 pick, arrows move) -->
 <section class="block-in w-full max-w-full overflow-hidden rounded-lg border border-border bg-card text-sm shadow-sm" aria-label="Questions" tabindex="0" {onkeydown}>
-  <header class="flex items-center gap-2 border-b border-border bg-muted/40 px-2.5 py-1.5 text-xs">
+  <header class="flex items-center gap-2 border-b border-border bg-muted/40 px-2.5 py-1.5 text-sm">
     <ZIcon zType={icon(done ? 'lucideCircleCheck' : 'lucideMessageCircleQuestion')} class="size-3.5 shrink-0 {done ? 'text-success' : 'text-primary'}" />
     <span class="font-medium">{done ? 'Answered' : from ? `${from} needs a few answers` : 'A few questions first'}</span>
     <span class="ml-auto flex items-center gap-1 text-muted-foreground tabular-nums">
@@ -162,7 +162,7 @@
     <div class="flex flex-col gap-1">
       {#if current.header}<span class="w-fit rounded bg-primary/10 px-1.5 py-px text-[10px] font-medium tracking-wide text-primary uppercase">{current.header}</span>{/if}
       <p class="m-0 font-medium text-foreground">{current.question}</p>
-      {#if current.multiSelect && !done}<span class="text-[11px] text-muted-foreground">Pick any that apply</span>{/if}
+      {#if current.multiSelect && !done}<span class="text-[0.6875rem] text-muted-foreground">Pick any that apply</span>{/if}
     </div>
 
     <div class="flex flex-col gap-1" role={current.multiSelect ? 'group' : 'radiogroup'} aria-label={current.question}>
@@ -180,15 +180,15 @@
             {#if on}<ZIcon zType={icon('lucideCheck')} class="size-3" />{/if}
           </span>
           <span class="min-w-0 flex-1">
-            <span class="block text-[13px] font-medium text-foreground">{option.label}</span>
-            {#if option.description}<span class="block text-xs text-muted-foreground">{option.description}</span>{/if}
+            <span class="block text-[0.8125rem] font-medium text-foreground">{option.label}</span>
+            {#if option.description}<span class="block text-sm text-muted-foreground">{option.description}</span>{/if}
           </span>
           {#if !done}<kbd class="shrink-0 rounded border border-border px-1 font-mono text-[10px] text-muted-foreground">{index + 1}</kbd>{/if}
         </button>
       {/each}
       <textarea
         rows="1"
-        class="field-sizing-content max-h-32 min-h-8 w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-[13px] outline-none placeholder:text-muted-foreground focus:border-primary/60 disabled:opacity-60"
+        class="field-sizing-content max-h-32 min-h-8 w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-[0.8125rem] outline-none placeholder:text-muted-foreground focus:border-primary/60 disabled:opacity-60"
         placeholder={current.options.length ? 'Or type your own answer…' : 'Type your answer…'}
         disabled={done}
         bind:value={answers[at].text}

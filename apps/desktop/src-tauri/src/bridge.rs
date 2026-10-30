@@ -421,7 +421,7 @@ fn tail(lines: Vec<Value>, limit: usize) -> Value {
 /// Opens `url` in the Preview panel (a tab of its own when another page is open there) and waits until the page
 /// answers the injected script: then it is ready to act on.
 async fn open_page(app: &AppHandle, url: &str, new_tab: bool, chat: &str) -> Result<Value, String> {
-    app.emit("agent-open", json!({ "url": url, "newTab": new_tab }))
+    app.emit_to("main", "agent-open", json!({ "url": url, "newTab": new_tab }))
         .map_err(|error| error.to_string())?;
     let wanted = url.trim_end_matches('/').to_string();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
@@ -829,7 +829,8 @@ pub(crate) async fn answer(
             let landscape = params
                 .get("landscape")
                 .is_some_and(|value| value == "1" || value == "true");
-            app.emit(
+            app.emit_to(
+                "main",
                 "agent-device",
                 json!({ "device": mode, "landscape": landscape }),
             )

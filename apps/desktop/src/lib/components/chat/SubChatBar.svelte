@@ -21,7 +21,7 @@
   const briefOpen = $derived(briefFor !== '' && briefFor === workspace.activeId);
 </script>
 
-  <div class="relative z-30 shrink-0 border-b border-border bg-background px-3 text-xs text-muted-foreground">
+  <div class="relative z-30 shrink-0 border-b border-border bg-background px-3 text-sm text-muted-foreground">
     <div class="flex h-8 min-w-0 items-center gap-1.5">
       {#if taskOfActive}
         <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md outline-none hover:bg-primary/10 hover:text-primary" aria-label="Back to {parentOfActive.title}" title="Back to parent chat" onclick={() => onback(parentOfActive.id)}>
@@ -42,7 +42,9 @@
         <span class="shrink-0 text-foreground">{agentDisplayName(parentOfActive.agent)}</span>
         <span class="shrink-0">from</span>
       {:else}
-        <span class="shrink-0">Started from</span>
+        <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md outline-none hover:bg-primary/10 hover:text-primary" aria-label="Back to {parentOfActive.title}" title="Back to parent chat" onclick={() => onback(parentOfActive.id)}>
+          <ZIcon zType={'lucideArrowLeft' as ZIconName} class="size-3.5" />
+        </button>
       {/if}
       <button type="button" class="min-w-0 cursor-pointer truncate rounded-sm font-medium text-foreground underline decoration-muted-foreground/50 underline-offset-2 outline-none hover:text-primary hover:decoration-primary" aria-label="Back to {parentOfActive.title}" onclick={() => onback(parentOfActive.id)}>{parentOfActive.title}</button>
       {#if taskOfActive}
@@ -53,6 +55,6 @@
       {/if}
     </div>
     {#if taskOfActive && briefOpen}
-      <div class="mb-2 max-h-48 overflow-auto rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap text-foreground">{taskOfActive.task}</div>
+      <div class="mb-2 max-h-48 overflow-auto rounded-md border border-border bg-muted/40 px-2.5 py-2 text-sm leading-relaxed whitespace-pre-wrap text-foreground">{taskOfActive.task}</div>
     {/if}
   </div>

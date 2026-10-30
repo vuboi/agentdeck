@@ -50,6 +50,7 @@ pub struct Local {
 pub struct Pins {
     pub codex_auth: String,
     pub claude_swap: String,
+    pub copilot: String,
 }
 
 #[derive(Deserialize)]

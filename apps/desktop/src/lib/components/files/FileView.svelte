@@ -72,8 +72,8 @@
     toast.success('Added to chat');
   }
   const codeItems = $derived<ZDropdownMenuItem[]>([
-    { label: 'Copy', icon: 'lucideCopy', iconSize: 12, class: 'text-xs! py-1', shortcut: 'Ctrl+C', onClick: () => void navigator.clipboard.writeText(pickedCode).then(() => toast.success('Copied')) },
-    { label: 'Add to chat', icon: 'lucideMessageSquarePlus', iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: addCodeToChat },
+    { label: 'Copy', icon: 'lucideCopy', iconSize: 12, class: 'text-sm! py-1', shortcut: 'Ctrl+C', onClick: () => void navigator.clipboard.writeText(pickedCode).then(() => toast.success('Copied')) },
+    { label: 'Add to chat', icon: 'lucideMessageSquarePlus', iconSize: 12, class: 'text-sm! py-1', divide: 'before', onClick: addCodeToChat },
   ]);
 
   // The file as last read from or written to disk (raw: BOM and line ends included). Null until read: the area
@@ -434,19 +434,19 @@
   ]);
   // A button is 32px with a 4px gap. The File/Changes tabs on the left keep their room; when not every tool fits, the
   // menu button (32px) takes the last place and the tools that do not fit go into its menu.
-  const BUTTON = 36;
+  const BUTTON = 28;
   const visibleTools = $derived.by(() => {
     const room = barWidth - 20 - (changed || !diffRead ? 140 : 0);
     if (tools.length * BUTTON <= room) return tools.length;
     return Math.max(0, Math.floor((room - 32) / BUTTON));
   });
   const hiddenTools = $derived<ZDropdownMenuItem[]>(
-    tools.slice(visibleTools).map((item) => ({ label: item.label, icon: item.icon as ZIconName, iconSize: 12, class: 'text-xs! py-1', checked: item.on && item.toggle, disabled: item.disabled, onClick: item.run })),
+    tools.slice(visibleTools).map((item) => ({ label: item.label, icon: item.icon as ZIconName, iconSize: 12, class: 'text-sm! py-1', checked: item.on && item.toggle, disabled: item.disabled, onClick: item.run })),
   );
 
   // File actions stay compact and use tooltips for their names.
-  const toolBase = 'inline-flex h-8 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded text-xs outline-none disabled:opacity-40';
-  const tool = `${toolBase} w-8`;
+  const toolBase = 'inline-flex h-7 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded text-sm outline-none disabled:opacity-40';
+  const tool = `${toolBase} w-7`;
   const findTool = `${toolBase} px-2`;
   const toolOff = 'text-muted-foreground hover:bg-primary/10 hover:text-primary';
   const toolOn = 'bg-primary/15 text-primary';
@@ -462,11 +462,11 @@
 {#snippet viewToggle()}
   <!-- A file with changes can be read as it is, or as its change: removed lines red, added lines green. -->
   <!-- Two equal halves with a pill that slides to the chosen one. -->
-  <div class="relative grid h-7 w-14 shrink-0 grid-cols-2 rounded-md border border-border bg-muted p-0.5 text-xs" role="radiogroup" aria-label="How to show the file">
+  <div class="relative grid h-7 w-14 shrink-0 grid-cols-2 rounded-md border border-border bg-muted p-0.5 text-sm" role="radiogroup" aria-label="How to show the file">
     <span class="pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-background shadow-sm transition-transform duration-200 ease-out" style:transform={view === 'changes' ? 'translateX(100%)' : 'translateX(0)'} aria-hidden="true"></span>
     {#each [{ value: 'file', label: 'File', glyph: 'lucideFileText' }, { value: 'changes', label: 'Changes', glyph: 'lucideGitCompare' }] as item (item.value)}
       <button type="button" role="radio" aria-checked={view === item.value} aria-label={item.label} title={item.label} class="relative z-10 grid size-6 cursor-pointer place-items-center rounded outline-none transition-colors {view === item.value ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (file.view = item.value as 'file' | 'changes')}>
-        <ZIcon zType={icon(item.glyph)} zSize="14" />
+        <ZIcon zType={icon(item.glyph)} zSize="16" />
       </button>
     {/each}
   </div>
@@ -485,9 +485,9 @@
         </span>
         <div class="flex flex-col gap-1">
           <p class="m-0 text-sm font-medium text-foreground">Can't open {file.name}</p>
-          <p class="m-0 text-xs leading-relaxed text-muted-foreground">{reason}</p>
+          <p class="m-0 text-sm leading-relaxed text-muted-foreground">{reason}</p>
         </div>
-        <p class="m-0 max-w-full truncate rounded-sm bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground" title={shortPath}>{shortPath}</p>
+        <p class="m-0 max-w-full truncate rounded-sm bg-muted px-2 py-1 font-mono text-[0.6875rem] text-muted-foreground" title={shortPath}>{shortPath}</p>
         <div class="flex gap-2">
           <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! p-0" aria-label="Try again" title="Try again" onclick={() => attempt++}>
             <ZIcon zType={icon('lucideRotateCw')} class="size-3.5" />
@@ -509,7 +509,7 @@
           }} />
       {/if}
     </div>
-    <div class="flex h-7 shrink-0 items-center gap-3 border-t border-border px-3 text-[11px] text-muted-foreground">
+    <div class="flex h-7 shrink-0 items-center gap-3 border-t border-border px-3 text-[0.6875rem] text-muted-foreground">
       <span class="min-w-0 flex-1 truncate font-mono" title={shortPath}>{shortPath}</span>
       <span class="shrink-0 whitespace-nowrap tabular-nums">{pictureSize}</span>
     </div>
@@ -519,14 +519,14 @@
     <OfficePreview {file} />
   {:else if view === 'changes' || disk !== null}
     <!-- One bar for both views, so the File/Changes tabs keep their place and their sliding mark when the view changes. -->
-    <div bind:clientWidth={barWidth} class="flex h-10 shrink-0 items-center gap-2 overflow-hidden border-b border-border px-1.5 text-xs">
+    <div bind:clientWidth={barWidth} class="flex h-10 shrink-0 items-center gap-2 overflow-hidden border-b border-border px-1.5 text-sm">
       <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">{#if changed || !diffRead}<div class="flex items-center gap-1 transition-opacity duration-200 {diffRead ? 'opacity-100' : 'opacity-0'}" aria-hidden={!diffRead}>{@render viewToggle()}</div>{/if}</div>
       {#if view !== 'changes'}
       <!-- The tools drop out of the bar from the last one as it narrows, and go into the menu button that takes their place. -->
       <div bind:this={toolsEnd} class="flex shrink-0 items-center gap-1">
         {#each tools.slice(0, visibleTools) as item (item.id)}
           <button bind:this={buttons[item.id]} type="button" class="{tool} {item.on ? toolOn : toolOff}" disabled={item.disabled ?? false} aria-pressed={item.toggle ? item.on : undefined} aria-expanded={item.id === 'find' ? findOpen : undefined} aria-label={item.label} title={item.title ?? item.label} onclick={item.run}>
-            <ZIcon zType={icon(item.icon)} zSize="14" class={item.spin ? 'animate-spin' : ''} />
+            <ZIcon zType={icon(item.icon)} zSize="16" class={item.spin ? 'animate-spin' : ''} />
           </button>
         {/each}
         {#if visibleTools < tools.length}
@@ -545,7 +545,7 @@
       </div>
     {:else}
     {#if incoming !== null}
-      <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-muted px-3 text-xs" role="alert">
+      <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-muted px-3 text-sm" role="alert">
         <ZIcon zType={icon('lucideTriangleAlert')} zSize="13" class="shrink-0 text-amber-500" />
         <span class="min-w-0 truncate text-foreground">File changed on disk</span>
         <span class="flex-1"></span>
@@ -564,7 +564,7 @@
       {/if}
     </div>
     <!-- Where the file is and how big: path on the left; language, lines and size on the right. -->
-    <div class="flex h-7 shrink-0 items-center gap-3 border-t border-border px-3 text-[11px] text-muted-foreground">
+    <div class="flex h-7 shrink-0 items-center gap-3 border-t border-border px-3 text-[0.6875rem] text-muted-foreground">
       <span class="min-w-0 flex-1 truncate font-mono" title={shortPath}>{shortPath}</span>
       {#if readOnly}<span class="shrink-0 rounded-sm bg-muted px-1.5 py-px whitespace-nowrap">{readOnlyWhy}</span>{/if}
       <span class="shrink-0 rounded-sm bg-muted px-1.5 py-px">{languageLabel(language)}</span>
@@ -576,7 +576,7 @@
          the top, so nothing moves when the text comes in; the text then fades in where it will stay. -->
     <div class="h-10 shrink-0 border-b border-border"></div>
     <div class="relative min-h-0 flex-1"><LoadingBar label="Loading file" /></div>
-    <div class="flex h-7 shrink-0 items-center border-t border-border px-3 text-[11px] text-muted-foreground"><span class="min-w-0 flex-1 truncate font-mono" title={shortPath}>{shortPath}</span></div>
+    <div class="flex h-7 shrink-0 items-center border-t border-border px-3 text-[0.6875rem] text-muted-foreground"><span class="min-w-0 flex-1 truncate font-mono" title={shortPath}>{shortPath}</span></div>
   {/if}
 </div>
 
@@ -584,15 +584,15 @@
      the editor, and stays open while the text is edited (a press in the file does not close it; Esc or the X does). -->
 <ZPopover anchor={findButton} bind:open={findOpen} zTrigger="manual" zPosition="bottom-right" zOffset={6} zWidth="auto" zCloseOnOutside={false} zScrollClose={false} zCloseOnEscape={false}>
   {#snippet children()}
-    <div class="flex items-center gap-0.5 p-1 text-[13px]" role="search">
-      <input bind:this={findInput} bind:value={query} onkeydown={onFindKey} class="h-8 w-44 rounded-sm border bg-background px-2 text-[13px] outline-none focus:border-primary {invalidQuery ? 'border-destructive' : 'border-border'}" placeholder="Find" aria-label="Find in file" spellcheck="false" />
+    <div class="flex items-center gap-0.5 p-1 text-[0.8125rem]" role="search">
+      <input bind:this={findInput} bind:value={query} onkeydown={onFindKey} class="h-8 w-44 rounded-sm border bg-background px-2 text-[0.8125rem] outline-none focus:border-primary {invalidQuery ? 'border-destructive' : 'border-border'}" placeholder="Find" aria-label="Find in file" spellcheck="false" />
       <button type="button" class="{findTool} h-8 px-1.5 font-mono {matchCase ? toolOn : toolOff}" aria-pressed={matchCase} title="Match case" onclick={() => (matchCase = !matchCase)}>Aa</button>
       <button type="button" class="{findTool} h-8 px-1.5 font-mono {wholeWord ? toolOn : toolOff}" aria-pressed={wholeWord} title="Match whole word" onclick={() => (wholeWord = !wholeWord)}><span class="underline decoration-1 underline-offset-2">ab</span></button>
       <button type="button" class="{findTool} h-8 px-1.5 font-mono {useRegex ? toolOn : toolOff}" aria-pressed={useRegex} title="Use regular expression" onclick={() => (useRegex = !useRegex)}>.*</button>
-      <span class="min-w-0 px-1.5 text-center text-xs whitespace-nowrap tabular-nums {invalidQuery ? 'text-destructive' : 'text-muted-foreground'}">{invalidQuery ? 'Invalid' : query ? (matchTotal ? `${matchAt + 1} of ${matchTotal}` : 'No results') : ''}</span>
-      <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Previous match (Shift+Enter)" aria-label="Previous match" disabled={!matchTotal} onclick={() => step(-1)}><ZIcon zType={icon('lucideChevronUp')} zSize="14" /></button>
-      <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Next match (Enter)" aria-label="Next match" disabled={!matchTotal} onclick={() => step(1)}><ZIcon zType={icon('lucideChevronDown')} zSize="14" /></button>
-      <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Close (Esc)" aria-label="Close find" onclick={() => (findOpen = false)}><ZIcon zType={icon('lucideX')} zSize="14" /></button>
+      <span class="min-w-0 px-1.5 text-center text-sm whitespace-nowrap tabular-nums {invalidQuery ? 'text-destructive' : 'text-muted-foreground'}">{invalidQuery ? 'Invalid' : query ? (matchTotal ? `${matchAt + 1} of ${matchTotal}` : 'No results') : ''}</span>
+      <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Previous match (Shift+Enter)" aria-label="Previous match" disabled={!matchTotal} onclick={() => step(-1)}><ZIcon zType={icon('lucideChevronUp')} zSize="16" /></button>
+      <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Next match (Enter)" aria-label="Next match" disabled={!matchTotal} onclick={() => step(1)}><ZIcon zType={icon('lucideChevronDown')} zSize="16" /></button>
+      <button type="button" class="{findTool} h-8 px-1 {toolOff}" title="Close (Esc)" aria-label="Close find" onclick={() => (findOpen = false)}><ZIcon zType={icon('lucideX')} zSize="16" /></button>
     </div>
   {/snippet}
 </ZPopover>

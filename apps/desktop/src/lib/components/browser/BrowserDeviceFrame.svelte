@@ -17,7 +17,7 @@
   style:height="{deviceBox.h + 12}px"
   aria-hidden="true"
 ></div>
-<div class="absolute flex items-center justify-center gap-2 text-[11px] text-muted-foreground {morphing ? glideClass : ''}" style:left="{deviceBox.x - 6}px" style:width="{deviceBox.w + 12}px" style:top="{deviceBox.y - 30}px">
+<div class="absolute flex items-center justify-center gap-2 text-[0.6875rem] text-muted-foreground {morphing ? glideClass : ''}" style:left="{deviceBox.x - 6}px" style:width="{deviceBox.w + 12}px" style:top="{deviceBox.y - 30}px">
   <span>{DEVICES[browser.device].name} · {browser.landscape ? `${DEVICES[browser.device].h}×${DEVICES[browser.device].w}` : `${DEVICES[browser.device].w}×${DEVICES[browser.device].h}`}{deviceBox.zoom < 1 ? ` · ${Math.round(deviceBox.zoom * 100)}%` : ''}</span>
   <button type="button" class="grid size-5 cursor-pointer place-items-center rounded hover:bg-accent hover:text-foreground" aria-label="Rotate" onclick={() => (browser.landscape = !browser.landscape)} {@attach zTooltip({ content: 'Rotate', position: 'top' })}>
     <ZIcon zType={'lucideRotateCw' as ZIconName} class="size-3" />

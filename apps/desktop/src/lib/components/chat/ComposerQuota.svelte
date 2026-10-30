@@ -5,6 +5,7 @@
   import { CREDIT_PREFIX } from '../../agents/credit-model';
   import type { Agent } from '../../chat/sessions.svelte';
   import {
+    activeProviderKey,
     connectors,
     refreshAccounts,
     refreshAgyQuota,
@@ -38,12 +39,13 @@
   $effect(() => {
     const provider = customProvider;
     if (!provider || !inTauri()) return;
+    activeProviderKey(provider);
     void refreshProviderQuota(provider);
     const timer = window.setInterval(() => void refreshProviderQuota(provider), 120_000);
     return () => clearInterval(timer);
   });
   /** What this provider's key can still spend (OpenRouter), or its free-tier note. */
-  const keyQuota = $derived(customProvider ? providerQuotas[customProvider.id] : undefined);
+  const keyQuota = $derived(customProvider ? providerQuotas[`${customProvider.id}:${activeProviderKey(customProvider)?.id ?? 'default'}`] : undefined);
 
   // A Claude model billed to the Console API credit: the credit left, read from the Console now and then and after
   // each reply (a reply spends some of it).

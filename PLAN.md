@@ -160,7 +160,7 @@ Mỗi module có Definition of Done (DoD). Làm tuần tự, mỗi module = 1 co
 ### M4 — UI chat
 - Store Svelte 5 (`$state` class) cho sessions/events; batch update theo rAF.
 - Timeline virtualized, markdown + Shiki, tool card (collapsible, spinner, thời gian), terminal stream (xterm.js), diff (CodeMirror merge), status badge thinking/working/running cmd/waiting approval.
-- Composer: `ZSelect` agent/model/effort; mention `@session` / `@project` / `@AI` (palette `ZCommand`, chip có thể xoá), `@file` (fuzzy từ core), `/command`, đính ảnh.
+- Composer: `ZSelect` agent/model/effort; inline mentions for chats/projects/models (`@` palette or `/c`, `/p`, `/m` shortcuts), `@file` (fuzzy từ core), `/command`, đính ảnh. Model mentions stay in the prompt and ask the main model to use AgentDeck's `delegate_task` sub-agent tool.
 - Sidebar: cây `ZTree` Project > Session > Fork (fork lồng dưới session cha); tạo fork từ menu session; trạng thái working/waiting/idle.
 - Tích hợp bộ UI của user (thay `packages/ui`).
 - **DoD**: chat Claude end-to-end trong app, stream mượt, permission prompt hoạt động.

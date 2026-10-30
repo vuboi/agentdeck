@@ -1,15 +1,18 @@
 import type { ZTreeNode } from '@shival99/z-ui-svelte';
 import { samePath } from '../../files/paths';
+import { agentDisplayName, customProviderOf } from '../../agents/provider-registry';
 import { NO_PROJECT, activeSession, hiddenProjects, isEmptyDraft, isPinnedSession, pinned, workspace, type Project, type SessionItem } from './state.svelte';
 
 // ---------- tree: Project > Session > Fork ----------
 // A fork is a branch of the conversation (not a git branch): it nests under the session it came from.
 export type TreeData = {
   /**
-   * `section` is a heading row (Recents, This computer, Projects, or a date); a `session` with `flat` sits right under
+   * `section` is a heading row (Recents, Projects, Other, or a date); a `session` with `flat` sits right under
    * one; `more` is the "Show more / Show less" row at the end of a long list.
    */
   kind: 'project' | 'session' | 'section' | 'more';
+  /** Provider identity for a plain-chat heading and its brand logo. */
+  provider?: { agent: SessionItem['agent']; model: string };
   session?: SessionItem;
   path?: string;
   /** The last fork under its chat: its branch line ends there. */
@@ -22,7 +25,7 @@ export type TreeData = {
   done?: boolean;
 };
 
-/** How the sidebar lists chats: by folder (Recents, This computer, Projects), by date, or one plain list. */
+/** How the sidebar lists chats: by folder (Recents, Projects, Other), by date, or one plain list. */
 export type SidebarView = {
   groupBy: 'folder' | 'date' | 'none';
   sortBy: 'updated' | 'name';
@@ -258,11 +261,34 @@ export function buildTree(
       ),
     ];
 
-  // By folder: Recents (newest chats of every project), This computer (chats outside any project), Projects.
+  // By folder: Recents (newest chats of every project), This computer (chats started here outside any project), Projects,
+  // Other (chats imported from Claude / Codex history outside any project). Both lists are grouped by agent.
   const latest = unpinned.filter((item) => !item.parentId).sort(newest);
-  const computer = chats.filter(
+  const outside = chats.filter(
     (item) => item.projectId === NO_PROJECT && !item.parentId,
   );
+  const providerRowsOf = (list: SessionItem[], scope: string) => {
+    // Use provider ids as keys: two custom providers may share a display name.
+    const providers = new Map<string, SessionItem[]>();
+    for (const item of ordered(list)) {
+      const key = item.agent === 'custom'
+        ? `custom:${customProviderOf(item.model)?.id ?? 'unknown'}`
+        : item.agent;
+      const items = providers.get(key);
+      if (items) items.push(item);
+      if (!items) providers.set(key, [item]);
+    }
+    return [...providers].flatMap(([id, items]) => {
+      const key = `provider:${scope}:${id}`;
+      const first = items[0];
+      const rows = section(key, agentDisplayName(first.agent, first.model),
+        limited(key, items, LIST_LIMIT, (item) => sessionNode(item)));
+      if (rows[0]?.data) rows[0].data.provider = { agent: first.agent, model: first.model };
+      return rows;
+    });
+  };
+  const computerRows = providerRowsOf(outside.filter((item) => item.made), 'computer');
+  const importedRows = providerRowsOf(outside.filter((item) => !item.made), 'other');
   const projects = visibleProjects.filter(
     (project) => !pinnedProjects.includes(project),
   );
@@ -279,19 +305,14 @@ export function buildTree(
         flatNode(item, 'recent'),
       ),
     ),
-    ...section(
-      'computer',
-      'This computer',
-      limited('computer', ordered(computer), LIST_LIMIT, (item) =>
-        flatNode(item),
-      ),
-      true,
-    ),
+    ...section('computer', 'This computer', computerRows, true),
     ...section(
       'projects',
       'Projects',
       limited('projects', projects, PROJECT_LIMIT, projectNode),
       true,
     ),
+    // Chats imported from Claude / Codex history outside any project: last.
+    ...section('other', 'Other', importedRows),
   ];
 }

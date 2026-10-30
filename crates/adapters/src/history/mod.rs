@@ -30,8 +30,10 @@ pub struct HistorySession {
     pub title: String,
     /// The model recorded by the source CLI when it is available.
     pub model: Option<String>,
-    /// Working folder of the session; sessions group into projects by it.
+    /// Original working folder, including ordinary chat directories.
     pub cwd: String,
+    /// True only when the indexer finds a repository or project manifest in this folder.
+    pub is_project: bool,
     pub started_at: Option<String>,
     pub updated_at: Option<String>,
     pub message_count: usize,
@@ -146,7 +148,60 @@ pub fn list_all(roots: &Roots) -> Vec<HistorySession> {
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     let mut seen = std::collections::HashSet::new();
     sessions.retain(|session| seen.insert(session.id.clone()));
+    // Probe each working folder once, rather than repeating filesystem reads for every chat.
+    let mut projects = std::collections::HashMap::new();
+    for session in &mut sessions {
+        session.is_project = *projects
+            .entry(session.cwd.clone())
+            .or_insert_with(|| is_project_directory(Path::new(&session.cwd)));
+    }
     sessions
+}
+
+/// Recognizes a project at the working folder itself; chat instructions alone are not evidence.
+fn is_project_directory(path: &Path) -> bool {
+    if !path.is_absolute() || !path.is_dir() {
+        return false;
+    }
+    // A worktree has a .git file rather than a directory. Do not walk up into unrelated parents.
+    if [".git", ".hg", ".svn"]
+        .iter()
+        .any(|name| path.join(name).exists())
+    {
+        return true;
+    }
+    [
+        "package.json",
+        "Cargo.toml",
+        "pyproject.toml",
+        "go.mod",
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+        "CMakeLists.txt",
+        "composer.json",
+        "Gemfile",
+        "mix.exs",
+        "pubspec.yaml",
+        "deno.json",
+        "deno.jsonc",
+        "Package.swift",
+    ]
+    .iter()
+    .any(|name| path.join(name).is_file())
+        || std::fs::read_dir(path).is_ok_and(|entries| {
+            entries.filter_map(Result::ok).any(|entry| {
+                let project_file = entry.path().extension().is_some_and(|ext| {
+                    matches!(
+                        ext.to_str(),
+                        Some("sln" | "slnx" | "csproj" | "fsproj" | "vbproj")
+                    )
+                });
+                project_file && entry.path().is_file()
+            })
+        })
 }
 
 /// One window of a transcript: `messages` are the ones at `start..start + messages.len()` of `total`.

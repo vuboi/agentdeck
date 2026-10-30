@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -34,6 +34,10 @@ const HEARTBEAT: Duration = Duration::from_secs(20);
 
 static WRITER: OnceLock<SyncSender<String>> = OnceLock::new();
 static PATH: OnceLock<PathBuf> = OnceLock::new();
+/// When the page last wrote, and its last line (cut): a page that stops writing has stopped answering.
+static PAGE_LAST: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+/// Past this long without a page line the heartbeat says the page is silent (a hidden window may slow the page's timers).
+const PAGE_SILENT: Duration = Duration::from_secs(45);
 
 /// A turn that is running: what the heartbeat reports of it.
 struct Live {
@@ -60,7 +64,34 @@ fn log_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 /// The time as `2026-10-29T04:12:09.123Z` (UTC), like the page writes it.
 fn now() -> String {
+    time_at(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default())
+}
+
+/// How long the log keeps its lines: older ones are dropped at start-up.
+const KEEP: Duration = Duration::from_secs(2 * 24 * 3600);
+
+/// Drops the lines older than `KEEP` from the log and its older file. Each line starts with its time (`"at"`), in the
+/// same UTC form, so the lines compare as text. A line that does not say its time is kept.
+fn prune_old(path: &Path) {
     let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let cutoff = time_at(since.saturating_sub(KEEP));
+    for file in [path.with_file_name("debug.1.log"), path.to_path_buf()] {
+        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        let kept: String = text
+            .lines()
+            .filter(|line| match line.split("\"at\":\"").nth(1).and_then(|rest| rest.split('"').next()) {
+                Some(at) => at >= cutoff.as_str(),
+                None => true,
+            })
+            .map(|line| format!("{line}\n"))
+            .collect();
+        if kept.len() != text.len() {
+            let _ = std::fs::write(&file, kept);
+        }
+    }
+}
+
+fn time_at(since: std::time::Duration) -> String {
     let (secs, millis) = (since.as_secs() as i64, since.subsec_millis());
     let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Days since 1970-01-01 to a calendar date (Howard Hinnant's civil_from_days).
@@ -107,6 +138,7 @@ pub fn install(app: &AppHandle) {
     if WRITER.set(sender).is_err() || PATH.set(path.clone()).is_err() {
         return;
     }
+    prune_old(&path);
     std::thread::spawn(move || {
         // Whatever is waiting goes out in one write.
         while let Ok(first) = receiver.recv() {
@@ -317,12 +349,27 @@ fn heartbeat() {
             .collect();
         format!("running={} [{}] {}", turns.len(), parts.join("; "), ag_adapters::agent::trace::stats())
     };
-    note("rust", "-", "heartbeat", &report);
+    let page = PAGE_LAST.lock().ok().and_then(|seen| seen.as_ref().map(|(at, text)| (at.elapsed(), text.clone())));
+    match page {
+        Some((silent, last)) if silent >= PAGE_SILENT => {
+            note("rust", "-", "page silent", &format!("no page line for {}s; page last wrote: {last}", silent.as_secs()));
+            note("rust", "-", "heartbeat", &format!("{report} page_silent={}s", silent.as_secs()));
+        }
+        Some((silent, _)) => note("rust", "-", "heartbeat", &format!("{report} page_silent={}s", silent.as_secs())),
+        None => note("rust", "-", "heartbeat", &format!("{report} page_silent=no page line yet")),
+    }
 }
 
 /// Lines from the page (already JSON, one per entry).
 #[tauri::command]
 pub fn flow_log_append(lines: Vec<String>) {
+    if let Some(last) = lines.last() {
+        // The page writes at least every 20 s (5 s with the hang trace on): a long silence is a page that stopped.
+        let text: String = last.chars().take(160).collect();
+        if let Ok(mut seen) = PAGE_LAST.lock() {
+            *seen = Some((Instant::now(), text));
+        }
+    }
     if let Some(writer) = WRITER.get() {
         for entry in lines {
             let _ = writer.try_send(entry);

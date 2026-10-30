@@ -103,7 +103,7 @@
                   onpointerenter={(event) => peekRun(item.run, event.currentTarget)}
                   onpointerleave={leavePeek}
                 >
-                  <span class="truncate text-xs">{item.run.prompt}</span>
+                  <span class="truncate text-sm">{item.run.prompt}</span>
                   <span class="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
                     <span class="shrink-0">{timeLabel(item.run.created_at)}</span>
                     <span class="truncate">· {item.run.models.length} model{item.run.models.length === 1 ? '' : 's'} · {item.run.images.length} image{item.run.images.length === 1 ? '' : 's'}</span>
@@ -129,6 +129,6 @@
 >
   {#snippet children()}
     <!-- The handlers sit on the content: the popover host overrides its own pointer handlers. -->
-    <div class="max-h-28 overflow-y-auto p-2 text-xs leading-snug break-words whitespace-normal" role="presentation" onpointerenter={keepPeek} onpointerleave={leavePeek}>{peek?.prompt}</div>
+    <div class="max-h-28 overflow-y-auto p-2 text-sm leading-snug break-words whitespace-normal" role="presentation" onpointerenter={keepPeek} onpointerleave={leavePeek}>{peek?.prompt}</div>
   {/snippet}
 </ZPopover>

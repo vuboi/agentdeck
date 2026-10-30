@@ -113,6 +113,7 @@ fn index_file(path: &Path) -> Option<Indexed> {
             title,
             model: None,
             cwd,
+            is_project: false,
             started_at: started,
             updated_at: updated,
             message_count: count,

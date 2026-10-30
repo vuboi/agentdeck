@@ -75,7 +75,7 @@
 </script>
 
 <span bind:this={anchor} class="shrink-0">
-  <ZButton zType="ghost" zSize="sm" class="h-7 gap-1.5 px-2 text-xs {open ? TRIGGER_ON : ''}" zDisabled={saving} aria-label={`Manage providers for ${name}`} aria-haspopup="dialog" aria-expanded={open} onclick={show}>
+  <ZButton zType="ghost" zSize="sm" class="h-7 gap-1.5 px-2 text-sm {open ? TRIGGER_ON : ''}" zDisabled={saving} aria-label={`Manage providers for ${name}`} aria-haspopup="dialog" aria-expanded={open} onclick={show}>
     {#each selected.slice(0, 3) as agent (agent)}<AgentLogo {agent} class="size-3.5" />{/each}
     <span>Providers · {selected.length}</span><ZIcon zType="lucideChevronDown" class="size-3" />
   </ZButton>
@@ -83,7 +83,7 @@
 
 <ZPopover {anchor} bind:open zTrigger="manual" zPosition="bottom-left" zWidth={300} zCloseOnOutside={!saving} zCloseOnEscape={!saving} onOpen={async () => { await tick(); input?.focus(); }}>
   {#snippet children()}
-    <div class="flex max-h-[min(420px,calc(100dvh_-_16px))] min-w-0 flex-col overflow-hidden text-xs" role="dialog" aria-label={`Providers for ${name}`} aria-busy={saving}>
+    <div class="flex max-h-[min(420px,calc(100dvh_-_16px))] min-w-0 flex-col overflow-hidden text-sm" role="dialog" aria-label={`Providers for ${name}`} aria-busy={saving}>
       <div class="flex shrink-0 flex-col gap-2 border-b border-border p-2">
         <div class="flex items-center justify-between gap-2"><span class="font-medium">Providers</span><span class="text-muted-foreground">{draft.length} selected</span></div>
         <ZInput autofocus bind:this={input} bind:value={query} zPlaceholder="Find provider…" class="h-8" />

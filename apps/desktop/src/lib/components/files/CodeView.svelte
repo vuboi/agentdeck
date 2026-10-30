@@ -202,7 +202,7 @@
   });
 </script>
 
-<div bind:this={scroller} class="h-full min-h-0 overflow-auto bg-background font-mono text-xs leading-5">
+<div bind:this={scroller} class="h-full min-h-0 overflow-auto bg-background font-mono text-sm leading-5">
   <div class="relative min-w-full" style:height="{$virtualizer.getTotalSize()}px">
     {#key wrap}
       {#each items as item (item.key)}

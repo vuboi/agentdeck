@@ -2,7 +2,7 @@
 // the ones still running (and those sent to the background) and, below them, the whole log, kept on disk
 // in `~/.agentdeck/audit.jsonl` so it survives a restart.
 
-import type { AgentEvent } from '../agent';
+import { pictureUrl, type AgentEvent } from '../agent';
 import { inTauri } from '../../app/platform/history';
 import { planRunRestore, terminalStep, updateInflight, loadInflight, withTerminal, withoutTerminal, type InflightRun, type ServerLike } from './inflight';
 import { sessionTail, watchOutput } from '../../terminal/terminal-session';
@@ -36,13 +36,21 @@ export type Activity = {
 
 /** A saved picture, read back as a data URL; one read per picture. */
 const pictures = new Map<string, Promise<string>>();
+/** Most pictures kept as data URLs at once; the oldest is read again when it is shown again. */
+const PICTURE_CACHE = 48;
+function rememberPicture(name: string, found: Promise<string>) {
+  pictures.delete(name);
+  pictures.set(name, found);
+  while (pictures.size > PICTURE_CACHE) pictures.delete(pictures.keys().next().value!);
+}
 export function auditImage(image: string): Promise<string> {
   if (image.startsWith('data:')) return Promise.resolve(image);
   let found = pictures.get(image);
   if (!found) {
-    found = tauriCall('audit_image_read', { name: image }).then(String);
+    // The file's own URL (asset protocol): the browser reads it when drawn, so no base64 crosses IPC.
+    found = tauriCall('audit_image_path', { name: image }).then((path) => pictureUrl(String(path)));
     found.catch(() => pictures.delete(image));
-    pictures.set(image, found);
+    rememberPicture(image, found);
   }
   return found;
 }
@@ -168,18 +176,12 @@ function record(item: Activity) {
   void tauriCall('audit_image_save', { image: picture })
     .then((name) => {
       const saved = String(name);
-      pictures.set(saved, Promise.resolve(picture));
+      rememberPicture(saved, Promise.resolve(picture));
       const shown = audit.find((item) => item.key === entry.key);
       if (shown) shown.image = saved;
       return tauriCall('audit_append', { line: JSON.stringify({ ...entry, image: saved }), offsetMin: tzOffset() });
     })
     .catch(() => void tauriCall('audit_append', { line: JSON.stringify({ ...entry, image: undefined }), offsetMin: tzOffset() }).catch(() => {}));
-}
-
-/** What two steps of a flow said to each other: one entry, so the Audit log shows how they worked it out. */
-export function logTalk(sessionId: string, title: string, project: string, from: string, to: string, question: string, answer: string) {
-  const now = Date.now();
-  record({ key: `${sessionId}:talk:${++calls}`, sessionId, title, project, name: 'Discussion', input: `${from} → ${to}: ${question}`.slice(0, 200), background: false, status: 'ok', startedAt: now, endedAt: now, output: `${from} asked ${to}:\n${question}\n\n${to} answered:\n${answer}` });
 }
 
 /** The message a chat sent and is waiting on: one entry from the send to the end of the reply, so the log shows who

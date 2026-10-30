@@ -10,8 +10,8 @@
 </script>
 
 {#if items.length > 0}
-  <div class="rounded-lg border border-border bg-muted/20 px-3 py-2.5 text-xs">
-    <div class="mb-1.5 text-[11px] text-muted-foreground tabular-nums">{done} of {items.length} done</div>
+  <div class="rounded-lg border border-border bg-muted/20 px-3 py-2.5 text-sm">
+    <div class="mb-1.5 text-[0.6875rem] text-muted-foreground tabular-nums">{done} of {items.length} done</div>
     <ul class="flex flex-col gap-1.5">
       {#each items as item, index (index)}
         <li class="flex items-start gap-2 {item.status === 'completed' ? 'text-muted-foreground' : ''}">

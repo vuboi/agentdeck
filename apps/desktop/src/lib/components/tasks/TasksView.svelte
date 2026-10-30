@@ -5,7 +5,7 @@
   import DevEmpty from '../browser/DevEmpty.svelte';
   import LiveCommand from '../chat/LiveCommand.svelte';
   import PhyllotaxisLoader from '../ui/PhyllotaxisLoader.svelte';
-  import { ZIcon, ZLoading, ZShimmerText, ZTabs, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZIcon, ZLoading, ZTabs, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { fade, slide } from 'svelte/transition';
   import { flip } from 'svelte/animate';
@@ -345,6 +345,8 @@
     }
   }
   const took = (item: Activity) => elapsed((item.endedAt ?? ticker.sec) - item.startedAt);
+  // A running step streams its output: only the end of it is drawn while it runs (the full text comes when it ends).
+  const tailOf = (text: string | undefined) => (text && text.length > 4000 ? `…${text.slice(-4000)}` : text ?? '');
   const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const dayLabel = (key: string, at: number) => {
     if (key === RUNNING) return 'Running';
@@ -393,7 +395,7 @@
   <div class="border-b border-border">
     <button
       type="button"
-      class="flex w-full cursor-pointer items-center gap-2 px-1.5 py-1.5 text-left text-xs outline-none {item.status === 'fail' ? 'bg-destructive/5 hover:bg-destructive/10 focus-visible:bg-destructive/10' : 'hover:bg-muted/40 focus-visible:bg-muted/40'}"
+      class="flex w-full cursor-pointer items-center gap-2 px-1.5 py-2 text-left text-sm outline-none {item.status === 'fail' ? 'bg-destructive/5 hover:bg-destructive/10 focus-visible:bg-destructive/10' : 'hover:bg-muted/40 focus-visible:bg-muted/40'}"
       aria-expanded={open[id] ?? false}
       onclick={() => (open[id] = !open[id])}
     >
@@ -414,24 +416,24 @@
         </span>
         {#if live(item)}
           <!-- The step label keeps its shimmer; the compact spinner at the left marks it as running. -->
-          <ZShimmerText class="shrink-0 text-xs leading-4 font-medium" zText={kind.label || item.name} />
+          <span class="shrink-0 text-[0.8125rem] leading-4 font-medium text-primary" title={item.name}>{kind.label || item.name}</span>
         {:else}
-          <span class="shrink-0 text-xs leading-4 font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}" title={item.name}>{kind.label || item.name}</span>
+          <span class="shrink-0 text-[0.8125rem] leading-4 font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}" title={item.name}>{kind.label || item.name}</span>
         {/if}
-        {#if detailOf(item.name)}<span class="shrink-0 text-[11px] leading-4 {item.status === 'fail' ? 'text-destructive/80' : 'text-muted-foreground'}">{detailOf(item.name)}</span>{/if}
+        {#if detailOf(item.name)}<span class="shrink-0 text-[0.6875rem] leading-4 {item.status === 'fail' ? 'text-destructive/80' : 'text-muted-foreground'}">{detailOf(item.name)}</span>{/if}
         {#if item.background}<span class="shrink-0 rounded bg-primary/10 px-1 text-[10px] text-primary">bg</span>{/if}
-        <span class="min-w-0 flex-1 truncate font-mono text-[11px] leading-4 {item.status === 'fail' ? 'text-destructive/80' : 'text-muted-foreground'}">{item.input}</span>
+        <span class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] leading-4 {item.status === 'fail' ? 'text-destructive/80' : 'text-muted-foreground'}">{item.input}</span>
         {#if !live(item)}
           <!-- How it ended, plain marks without a circle: a check, a cross, a dash for a stopped one. -->
           <span class="grid size-3.5 shrink-0 place-items-center self-center {(STATUS[item.status] ?? STATUS.stopped).tone}" aria-label={(STATUS[item.status] ?? STATUS.stopped).label} {@attach zTooltip({ content: (STATUS[item.status] ?? STATUS.stopped).label, position: 'top' })}>
             <ZIcon zType={(item.status === 'ok' ? 'lucideCheck' : item.status === 'fail' ? 'lucideX' : 'lucideMinus') as ZIconName} class="size-3.5" />
           </span>
         {/if}
-        <span class="shrink-0 text-[11px] leading-4 tabular-nums {item.status === 'fail' ? 'text-destructive/80' : 'text-muted-foreground'}">{live(item) ? took(item) : `${took(item)} | ${clock(item.startedAt)}`}</span>
+        <span class="shrink-0 text-[0.71875rem] leading-4 tabular-nums {item.status === 'fail' ? 'text-destructive/80' : 'text-muted-foreground'}">{live(item) ? took(item) : `${took(item)} | ${clock(item.startedAt)}`}</span>
       </span>
     </button>
     {#if open[id]}
-      <div class="flex flex-col gap-1.5 overflow-hidden px-1.5 pb-1.5 text-[11px]" transition:slide={{ duration: 180 }}>
+      <div class="flex flex-col gap-1.5 overflow-hidden px-1.5 pb-1.5 text-[0.6875rem]" transition:slide={{ duration: 180 }}>
         <div class="flex items-center gap-2 text-muted-foreground">
           <button type="button" class="min-w-0 cursor-pointer truncate text-primary hover:underline" onclick={() => openChat(item.sessionId)}>{item.title}</button>
           <span aria-hidden="true">·</span>
@@ -457,7 +459,7 @@
                 <div class="border-t {failed ? 'border-destructive/30' : 'border-border'}"></div>
               {/if}
               {#if item.output}
-                <pre class="m-0 max-h-48 overflow-auto py-1 pr-7 pl-2 font-mono whitespace-pre-wrap break-all {failed ? 'text-destructive' : 'text-muted-foreground'}">{item.output}</pre>
+                <pre class="m-0 max-h-48 overflow-auto py-1 pr-7 pl-2 font-mono whitespace-pre-wrap break-all {failed ? 'text-destructive' : 'text-muted-foreground'}">{live(item) ? tailOf(item.output) : item.output}</pre>
               {/if}
               {@render copyButton([askedOf(item.input), item.output].filter(Boolean).join('\n'), failed ? 'Error' : item.input && item.output ? 'Command and output' : item.output ? 'Output' : 'Command')}
             </div>
@@ -485,7 +487,7 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Tasks">
-  <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-1.5 text-[13px]">
+  <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-1.5 text-[0.8125rem]">
     <span class="font-medium">Tasks</span>
     {#if runningCount > 0}
       <span class="flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-px text-[10px] text-primary tabular-nums"><PhyllotaxisLoader className="text-current" />{runningCount}</span>
@@ -509,7 +511,7 @@
     </button>
   </div>
   <!-- How far back the history reaches (left) and which project (right); the select drops under the range when narrow. -->
-  <div class="flex shrink-0 items-center gap-2 border-b border-border px-1.5 py-1.5 text-xs">
+  <div class="flex shrink-0 items-center gap-2 border-b border-border px-1.5 py-1.5 text-sm">
     <ZTabs zTabs={RANGES.map(({ value, label }) => ({ value, label }))} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={range} onTabChange={(next) => (range = next as Range)} />
     {#if projects.length > 1}
       <ProjectSelect variant="select" bind:value={project} options={projects} label={(name) => name || 'No project'} class="ml-auto" />
@@ -530,13 +532,13 @@
           <div {@attach measure(entry.id)} animate:flip={{ duration: 220 }} in:fade={{ duration: live ? 180 : 0 }} out:fade={{ duration: live ? 150 : 0 }}>
             {#if entry.kind === 'day'}{@render dayHeader(entry.group, false)}
             {:else if entry.kind === 'chat'}
-              <div class="flex items-center gap-2 border-b border-border px-1.5 py-1.5 text-xs">
+              <div class="flex items-center gap-2 border-b border-border px-1.5 py-1.5 text-sm">
                 <ZIcon zType={'lucideLoaderCircle' as ZIconName} class="size-3 shrink-0 animate-spin text-primary" />
                 <span class="min-w-0 flex-1 truncate" title={entry.chat.text}>{entry.chat.text || 'Working…'}</span>
                 <span class="max-w-[35%] shrink-0 truncate text-[10px] text-muted-foreground" title={entry.chat.title}>{entry.chat.title}</span>
               </div>
             {:else if entry.kind === 'empty'}
-              <div class="flex items-center justify-center gap-2 border-b border-border px-1.5 py-1.5 text-xs text-muted-foreground">
+              <div class="flex items-center justify-center gap-2 border-b border-border px-1.5 py-1.5 text-sm text-muted-foreground">
                 <ZIcon zType={'lucideInbox' as ZIconName} class="size-3 shrink-0" />
                 <span>No task running</span>
               </div>
@@ -550,10 +552,10 @@
         <!-- First read (or a filter that has nothing yet): the same centred block as an empty list. -->
         <div class="flex min-h-40 flex-1 flex-col items-center justify-center gap-1.5 p-4 text-center" role="status">
           <span class="grid size-11 place-items-center rounded-full bg-muted"><ZLoading zLoading zSpinner={LOADER.check} zSize={LOADER_SIZE} zColor="primary" /></span>
-          <p class="m-0 text-xs font-medium">Loading logs…</p>
+          <p class="m-0 text-sm font-medium">Loading logs…</p>
         </div>
       {:else}
-        <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-muted-foreground" role="status">
+        <div class="flex items-center justify-center gap-2 py-3 text-[0.6875rem] text-muted-foreground" role="status">
           <ZLoading zLoading zSpinner={LOADER.check} zSize={LOADER_SIZE} zColor="primary" /> Loading older logs…
         </div>
       {/if}

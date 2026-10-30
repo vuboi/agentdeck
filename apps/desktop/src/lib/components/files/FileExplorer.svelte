@@ -1,12 +1,14 @@
 <script lang="ts">
   import Menu from '../ui/Menu.svelte';
   import { closeOnScroll } from '../../app/ui/close-on-scroll';
-  import { ZDropdownMenu, ZIcon, ZTree, zTooltip } from '@shival99/z-ui-svelte';
+  import { ZDropdownMenu, ZIcon, zTooltip } from '@shival99/z-ui-svelte';
+  import Tree from '../ui/Tree.svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
   import { tick, untrack } from 'svelte';
   import { activeSession, workspace } from '../../chat/sessions.svelte';
   import { openProjectFile } from '../../files/file-viewer.svelte';
   import { inTauri } from '../../app/platform/history';
+  import { getPref, setPref } from '../../app/platform/prefs';
   import { toast } from '../../app/platform/toast';
   import { fileWrites } from '../../chat/runs/activity.svelte';
   import FileSearchPalette, { warmFiles } from './FileSearchPalette.svelte';
@@ -44,14 +46,26 @@
   let failure = $state('');
   const loading = new Map<string, Promise<Entry[]>>();
 
+  // The listings are kept in IndexedDB too: a folder opened before shows at once, and the disk is read again behind it.
+  const listingKey = (from: string, dir: string) => `index.files.${from}|${dir}`;
+
   async function load(dir: string): Promise<Entry[]> {
     if (listing[dir]) return listing[dir];
     const pending = loading.get(dir);
     if (pending) return pending;
     const from = root;
+    const cached = await getPref<Entry[]>(listingKey(from, dir));
+    if (cached && from === root && !listing[dir]) listing[dir] = cached;
+    if (listing[dir]) {
+      void reread(dir);
+      return listing[dir];
+    }
     const request = call<Entry[]>('folder_list', { root: from, path: `${from}${dir}` })
       .then((entries) => {
-        if (from === root) listing[dir] = entries;
+        if (from === root) {
+          listing[dir] = entries;
+          void setPref(listingKey(from, dir), entries);
+        }
         return entries;
       })
       .catch((error: unknown) => {
@@ -76,7 +90,10 @@
     const from = root;
     try {
       const entries = await call<Entry[]>('folder_list', { root: from, path: `${from}${dir}` });
-      if (from === root) listing[dir] = entries;
+      if (from === root) {
+        listing[dir] = entries;
+        void setPref(listingKey(from, dir), entries);
+      }
     } catch {
       // A folder that went away with the change stops showing on the next read of its parent.
     }
@@ -114,10 +131,18 @@
 
   const PLACEHOLDER = '/…';
   const DRAFT = '/::new-entry::';
+  // A folder with many entries shows a page at a time: a loader row at its end asks for the next page as it scrolls in.
+  const PAGE = 200;
+  const MORE = '/::more::';
+  let shown = $state<Record<string, number>>({});
   function fromDisk(dir: string): ZTreeNode<null>[] {
     const draft: ZTreeNode<null>[] =
       creating && creating.dir === dir && listing[dir] ? [{ id: `${dir}${DRAFT}`, label: '', icon: (creating.folder ? 'lucideFolder' : 'lucideFile') as ZIconName }] : [];
-    return draft.concat((listing[dir] ?? []).map((entry) => {
+    const all = listing[dir] ?? [];
+    const count = shown[dir] ?? PAGE;
+    const page = all.slice(0, count);
+    const more: ZTreeNode<null>[] = all.length > count ? [{ id: `${dir}${MORE}`, label: 'Loading…', icon: 'lucideLoaderCircle' as ZIconName, isLeaf: true }] : [];
+    return draft.concat(page.map((entry) => {
       const id = `${dir}/${entry.name}`;
       // The parent listing knows whether a folder has any visible entries, so empty folders are leaves on first render.
       const loaded = listing[id] !== undefined;
@@ -130,7 +155,7 @@
         children: empty ? undefined : kids,
         isLeaf: empty || undefined,
       };
-    }));
+    }), ...more);
   }
 
   // Same shape as the sidebar tree: folders expand, files are leaves.
@@ -206,8 +231,14 @@
   }
 
   // A file opens in the viewer beside the tree; folders only expand.
+  function onReveal(node: ZTreeNode<null>) {
+    if (!node.id.endsWith(MORE)) return;
+    const dir = node.id.slice(0, -MORE.length);
+    shown[dir] = (shown[dir] ?? PAGE) + PAGE;
+  }
+
   function onSelect(node: ZTreeNode<null>) {
-    if (node.children || node.id.endsWith(PLACEHOLDER) || node.id.endsWith(DRAFT)) return;
+    if (node.children || node.id.endsWith(PLACEHOLDER) || node.id.endsWith(DRAFT) || node.id.endsWith(MORE)) return;
     // An empty folder has no children to tell it from a file: the listing of its parent does.
     if (listing[parentOf(node.id)]?.find((item) => item.name === nameOf(node.id))?.dir) return;
     if (root) openProjectFile(node.id.slice(1), root);
@@ -286,23 +317,23 @@
   }
 
   const menuItems = $derived<ZDropdownMenuItem[]>(menu?.id === '' ? [
-    { label: 'New file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => askCreate('', false) },
-    { label: 'New folder', icon: 'lucideFolderPlus', iconSize: 12, class: 'text-xs! py-1', onClick: () => askCreate('', true) },
-    { label: 'Reveal in File Explorer', icon: 'lucideFolder', iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => void reveal('/.') },
+    { label: 'New file', icon: 'lucideFile', iconSize: 12, class: 'text-sm! py-1', onClick: () => askCreate('', false) },
+    { label: 'New folder', icon: 'lucideFolderPlus', iconSize: 12, class: 'text-sm! py-1', onClick: () => askCreate('', true) },
+    { label: 'Reveal in File Explorer', icon: 'lucideFolder', iconSize: 12, class: 'text-sm! py-1', divide: 'before', onClick: () => void reveal('/.') },
   ] : [
-    { label: 'New file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && askCreate(folderFor(menu.id), false) },
-    { label: 'New folder', icon: 'lucideFolderPlus', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && askCreate(folderFor(menu.id), true) },
-    { label: 'Rename', icon: 'lucidePencil', iconSize: 12, class: 'text-xs! py-1', divide: 'before', onClick: () => menu && askRename(menu.id) },
-    { label: 'Open file', icon: 'lucideFile', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && openProjectFile(menu.id.slice(1), root) },
+    { label: 'New file', icon: 'lucideFile', iconSize: 12, class: 'text-sm! py-1', onClick: () => menu && askCreate(folderFor(menu.id), false) },
+    { label: 'New folder', icon: 'lucideFolderPlus', iconSize: 12, class: 'text-sm! py-1', onClick: () => menu && askCreate(folderFor(menu.id), true) },
+    { label: 'Rename', icon: 'lucidePencil', iconSize: 12, class: 'text-sm! py-1', divide: 'before', onClick: () => menu && askRename(menu.id) },
+    { label: 'Open file', icon: 'lucideFile', iconSize: 12, class: 'text-sm! py-1', onClick: () => menu && openProjectFile(menu.id.slice(1), root) },
     ...openWithMenuItems(),
-    { label: 'Save as…', icon: 'lucideDownload', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && void saveAs(menu.id) },
-    { label: 'Copy file contents', icon: 'lucideCopy', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && void copyContents(menu.id) },
-    { label: 'Reveal in File Explorer', icon: 'lucideFolder', iconSize: 12, class: 'text-xs! py-1', onClick: () => menu && void reveal(menu.id) },
+    { label: 'Save as…', icon: 'lucideDownload', iconSize: 12, class: 'text-sm! py-1', onClick: () => menu && void saveAs(menu.id) },
+    { label: 'Copy file contents', icon: 'lucideCopy', iconSize: 12, class: 'text-sm! py-1', onClick: () => menu && void copyContents(menu.id) },
+    { label: 'Reveal in File Explorer', icon: 'lucideFolder', iconSize: 12, class: 'text-sm! py-1', onClick: () => menu && void reveal(menu.id) },
     {
       label: 'Copy path',
       icon: 'lucideCopy',
       iconSize: 12,
-      class: 'text-xs! py-1',
+      class: 'text-sm! py-1',
       onClick: () => {
         if (!menu) return;
         void navigator.clipboard.writeText(`${root}${menu.id}`);
@@ -314,7 +345,7 @@
       icon: 'lucideTrash2',
       iconSize: 12,
       divide: 'before',
-      class: 'text-xs! py-1 text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive!',
+      class: 'text-sm! py-1 text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive!',
       onClick: () => menu && askDelete(menu.id),
     },
   ]);
@@ -519,7 +550,7 @@
 
 {#if root && inTauri()}
   <!-- Find a file by name, or make a new file or folder in the project folder. -->
-  <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center gap-1 border-b border-border p-1.5 text-xs">
+  <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center gap-1 border-b border-border p-1.5 text-sm">
     <button type="button" class="inline-flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-2 text-left outline-none {findOpen ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" title="Find a file by name" aria-expanded={findOpen} onclick={() => (findOpen = true)}>
       <ZIcon zType={'lucideSearch' as ZIconName} zSize="15" /> <span class="truncate">Search files</span>
     </button>
@@ -540,11 +571,11 @@
     {#if root && !failure && !listing[''] && inTauri()}
       <!-- A big folder takes a moment: the loader sits where the files will appear. -->
       <ZIcon zType={'lucideLoaderCircle' as ZIconName} class="size-5 animate-spin text-primary" />
-      <p class="m-0 max-w-56 text-xs leading-normal" role="status">Reading the {project?.name} folder…</p>
+      <p class="m-0 max-w-56 text-sm leading-normal" role="status">Reading the {project?.name} folder…</p>
     {:else}
       <ZIcon zType="lucideFolder" zSize="28" class="size-7 opacity-60" />
       <h2 class="text-sm font-medium text-foreground">Explore</h2>
-      <p class="m-0 max-w-56 text-xs leading-normal">
+      <p class="m-0 max-w-56 text-sm leading-normal">
         {#if failure}{failure}{:else if !root}Open a chat in a project to see its files.{:else}This folder is empty.{/if}
       </p>
     {/if}
@@ -554,18 +585,18 @@
   <div
     bind:this={box}
     bind:clientHeight={treeHeight}
-    class="relative flex min-h-0 flex-1 flex-col pt-1.5 [&_.z-tree-row:focus-visible]:before:ring-0!"
+    class="relative flex min-h-0 flex-1 flex-col pt-1.5 [&_.tree-row:focus-visible]:before:ring-0!"
     oncontextmenu={onContextMenu}
   >
     <!-- The list stops 12px above the panel's edge, so the last file never touches it. -->
-    <ZTree {nodes} zSize="sm" zShowLine zExpandOnClick zMaxHeight={Math.max(0, treeHeight - 18)} zLabel="Project files" bind:expanded bind:selected {onSelect}>
+    <Tree {nodes} rowHeight={28} class="text-sm" lines maxHeight={Math.max(0, treeHeight - 18)} label="Project files" bind:expanded bind:selected {onSelect} {onReveal}>
       {#snippet node(ctx)}
         {#if ctx.node.id.endsWith(DRAFT)}
           <ZIcon zType={(ctx.node.icon ?? 'lucideFile') as ZIconName} class="size-3.5 shrink-0 text-muted-foreground" />
           <input
             use:focusNow
             bind:value={createName}
-            class="h-5 min-w-0 flex-1 bg-transparent p-0 text-xs outline-none {createError ? 'text-destructive' : 'text-foreground'}"
+            class="h-5 min-w-0 flex-1 bg-transparent p-0 [font:inherit] outline-none {createError ? 'text-destructive' : 'text-foreground'}"
             spellcheck="false"
             autocomplete="off"
             aria-label={creating?.folder ? 'Folder name' : 'File name'}
@@ -582,7 +613,7 @@
           <input
             use:focusRename
             bind:value={newName}
-            class="h-5 min-w-0 flex-1 bg-transparent p-0 text-xs outline-none {renameError ? 'text-destructive' : 'text-foreground'}"
+            class="h-5 min-w-0 flex-1 bg-transparent p-0 [font:inherit] outline-none {renameError ? 'text-destructive' : 'text-foreground'}"
             spellcheck="false"
             autocomplete="off"
             aria-label="New name"
@@ -599,7 +630,7 @@
         <span data-path={ctx.node.id} class="min-w-0 flex-1 truncate {ctx.node.id.endsWith(PLACEHOLDER) ? 'text-muted-foreground' : ''}">{ctx.node.label}</span>
         {/if}
       {/snippet}
-    </ZTree>
+    </Tree>
   </div>
 {/if}
 

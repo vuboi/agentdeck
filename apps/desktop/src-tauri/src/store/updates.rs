@@ -89,7 +89,7 @@ pub async fn apply(home: &Path, name: &str, acknowledged: bool) -> Result<(), St
 fn replace(home: &Path, name: &str, folder: &Path, entry: &LockEntry) -> Result<(), String> {
     checked_name(name)?;
     let target = library_root(home).join(name);
-    let work = home.join(".agentdeck/library/.updates").join(stage::new_job_id());
+    let work = home.join(crate::channel::home_folder_name()).join("library/.updates").join(stage::new_job_id());
     let prepared = work.join("new");
     let backup = work.join("old");
     let result = (|| {

@@ -210,8 +210,8 @@
   }
   const menuOf = (item: Artifact): ZDropdownMenuItem[] => [
     ...openWithItem(item.path, apps[item.path] ?? []),
-    { label: 'Save as…', icon: 'lucideDownload', iconSize: '12', class: 'text-xs! py-1', onClick: () => void saveAs(item) },
-    { label: 'Show in folder', icon: 'lucideFolderOpen', iconSize: '12', class: 'text-xs! py-1', onClick: () => void revealFile(item.path).catch(() => toast.error('Could not show the file')) },
+    { label: 'Save as…', icon: 'lucideDownload', iconSize: '12', class: 'text-sm! py-1', onClick: () => void saveAs(item) },
+    { label: 'Show in folder', icon: 'lucideFolderOpen', iconSize: '12', class: 'text-sm! py-1', onClick: () => void revealFile(item.path).catch(() => toast.error('Could not show the file')) },
   ];
   const typeLabel = (item: Artifact) => `${fileKind(item.name).label} ${item.kind === 'audio' ? 'audio' : item.kind === 'video' ? 'video' : ''}`.trim();
 </script>
@@ -232,7 +232,7 @@
       <div class="artifact-pending relative flex h-9 w-full max-w-64 items-center gap-2 overflow-hidden rounded-lg border border-border bg-muted/30 py-1 pr-2.5 pl-1" role="status" aria-label="Creating {item.name}">
         <span class="grid size-7 shrink-0 place-items-center rounded-md bg-primary/12 text-primary"><ZIcon zType={(item.kind === 'audio' ? 'lucideMusic' : item.kind === 'video' ? 'lucideFilm' : item.kind === 'image' ? 'lucideImage' : 'lucideFile') as ZIconName} class="size-3.5 animate-pulse" /></span>
         <span class="flex min-w-0 flex-col leading-tight">
-          <span class="truncate text-xs font-medium text-foreground">{item.name}</span>
+          <span class="truncate text-sm font-medium text-foreground">{item.name}</span>
           <span class="text-[10px] text-muted-foreground">Creating…</span>
         </span>
       </div>
@@ -283,7 +283,7 @@
             <span class="grid size-11 shrink-0 place-items-center rounded-lg bg-background text-primary"><ZIcon zType={'lucideAudioLines' as ZIconName} class="size-5 {state.playing ? 'animate-pulse' : ''}" /></span>
             <span class="flex min-w-0 flex-1 flex-col leading-tight">
               <span class="truncate text-sm font-semibold text-foreground" title={displayPath(root ?? '', item.path)}>{item.name}</span>
-              <span class="mt-0.5 truncate text-xs text-muted-foreground">{typeLabel(item)} · {fileSizeLabel(sizes[item.path])}</span>
+              <span class="mt-0.5 truncate text-sm text-muted-foreground">{typeLabel(item)} · {fileSizeLabel(sizes[item.path])}</span>
             </span>
             <button type="button" class="grid size-9 shrink-0 cursor-pointer place-items-center rounded-full bg-background text-foreground outline-none transition hover:bg-primary/15 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring" aria-label={state.playing ? `Pause ${item.name}` : `Play ${item.name}`} onclick={() => void toggle(item)}>
               <ZIcon zType={(state.playing ? 'lucidePause' : 'lucidePlay') as ZIconName} class="size-4" />
@@ -292,7 +292,7 @@
           </div>
           <div class="flex items-center gap-3 border-t border-border px-3 py-2">
             <input type="range" min="0" max={state.length || 1} step="0.01" value={state.time} disabled={!blobs[item.path]} class="artifact-range min-w-0 flex-1" style:--fill="{state.length ? (state.time / state.length) * 100 : 0}%" aria-label="Position in {item.name}" oninput={(event) => seek(item, event)} />
-            <span class="shrink-0 text-xs tabular-nums text-muted-foreground">{clock(state.time)} / {clock(state.length)}</span>
+            <span class="shrink-0 text-sm tabular-nums text-muted-foreground">{clock(state.time)} / {clock(state.length)}</span>
           </div>
           {#if blobs[item.path]}<audio use:bind={item.path} src={blobs[item.path]} preload="metadata" class="hidden"></audio>{/if}
         </div>

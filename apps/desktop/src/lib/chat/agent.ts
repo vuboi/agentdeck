@@ -1,5 +1,6 @@
 import { connectors } from '../agents/connectors.svelte';
 import { creditModel } from '../agents/credit-model';
+import { convertFileSrc } from '@tauri-apps/api/core';
 
 // The UI side of the agent event stream. The Rust side (crates/adapters/src/agent) turns each CLI's output
 // into these events; nothing here knows a CLI's format.
@@ -53,7 +54,7 @@ function billing(args: AgentTurnSettings): { model: string | null; apiKey: strin
 }
 
 /** Start one turn. Resolves as soon as the CLI is started; the answer arrives as `agent-event`s. */
-/** `keepOpen: false`: the turn runs once and its CLI is not kept for the next one (a side answer, a worker, a flow step). */
+/** `keepOpen: false`: the turn runs once and its CLI is not kept for the next one (a side answer or delegated worker). */
 export async function sendAgentTurn(args: AgentTurnSettings & { turn: string; prompt: string; messageId?: string; keepOpen?: boolean }): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('agent_send', { ...args, ...billing(args) });
@@ -114,6 +115,51 @@ export async function fileSize(path: string): Promise<number | null> {
 export async function readImageDataUrl(path: string): Promise<string> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<string>('read_image_data_url', { path });
+}
+
+/**
+ * A picture on disk as a URL the page can show directly (Tauri's asset protocol, scoped in tauri.conf.json): the bytes are
+ * read by the browser when drawn, not copied through IPC or kept as base64. Use for pictures under the scoped folders.
+ */
+export async function pictureUrl(path: string): Promise<string> {
+  const { convertFileSrc } = await import('@tauri-apps/api/core');
+  return convertFileSrc(path);
+}
+
+/** Where a picture is drawn from: its file when it has one (asset URL), else its data URL. Synchronous, for templates. */
+export function pictureSrc(picture: { src?: string; path?: string }): string {
+  return picture.path ? convertFileSrc(picture.path) : (picture.src ?? '');
+}
+
+/** The MIME type of a picture file, from its extension. */
+export function mimeOfPath(path: string): string {
+  const extension = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+  return extension === 'jpg' || extension === 'jpeg' ? 'image/jpeg' : `image/${extension || 'png'}`;
+}
+
+/** The picture's bytes as a data URL, read from its file when it was kept as one (for APIs that take base64). */
+export async function pictureData(picture: { src?: string; path?: string }): Promise<string> {
+  return picture.src || readImageDataUrl(picture.path ?? '');
+}
+
+/** A data URL kept as its file: the URL to show it by (small, asset protocol) and the path it is sent and saved by. */
+export async function keepPictureUrl(src: string): Promise<{ url: string; path?: string }> {
+  const kept = await keepPicture<{ mime: string; src: string; path?: string }>({ mime: 'image/png', src });
+  return kept.path ? { url: pictureSrc(kept), path: kept.path } : { url: src };
+}
+
+/**
+ * A picture about to be attached is written to its file at once (WebP, see picture_store.rs): the attachment then
+ * carries the path, and what gets saved, sent or stored is the path, not base64. Failing to save keeps the data URL.
+ */
+export async function keepPicture<T extends { mime: string; src: string; path?: string }>(picture: T): Promise<T> {
+  if (picture.path || !picture.src.startsWith('data:')) return picture;
+  try {
+    const path = await saveAttachment(picture.mime, picture.src.slice(picture.src.indexOf(',') + 1));
+    return { ...picture, path };
+  } catch {
+    return picture;
+  }
 }
 
 /** The bytes of a file on disk (at most 50 MB), for the document preview. */

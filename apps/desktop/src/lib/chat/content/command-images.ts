@@ -1,8 +1,11 @@
 import type { Block, Message } from '../mock';
-import { loadImagePath } from './attachments';
-import { saveAttachment } from '../agent';
+import { pictureUrl, saveAttachment } from '../agent';
 import { getPref, setPref } from '../../app/platform/prefs';
 
+// Each screenshot is a file under ~/.agentdeck/attachments (WebP). The index below keeps only its path, per chat, in the
+// IndexedDB `images` collection (prefs.ts). Pictures are drawn from the file by the asset protocol, never as base64.
+// TODO(sync): when chats sync, upload each file once and keep its remote id next to `path` here; the local path stays the
+// fast copy. Nothing here uploads yet.
 type SavedCommandImage = { ordinal: number; command: string; path?: string; image?: string };
 type SavedTurnImages = { messageId: string; at?: string; fingerprint?: string; images: SavedCommandImage[] };
 
@@ -41,6 +44,11 @@ export function persistCommandImage(sessionId: string, message: Message, command
       path = await saveAttachment(mime, image.slice(headerEnd + 1));
     } catch {
       // Keep the screenshot in AgentDeck's local history if the attachment directory is temporarily unavailable.
+    }
+    // The chat shows the file from now on, so the base64 leaves the live message as well as the index.
+    if (path) {
+      const block = message.blocks.find((item): item is Extract<Block, { kind: 'command' }> => item.kind === 'command' && item.id === commandId);
+      if (block?.image?.startsWith('data:')) block.image = await pictureUrl(path);
     }
     const records = (await getPref<SavedTurnImages[]>(keyOf(sessionId))) ?? [];
     let record = records.find((item) => item.messageId === message.id);
@@ -106,8 +114,10 @@ export async function restoreCommandImages(sessionId: string, messages: Message[
         blockIndex = commandIndices.find((index) => target.blocks[index]?.kind === 'command' && (target.blocks[index] as Extract<Block, { kind: 'command' }>).command === saved.command) ?? -1;
       }
       const block = target.blocks[blockIndex];
-      if (blockIndex < 0 || block?.kind !== 'command' || block.image) continue;
-      const image = saved.path ? await loadImagePath(saved.path) : saved.image;
+      if (blockIndex < 0 || block?.kind !== 'command') continue;
+      // A picture already drawn from its file stays. Base64 from an older save is replaced by the file, when there is one.
+      if (block.image && !(saved.path && block.image.startsWith('data:'))) continue;
+      const image = saved.path ? await pictureUrl(saved.path) : saved.image;
       if (image) target.blocks[blockIndex] = { ...block, image };
     }
   }

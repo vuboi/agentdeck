@@ -331,7 +331,7 @@
 {/snippet}
 
 {#snippet heading(title: string, items: { name: string; value: string }[], icon: string)}
-  <div class="group/head mb-1 flex items-center gap-1 font-sans text-xs font-semibold">
+  <div class="group/head mb-1 flex items-center gap-1 font-sans text-sm font-semibold">
     <ZIcon zType={icon as ZIconName} zSize="12" class="shrink-0 text-muted-foreground" />
     {title}
     {#if items.length > 0}
@@ -342,7 +342,7 @@
   </div>
 {/snippet}
 
-<div class="flex min-h-0 flex-1 font-mono text-[11px]">
+<div class="flex min-h-0 flex-1 font-mono text-[0.6875rem]">
   <div bind:this={scroller} bind:clientHeight={viewHeight} onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)} class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto" role="table" aria-label="Requests" aria-rowcount={rows.length}>
     <!-- No header while there is nothing to head. -->
     {#if rows.length > 0}
@@ -409,7 +409,7 @@
     <div class="flex min-h-0 w-[55%] min-w-72 shrink-0 flex-col border-l border-border">
       <div class="flex shrink-0 items-center gap-0.5 border-b border-border px-1 py-0.5" role="tablist">
         {#each [['headers', 'Headers'], ['payload', 'Payload'], ['response', 'Response'], ['timing', 'Timing'], ...(socket ? [['messages', 'Messages']] : [])] as [value, label] (value)}
-          <button type="button" role="tab" aria-selected={pane === value} class="h-5 cursor-pointer rounded px-2 font-sans text-xs outline-none {pane === value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" onclick={() => show(value as Pane)}>{label}</button>
+          <button type="button" role="tab" aria-selected={pane === value} class="h-5 cursor-pointer rounded px-2 font-sans text-sm outline-none {pane === value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" onclick={() => show(value as Pane)}>{label}</button>
         {/each}
         <button type="button" class="ml-auto grid size-5 cursor-pointer place-items-center rounded text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary" aria-label="Close details" onclick={() => (chosen = null)}>
           <ZIcon zType="lucideX" class="size-3" />
@@ -425,11 +425,11 @@
           {@render headerList(current.reqHeaders)}
         {:else if pane === 'payload'}
           {#if query.length > 0}
-            <div class="mb-1 flex items-center gap-1 font-sans text-xs font-semibold"><ZIcon zType={'lucideSearch' as ZIconName} zSize="12" class="text-muted-foreground" /> Query string parameters</div>
+            <div class="mb-1 flex items-center gap-1 font-sans text-sm font-semibold"><ZIcon zType={'lucideSearch' as ZIconName} zSize="12" class="text-muted-foreground" /> Query string parameters</div>
             <div class="mb-3">{@render headerList(query.map(([name, value]) => ({ name, value })))}</div>
           {/if}
           {#if current.postData}
-            <div class="mb-1 flex items-center gap-1 font-sans text-xs font-semibold"><ZIcon zType={'lucideFileJson' as ZIconName} zSize="12" class="text-muted-foreground" /> Request body</div>
+            <div class="mb-1 flex items-center gap-1 font-sans text-sm font-semibold"><ZIcon zType={'lucideFileJson' as ZIconName} zSize="12" class="text-muted-foreground" /> Request body</div>
             <DataView text={current.postData} label="request body" />
           {:else if query.length === 0}
             <DevEmpty icon="lucideInbox" title="No payload" hint="This request sent no query string or body." />
@@ -441,21 +441,21 @@
             <DevEmpty icon="lucideLoaderCircle" title="Loading…" />
           {:else if imageSrc}
             <div class="mb-1.5 flex shrink-0 flex-wrap items-center gap-1 font-sans">
-              <button type="button" class="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-input px-2 text-xs outline-none hover:border-primary/60 hover:text-primary" onclick={() => downloadImage(current)}>
+              <button type="button" class="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-input px-2 text-sm outline-none hover:border-primary/60 hover:text-primary" onclick={() => downloadImage(current)}>
                 <ZIcon zType={'lucideDownload' as ZIconName} zSize="12" /> Download
               </button>
-              <button type="button" class="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-input px-2 text-xs outline-none hover:border-primary/60 hover:text-primary" onclick={() => void copyImage()}>
+              <button type="button" class="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-input px-2 text-sm outline-none hover:border-primary/60 hover:text-primary" onclick={() => void copyImage()}>
                 <ZIcon zType={'lucideImage' as ZIconName} zSize="12" /> Copy image
               </button>
               {#if imageMime.includes('svg') && current.body && !current.bodyBase64}
-                <button type="button" class="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-input px-2 text-xs outline-none hover:border-primary/60 hover:text-primary" onclick={() => void copyText(current.body ?? '', 'the SVG source')}>
+                <button type="button" class="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-input px-2 text-sm outline-none hover:border-primary/60 hover:text-primary" onclick={() => void copyText(current.body ?? '', 'the SVG source')}>
                   <ZIcon zType={'lucideCode' as ZIconName} zSize="12" /> Copy SVG
                 </button>
               {/if}
-              <button type="button" class="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-input px-2 text-xs outline-none hover:border-primary/60 hover:text-primary" onclick={() => void copyText(imageSrc, 'the data URL')}>
+              <button type="button" class="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-input px-2 text-sm outline-none hover:border-primary/60 hover:text-primary" onclick={() => void copyText(imageSrc, 'the data URL')}>
                 <ZIcon zType={'lucideLink' as ZIconName} zSize="12" /> Copy data URL
               </button>
-              <button type="button" class="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-input px-2 text-xs outline-none hover:border-primary/60 hover:text-primary" onclick={() => void copyText(current.url, 'the URL')}>
+              <button type="button" class="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-input px-2 text-sm outline-none hover:border-primary/60 hover:text-primary" onclick={() => void copyText(current.url, 'the URL')}>
                 <ZIcon zType={'lucideCopy' as ZIconName} zSize="12" /> Copy URL
               </button>
             </div>
@@ -463,7 +463,7 @@
               <div class="inline-block max-w-full rounded border border-border bg-[length:16px_16px] bg-[position:0_0,8px_8px] p-1" style="background-color: var(--background); background-image: conic-gradient(var(--muted) 25%, transparent 0 50%, var(--muted) 0 75%, transparent 0);">
                 <img src={imageSrc} alt="" class="block max-w-full" bind:naturalWidth={natural.w} bind:naturalHeight={natural.h} />
               </div>
-              <div class="mt-1 font-sans text-[11px] text-muted-foreground">{imageMime}{natural.w ? ` · ${natural.w}×${natural.h}` : ''}{current.size ? ` · ${sizeText(current.size)}` : ''}</div>
+              <div class="mt-1 font-sans text-[0.6875rem] text-muted-foreground">{imageMime}{natural.w ? ` · ${natural.w}×${natural.h}` : ''}{current.size ? ` · ${sizeText(current.size)}` : ''}</div>
             </div>
           {:else if current.body === null}
             <DevEmpty icon="lucideFileX" title="No response body" hint="This request returned no body, or the browser no longer keeps it." />
@@ -474,9 +474,9 @@
           {:else if isHtml}
             <div class="mb-1 flex shrink-0 items-center gap-0.5 font-sans">
               {#each [['preview', 'Preview'], ['source', 'Source']] as [value, name] (value)}
-                <button type="button" class="h-5 cursor-pointer rounded px-2 text-xs outline-none {htmlMode === value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" onclick={() => (htmlMode = value as 'preview' | 'source')}>{name}</button>
+                <button type="button" class="h-5 cursor-pointer rounded px-2 text-sm outline-none {htmlMode === value ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}" onclick={() => (htmlMode = value as 'preview' | 'source')}>{name}</button>
               {/each}
-              <span class="ml-1 text-[11px] text-muted-foreground">{htmlMode === 'preview' ? 'Scripts are off here' : ''}</span>
+              <span class="ml-1 text-[0.6875rem] text-muted-foreground">{htmlMode === 'preview' ? 'Scripts are off here' : ''}</span>
             </div>
             {#if htmlMode === 'preview'}
               <iframe title="Response preview" sandbox="" srcdoc={htmlDoc} class="min-h-0 w-full flex-1 rounded border border-border bg-white"></iframe>
@@ -485,7 +485,7 @@
             {/if}
           {:else}
             {#if tidy && current && tidy.id === current.id || tidying}
-              <div class="mb-1 flex shrink-0 items-center gap-1 font-sans text-[11px] text-muted-foreground">
+              <div class="mb-1 flex shrink-0 items-center gap-1 font-sans text-[0.6875rem] text-muted-foreground">
                 {#if tidying}
                   <ZIcon zType={'lucideLoaderCircle' as ZIconName} zSize="12" class="animate-spin" /> Formatting…
                 {:else}
@@ -525,7 +525,7 @@
 
 {#if menu}
   {@const target = menu.request}
-  <div class="fixed z-50 w-56 rounded-md border border-border bg-popover p-1 font-sans text-xs text-popover-foreground shadow-lg" style:left="{menu.x}px" style:top="{menu.y}px" role="menu" tabindex="-1" onpointerdown={(event) => event.stopPropagation()} oncontextmenu={(event) => event.preventDefault()}>
+  <div class="fixed z-50 w-56 rounded-md border border-border bg-popover p-1 font-sans text-sm text-popover-foreground shadow-lg" style:left="{menu.x}px" style:top="{menu.y}px" role="menu" tabindex="-1" onpointerdown={(event) => event.stopPropagation()} oncontextmenu={(event) => event.preventDefault()}>
     {#each MENU as item (item.label)}
       {#if item.divide}<div class="my-1 h-px bg-border" role="separator"></div>{/if}
       <button type="button" role="menuitem" class="flex w-full cursor-pointer items-center rounded px-2 py-1 text-left outline-none hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10" onclick={() => { item.run(target); menu = null; }}>{item.label}</button>

@@ -196,7 +196,7 @@
     icon: icon as ZIconName,
     iconSize: '12',
     shortcut,
-    class: 'text-xs! py-1',
+    class: 'text-sm! py-1',
     onClick: () => {
       const id = menu?.id;
       if (!id) return;
@@ -229,7 +229,7 @@
             aria-selected={tab.id === terminal.active}
             zType="ghost"
             zSize="sm"
-            class="h-7 gap-1.5 px-2 text-xs {tab.id === terminal.active ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : 'hover:bg-primary/10 hover:text-primary'}"
+            class="h-7 gap-1.5 px-2 text-sm {tab.id === terminal.active ? '!bg-primary/15 !text-primary hover:!bg-primary/20 hover:!text-primary' : 'hover:bg-primary/10 hover:text-primary'}"
             onclick={() => (terminal.active = tab.id)}
           >
             <ZIcon zType="lucideSquareTerminal" class="size-3.5" />
@@ -279,7 +279,7 @@
     </div>
 
     {#if !terminalAvailable()}
-      <div class="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-xs text-muted-foreground">The terminal runs in the desktop app.</div>
+      <div class="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm text-muted-foreground">The terminal runs in the desktop app.</div>
     {:else}
       <div class="relative min-h-0 flex-1">
         {#each terminal.tabs as tab (tab.id)}
@@ -324,7 +324,7 @@
         bind:value={query}
         aria-label="Find in terminal"
         placeholder="Find"
-        class="h-6 w-44 rounded bg-transparent px-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+        class="h-6 w-44 rounded bg-transparent px-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
         autocomplete="off"
         spellcheck="false"
         oninput={() => findInSession(terminal.active, query)}

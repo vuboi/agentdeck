@@ -1,13 +1,14 @@
-import { connectors, agentHasRoom, limitResetAt } from '../../agents/connectors.svelte';
+import { connectors, agentHasRoom, autoSwitchConnectorAccount, autoSwitchProviderKey, limitResetAt, refreshProviderQuota, type ConnectorId } from '../../agents/connectors.svelte';
 import { type FailureKind, type Recovery, classifyFailure, planRecovery, continuePrompt, recoveryNote } from '../recovery/turn-failure';
-import { inTauri, clock } from '../../app/platform/history';
+import { inTauri, isPreviewCopy, clock } from '../../app/platform/history';
 import { type Message, type Block } from '../mock';
 import { modelLabel } from '../../agents/models.svelte';
 import { getPref, setPref } from '../../app/platform/prefs';
 import { parseResetAt } from '../recovery/limit-reset';
+import { classifyLimitGate, type LimitGateKind } from '../recovery/limit-gate';
 import { type AgentEvent, listenAgentEvents } from '../agent';
 import { logError } from '../../app/platform/error-log.svelte';
-import { logFlow } from '../../tasks/flow-log';
+import { hangTraceOn, logFlow, markStep } from '../../tasks/flow-log';
 import { trackActivity } from '../runs/activity.svelte';
 import { guide } from '../../app/ui/guide.svelte';
 import { addUsage, applyAgentEvent } from '../agent-reply';
@@ -16,12 +17,42 @@ import { recordUsage, estimateCost } from '../runs/usage';
 import { toolKindOf } from '../../tasks/delegate-task';
 import { archiveTurn } from '../content/archive';
 import { MODELS, advanceRun, nextId, persistLocal, runEpochs, workspace, type Agent, type SessionItem } from './state.svelte';
-import { agentLabel, continuationGroups, failSessionWork, hiddenPrompt, isRunning, openServedPage, queued, turns } from './turns.svelte';
+import { agentLabel, continuationGroups, failSessionWork, hiddenPrompt, isRunning, openServedPage, queued, stopTurn, turns } from './turns.svelte';
 import { NO_HANDOUT, RENDER_WAIT_LIMIT_MS, liveAsks, liveHandouts, liveReplies, messagesOf, needsUserInput, renderWaiters, replies, runReplies, sendNextQueued, sessionLanes, updateLane } from './run.svelte';
-import { onDelegateDone } from './delegation.svelte';
+import { finishWorkflowTurn, onDelegateDone } from './delegation.svelte';
 import { bindTasks, delegateTasks, endWaitingTasks } from './delegate-task.svelte';
-import { clipText, handleSideEvent, handoffFor, hasSideTurn, onHandbackDone, send, sideTurns } from './sending.svelte';
+import { handoffFor, send } from './sending.svelte';
+import { clipText } from './orchestration.svelte';
+import { finishWorkflowIntegration } from './delegation.svelte';
 import { importHistory, keepOtherTurn, rememberMixed, transcripts } from './history.svelte';
+import { parseCustomModel } from '../../agents/models.svelte';
+import type { CredentialAttempt } from '../../agents/credential-switch';
+
+const credentialAttempts = new Map<string, CredentialAttempt & { controller: AbortController }>();
+/** A user request or Stop invalidates every pending continuation for the previous task. */
+export function cancelAutoSwitch(sessionId: string): void {
+  credentialAttempts.get(sessionId)?.controller.abort();
+  credentialAttempts.delete(sessionId);
+}
+
+/** A turn the user stopped can be continued from the composer without adding a visible user message. */
+export const manuallyStopped = $state<Record<string, boolean>>({});
+
+/** Stops the active turn and exposes the composer's one-click continuation action. */
+export function stopTurnForResume(sessionId: string) {
+  stopTurn(sessionId);
+  manuallyStopped[sessionId] = true;
+}
+
+/** Continues a user-stopped turn with a hidden prompt that preserves the original request in context. */
+export function resumeStoppedTurn(sessionId: string) {
+  if (!manuallyStopped[sessionId] || isRunning(sessionId)) return;
+  delete manuallyStopped[sessionId];
+  send(sessionId, '', [], [], [], {
+    prompt: continuePrompt('the user stopped the reply', true, lastRequest(sessionId)),
+    silent: NO_HANDOUT,
+  });
+}
 
 // ---------- keeping work going when a turn fails ----------
 // A turn that ends in an error is not the end of the work: a passing fault is tried again, and otherwise (a usage
@@ -136,24 +167,106 @@ async function runRecovery(sessionId: string, plan: Recovery, reason: string) {
   send(sessionId, '', [], [], [], { prompt: continuePrompt(reason, same, lastRequest(sessionId)), silent: NO_HANDOUT });
 }
 
+/** Rotates the credential for a limit/auth failure, then resumes the original request invisibly. */
+async function runAutoSwitch(sessionId: string, reason: string, reply: Message, blockId: string) {
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  const scope = session.agent === 'custom' ? parseCustomModel(session.model)?.providerId : session.agent === 'antigravity' ? 'agy' : session.agent;
+  const expectedModel = session.model;
+  const modelId = session.agent === 'custom' ? parseCustomModel(session.model)?.model ?? '' : session.model ?? '';
+  let attempt = credentialAttempts.get(sessionId);
+  if (attempt && (attempt.scope !== scope || attempt.model !== modelId)) { cancelAutoSwitch(sessionId); attempt = undefined; }
+  if (!attempt) {
+    const controller = new AbortController();
+    attempt = { controller, signal: controller.signal, tried: new Set(), model: modelId, scope };
+    credentialAttempts.set(sessionId, attempt);
+  }
+  const currentAttempt = attempt;
+  currentAttempt.failedId = reply.credentialId;
+  if (reply.credentialId) currentAttempt.tried.add(reply.credentialId);
+  const isCurrent = () => !currentAttempt.signal.aborted && credentialAttempts.get(sessionId) === currentAttempt && workspace.sessions.some((item) => item.id === sessionId) && session.model === expectedModel && (session.agent === 'custom' ? parseCustomModel(session.model)?.providerId : session.agent === 'antigravity' ? 'agy' : session.agent) === scope;
+  const block = () => reply.blocks.find((item): item is Extract<Block, { kind: 'command' }> => item.kind === 'command' && item.id === blockId);
+  const started = Date.now();
+  const timer = setInterval(() => {
+    if (!isCurrent()) currentAttempt.controller.abort();
+    const current = block();
+    if (current?.status === 'running') current.output = `Waiting for an available account or API key…\nElapsed ${Math.floor((Date.now() - started) / 1000)}s`;
+  }, 1000);
+  let selected: string | null = null;
+  try {
+    if (!session) return;
+    if (session.agent === 'custom') {
+      const providerId = parseCustomModel(session.model)?.providerId;
+      const provider = connectors.custom.find((item) => item.id === providerId);
+      if (provider) {
+        const switched = await autoSwitchProviderKey(provider, currentAttempt);
+        if (switched) {
+          selected = switched.label;
+          const current = connectors.custom.find((item) => item.id === provider.id);
+          if (current) void refreshProviderQuota(current);
+        }
+      }
+    } else {
+      const connector = (session.agent === 'antigravity' ? 'agy' : session.agent) as ConnectorId;
+      const switched = await autoSwitchConnectorAccount(connector, currentAttempt);
+      if (switched) selected = switched.email;
+    }
+    const current = block();
+    if (!isCurrent()) { if (current) { current.status = 'fail'; current.output = 'Account switching cancelled'; } return; }
+    if (selected && session && !replies[sessionId]) {
+      if (current) {
+        current.status = 'ok';
+        current.output = `Switched to ${selected}. Continuing work…`;
+      }
+      send(sessionId, '', [], [], [], { prompt: continuePrompt('the account or API key reached its limit', true, lastRequest(sessionId)), silent: NO_HANDOUT });
+      return;
+    }
+    if (current) {
+      current.status = 'fail';
+      current.output = `No available account or API key. Elapsed ${Math.floor((Date.now() - started) / 1000)}s`;
+    }
+    if (session) scheduleResume(session, reason);
+    cancelAutoSwitch(sessionId);
+  } catch (error) {
+    const current = block();
+    const cancelled = !isCurrent() || (error instanceof Error && error.name === 'AbortError');
+    if (current) { current.status = 'fail'; current.output = cancelled ? 'Account switching cancelled' : 'Account verification failed. Resume manually after checking the account.'; }
+    if (!cancelled) scheduleResume(session, reason);
+    cancelAutoSwitch(sessionId);
+  } finally {
+    clearInterval(timer);
+    persistLocal();
+  }
+}
+
 // ---------- carrying on when a usage limit ends ----------
 // A turn that ends at a usage limit with no other agent to move to waits for the limit to reset (its time is in the error,
 // or in the account's usage windows) and then carries on by itself, as Claude Code does. The chat shows a card with the
 // time, a switch to turn the automatic part off, and Try again / Cancel. A message of the user cancels it: they took over.
-export type Resume = { sessionId: string; agent: string; at: number; reason: string; auto: boolean };
+export type Resume = { sessionId: string; agent: string; model?: string; at: number; since: number; reason: string; label: string; gate?: LimitGateKind; detail?: string; canAutoResume?: boolean; auto: boolean };
 export const resumes = $state<Record<string, Resume>>({});
 const RESUMES_KEY = 'chat.resumes';
 /** A little after the reset, so the first request is not refused for being early. */
 const RESUME_BUFFER_MS = 60_000;
-const RESUME_MAX_WAIT_MS = 8 * 86_400_000;
-const RESUME_MAX_AGE_MS = 36 * 3_600_000;
+/** Keep a paused request long enough for monthly provider windows to reset. */
+const RESUME_MAX_WAIT_MS = 31 * 86_400_000;
+const RESUME_MAX_AGE_MS = 32 * 86_400_000;
 const resumeStore = { ready: false };
-/** Automatic resumes made since the user last wrote: a limit that is still on after three of them stops the loop. */
-export const resumeTries: Record<string, number> = {};
-const MAX_RESUME_TRIES = 3;
+/** Keeps the user's switch choice across repeated provider limit responses for this paused task. */
+export const resumeAutoChoice: Record<string, boolean> = {};
+export const resumeSince: Record<string, number> = {};
 void getPref<Resume[]>(RESUMES_KEY)
   .then((saved) => {
-    for (const item of Array.isArray(saved) ? saved : []) if (!resumes[item.sessionId] && item.at + RESUME_MAX_AGE_MS > Date.now()) resumes[item.sessionId] = item;
+    for (const item of Array.isArray(saved) ? saved : []) if (!resumes[item.sessionId] && (item.since ?? item.at) + RESUME_MAX_AGE_MS > Date.now()) {
+      item.label ??= 'Usage limit reached';
+      item.gate ??= 'generic';
+      item.detail ??= 'Try again after the provider limit resets';
+      item.canAutoResume ??= item.auto;
+      item.since ??= item.at;
+      resumes[item.sessionId] = item;
+      resumeAutoChoice[item.sessionId] = item.auto;
+      resumeSince[item.sessionId] = item.since;
+    }
   })
   .catch(() => undefined)
   .finally(() => {
@@ -168,14 +281,24 @@ $effect.root(() => {
 
 function scheduleResume(session: SessionItem, message: string) {
   const now = Date.now();
-  const end = parseResetAt(message, now) ?? limitResetAt(session.agent, now);
-  if (end === null || end - now > RESUME_MAX_WAIT_MS || (resumeTries[session.id] ?? 0) >= MAX_RESUME_TRIES) return;
+  const resetAt = parseResetAt(message, now) ?? limitResetAt(session.agent, now);
+  const gate = classifyLimitGate(message, resetAt, session.model);
+  const end = gate.canAutoResume ? resetAt : null;
+  if (end !== null && end - now > RESUME_MAX_WAIT_MS) return;
+  const since = resumeSince[session.id] ?? resumes[session.id]?.since ?? now;
+  if (now - since > RESUME_MAX_AGE_MS) return;
   resumes[session.id] = {
     sessionId: session.id,
     agent: session.agent,
-    at: Math.max(end, now) + RESUME_BUFFER_MS,
+    model: session.model,
+    at: end === null ? now : Math.max(end, now) + RESUME_BUFFER_MS,
+    since,
     reason: 'the usage limit was reached',
-    auto: connectors.recovery.autoResume,
+    label: gate.label,
+    gate: gate.kind,
+    detail: gate.detail,
+    canAutoResume: gate.canAutoResume,
+    auto: gate.canAutoResume && (resumeAutoChoice[session.id] ?? connectors.recovery.autoResume),
   };
 }
 
@@ -183,22 +306,34 @@ function scheduleResume(session: SessionItem, message: string) {
 export function resumeNow(sessionId: string) {
   const resume = resumes[sessionId];
   delete resumes[sessionId];
-  if (resume) resumeTries[sessionId] = (resumeTries[sessionId] ?? 0) + 1;
+  if (resume) {
+    resumeAutoChoice[sessionId] = resume.auto;
+    resumeSince[sessionId] = resume.since;
+  }
   const session = workspace.sessions.find((item) => item.id === sessionId);
   if (!resume || !session || replies[sessionId]) return;
   send(sessionId, '', [], [], [], { prompt: continuePrompt(resume.reason, true, lastRequest(sessionId)), silent: NO_HANDOUT });
 }
-export const cancelResume = (sessionId: string) => void delete resumes[sessionId];
+export const cancelResume = (sessionId: string) => {
+  delete resumes[sessionId];
+  delete resumeAutoChoice[sessionId];
+  delete resumeSince[sessionId];
+};
 export function setResumeAuto(sessionId: string, auto: boolean) {
   const resume = resumes[sessionId];
-  if (resume) resume.auto = auto;
+  if (resume) {
+    resume.auto = auto;
+    resumeAutoChoice[sessionId] = auto;
+  }
 }
 
 function checkResumes() {
   const now = Date.now();
   for (const resume of Object.values(resumes)) {
-    if (resume.at + RESUME_MAX_AGE_MS < now) {
+    if (resume.since + RESUME_MAX_AGE_MS < now) {
       delete resumes[resume.sessionId];
+      delete resumeAutoChoice[resume.sessionId];
+      delete resumeSince[resume.sessionId];
       continue;
     }
     if (!resume.auto || resume.at > now) continue;
@@ -208,7 +343,7 @@ function checkResumes() {
     resumeNow(resume.sessionId);
   }
 }
-if (typeof window !== 'undefined') setInterval(checkResumes, 10_000);
+if (typeof window !== 'undefined') setInterval(checkResumes, 30_000);
 
 /** The words of the user's latest message, for a turn that carries on without it. */
 function lastRequest(sessionId: string): string {
@@ -331,7 +466,7 @@ function recordAgentEvent(sessionId: string, event: AgentEvent) {
  */
 function beginAutoTurn(sessionId: string, turn: string, messageId?: string) {
   const session = workspace.sessions.find((item) => item.id === sessionId);
-  if (!session || liveReplies[sessionId]?.live || hasSideTurn(sessionId)) return;
+  if (!session || liveReplies[sessionId]?.live) return;
   const list = messagesOf(sessionId);
   const previous = list.at(-1);
   const runGroup = continuationGroups[sessionId] ?? (previous?.role === 'assistant' ? previous.runGroup : undefined) ?? nextId();
@@ -361,7 +496,49 @@ function beginAutoTurn(sessionId: string, turn: string, messageId?: string) {
   advanceRun(sessionId, { type: 'turnStarted', epoch });
 }
 
+// Streamed text and tool output come as many small events, and each one used to redraw the whole reply on its own: a
+// turn of a few thousand events froze the page. They are applied together every COALESCE_MS, in their order; any other
+// event first applies what came before it, so a stop or a finished turn never overtakes the text it follows.
+const COALESCE_MS = 100;
+const STREAMED = new Set<AgentEvent['kind']>(['delta', 'thinking', 'tool_output_delta']);
+const streamQueue = new Map<string, { event: AgentEvent; turn?: string; messageId?: string }[]>();
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Applies the queued events of one chat, or of every chat. */
+function flushQueued(onlySession?: string) {
+  for (const [sessionId, items] of [...streamQueue]) {
+    if (onlySession !== undefined && sessionId !== onlySession) continue;
+    streamQueue.delete(sessionId);
+    const started = performance.now();
+    markStep(`apply ${items.length} streamed event(s) of ${sessionId}`);
+    for (const item of items) handleEventNow(sessionId, item.event, item.turn, item.messageId);
+    const ms = Math.round(performance.now() - started);
+    if (ms >= 50 || hangTraceOn()) logFlow(sessionId, 'applied', `${items.length} event(s) in ${ms} ms, last=${items.at(-1)?.event.kind}`);
+  }
+}
+if (typeof window !== 'undefined') window.addEventListener('pagehide', () => flushQueued());
+
 export function handleAgentEvent(
+  sessionId: string,
+  event: AgentEvent,
+  turn?: string,
+  messageId?: string,
+) {
+  if (STREAMED.has(event.kind)) {
+    const items = streamQueue.get(sessionId) ?? [];
+    items.push({ event, turn, messageId });
+    streamQueue.set(sessionId, items);
+    flushTimer ??= setTimeout(() => {
+      flushTimer = undefined;
+      flushQueued();
+    }, COALESCE_MS);
+    return;
+  }
+  flushQueued(sessionId);
+  handleEventNow(sessionId, event, turn, messageId);
+}
+
+function handleEventNow(
   sessionId: string,
   event: AgentEvent,
   turn?: string,
@@ -450,7 +627,7 @@ export function handleAgentEvent(
   if (!reply) {
     if (event.kind === 'done' || event.kind === 'error') {
       delete replies[sessionId];
-      session.status = hasSideTurn(sessionId) ? 'working' : 'idle';
+      session.status = 'idle';
     }
     return;
   }
@@ -507,10 +684,23 @@ export function handleAgentEvent(
   }
   // A failed turn that can be carried on (retry, another account, the next agent) does not end the work: the chat
   // gets a line saying what happens, and the steps below that close the work (failure, reports) are skipped.
-  const recovery =
-    update.finished && event.kind === 'error' ? recoveryFor(session, event.message) : null;
-  const recovering = recovery !== null && recovery.plan.action !== 'stop';
-  if (update.finished && event.kind !== 'error') delete recoveries[sessionId];
+  const failureKind = event.kind === 'error' ? classifyFailure(event.message) : null;
+  const customProviderId = session.agent === 'custom' ? parseCustomModel(session.model)?.providerId : undefined;
+  const autoSwitchConnector = session.agent === 'antigravity' ? 'agy' : session.agent;
+  const autoSwitchRequested = Boolean(update.finished && event.kind === 'error' && (failureKind === 'limit' || failureKind === 'auth') && (
+    session.agent === 'custom'
+      ? connectors.custom.some((provider) => provider.id === customProviderId && provider.autoSwitch)
+      : ['claude', 'codex', 'copilot', 'agy'].includes(autoSwitchConnector) && connectors.autoSwitch[autoSwitchConnector as ConnectorId]
+  ));
+  const recovery = update.finished && event.kind === 'error' && !autoSwitchRequested ? recoveryFor(session, event.message) : null;
+  const recovering = autoSwitchRequested || (recovery !== null && recovery.plan.action !== 'stop');
+  let autoSwitchBlockId: string | null = null;
+  if (update.finished && event.kind !== 'error') {
+    cancelAutoSwitch(sessionId);
+    delete recoveries[sessionId];
+    delete resumeAutoChoice[sessionId];
+    delete resumeSince[sessionId];
+  }
   // A limit with nowhere to move: wait for it to reset, then carry on (see `resumes`).
   if (update.finished && event.kind === 'error' && !recovering && classifyFailure(event.message) === 'limit') scheduleResume(session, event.message);
   if (recovery) {
@@ -520,6 +710,10 @@ export function handleAgentEvent(
       to: plan.action === 'fallback' ? agentLabel(plan.agent as Agent) : undefined,
     });
     reply.blocks = [...reply.blocks, { kind: 'response', text: `> ↻ ${note}` }];
+  }
+  if (autoSwitchRequested) {
+    autoSwitchBlockId = nextId();
+    reply.blocks = [...reply.blocks, { kind: 'command', id: autoSwitchBlockId, command: 'AgentDeck · waiting for account switch', output: 'Elapsed 0s', status: 'running' }];
   }
   if (update.finished) {
     updateLane(sessionId, { id: turn!, role: 'primary', state: event.kind === 'error' ? 'failed' : 'done', backgroundWork: false });
@@ -571,7 +765,8 @@ export function handleAgentEvent(
           reply,
           event.kind === 'error' ? event.message : null,
         );
-        onHandbackDone(sessionId, reply, event.kind === 'error');
+        finishWorkflowTurn(sessionId, event.kind === 'error' && !recovering, reply);
+        finishWorkflowIntegration(sessionId, reply, event.kind === 'error');
         endWaitingTasks(sessionId);
       }
       // Our own copy of the turn (agent, model, time), apart from what the CLIs store: the base for syncing later.
@@ -595,7 +790,7 @@ export function handleAgentEvent(
       delete liveReplies[sessionId];
       delete liveAsks[sessionId];
       delete liveHandouts[sessionId];
-      session.status = hasSideTurn(sessionId) || (sessionLanes[sessionId]?.length ?? 0) > 0 ? 'working' : 'idle';
+      session.status = (sessionLanes[sessionId]?.length ?? 0) > 0 ? 'working' : 'idle';
       persistLocal();
       // The CLI wrote the conversation to disk: pick it up so the row gets its path, in place (same id).
       // The cached transcript of this chat is now behind the file: a new time makes the next open read it again.
@@ -606,7 +801,9 @@ export function handleAgentEvent(
       const responseBlocks = reply.blocks.flatMap((block, index) =>
         block.kind === 'response' && block.text ? [index] : [],
       );
-      if (recovering && recovery && event.kind === 'error')
+      if (autoSwitchRequested && autoSwitchBlockId && event.kind === 'error')
+        void runAutoSwitch(sessionId, clipText(event.message, 200), reply, autoSwitchBlockId);
+      else if (recovering && recovery && event.kind === 'error')
         void runRecovery(sessionId, recovery.plan, clipText(event.message, 200));
       else if (
         sessionId === workspace.activeId &&
@@ -632,7 +829,7 @@ export function handleAgentEvent(
   }
 }
 
-if (inTauri()) {
+if (inTauri() && !isPreviewCopy()) {
   // A fast stream sends dozens of deltas a second; each one re-rendered the chat. Apply them once per frame.
   let queue: { session: string; turn: string; message_id?: string; event: AgentEvent }[] = [];
   const flush = () => {
@@ -643,8 +840,7 @@ if (inTauri()) {
       // One event that throws must not drop the rest of the frame: a `done` behind it (of this chat or of another
       // running at the same time) would be lost, and that chat would show it is working for ever.
       try {
-        if (sideTurns.has(session)) handleSideEvent(session, event, turn);
-        else handleAgentEvent(session, event, turn, message_id);
+        handleAgentEvent(session, event, turn, message_id);
       } catch (error) {
         console.error('agent event failed', session, event.kind, error);
       }

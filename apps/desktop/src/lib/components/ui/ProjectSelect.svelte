@@ -36,13 +36,13 @@
 
 {#if variant === 'select'}
   <span class="w-40 min-w-0 max-w-48 {className}">
-    <ZSelect zSize="sm" class="h-8 min-w-0 text-xs" zPosition="bottom-right" zPlaceholder={allLabel} zOptions={items.map((item) => ({ label: item.label, value: item.id }))} value={current === null ? '::all' : `project:${current}`} onValueChange={(next) => (value = items.find((item) => item.id === next)?.data ?? null)} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
+    <ZSelect zSize="sm" class="h-8 min-w-0 text-sm" zPosition="bottom-right" zPlaceholder={allLabel} zOptions={items.map((item) => ({ label: item.label, value: item.id }))} value={current === null ? '::all' : `project:${current}`} onValueChange={(next) => (value = items.find((item) => item.id === next)?.data ?? null)} zShowSearch zPlaceholderSearch="Search projects…" zDropdownWidth={240} />
   </span>
 {:else}
 <button
   bind:this={trigger}
   type="button"
-  class="inline-flex h-7 min-w-36 max-w-48 cursor-pointer items-center justify-between gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs outline-none hover:bg-primary/10 {open ? `border-primary/50 ${TRIGGER_ON_PLAIN}` : ''} {className}"
+  class="inline-flex h-7 min-w-36 max-w-48 cursor-pointer items-center justify-between gap-1.5 rounded-md border border-border bg-background px-2.5 text-sm outline-none hover:bg-primary/10 {open ? `border-primary/50 ${TRIGGER_ON_PLAIN}` : ''} {className}"
   aria-label="Project"
   aria-haspopup="listbox"
   aria-expanded={open}

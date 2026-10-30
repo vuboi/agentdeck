@@ -19,6 +19,7 @@
   import FileView from '../files/FileView.svelte';
   import ChatHeader from './ChatHeader.svelte';
   import SubChatBar from './SubChatBar.svelte';
+  import DelegateList from '../tasks/DelegateList.svelte';
   import JumpButton from './JumpButton.svelte';
   import UserMessage from './UserMessage.svelte';
   import AssistantMessage from './AssistantMessage.svelte';
@@ -40,7 +41,7 @@
       const id = workspace.activeId;
       if (!id) return;
       openChatTab(id);
-      void tick().then(() => requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()));
+      void tick().then(() => requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-composer-editor]')?.focus()));
     };
     window.addEventListener('agentdeck:new-chat-requested', openAndFocusNewChat);
     return () => window.removeEventListener('agentdeck:new-chat-requested', openAndFocusNewChat);
@@ -321,10 +322,13 @@
       jumpReady = Boolean(restoreTarget);
       revealed = false;
       setEagerColour(true);
-      if (!restoreTarget) stickToEnd(6000);
+      // Read here, not after the transcript loads: revealAtEnd takes restoreTarget (sets it to null) before this promise
+      // settles, and the null then pinned a restored view to the end for 3 s.
+      const restoring = Boolean(restoreTarget);
+      if (!restoring) stickToEnd(6000);
       else stopSticking();
       void openTranscript(workspace.sessions.find((item) => item.id === id)).then(() => {
-        if (!restoreTarget) stickToEnd();
+        if (!restoring) stickToEnd();
       });
     });
   });
@@ -388,14 +392,14 @@
     }
     return null;
   });
-  /** Flow steps (chats this one handed work to) stopped on an approval card: they wait for a yes in their own chat. */
-  const stepApprovals = $derived.by(() => {
+  /** Delegated agents stopped on an approval card wait for a yes in their own chat. */
+  const agentApprovals = $derived.by(() => {
     void ticker.sec;
-    const found: { childId: string; step: string; agent: string }[] = [];
+    const found: { childId: string; agent: string }[] = [];
     for (const message of chat.messages.slice(-12)) {
       for (const block of message.blocks) {
         if (block.kind !== 'delegate' || found.some((item) => item.childId === block.childId) || !needsApproval(block.childId)) continue;
-        found.push({ childId: block.childId, step: block.step ?? 'A step', agent: AGENTS.find((item) => item.value === block.agent)?.label ?? 'The agent' });
+        found.push({ childId: block.childId, agent: AGENTS.find((item) => item.value === block.agent)?.label ?? 'The agent' });
       }
     }
     return found;
@@ -523,7 +527,7 @@
       {#if contentTabs.tabs.length === 0 && !pendingProject()}
         <div class="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-background p-6 text-center text-muted-foreground">
           <ZIcon zType={'lucideMessagesSquare' as ZIconName} zSize="28" class="size-7 opacity-60" />
-          <p class="m-0 text-xs">No open tabs. Start a chat from the sidebar.</p>
+          <p class="m-0 text-sm">No open tabs. Start a chat from the sidebar.</p>
         </div>
       {/if}
     {/if}
@@ -552,7 +556,7 @@
     {#if chat.loadingOlder}
       <!-- Drops in from the top while a page of older messages loads: a spinner in a soft primary ring and shimmering text. -->
       <div class="pointer-events-none absolute top-3 left-1/2 z-40 -translate-x-1/2" role="status" aria-label="Loading earlier messages" in:fly={{ y: -12, duration: 220 }} out:fade={{ duration: 160 }}>
-        <div class="flex items-center gap-2.5 rounded-full border border-primary/25 bg-background/95 py-1.5 pr-4 pl-2 text-[13px] font-medium shadow-lg shadow-primary/10 backdrop-blur">
+        <div class="flex items-center gap-2.5 rounded-full border border-primary/25 bg-background/95 py-1.5 pr-4 pl-2 text-[0.8125rem] font-medium shadow-lg shadow-primary/10 backdrop-blur">
           <span class="grid size-6 place-items-center rounded-full bg-primary/12"><ZLoading zLoading zSpinner={LOADER.fetch} zSize={LOADER_SIZE} zColor="primary" /></span>
           <ZShimmerText zText="Loading earlier messages…" />
         </div>
@@ -569,13 +573,13 @@
     {/if}
 
     {#if chat.messages.length === 0 && !chat.loading}
-      <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center text-xs text-muted-foreground">
+      <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center text-sm text-muted-foreground">
         {#if chat.error}
           <span class="max-w-sm text-center text-destructive">{chat.error}</span>
         {:else}
           <div class="flex flex-col items-center gap-3">
             <ZIcon zType={'lucideMessagesSquare' as ZIconName} zSize="28" class="size-7 opacity-60" />
-            <p class="m-0 text-xs">No messages yet. Say something to start.</p>
+            <p class="m-0 text-sm">No messages yet. Say something to start.</p>
           </div>
         {/if}
       </div>
@@ -599,7 +603,7 @@
               {#if theme.turnDividers && message.mark}
                 <div class="chat-mark mx-auto flex w-full max-w-[52rem] items-center gap-3 px-3 pt-3 min-[720px]:px-8" role="separator" aria-label={markerText(message.mark)}>
                   <span class="chat-rule"></span>
-                  <span class="shrink-0 text-[11px] text-muted-foreground">{markerText(message.mark)}</span>
+                  <span class="shrink-0 text-[0.6875rem] text-muted-foreground">{markerText(message.mark)}</span>
                   <span class="chat-rule"></span>
                 </div>
               {:else if hollow(message, chat.messages.at(-1) !== message)}
@@ -616,11 +620,19 @@
                   <AssistantMessage {message} index={row.index + from} {agent} questionMessageId={pendingQuestion?.messageId} />
                 {/if}
               </article>
+              <!-- Delegated agents are shown as their own row, apart from
+                   the user's bubble, so hovering one does not light up the other. -->
+              {#if mine && message.blocks.some((block) => block.kind === 'delegate')}
+                {@const handed = message.blocks.filter((block) => block.kind === 'delegate')}
+                <div class="mx-auto flex w-full min-w-0 max-w-[52rem] flex-col items-start px-3 pb-2.5 min-[720px]:px-8">
+                  <DelegateList blocks={handed} />
+                </div>
+              {/if}
               {/if}
             </div>
             {#snippet failed()}
               <div class="absolute top-0 left-0 w-full" data-index={row.index} style:transform="translateY({row.start}px)" {@attach measureRow}>
-                <p class="mx-auto my-2 w-full max-w-[52rem] px-3 text-xs text-muted-foreground min-[720px]:px-8">This message could not be drawn. It is saved; open the chat again to retry.</p>
+                <p class="mx-auto my-2 w-full max-w-[52rem] px-3 text-sm text-muted-foreground min-[720px]:px-8">This message could not be drawn. It is saved; open the chat again to retry.</p>
               </div>
             {/snippet}
             </svelte:boundary>
@@ -637,7 +649,7 @@
     <div class="relative z-30 shrink-0 bg-background px-2 pt-4 pb-2 min-[720px]:px-6">
       <div class="mx-auto w-full min-w-0 max-w-[52rem] px-3 min-[720px]:min-w-[440px] min-[720px]:px-8">
         <!-- A pending approval sits right above the input, where the eye already is. -->
-        <ComposerDock {pendingApproval} {pendingQuestion} {stepApprovals} />
+        <ComposerDock {pendingApproval} {pendingQuestion} {agentApprovals} />
       </div>
     </div>
   {/if}

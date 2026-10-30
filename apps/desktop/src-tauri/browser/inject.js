@@ -288,7 +288,7 @@
       label.textContent = note.text;
       label.setAttribute('data-ann-ui', '');
       label.title = 'Edit this note';
-      label.style.cssText = `position:absolute;left:${x + 14}px;top:${y - 10}px;max-width:240px;padding:2px 8px;border-radius:6px;background:${ANN_COLOR};color:#fff;font:12px/1.4 system-ui,sans-serif;white-space:pre-wrap;word-break:break-word;box-shadow:${picked ? '0 0 0 2px #fff, ' : ''}0 1px 4px rgba(0,0,0,.35);pointer-events:auto;cursor:pointer`;
+      label.style.cssText = `position:absolute;left:${x + 14}px;top:${y - 10}px;max-width:240px;padding:2px 8px;border-radius:5px;background:${ANN_COLOR};color:#fff;font:12px/1.4 system-ui,sans-serif;white-space:pre-wrap;word-break:break-word;box-shadow:${picked ? '0 0 0 2px #fff, ' : ''}0 1px 4px rgba(0,0,0,.35);pointer-events:auto;cursor:pointer`;
       label.addEventListener('click', open);
       ann.layer.appendChild(label);
     }
@@ -360,7 +360,7 @@
     box.rows = 2;
     box.placeholder = 'Add a note…';
     box.value = original;
-    box.style.cssText = `position:absolute;left:0px;top:0px;width:220px;resize:none;padding:6px 8px;border:1px solid ${ANN_COLOR};border-radius:8px;background:#1b1b1b;color:#eee;font:12px/1.4 system-ui,sans-serif;outline:none;pointer-events:auto;z-index:2;box-shadow:0 4px 14px rgba(0,0,0,.4)`;
+    box.style.cssText = `position:absolute;left:0px;top:0px;width:220px;resize:none;padding:6px 8px;border:1px solid ${ANN_COLOR};border-radius:3px;background:#1b1b1b;color:#eee;font:12px/1.4 system-ui,sans-serif;outline:none;pointer-events:auto;z-index:2;box-shadow:0 4px 14px rgba(0,0,0,.4)`;
     ann.layer.appendChild(box);
     // Beside the note, kept inside the visible page: too close to an edge, it steps back from it (below a note at the
     // top, above one at the bottom, left of one at the right edge).

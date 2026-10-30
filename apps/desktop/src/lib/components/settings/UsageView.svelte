@@ -185,7 +185,7 @@
   const money = (value: number) => `${approx}${usd(value)}`;
 </script>
 
-<div class="flex h-full min-h-0 flex-1 flex-col text-xs" role="tabpanel" aria-label="Usage">
+<div class="flex h-full min-h-0 flex-1 flex-col text-sm" role="tabpanel" aria-label="Usage">
   <div class="flex shrink-0 items-center gap-2 border-b border-border px-1.5 py-1.5">
     <ZTabs zTabs={RANGES.map(({ value, label }) => ({ value, label }))} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={range} onTabChange={(next) => (range = next as typeof range)} />
     {#if projectIds.length > 1}
@@ -217,7 +217,7 @@
           { label: 'Est. per month', value: monthly && monthly.priced ? money(monthly.cost) : '–', hint: monthly ? `Average cost per day over the ${monthly.days} day${monthly.days === 1 ? '' : 's'} since the first reply, times 30. A rough guide: it moves with how much you use it.` : 'Needs a reply first.' },
         ] as card (card.label)}
           <div class="rounded-lg border border-border bg-muted/20 px-3 py-2" title={card.hint}>
-            <div class="text-[11px] text-muted-foreground">{card.label}</div>
+            <div class="text-[0.75rem] text-muted-foreground">{card.label}</div>
             <div class="mt-0.5 text-base font-semibold tabular-nums">{card.value}</div>
           </div>
         {/each}
@@ -225,8 +225,8 @@
 
       <section class="rounded-xl border border-border px-3 pt-2.5 pb-2.5">
         <div class="mb-2 flex items-baseline gap-2">
-          <h3 class="m-0 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Cost over {range === 'day' ? 'the day, by hour' : range === 'all' ? 'time, by week' : 'time, by day'}</h3>
-          {#if peakBar && peakBar.cost > 0}<span class="ml-auto text-[11px] text-muted-foreground tabular-nums">Most: <b class="font-medium text-foreground">{peakBar.label}{range === 'day' ? 'h' : ''}</b> · {money(peakBar.cost)}</span>{/if}
+          <h3 class="m-0 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">Cost over {range === 'day' ? 'the day, by hour' : range === 'all' ? 'time, by week' : 'time, by day'}</h3>
+          {#if peakBar && peakBar.cost > 0}<span class="ml-auto text-[0.75rem] text-muted-foreground tabular-nums">Most: <b class="font-medium text-foreground">{peakBar.label}{range === 'day' ? 'h' : ''}</b> · {money(peakBar.cost)}</span>{/if}
         </div>
         <div class="flex gap-2">
           <!-- The scale: what the top of the chart is, and the middle. -->
@@ -251,7 +251,7 @@
                   </div>
                   {#if hover === index}
                     <!-- Hours, days or weeks with nothing spent say so too. -->
-                    <div class="pointer-events-none absolute bottom-full z-10 mb-1 w-max max-w-44 rounded-md border border-border bg-popover px-2 py-1 text-[11px] shadow-md {index < bars.length / 2 ? 'left-0' : 'right-0'}">
+                    <div class="pointer-events-none absolute bottom-full z-10 mb-1 w-max max-w-44 rounded-md border border-border bg-popover px-2 py-1 text-[0.6875rem] shadow-md {index < bars.length / 2 ? 'left-0' : 'right-0'}">
                       <div class="font-medium">{range === 'day' ? `${bar.label}:00` : range === 'all' ? `Week of ${bar.label}` : bar.label}</div>
                       <div class="text-muted-foreground tabular-nums">{bar.cost > 0 ? money(bar.cost) : 'Nothing spent'}</div>
                       {#each Object.entries(bar.byAgent) as [agent, cost] (agent)}
@@ -270,14 +270,14 @@
           </div>
         </div>
         {#if agentsSeen.length > 1}
-          <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[0.75rem] text-muted-foreground">
             {#each agentsSeen as agent (agent)}<span class="flex items-center gap-1"><span class="size-2 rounded-sm {AGENT_BAR[agent] ?? 'bg-muted-foreground'}"></span>{AGENT_NAME[agent] ?? agent}</span>{/each}
           </div>
         {/if}
       </section>
 
       <section>
-        <h3 class="m-0 mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Tokens</h3>
+        <h3 class="m-0 mb-1.5 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">Tokens</h3>
         <div class="flex h-2 overflow-hidden rounded-full bg-muted">
           {#each kinds as kind (kind.key)}<div class={kind.bar} style:width="{kindsTotal > 0 ? (kind.count / kindsTotal) * 100 : 0}%"></div>{/each}
         </div>
@@ -291,7 +291,7 @@
       {#each sections as section (section.title)}
         {#if section.lines.length > 0 && !(section.title === 'By agent' && section.lines.length < 2) && !(section.title === 'By project' && section.lines.length < 2)}
           <section>
-            <h3 class="m-0 mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{section.title}</h3>
+            <h3 class="m-0 mb-1.5 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">{section.title}</h3>
             <ul class="m-0 flex list-none flex-col gap-1.5 p-0">
               {#each section.lines as line (line.key)}
                 {@const share = total.cost > 0 ? line.cost / total.cost : total.tokens > 0 ? line.tokens / total.tokens : 0}
@@ -312,7 +312,7 @@
       {#if score.length > 0}
         <section>
           <div class="mb-1.5 flex items-baseline gap-2">
-            <h3 class="m-0 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Delegated work by model</h3>
+            <h3 class="m-0 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">Delegated work by model</h3>
             <span class="ml-auto text-[10px] text-muted-foreground" title="Every reply in a worker's chat is one round: the first answer, then each correction sent back.">Rounds per task, fewer is better</span>
           </div>
           <ul class="m-0 flex list-none flex-col gap-2.5 p-0">
@@ -329,13 +329,13 @@
                   <div class="bg-amber-500" style:width="{(row.oneFix / row.tasks) * 100}%"></div>
                   <div class="bg-destructive" style:width="{(row.rework / row.tasks) * 100}%"></div>
                 </div>
-                <div class="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground tabular-nums">
+                <div class="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[0.75rem] text-muted-foreground tabular-nums">
                   <span class="flex items-center gap-1"><span class="size-1.5 rounded-sm bg-emerald-500"></span>{row.firstTry} first try</span>
                   <span class="flex items-center gap-1"><span class="size-1.5 rounded-sm bg-amber-500"></span>{row.oneFix} one fix</span>
                   <span class="flex items-center gap-1"><span class="size-1.5 rounded-sm bg-destructive"></span>{row.rework} rework</span>
                   {#if row.failed > 0}<span class="text-destructive">{row.failed} failed</span>{/if}
                 </div>
-                <div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground tabular-nums">
+                <div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[0.75rem] text-muted-foreground tabular-nums">
                   <span>Task {row.avgTaskMs ? seconds(row.avgTaskMs) : '–'}</span>
                   <span>Reply {row.avgReplyMs ? seconds(row.avgReplyMs) : '–'}</span>
                   <span>Cost / task {row.costPerTask === null ? '–' : money(row.costPerTask)}</span>
@@ -351,16 +351,16 @@
         <!-- Free models apart: they are counted as $0, so the cost above is what was really paid. -->
         <section class="rounded-lg border border-border bg-muted/20 px-3 py-2">
           <div class="flex items-baseline gap-2">
-            <h3 class="m-0 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Free models</h3>
-            <span class="ml-auto text-[11px] text-muted-foreground tabular-nums">{freeUse.replies} replies · {shortCount(freeUse.tokens)} tokens · $0</span>
+            <h3 class="m-0 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">Free models</h3>
+            <span class="ml-auto text-[0.75rem] text-muted-foreground tabular-nums">{freeUse.replies} replies · {shortCount(freeUse.tokens)} tokens · $0</span>
           </div>
-          <p class="m-0 mt-1 text-[11px] leading-normal text-muted-foreground">{freeUse.models.join(', ')}</p>
+          <p class="m-0 mt-1 text-[0.6875rem] leading-normal text-muted-foreground">{freeUse.models.join(', ')}</p>
         </section>
       {/if}
 
 
       {#if anyEstimated}
-        <p class="m-0 text-[11px] leading-normal text-muted-foreground">≈ Some costs are estimates: from list prices, or from the model's tier when it has none (free models count as $0). A reply's exact cost is used when the CLI reports it.</p>
+        <p class="m-0 text-[0.6875rem] leading-normal text-muted-foreground">≈ Some costs are estimates: from list prices, or from the model's tier when it has none (free models count as $0). A reply's exact cost is used when the CLI reports it.</p>
       {/if}
     </div>
   {/if}

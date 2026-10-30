@@ -79,7 +79,7 @@
 
 <!-- Keep the modal's internal close action in sync so the same source can be opened again. -->
 <ZModal bind:open={() => item !== null, (open) => { if (!open) item = null; }} zTitle={`Edit source · ${shown?.name ?? ''}`} zWidth="480px" zBodyClass="min-h-0! py-3" zOkText="Save source" zCancelText="Cancel" zLoading={saving} zOkDisabled={!ready || !target.trim() || Boolean(argumentError)} onOk={() => void save()}>
-  <div class="flex flex-col gap-3 text-xs">
+  <div class="flex flex-col gap-3 text-sm">
     <ZInput zDisabled={loading} zLabel={shown?.kind === 'skill' ? 'Git repository (HTTPS)' : shown?.transport === 'stdio' ? 'Command' : 'Server URL'} zPlaceholder={shown?.kind === 'skill' ? 'https://github.com/owner/skills' : shown?.transport === 'stdio' ? 'npx' : 'https://example.com/mcp'} bind:value={target} />
     {#if shown?.kind === 'skill'}
       <ZInput zDisabled={loading} zLabel="Skill folder inside repository (empty for root)" zPlaceholder="skills/my-skill · leave empty for repository root" bind:value={details} />

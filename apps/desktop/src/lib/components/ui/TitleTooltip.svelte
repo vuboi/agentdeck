@@ -74,7 +74,7 @@
       element.showPopover?.();
       place(element);
     }}
-    class="pointer-events-none fixed inset-auto m-0 w-max max-w-[min(18rem,calc(100vw-16px))] overflow-visible rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs font-medium break-words whitespace-normal text-popover-foreground shadow-lg"
+    class="pointer-events-none fixed inset-auto m-0 w-max max-w-[min(18rem,calc(100vw-16px))] overflow-visible rounded-lg border border-border bg-popover px-2.5 py-1.5 text-[0.84375rem] font-medium break-words whitespace-normal text-popover-foreground shadow-lg"
     role="tooltip"
   >
     {tip.text}

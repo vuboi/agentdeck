@@ -13,6 +13,6 @@
   <span class="grid size-11 place-items-center rounded-full bg-muted text-muted-foreground">
     <ZIcon zType={(loading ? 'lucideLoaderCircle' : icon) as ZIconName} zSize="22" class="size-5.5 {loading ? 'animate-spin' : ''}" />
   </span>
-  <p class="m-0 text-xs font-medium text-foreground">{text}</p>
-  {#if hint}<p class="m-0 max-w-64 text-[11px] text-muted-foreground">{hint}</p>{/if}
+  <p class="m-0 text-sm font-medium text-foreground">{text}</p>
+  {#if hint}<p class="m-0 max-w-64 text-[0.6875rem] text-muted-foreground">{hint}</p>{/if}
 </div>

@@ -136,8 +136,8 @@
     } = $props();
 
     const SIZE = {
-        sm: { row: 28, text: 'text-xs', icon: 'size-3.5' },
-        md: { row: 34, text: 'text-[13px]', icon: 'size-4' },
+        sm: { row: 28, text: 'text-sm', icon: 'size-3.5' },
+        md: { row: 34, text: 'text-[0.8125rem]', icon: 'size-4' },
     } as const;
     const look = $derived(SIZE[size]);
     const rowPx = $derived(rowHeight ?? look.row);
@@ -445,7 +445,7 @@
                     <input
                         bind:this={input}
                         bind:value={query}
-                        class="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground"
+                        class="min-w-0 flex-1 bg-transparent text-[0.8125rem] outline-none placeholder:text-muted-foreground"
                         {placeholder}
                         aria-label={placeholder}
                         spellcheck="false"
@@ -465,7 +465,7 @@
                     {#if items.length === 0}
                         <!-- In the fixed height: the box does not change size whether it is waiting, empty or full. -->
                         <div
-                            class="grid h-full min-h-20 place-items-center px-2 text-center text-xs text-muted-foreground"
+                            class="grid h-full min-h-20 place-items-center px-2 text-center text-sm text-muted-foreground"
                         >
                             {#if loading}
                                 <ZIcon
@@ -497,7 +497,7 @@
                                 >
                                     {#if row?.kind === 'head'}
                                         <div
-                                            class="flex h-full items-end px-2 pb-1 text-[11px] font-medium text-muted-foreground"
+                                            class="flex h-full items-end px-2 pb-1 text-[0.6875rem] font-medium text-muted-foreground"
                                         >
                                             {row.text}
                                         </div>
@@ -572,13 +572,13 @@
                                                         >{:else}{part.text}{/if}{/each}</span
                                             >
                                             {#if item.hint}<span
-                                                    class="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+                                                    class="min-w-0 flex-1 truncate text-sm text-muted-foreground"
                                                     >{item.hint}</span
                                                 >{:else if item.stat}<span
                                                     class="flex-1"
                                                 ></span>{/if}
                                             {#if item.shortcut}<span
-                                                    class="ml-auto shrink-0 pl-3 text-[11px] text-muted-foreground"
+                                                    class="ml-auto shrink-0 pl-3 text-[0.6875rem] text-muted-foreground"
                                                     >{item.shortcut}</span
                                                 >{/if}
                                             {#if item.more}<ZIcon
@@ -590,7 +590,7 @@
                                                     class="ml-auto size-3.5 shrink-0"
                                                 />{/if}
                                             {#if item.stat}<span
-                                                    class="flex shrink-0 gap-1.5 font-mono text-xs tabular-nums"
+                                                    class="flex shrink-0 gap-1.5 font-mono text-sm tabular-nums"
                                                     ><span
                                                         class="text-emerald-500"
                                                         >+{compact(
@@ -640,7 +640,7 @@
         zCloseOnOutside={false}
     >
         {#snippet children()}
-            <p class="m-0 p-2.5 text-xs leading-relaxed text-muted-foreground">
+            <p class="m-0 p-2.5 text-sm leading-relaxed text-muted-foreground">
                 {describe(items[active])}
             </p>
         {/snippet}

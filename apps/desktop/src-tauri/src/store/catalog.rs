@@ -75,11 +75,11 @@ pub struct Cache {
 }
 
 pub fn cache_file(home: &Path) -> PathBuf {
-    home.join(".agentdeck").join("cache").join("catalog.json")
+    home.join(crate::channel::home_folder_name()).join("cache").join("catalog.json")
 }
 
 pub fn sources_file(home: &Path) -> PathBuf {
-    home.join(".agentdeck").join("store-sources.json")
+    home.join(crate::channel::home_folder_name()).join("store-sources.json")
 }
 
 /// The skill sources a new install starts with, so Discover lists skills before the user adds any. Once the list is

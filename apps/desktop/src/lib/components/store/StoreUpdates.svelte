@@ -37,7 +37,7 @@
   const rise = (index: number) => ({ y: 6, duration: 180, delay: Math.min(index, 12) * 25 });
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col text-xs">
+<div class="flex min-h-0 flex-1 flex-col text-sm">
   <StoreBar bind:query placeholder="Search skill and MCP updates" />
 
   {#if (updates.checking || maintenance.checking) && all.length === 0}
@@ -53,11 +53,11 @@
           <li class="flex items-center gap-2 rounded-md border border-border bg-card p-2.5 {ROW.plugin}" in:fly={rise(index)}>
             <div class="min-w-0 flex-1">
               <div class="truncate font-medium text-foreground">{item.name}</div>
-              <div class="truncate font-mono text-[11px] text-muted-foreground">{item.source}</div>
+              <div class="truncate font-mono text-[0.6875rem] text-muted-foreground">{item.source}</div>
               {#if item.error}<div class="text-destructive">{item.error}</div>{/if}
             </div>
             {#if item.changed}
-              <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-2.5 text-xs" zLoading={item.busy} onclick={item.onupdate}>
+              <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-2.5 text-sm" zLoading={item.busy} onclick={item.onupdate}>
                 <ZIcon zType="lucideRefreshCw" class="size-3.5" />Update
               </ZButton>
             {:else if !item.error}

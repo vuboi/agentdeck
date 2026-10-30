@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use github_copilot_sdk::handler::{PermissionHandler, PermissionResult};
 use github_copilot_sdk::types::{
     Attachment, DeliveryMode, MessageOptions, PermissionRequestData, ResumeSessionConfig, SessionConfig,
 };
-use github_copilot_sdk::{Client, ClientOptions};
+use github_copilot_sdk::{CliProgram, Client, ClientOptions};
 use serde_json::{json, Value};
 use sha2::Digest;
 use tauri::{AppHandle, Emitter};
@@ -138,11 +139,29 @@ pub(crate) async fn run_turn_core(
     chat_id: &str,
     request: TurnRequest,
     permissions: Arc<dyn PermissionHandler>,
+    stop: ag_adapters::agent::interrupt::StopToken,
+    out: impl FnMut(AgentEvent),
+) -> Result<(), String> {
+    let token = github_token().await?;
+    let (id, client) = acquire_client(chat_id, token, request.cwd.as_deref()).await?;
+    let result = run_session(&client, chat_id, request, permissions, stop, out).await;
+    if result.is_err() {
+        // The CLI may be the cause (it did not start, or stopped answering): the next turn starts a new one.
+        evict_client(id).await;
+    }
+    release_client(id).await;
+    result
+}
+
+/// Runs one message on the shared client: a session for it, then its events until the run ends.
+async fn run_session(
+    client: &Client,
+    chat_id: &str,
+    request: TurnRequest,
+    permissions: Arc<dyn PermissionHandler>,
     mut stop: ag_adapters::agent::interrupt::StopToken,
     mut out: impl FnMut(AgentEvent),
 ) -> Result<(), String> {
-    let token = github_token().await?;
-    let client = start_client(token, request.cwd.as_deref()).await?;
     let session_id = request
         .session_id
         .clone()
@@ -198,10 +217,7 @@ pub(crate) async fn run_turn_core(
     };
     let session = match session_result {
         Ok(session) => session,
-        Err(error) => {
-            let _ = client.stop().await;
-            return Err(error.to_string());
-        }
+        Err(error) => return Err(error.to_string()),
     };
     let mut events = session.subscribe();
     // A message the user writes while the turn runs is steered into it (`immediate`): the work goes on and reads it at its
@@ -220,7 +236,6 @@ pub(crate) async fn run_turn_core(
     // after the first idle (a shell that finishes, Copilot going on by itself) is read here from the events.
     if let Err(error) = session.send(message).await {
         let _ = session.disconnect().await;
-        let _ = client.stop().await;
         return Err(error.to_string());
     }
     let mut answer = String::new();
@@ -344,7 +359,6 @@ pub(crate) async fn run_turn_core(
         }
     }
     let _ = session.disconnect().await;
-    let _ = client.stop().await;
     if let Some(error) = turn_error {
         return Err(error);
     }
@@ -356,6 +370,85 @@ pub(crate) async fn run_turn_core(
         });
     }
     Ok(())
+}
+
+/// How long a Copilot CLI stays running with no turn. The same as the CLIs in `warm.rs`.
+const CLIENT_IDLE: Duration = Duration::from_secs(20 * 60);
+
+/// At most this many Copilot CLIs are kept, one per chat. The same limit as `warm.rs`.
+const MAX_CLIENTS: usize = 4;
+
+/// A Copilot CLI kept between the turns of one chat, for the token and working directory it was started with.
+struct PooledClient {
+    id: u64,
+    chat: String,
+    token: String,
+    cwd: Option<PathBuf>,
+    client: Client,
+    /// Turns holding this client now.
+    busy: usize,
+    /// Changes at every turn start and end, so an idle timer stops the client only if nothing ran after it was set.
+    generation: u64,
+    last_used: tokio::time::Instant,
+}
+
+static POOL: LazyLock<tokio::sync::Mutex<Vec<PooledClient>>> = LazyLock::new(|| tokio::sync::Mutex::new(Vec::new()));
+static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// The pooled client of this chat. It is started when the chat has none, or when its account or folder changed; the old
+/// one stops once no running turn still holds it. When the pool is full, the least recently used idle client makes room.
+async fn acquire_client(chat: &str, token: String, cwd: Option<&Path>) -> Result<(u64, Client), String> {
+    let cwd = cwd.map(Path::to_path_buf);
+    let mut pool = POOL.lock().await;
+    pool.retain(|entry| entry.chat != chat || (entry.token == token && entry.cwd == cwd));
+    if !pool.iter().any(|entry| entry.chat == chat) {
+        if pool.len() >= MAX_CLIENTS {
+            let idle = pool.iter().enumerate().filter(|(_, entry)| entry.busy == 0).min_by_key(|(_, entry)| entry.last_used);
+            if let Some((index, _)) = idle {
+                pool.remove(index);
+            }
+        }
+        let client = start_client(token.clone(), cwd.as_deref()).await?;
+        let id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
+        pool.push(PooledClient { id, chat: chat.to_owned(), token, cwd, client, busy: 0, generation: 0, last_used: tokio::time::Instant::now() });
+    }
+    let entry = pool.iter_mut().find(|entry| entry.chat == chat).ok_or("GitHub Copilot did not start")?;
+    entry.busy += 1;
+    entry.generation += 1;
+    Ok((entry.id, entry.client.clone()))
+}
+
+/// Starts the chat's Copilot CLI ahead of its first message and keeps it in the pool. Errors are left to the first turn,
+/// which reports them.
+pub(crate) async fn prewarm(chat: String, cwd: Option<PathBuf>) {
+    let Ok(token) = github_token().await else { return };
+    if let Ok((id, _client)) = acquire_client(&chat, token, cwd.as_deref()).await {
+        release_client(id).await;
+    }
+}
+
+/// A turn is done with its client: the CLI stops once no turn has used it for `CLIENT_IDLE`.
+async fn release_client(id: u64) {
+    let generation = {
+        let mut pool = POOL.lock().await;
+        let Some(entry) = pool.iter_mut().find(|entry| entry.id == id) else {
+            return;
+        };
+        entry.busy = entry.busy.saturating_sub(1);
+        entry.generation += 1;
+        entry.last_used = tokio::time::Instant::now();
+        entry.generation
+    };
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(CLIENT_IDLE).await;
+        let mut pool = POOL.lock().await;
+        pool.retain(|entry| !(entry.id == id && entry.busy == 0 && entry.generation == generation));
+    });
+}
+
+/// Drops a pooled client after a failed turn, so the next turn of that chat starts a new CLI.
+async fn evict_client(id: u64) {
+    POOL.lock().await.retain(|entry| entry.id != id);
 }
 
 /// How long the main agent may stay idle, with the run not over, before the turn ends with its answer: a shell it left
@@ -426,9 +519,12 @@ fn scoped(parent: Option<String>, event: AgentEvent) -> AgentEvent {
     }
 }
 
-/// Starts a request-scoped SDK client using the account selected in GitHub CLI.
+/// Starts a request-scoped SDK client using the account selected in GitHub CLI. The SDK runs the Copilot CLI that
+/// AgentDeck installed (Settings > Connectors); it does not search PATH itself.
 async fn start_client(token: String, cwd: Option<&Path>) -> Result<Client, String> {
+    let cli = which("copilot").ok_or("GitHub Copilot CLI is not installed: install it in Settings > Connectors")?;
     let mut options = ClientOptions::new()
+        .with_program(CliProgram::Path(cli))
         .with_github_token(token)
         .with_use_logged_in_user(false);
     if let Some(cwd) = cwd {
@@ -623,8 +719,10 @@ impl PermissionHandler for CopilotPermissions {
     }
 }
 
-fn emit(app: &AppHandle, session: &str, turn: &str, message_id: Option<&str>, event: AgentEvent) {
-    let _ = app.emit(
+pub(crate) fn emit(app: &AppHandle, session: &str, turn: &str, message_id: Option<&str>, event: AgentEvent) {
+    // Only the main window: a Preview page is a copy of this app and must not replay the chats' events.
+    let _ = app.emit_to(
+        "main",
         "agent-event",
         AgentEnvelope {
             session: session.to_string(),

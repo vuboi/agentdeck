@@ -99,7 +99,9 @@ fn forget(session: &str, turn: &str) {
 
 fn emit(app: &AppHandle, session: &str, turn: &str, message_id: Option<&str>, event: AgentEvent) {
     crate::flow_log::tap(session, turn, &event);
-    let _ = app.emit(
+    // Only the main window: a Preview page is a copy of this app and must not replay the chats' events.
+    let _ = app.emit_to(
+        "main",
         "agent-event",
         AgentEnvelope {
             session: session.to_owned(),
@@ -183,7 +185,9 @@ pub(crate) async fn agent_prewarm(
     api_key: Option<String>,
 ) -> Result<(), String> {
     if agent == "copilot" {
-        // The SDK starts a scoped Copilot runtime when the user sends the first turn.
+        // The Copilot CLI is pooled per chat (copilot.rs), so the first turn does not wait for it to start.
+        let cwd = working_directory(cwd);
+        tauri::async_runtime::spawn(crate::copilot::prewarm(session, cwd));
         return Ok(());
     }
     let provider = provider_for(&agent)?;
@@ -246,6 +250,30 @@ pub(crate) async fn agent_send(
         let (stop, token) = StopHandle::new();
         let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, "copilot", req.model.as_deref().unwrap_or("-"));
         let run = crate::copilot::run_turn(app.clone(), session.clone(), turn.clone(), message_id.clone(), req, token);
+        let handle = tauri::async_runtime::spawn(async move {
+            run.await;
+            noted.finish("finished");
+        });
+        track(session, turn, handle, Some(stop), response);
+        return Ok(());
+    }
+    if agent == "opencode" {
+        let response = ChatResponseCapabilities::custom();
+        let req = TurnRequest {
+            prompt,
+            session_id: agent_session,
+            resume,
+            model,
+            permission_mode,
+            effort,
+            allowed_tools,
+            cwd: working_directory(cwd),
+            owner: Some(session.clone()),
+            api_key,
+        };
+        let (stop, token) = StopHandle::new();
+        let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, "opencode", req.model.as_deref().unwrap_or("-"));
+        let run = crate::opencode_serve::run_turn(app.clone(), session.clone(), turn.clone(), message_id.clone(), req, token);
         let handle = tauri::async_runtime::spawn(async move {
             run.await;
             noted.finish("finished");
@@ -364,4 +392,20 @@ pub(crate) fn agent_stop(session: String, turn: Option<String>) {
             }
         }
     }
+}
+
+/// Stops every active agent turn and warm CLI when the desktop WebView reloads.
+#[tauri::command]
+pub(crate) fn agent_stop_all() {
+    let runs = RUNNING
+        .lock()
+        .map(|mut running| std::mem::take(&mut *running))
+        .unwrap_or_default();
+    for ((session, turn), run) in runs {
+        if turn.starts_with("auto-") {
+            ag_adapters::agent::tail::interrupt(&session);
+        }
+        stop_run(run);
+    }
+    ag_adapters::agent::warm::reset(None);
 }

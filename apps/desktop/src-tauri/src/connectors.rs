@@ -457,11 +457,12 @@ pub struct Detected {
     copilot: Login,
 }
 
-const TOOLS: [&str; 9] = [
+const TOOLS: [&str; 10] = [
     "claude",
     "codex",
     "agy",
     "opencode",
+    "copilot",
     "codex-auth",
     "cswap",
     "uv",
@@ -816,7 +817,8 @@ pub async fn connector_install(app: AppHandle, id: String) -> Result<(), String>
                 )
             }
         }
-        "copilot" => return Err("Install GitHub CLI (`gh`) to use GitHub Copilot".into()),
+        // Pinned to the CLI version the SDK was built against (its `cli-version.txt`): the SDK speaks its protocol.
+        "copilot" => node_tool(&format!("@github/copilot@{}", ENDPOINTS.pins.copilot))?,
         other => return Err(format!("do not know how to install `{other}`")),
     };
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -1982,7 +1984,7 @@ pub(crate) fn delete_secret(target: &str) -> Result<(), String> {
 }
 
 fn agy_accounts_path() -> Result<PathBuf, String> {
-    crate::home_folder().map(|home| home.join(".agentdeck").join("antigravity-accounts.json"))
+    crate::home_folder().map(|home| home.join(crate::channel::home_folder_name()).join("antigravity-accounts.json"))
 }
 
 #[cfg(windows)]
@@ -2436,6 +2438,44 @@ pub async fn antigravity_quota() -> Option<AgyQuota> {
     }
 }
 
+/// One saved Antigravity account and its own quota. `error` says why there is none (no saved sign-in, or one whose access
+/// token ran out: agy renews it on its next run).
+#[derive(Serialize, Debug)]
+pub struct AgyAccountQuota {
+    id: String,
+    email: String,
+    active: bool,
+    quota: Option<AgyQuota>,
+    error: Option<String>,
+}
+
+/// The quota of every saved Antigravity account, each read with its own sign-in. Accounts are read at the same time.
+#[tauri::command]
+pub async fn antigravity_quotas() -> Vec<AgyAccountQuota> {
+    let accounts = antigravity_accounts_list().await;
+    let reads = accounts.into_iter().map(|account| async move {
+        #[cfg(windows)]
+        let sign_in = stored_secret(&agy_secret_target(&account.email)).and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        #[cfg(not(windows))]
+        let sign_in: Option<Value> = None;
+        let (quota, error) = match sign_in {
+            None => (None, Some("Saved credentials are missing".to_string())),
+            Some(sign_in) => match fetch_agy_quota_for_sign_in(&sign_in).await {
+                Ok(quota) => (Some(quota), None),
+                Err(error) => (None, Some(error)),
+            },
+        };
+        AgyAccountQuota {
+            id: account.id,
+            email: account.email,
+            active: account.active,
+            quota,
+            error,
+        }
+    });
+    futures_util::future::join_all(reads).await
+}
+
 fn tracing_note(error: &str) {
     eprintln!("antigravity quota: {error}");
 }
@@ -2465,7 +2505,7 @@ pub async fn agy_modes(force: bool) -> AgyModes {
     let version = version_of(&agy).await.unwrap_or_default();
     let cache = crate::home_folder()
         .ok()
-        .map(|home| home.join(".agentdeck").join("agy-modes.json"));
+        .map(|home| home.join(crate::channel::home_folder_name()).join("agy-modes.json"));
     if !force {
         let saved = cache
             .as_ref()

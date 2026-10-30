@@ -18,6 +18,7 @@
     type Section,
   } from '../../agents/connectors.svelte';
   import AboutSection from './sections/AboutSection.svelte';
+  import DebugSection from './sections/DebugSection.svelte';
   import AlertsSection from './sections/AlertsSection.svelte';
   import ComputerSection from './sections/ComputerSection.svelte';
   import ConnectorsSection from './sections/ConnectorsSection.svelte';
@@ -40,6 +41,7 @@
     { id: 'alerts', label: 'Limit alerts', icon: 'lucideBell', hint: 'Warn before a limit' },
     { id: 'sync', label: 'Sync', icon: 'lucideCloudUpload', hint: 'History backup (planned)' },
     { id: 'computer', label: 'Computer use', icon: 'lucideMonitor', hint: 'Windows screen and input via MCP or CLI' },
+    { id: 'debug', label: 'Debug', icon: 'lucideBug', hint: 'Trace where the app hangs' },
     { id: 'about', label: 'About', icon: 'lucideInfo', hint: 'Version and links' },
   ];
 
@@ -140,7 +142,7 @@
             <ZIcon zType={icon(item.icon)} class="size-4 shrink-0" />
             <span class="min-w-0 max-[700px]:hidden">
               <span class="block truncate font-medium">{item.label}</span>
-              <span class="block truncate text-[11px] font-normal opacity-70">{item.hint}</span>
+              <span class="block truncate text-[0.6875rem] font-normal opacity-70">{item.hint}</span>
             </span>
             {#if item.id === 'alerts' && active.length > 0}
               <span class="absolute top-2 right-2 size-2 rounded-full bg-destructive" aria-label="{active.length} warnings"></span>
@@ -155,7 +157,7 @@
           <h2 class="text-sm font-semibold">{NAV.find((item) => item.id === settings.section)?.label}</h2>
           <span class="ml-auto"></span>
           {#if settings.section === 'connectors'}
-            <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2 text-xs" title="Check CLIs and reload usage" disabled={refreshingAll} onclick={() => void refreshAll(true)}>
+            <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2 text-sm" title="Check CLIs and reload usage" disabled={refreshingAll} onclick={() => void refreshAll(true)}>
               <ZIcon zType={icon(refreshingAll ? 'lucideLoaderCircle' : 'lucideRefreshCw')} class="size-3.5 {refreshingAll ? 'animate-spin' : ''}" /> Refresh
             </ZButton>
           {/if}
@@ -166,13 +168,16 @@
 
         <div class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-5 py-4 [scrollbar-gutter:stable] max-[700px]:px-3">
           {#if !inTauri()}
-            <p class="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">Connectors need the desktop app: open AgentDeck, not the browser preview.</p>
+            <p class="rounded-lg border border-dashed border-border p-6 text-center text-[0.75rem] text-muted-foreground">Connectors need the desktop app: open AgentDeck, not the browser preview.</p>
 
           {:else if settings.section === 'connectors'}
             <ConnectorsSection bind:connectorTab bind:resetAsk />
 
           {:else if settings.section === 'providers'}
             <ProvidersSection form={providerForm} />
+
+          {:else if settings.section === 'debug'}
+            <DebugSection />
 
           {:else if settings.section === 'about'}
             <AboutSection />
@@ -202,7 +207,7 @@
 {/if}
 
 <ZModal open={resetAsk !== ''} zTitle="Reset Codex limits" zWidth="460px" zBodyClass="min-h-0! py-3" zOkText="Use one reset" zCancelText="Cancel" onOk={() => { const email = resetAsk; resetAsk = ''; void consumeCodexResetCredit(email); }} onCancel={() => (resetAsk = '')}>
-  <p class="text-sm text-muted-foreground">
+  <p class="text-[0.75rem] text-muted-foreground">
     This will redeem one available reset credit for <b class="text-foreground">{resetAsk}</b> and refresh its Codex limits. The credit is consumed immediately.
   </p>
 </ZModal>

@@ -10,6 +10,8 @@ export type HistorySession = {
   title: string;
   model: string | null;
   cwd: string;
+  /** Verified on disk by the history indexer; a working directory alone is not a project. */
+  is_project?: boolean;
   started_at: string | null;
   updated_at: string | null;
   message_count: number;

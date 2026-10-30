@@ -23,7 +23,10 @@ const accountOf = (base: string, url: string) => {
   return tail !== undefined && url.startsWith(head) && url.endsWith(tail) ? url.slice(head.length, url.length - tail.length).replace('{account_id}', '') : '';
 };
 
-const blank = (): CustomProvider => ({ id: newProviderId(), name: '', kind: 'openai', baseUrl: KINDS[0].base, keyEnv: '', apiKey: '', models: [], defaultModel: '', enabled: true });
+const blank = (): CustomProvider => {
+  const keyId = `key-${Date.now().toString(36)}`;
+  return { id: newProviderId(), name: '', kind: 'openai', baseUrl: KINDS[0].base, keyEnv: '', keys: [{ id: keyId, label: 'Key 1', apiKey: '' }], activeKeyId: keyId, autoSwitch: false, models: [], defaultModel: '', enabled: true };
+};
 
 /**
  * State and actions of the provider form, shared by the providers list (which opens it) and the form modals
@@ -36,6 +39,7 @@ export class ProviderForm {
   confirmDelete = $state('');
   /** The key the provider being edited was saved with: shown hidden, never in the field (SecretInput). */
   keptKey = $state('');
+  keptKeys = $state<Record<string, string>>({});
   /** The provider form is a modal over the settings (like adding an MCP server). */
   providerModal = $state(false);
   account = $state('');
@@ -48,8 +52,9 @@ export class ProviderForm {
 
   edit(provider?: CustomProvider) {
     // A provider saved before keys were kept as text has none: the field binds a string either way.
-    this.draft = provider ? { ...provider, apiKey: provider.apiKey ?? '', models: [...provider.models] } : blank();
-    this.keptKey = provider?.apiKey ?? '';
+    this.draft = provider ? { ...provider, keys: provider.keys.map((key) => ({ ...key })), models: [...provider.models] } : blank();
+    this.keptKeys = Object.fromEntries((provider?.keys ?? []).map((key) => [key.id, key.apiKey]));
+    this.keptKey = '';
     this.account = provider ? accountOf(FREE_CLOUD.find((preset) => samePreset(preset.base, provider.baseUrl))?.base ?? '', provider.baseUrl) : '';
     this.providerModal = true;
     this.probeNote = null;
@@ -61,7 +66,8 @@ export class ProviderForm {
     this.probing = true;
     this.probeNote = null;
     try {
-      const result = await probeProvider(draft.kind, draft.baseUrl, draft.apiKey ?? '', draft.keyEnv);
+      const active = draft.keys.find((key) => key.id === draft.activeKeyId) ?? draft.keys[0];
+      const result = await probeProvider(draft.kind, draft.baseUrl, active?.apiKey ?? '', active?.keyEnv ?? draft.keyEnv);
       if (result.ok) {
         draft.models = result.models;
         if (!result.models.includes(draft.defaultModel)) draft.defaultModel = result.models[0] ?? '';
@@ -87,6 +93,20 @@ export class ProviderForm {
     draft.name = this.freePreset?.name ?? (draft.name.trim() || KINDS.find((kind) => kind.value === draft.kind)?.label || 'Provider');
     saveProvider($state.snapshot(draft) as CustomProvider);
     this.providerModal = false;
+  }
+
+  addKey() {
+    if (!this.draft) return;
+    const id = `key-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    this.draft.keys.push({ id, label: `Key ${this.draft.keys.length + 1}`, apiKey: '' });
+    this.draft.activeKeyId ??= id;
+  }
+
+  removeKey(id: string) {
+    if (!this.draft) return;
+    this.draft.keys = this.draft.keys.filter((key) => key.id !== id);
+    delete this.keptKeys[id];
+    if (this.draft.activeKeyId === id) this.draft.activeKeyId = this.draft.keys[0]?.id ?? null;
   }
 
   /** Opens the provider form filled in for a free cloud API: paste the key, Test lists its models, Save. */

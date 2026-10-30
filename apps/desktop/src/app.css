@@ -317,9 +317,9 @@ html[data-warming] [data-z-popover] {
   font-size: 0.8em;
 }
 .md-table { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; margin: 0 0 0.75rem; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
-.md-table table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.md-table table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
 .md-table th, .md-table td { padding: 0.4rem 0.8rem; text-align: left; border: 0; }
-.md-table th { font-weight: 600; color: var(--muted-foreground); font-size: 0.75rem; border-bottom: 1px solid var(--border); }
+.md-table th { font-weight: 600; color: var(--muted-foreground); font-size: 0.8125rem; border-bottom: 1px solid var(--border); }
 .md-table tr + tr td { border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent); }
 /* Words stay whole (a "Mức" or "minor" cell does not split into letters), headers stay on one line, the "#" column hugs its
    number, and a long code span (a path) may wrap anywhere, so it does not claim a column of its own. */
@@ -327,18 +327,20 @@ html[data-warming] [data-z-popover] {
 .md-table th, .md-table td { overflow-wrap: normal; word-break: normal; }
 /* The first column hugs its content but still wraps: a long first cell ("CVE-… — text") is cut by its cell's reading width
    instead of running into the next column. */
-.md-table td:first-child, .md-table th:first-child { width: 1%; }
-.md-table td code { overflow-wrap: anywhere; }
+.md-table td code { overflow-wrap: anywhere; line-height: 1.4; }
+.md-table th, .md-table td { vertical-align: top; }
 /* Columns size to their content up to a reading width, then wrap: a long cell no longer takes the whole table and leaves
    the next column a sliver. The table fills the card, and scrolls sideways only when the columns need more. */
-.md-table table { width: max-content; min-width: 100%; }
-.md-cell { max-width: 22rem; min-width: 4rem; }
-.md-table td:first-child .md-cell { min-width: 0; }
+.md-table table { width: 100%; min-width: max-content; }
+.md-cell { max-width: 28rem; min-width: 4rem; }
+.md-table td:first-child .md-cell { min-width: 8rem; }
+.md-table td:first-child code { overflow-wrap: break-word; white-space: normal; }
 .md img { max-width: 100%; border-radius: var(--radius-large); }
 .md-code { margin: 0 0 0.75rem; overflow: clip; border: 1px solid var(--border); border-radius: var(--radius-large); background: var(--muted); }
 .md-code-head, .md-code-foot { position: relative; display: flex; align-items: center; justify-content: space-between; background: var(--muted); color: var(--muted-foreground); font-size: 0.6875rem; }
 .md-code-head { padding: 0.25rem 0.5rem 0.25rem 0.75rem; border-bottom: 1px solid var(--border); }
 .md-code-foot { justify-content: flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid var(--border); }
+.md-code-kind { display: inline-grid; place-items: center; height: 1.6rem; color: var(--muted-foreground); }
 .md-code-actions { display: flex; align-items: center; gap: 0.1rem; }
 .md-code-head button, .md-code-foot button { position: relative; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; padding: 0; cursor: pointer; border-radius: var(--radius-small); font: inherit; }
 .md-code-head button:hover, .md-code-foot button:hover { background: var(--accent); color: var(--foreground); }

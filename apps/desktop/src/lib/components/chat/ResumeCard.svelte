@@ -1,39 +1,48 @@
 <script lang="ts">
   import { fly } from 'svelte/transition';
-  import { ZButton, ZIcon } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZSwitch } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { ticker } from '../../app/platform/clock.svelte';
   import { resetCountdown } from '../../chat/recovery/countdown';
-  import { cancelResume, resumeNow, setResumeAuto, type Resume } from '../../chat/sessions.svelte';
-  import { openSettings } from '../../agents/connectors.svelte';
+  import { resumeNow, setResumeAuto, type Resume } from '../../chat/sessions.svelte';
+  import { openExternal } from '../../browser/browser.svelte';
+  import { ENDPOINTS } from '../../agents/endpoints';
+  import { modelLabel } from '../../agents/models.svelte';
 
-  // Above the message box when a turn stopped at a usage limit: when the work carries on by itself, with a switch to turn
-  // that off, Try again now, and Cancel. (sessions.svelte.ts, "carrying on when a usage limit ends")
+  // Compact status directly above the composer when a turn is paused at a usage limit.
   let { resume }: { resume: Resume } = $props();
 
-  const clock = $derived(new Date(resume.at).toLocaleString([], { hour: 'numeric', minute: '2-digit', ...(resume.at - Date.now() > 20 * 3_600_000 ? { weekday: 'short', day: 'numeric', month: 'short' } : {}) }));
   const left = $derived(resume.at > ticker.sec ? resetCountdown(resume.at / 1000, ticker.sec) : 'now');
+  const canAutoResume = $derived(resume.canAutoResume ?? true);
+  const model = $derived(resume.model ? modelLabel(resume.model) : '');
+  function changeAuto(value: boolean) {
+    setResumeAuto(resume.sessionId, value);
+  }
+  function tryAgain() {
+    resumeNow(resume.sessionId);
+  }
 </script>
 
-<section class="mb-2 overflow-hidden rounded-xl border border-border bg-card" aria-label="Usage limit reached" transition:fly={{ y: 8, duration: 180 }}>
-  <div class="flex items-center gap-2.5 border-b border-border bg-muted/40 px-4 py-2.5 text-sm font-medium">
-    <ZIcon zType={'lucideGauge' as ZIconName} class="size-4 shrink-0 text-destructive" />
-    Usage limit reached
-  </div>
-  <div class="px-4 py-3 text-xs">
-    <p class="m-0 text-muted-foreground">
-      {#if resume.auto}Auto-resuming at <b class="text-foreground">{clock}</b> · in <span class="tabular-nums">{left}</span>{:else}Resets at <b class="text-foreground">{clock}</b> · in <span class="tabular-nums">{left}</span>{/if}
-    </p>
-    <label class="mt-2.5 flex w-fit cursor-pointer items-center gap-2 text-sm">
-      <input type="checkbox" class="size-4 cursor-pointer accent-[var(--primary)]" checked={resume.auto} onchange={(event) => setResumeAuto(resume.sessionId, event.currentTarget.checked)} />
-      Auto-continue when the limit resets
-    </label>
-    <div class="mt-3 flex flex-wrap items-center justify-end gap-2">
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="h-8 px-3 text-xs" onclick={() => cancelResume(resume.sessionId)}>Cancel</ZButton>
-      <ZButton zWave={false} zType="outline" zSize="sm" class="h-8 gap-1.5 px-3 text-xs" onclick={() => openSettings()}>
-        <ZIcon zType={'lucideGauge' as ZIconName} class="size-3.5" /> Usage settings
-      </ZButton>
-      <ZButton zWave={false} zSize="sm" class="h-8 px-3 text-xs" onclick={() => resumeNow(resume.sessionId)}>Try again</ZButton>
+<section class="mb-2 flex min-h-[5.5rem] w-fit min-w-[23rem] max-w-full flex-col justify-between gap-2 rounded-lg border border-border bg-card px-3.5 pb-2.5 pt-3.5 text-sm" aria-label="Usage limit reached" transition:fly={{ y: 4, duration: 140 }}>
+  <div class="flex min-w-0 items-start gap-2.5">
+    <ZIcon zType={'lucideGauge' as ZIconName} class="mt-0.5 size-4 shrink-0 text-destructive" />
+    <div class="min-w-0">
+      <div class="truncate text-sm font-medium">{resume.label}{model ? ` · ${model}` : ''}</div>
+      <div class="truncate text-sm text-muted-foreground">{#if canAutoResume}{resume.detail ?? 'Try again after the provider limit resets'} · {left}{:else}{resume.detail ?? 'Try again after resolving this limit'}{/if}</div>
     </div>
+  </div>
+  <div class="flex min-h-7 shrink-0 items-center gap-3 pl-6">
+    {#if canAutoResume}
+      <ZSwitch class="[&>div>label]:text-[13px]" zVariant="dot" zSize="sm" zWave={false} zText="Continue when limit resets" zTextPosition="right" checked={resume.auto} onChange={changeAuto} />
+    {/if}
+    {#if !resume.auto || !canAutoResume}
+      {#if resume.gate === 'credit' && resume.agent === 'claude'}
+        <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 px-2.5 text-xs" onclick={() => void openExternal(ENDPOINTS.anthropic.billingPage)}>Add credit</ZButton>
+      {/if}
+      <ZButton zWave={false} zType="outline" zSize="sm" class="h-7 gap-1.5 px-2.5 text-[13px]" onclick={tryAgain}>
+        <ZIcon zType={'lucideRotateCcw' as ZIconName} class="size-3.5" />
+        Try again
+      </ZButton>
+    {/if}
   </div>
 </section>

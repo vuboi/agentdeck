@@ -4,7 +4,7 @@ members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
 
 [workspace.package]
 edition = "2021"
-version = "0.1.40"
+version = "0.1.44"
 license = "MIT"
 
 [workspace.dependencies]
@@ -27,7 +27,8 @@ ag-protocol = { path = "crates/protocol" }
 ag-store = { path = "crates/store" }
 ag-core = { path = "crates/core" }
 ag-adapters = { path = "crates/adapters" }
-github-copilot-sdk = "1.0.28"
+# No bundled CLI: the Copilot CLI is installed on demand (Settings > Connectors) and passed by path.
+github-copilot-sdk = { version = "1.0.28", default-features = false, features = ["runtime"] }
 indexmap = "2"
 async-trait = "0.1"
 ag-quota = { path = "crates/quota" }

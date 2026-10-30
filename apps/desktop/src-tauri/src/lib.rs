@@ -6,6 +6,7 @@ mod agent_runs;
 mod awake;
 mod answers;
 mod bridge;
+mod channel;
 mod browser;
 mod browser_extensions;
 mod cdp;
@@ -26,11 +27,13 @@ mod image_gen;
 mod image_history;
 mod index;
 mod mcp;
+mod opencode_serve;
 mod mcp_client;
 mod mcp_manage;
 mod mcp_providers;
 mod notify;
 mod page_memory;
+mod picture_store;
 mod path_links;
 mod officecli;
 mod process_guard;
@@ -141,30 +144,39 @@ async fn attachment_save(mime: String, data: String) -> Result<String, String> {
     use base64::Engine;
     const MAX_BYTES: usize = 15 * 1024 * 1024;
     tauri::async_runtime::spawn_blocking(move || {
-        let extension = match mime.as_str() {
-            "image/png" => "png",
-            "image/jpeg" => "jpg",
-            "image/gif" => "gif",
-            "image/webp" => "webp",
-            other => return Err(format!("{other} is not a supported image type")),
-        };
+        if !matches!(mime.as_str(), "image/png" | "image/jpeg" | "image/gif" | "image/webp") {
+            return Err(format!("{mime} is not a supported image type"));
+        }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data.as_bytes())
             .map_err(|error| error.to_string())?;
         if bytes.len() > MAX_BYTES {
             return Err("the image is larger than 15 MB".to_string());
         }
-        let folder = home_folder()?.join(".agentdeck").join("attachments");
-        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_nanos());
-        let path = folder.join(format!("image-{stamp:x}.{extension}"));
-        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
-        Ok(path.to_string_lossy().into_owned())
+        write_attachment(&mime, bytes)
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// A picture already in memory (the browser's capture), stored like an attachment: WebP when it can be, the path back.
+pub(crate) async fn save_attachment_bytes(mime: &str, bytes: Vec<u8>) -> Result<String, String> {
+    let mime = mime.to_string();
+    tauri::async_runtime::spawn_blocking(move || write_attachment(&mime, bytes))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn write_attachment(mime: &str, bytes: Vec<u8>) -> Result<String, String> {
+    let (extension, bytes) = picture_store::stored_picture(mime, bytes);
+    let folder = home_folder()?.join(crate::channel::home_folder_name()).join("attachments");
+    std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let path = folder.join(format!("image-{stamp:x}.{extension}"));
+    std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Saves a picked file (any type: document, spreadsheet, code) under `~/.agentdeck/attachments` so the agent CLI can
@@ -192,7 +204,7 @@ async fn attachment_save_file(name: String, data: String) -> Result<String, Stri
             .collect();
         let safe = safe.trim_matches(|c: char| c == '.' || c == ' ');
         let safe = if safe.is_empty() { "file" } else { safe };
-        let folder = home_folder()?.join(".agentdeck").join("attachments");
+        let folder = home_folder()?.join(crate::channel::home_folder_name()).join("attachments");
         std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -472,7 +484,7 @@ fn server_log(port: u16, lines: usize) -> String {
     }
 }
 
-/// Sessions Claude Code and Codex already saved on this machine. Read-only.
+/// Indexes the conversations saved by Claude Code and Codex. `is_project` is decided by the indexer (one check per folder).
 #[tauri::command]
 async fn history_list() -> Result<Vec<HistorySession>, String> {
     let roots = roots()?;
@@ -529,7 +541,7 @@ pub(crate) fn home_folder() -> Result<PathBuf, String> {
 
 /// The Audit log: `~/.agentdeck/audit.jsonl`, one JSON line per finished tool call or chat error.
 fn audit_file() -> Result<PathBuf, String> {
-    Ok(home_folder()?.join(".agentdeck").join("audit.jsonl"))
+    Ok(home_folder()?.join(crate::channel::home_folder_name()).join("audit.jsonl"))
 }
 
 /// Per-day line counts of the Audit log, kept beside it so a count does not read the whole file.
@@ -567,7 +579,7 @@ fn audit_day(started: f64, offset_min: f64) -> i64 {
 }
 
 fn audit_index_file() -> Result<PathBuf, String> {
-    Ok(home_folder()?.join(".agentdeck").join("audit.index.json"))
+    Ok(home_folder()?.join(crate::channel::home_folder_name()).join("audit.index.json"))
 }
 
 /// Serialises every change to the index: appends, counts and rebuilds all read and write it.
@@ -821,7 +833,7 @@ fn audit_clear() -> Result<(), String> {
 /// Pictures a tool call returned (a screenshot of the page): `~/.agentdeck/audit-images`, one file each. The log
 /// line keeps the file's name, not the picture, so the log stays small.
 fn audit_images() -> Result<PathBuf, String> {
-    Ok(home_folder()?.join(".agentdeck").join("audit-images"))
+    Ok(home_folder()?.join(crate::channel::home_folder_name()).join("audit-images"))
 }
 
 /// Saves a picture given as a data URL (`data:image/png;base64,…`). Returns the file's name.
@@ -830,16 +842,17 @@ async fn audit_image_save(image: String) -> Result<String, String> {
     use base64::Engine;
     tauri::async_runtime::spawn_blocking(move || {
         let (head, data) = image.split_once(',').ok_or("not a data URL")?;
-        let extension = match head {
-            "data:image/png;base64" => "png",
-            "data:image/jpeg;base64" => "jpg",
-            "data:image/webp;base64" => "webp",
-            "data:image/gif;base64" => "gif",
-            other => return Err(format!("{other} is not a supported picture")),
-        };
+        let mime = head
+            .strip_prefix("data:")
+            .and_then(|rest| rest.strip_suffix(";base64"))
+            .ok_or_else(|| format!("{head} is not a supported picture"))?;
+        if !matches!(mime, "image/png" | "image/jpeg" | "image/gif" | "image/webp") {
+            return Err(format!("{mime} is not a supported picture"));
+        }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data.as_bytes())
             .map_err(|error| error.to_string())?;
+        let (extension, bytes) = picture_store::stored_picture(mime, bytes);
         let folder = audit_images()?;
         std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
         let stamp = std::time::SystemTime::now()
@@ -851,6 +864,19 @@ async fn audit_image_save(image: String) -> Result<String, String> {
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// The full path of a saved picture, for the asset protocol (no bytes cross IPC). Only a bare file name of that folder.
+#[tauri::command]
+fn audit_image_path(name: String) -> Result<String, String> {
+    if name.is_empty() || name.contains(['/', '\\']) || name.contains("..") {
+        return Err("not a picture of the audit log".to_string());
+    }
+    let path = audit_images()?.join(&name);
+    if !path.is_file() {
+        return Err("not a picture of the audit log".to_string());
+    }
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// A saved picture as a data URL. Only a bare file name of that folder is read.
@@ -937,7 +963,7 @@ fn run_file(root: Option<String>, run: &str, name: &str) -> Result<PathBuf, Stri
         Some(root) if !root.is_empty() => PathBuf::from(root),
         _ => home_folder()?,
     };
-    Ok(base.join(".agentdeck").join("runs").join(run).join(name))
+    Ok(base.join(crate::channel::home_folder_name()).join("runs").join(run).join(name))
 }
 
 /// Writes one file of a run's notes and returns its full path. The runs folder ignores itself in git.
@@ -1064,7 +1090,7 @@ fn inside_root(root: &str, path: &str) -> Result<PathBuf, String> {
 /// Where deleted files go, so they can be put back (Ctrl+Z in Explore, or by hand).
 fn file_trash() -> Result<PathBuf, String> {
     Ok(home_folder()?
-        .join(".agentdeck")
+        .join(crate::channel::home_folder_name())
         .join("trash")
         .join("files"))
 }
@@ -2138,6 +2164,8 @@ pub fn run() {
                 .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
         })
         .setup(|app| {
+            // First: every folder and MCP name below depends on which build this is.
+            channel::init(&app.config().identifier);
             flow_log::install(app.handle());
             // Create the main webview with the same WebView2 extension setting used by Preview child views.
             let main_window = app
@@ -2299,6 +2327,7 @@ pub fn run() {
             mcp_manage::mcp_agy_link,
             connectors::antigravity_quota,
             connectors::antigravity_quota_cached,
+            connectors::antigravity_quotas,
             connectors::antigravity_accounts_list,
             connectors::antigravity_account_adopt,
             connectors::antigravity_account_switch,
@@ -2324,6 +2353,7 @@ pub fn run() {
             audit_clear,
             audit_image_save,
             audit_image_read,
+            audit_image_path,
             folder_list,
             reveal_path,
             path_links::path_resolve,
@@ -2372,6 +2402,7 @@ pub fn run() {
             awake::keep_awake_set,
             agent_runs::custom_send,
             agent_runs::agent_stop,
+            agent_runs::agent_stop_all,
             agent_runs::agent_inject,
             delegate::delegate_reply,
             delegate::delegate_ready,
@@ -2415,6 +2446,8 @@ pub fn run() {
             browser::browser_close,
             browser::browser_capture,
             browser::browser_element_capture,
+        browser::browser_capture_file,
+        browser::browser_element_capture_file,
             browser::browser_press,
             browser::open_external,
             browser::browser_favicon,

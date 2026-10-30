@@ -137,7 +137,7 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-1 flex-col overflow-hidden" role="tabpanel" aria-label="Store" bind:clientWidth={panelWidth}>
-  <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-1.5 text-xs text-muted-foreground">
+  <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-1.5 text-sm text-muted-foreground">
     <ZTabs zTabs={TABS} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={tab} onTabChange={(next) => (tab = next as Tab)} />
     <!-- Add and refresh, plain until the pointer is on them: the tab on screen decides which there are. -->
     <div class="ml-auto flex shrink-0 items-center gap-0.5">
@@ -167,7 +167,7 @@
     <!-- Header 2: what kind of thing; header 3: the search box. -->
     <StoreHeader>
       <div class="store-kinds min-w-0"><ZTabs zTabs={KIND_TABS} zType="segmented" zSize="sm" zTabsOnly zCache={false} activeTab={section} onTabChange={(next) => (section = next as Section)} /></div>
-      <ZButton zType="outline" zSize="sm" class="ml-auto h-8 shrink-0 px-2 text-xs" onclick={() => section === 'mcp' ? (mcpAdding = true) : (addOpen = true)}><ZIcon zType="lucidePlus" class="size-3.5" />{section === 'mcp' ? 'Add MCP' : section === 'skills' ? 'Add skill' : 'Import'}</ZButton>
+      <ZButton zType="outline" zSize="sm" class="ml-auto h-8 shrink-0 px-2 text-sm" onclick={() => section === 'mcp' ? (mcpAdding = true) : (addOpen = true)}><ZIcon zType="lucidePlus" class="size-3.5" />{section === 'mcp' ? 'Add MCP' : section === 'skills' ? 'Add skill' : 'Import'}</ZButton>
     </StoreHeader>
     {#snippet categoryFilter()}<StoreCategoryFilter class="w-full" bind:value={category} />{/snippet}
     <StoreBar
@@ -179,7 +179,7 @@
     {#if section === 'mcp'}
       <div class="flex min-h-0 flex-1 flex-col"><McpView {category} query={searched.value} bind:adding={mcpAdding} /></div>
     {:else}
-      <div class="flex min-h-0 flex-1 flex-col overflow-y-auto text-xs {GUTTER}">
+      <div class="flex min-h-0 flex-1 flex-col overflow-y-auto text-sm {GUTTER}">
         {#if store.error}
           <p class="m-1.5 rounded-md border border-destructive/30 bg-destructive/10 p-2 text-destructive">{store.error}</p>
         {/if}

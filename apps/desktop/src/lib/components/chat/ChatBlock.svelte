@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ZIcon, ZLoading, ZPopover, ZShimmerText, ZShowMore } from '@shival99/z-ui-svelte';
   import ElementCard from '../browser/ElementCard.svelte';
+  import { pictureSrc } from '../../chat/agent';
   import { TRIGGER_ON } from '../../app/ui/popover';
   import { LOADER, LOADER_SIZE, loaderFor } from '../../app/platform/loaders';
   import type { Block } from '../../chat/mock';
@@ -39,7 +40,7 @@
   <!-- One quiet line like the tool steps ("Used 2 tools ⌄"), no box: "Thinking" shimmers while it streams, "Thought"
        once done. Opened, the reasoning sits under it beside a thin rule, in the muted colour, as in Claude and ChatGPT. -->
   {@const thinkingNow = block.streaming && running}
-  <div class="block-in flex flex-col text-xs">
+  <div class="block-in flex flex-col text-sm">
     <button
       type="button"
       class="flex w-fit max-w-full cursor-pointer items-center gap-2 rounded-md py-0.5 text-left text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -52,7 +53,7 @@
     </button>
     <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {thinkingOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
       <div class="min-h-0 overflow-hidden">
-        <div class="mt-1.5 ml-[5px] border-l-2 border-border py-0.5 pl-3 text-[13px] leading-relaxed text-muted-foreground">
+        <div class="mt-1.5 ml-[5px] border-l-2 border-border py-0.5 pl-3 text-[0.8125rem] leading-relaxed text-muted-foreground">
           <!-- Short reasoning is shown as is: the show-more box keeps room for its button even when it has none. -->
           {#if thinkingText.length > 600}
             <ZShowMore zMaxHeight={160} zButtonSize="sm" zBlurColor="var(--background)" moreLabel="Show more" lessLabel="Show less">
@@ -78,7 +79,7 @@
   </div>
 {:else if block.kind === 'command'}
   <div class="block-in overflow-hidden rounded-lg border border-border bg-background">
-    <div class="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 font-mono text-xs">
+    <div class="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 font-mono text-sm">
       <ZIcon zType="lucideTerminal" class="size-3.5 text-muted-foreground" />
       <span class="truncate">{block.command}</span>
       <span class="ml-auto flex items-center gap-1 {statusTone[block.status]}">
@@ -91,7 +92,7 @@
       </span>
     </div>
     {#if block.output}
-      <div class="px-3 py-2 font-mono text-xs text-muted-foreground">
+      <div class="px-3 py-2 font-mono text-sm text-muted-foreground">
         <ZShowMore zMaxHeight={120} zButtonSize="sm" zBlurColor="var(--background)">
           <pre class="m-0 whitespace-pre-wrap">{block.output}</pre>
         </ZShowMore>
@@ -103,7 +104,7 @@
   {#if block.state !== 'pending'}<PermissionCard {block} {agent} {onanswer} />{/if}
 {:else if block.kind === 'element'}
   <!-- Click for what was sent with the message, in a card (the native tooltip ran off the window with the long selector). -->
-  <button type="button" bind:this={chip} class="block-in inline-flex max-w-full cursor-pointer items-center gap-1.5 self-start rounded-md border px-2 py-1 font-mono text-[11px] outline-none {cardOpen ? `${TRIGGER_ON} border-primary/60 ring-1 ring-primary/60` : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted'}" aria-label="Details of {block.selector}" aria-expanded={cardOpen} onclick={() => (cardOpen = !cardOpen)}>
+  <button type="button" bind:this={chip} class="block-in inline-flex max-w-full cursor-pointer items-center gap-1.5 self-start rounded-md border px-2 py-1 font-mono text-[0.6875rem] outline-none {cardOpen ? `${TRIGGER_ON} border-primary/60 ring-1 ring-primary/60` : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted'}" aria-label="Details of {block.selector}" aria-expanded={cardOpen} onclick={() => (cardOpen = !cardOpen)}>
     <ZIcon zType="lucideMousePointerClick" class="size-3 shrink-0 text-primary" />
     {#if block.picture}<img src={block.picture} alt="" class="size-5 shrink-0 rounded-sm border border-border object-cover" />{/if}
     <span class="truncate">&lt;{block.tag} /&gt; {block.text}</span>
@@ -114,9 +115,9 @@
     {/snippet}
   </ZPopover>
 {:else if block.kind === 'image'}
-  <img src={block.src} alt={block.name} class="block-in max-h-56 max-w-full self-start rounded-lg border border-border object-contain" />
+  <img src={pictureSrc(block)} alt={block.name} class="block-in max-h-56 max-w-full self-start rounded-lg border border-border object-contain" />
 {:else if block.kind === 'loading'}
-  <div class="block-in flex items-center gap-2 text-xs text-muted-foreground">
+  <div class="block-in flex items-center gap-2 text-sm text-muted-foreground">
     <ZLoading zLoading zSpinner={LOADER.thinking} zSize={LOADER_SIZE} zColor="primary" />
     <span>{block.label}</span>
   </div>

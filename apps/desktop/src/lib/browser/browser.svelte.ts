@@ -105,7 +105,7 @@ let listening = false;
 let regionSelectionResolve: ((selection: { box: Rect; viewport: { w: number; h: number } } | null) => void) | null = null;
 
 export async function listenToPage() {
-  if (listening || !inTauri()) return;
+  if (listening || !inTauri() || isPreviewCopy()) return;
   listening = true;
   const { listen } = await import('../app/platform/tauri-event');
   void listenToNetwork();
@@ -371,8 +371,13 @@ export function showBrowser(rect: Rect): Promise<void> {
 async function openBrowser(rect: Rect) {
   const tab = activeTab();
   if (!tab.url) return;
-  await call('browser_show', { tab: tab.id, url: tab.url, userAgent: DEVICES[browser.device].ua ?? null, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
-  tab.opened = true;
+  try {
+    await call('browser_show', { tab: tab.id, url: tab.url, userAgent: DEVICES[browser.device].ua ?? null, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
+    tab.opened = true;
+  } catch (error) {
+    tab.loading = false;
+    throw error;
+  }
 }
 export const moveBrowser = (rect: Rect) => call('browser_bounds', { tab: activeTab().id, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
 export const hideBrowser = () => call('browser_hide');
@@ -390,7 +395,12 @@ export async function goTo(url: string) {
   tab.url = url;
   if (tab.opened) {
     tab.loading = true;
-    await call('browser_navigate', { tab: tab.id, url });
+    try {
+      await call('browser_navigate', { tab: tab.id, url });
+    } catch (error) {
+      tab.loading = false;
+      throw error;
+    }
   }
 }
 const run = (script: string) => call('browser_eval', { tab: activeTab().id, script });
@@ -402,7 +412,12 @@ export const reload = () => {
   const tab = activeTab();
   return tab.url ? goTo(tab.url) : Promise.resolve();
 };
-export const stop = () => run('window.stop()');
+export const stop = () => {
+  const tab = activeTab();
+  tab.loading = false;
+  if (!tab.opened) return Promise.resolve();
+  return call('browser_eval', { tab: tab.id, script: 'window.stop()' });
+};
 
 /** The pages are created again with the new device's user agent (it cannot change on a live page), at the same address. */
 export async function recreateBrowser() {
@@ -449,6 +464,28 @@ export async function capturePageIfPossible(scale = 1, fullPage = false): Promis
   try {
     const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), fullPage ? 45000 : scale > 1 ? 15000 : 5000));
     return await Promise.race([capturePage(scale, fullPage), timeout]);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A WebP file of one element of a tab (its path, see browser_element_capture_file), or undefined: no base64 is made. */
+export async function captureElementFile(tab: string, box: PickedElement['box']): Promise<string | undefined> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 5000));
+    return await Promise.race([invoke<string>('browser_element_capture_file', { tab, x: box.x, y: box.y, w: box.w, h: box.h }), timeout]);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A WebP file of the whole page as it is now (its path, see browser_capture_file), or undefined when it cannot be captured. */
+export async function capturePageFileIfPossible(): Promise<string | undefined> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 5000));
+    return await Promise.race([invoke<string>('browser_capture_file', { tab: activeTab().id, scale: 1, fullPage: false }), timeout]);
   } catch {
     return undefined;
   }

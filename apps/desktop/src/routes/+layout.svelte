@@ -4,6 +4,8 @@
   import '../lib/app/ui/theme.svelte';
 
   import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
+  import { inTauri, isPreviewCopy } from '../lib/app/platform/history';
   import TitleTooltip from '../lib/components/ui/TitleTooltip.svelte';
   import { ZToaster } from '@shival99/z-ui-svelte';
   let { children } = $props();
@@ -11,7 +13,22 @@
 
   // In the desktop app, replace the mock workspace with the Claude Code / Codex history on this machine.
   onMount(() => {
-    if (isTrayMenu) return;
+    // The Preview's copy of this app starts nothing: no history import, no page listeners, no shortcuts. Two copies
+    // doing that at once fought over the same chats and froze both.
+    if (isTrayMenu || isPreviewCopy()) return;
+    let reloading = false;
+    const stopAgents = () => inTauri() && !isPreviewCopy() ? invoke('agent_stop_all').catch(() => {}) : Promise.resolve();
+    const beforeUnload = () => {
+      if (!reloading) void stopAgents();
+    };
+    const reloadKey = (event: KeyboardEvent) => {
+      if (event.key !== 'F5' || event.altKey || reloading || !inTauri() || isPreviewCopy()) return;
+      event.preventDefault();
+      reloading = true;
+      void stopAgents().finally(() => window.location.reload());
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    window.addEventListener('keydown', reloadKey, true);
     const scrollArrow = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
@@ -45,6 +62,8 @@
     void import('../lib/app/ui/content-tabs.svelte').then(({ installTabShortcuts }) => (stopShortcuts = installTabShortcuts()));
     return () => {
       stopShortcuts?.();
+      window.removeEventListener('beforeunload', beforeUnload);
+      window.removeEventListener('keydown', reloadKey, true);
       document.removeEventListener('pointerdown', scrollArrow, true);
     };
   });

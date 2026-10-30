@@ -56,12 +56,12 @@
   }
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col text-xs">
+<div class="flex min-h-0 flex-1 flex-col text-sm">
   <StoreHeader>
     <div class="min-w-0 flex-1"><ZInput bind:value={query} zPlaceholder="Search skill sources by name or URL…" zLabel="Search sources" zLabelClass="sr-only" class="h-8 w-full" /></div>
-    <ZButton zType="outline" zSize="sm" class="h-8 shrink-0 px-2 text-xs" zDisabled={catalog.refreshing} onclick={() => { address = ''; addOpen = true; }}><ZIcon zType="lucidePlus" class="size-3.5" />Add source</ZButton>
+    <ZButton zType="outline" zSize="sm" class="h-8 shrink-0 px-2 text-sm" zDisabled={catalog.refreshing} onclick={() => { address = ''; addOpen = true; }}><ZIcon zType="lucidePlus" class="size-3.5" />Add source</ZButton>
   </StoreHeader>
-  <p class="m-0 shrink-0 border-b border-border px-2 py-2 text-[11px] text-muted-foreground">Add a Git repository to list its skills in Discover. Then choose a skill and press Install. To add MCP, use Installed → MCP servers → Add MCP.</p>
+  <p class="m-0 shrink-0 border-b border-border px-2 py-2 text-[0.6875rem] text-muted-foreground">Add a Git repository to list its skills in Discover. Then choose a skill and press Install. To add MCP, use Installed → MCP servers → Add MCP.</p>
   {#if catalog.refreshing}<p class="m-0 px-2 py-2 text-muted-foreground" role="status">Reading skill sources and refreshing Discover…</p>{/if}
   {#if catalog.error}<p class="m-0 px-2 py-2 text-destructive" role="alert">{catalog.error}</p>{/if}
 
@@ -74,8 +74,8 @@
       <ul class="m-0 flex list-none flex-col gap-2 p-1.5">
         {#each shown as url (url)}
           <li class="flex items-center gap-2 rounded-md border border-border bg-card p-2.5">
-            <span class="min-w-0 flex-1 truncate font-mono text-[11px]" title={url}>{url}</span>
-            <ZButton zType="outline" zSize="sm" class="h-7 shrink-0 px-2 text-xs" zDisabled={catalog.refreshing} onclick={() => onbrowse(url)}>View skills</ZButton>
+            <span class="min-w-0 flex-1 truncate font-mono text-[0.6875rem]" title={url}>{url}</span>
+            <ZButton zType="outline" zSize="sm" class="h-7 shrink-0 px-2 text-sm" zDisabled={catalog.refreshing} onclick={() => onbrowse(url)}>View skills</ZButton>
             <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! p-0 text-destructive hover:!bg-destructive/10" title="Remove source" aria-label="Remove source" zDisabled={catalog.refreshing} onclick={() => dropSource(url)}>
               <ZIcon zType={icon('lucideTrash2')} class="size-3.5" />
             </ZButton>
@@ -93,7 +93,7 @@
 </div>
 
 <ZModal bind:open={addOpen} zTitle="Add skill source" zWidth="480px" zBodyClass="min-h-0! py-3" zOkText="Add source" zCancelText="Cancel" zOkDisabled={!isUrl || catalog.refreshing} zLoading={adding} onOk={() => void add()}>
-  <div class="flex flex-col gap-3 text-xs">
+  <div class="flex flex-col gap-3 text-sm">
     <ZInput bind:value={address} autofocus zLabel="Git repository URL (HTTPS)" zPlaceholder="https://github.com/owner/skills" onkeydown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void add(); } }} />
     <p class="m-0 text-muted-foreground">Discover refreshes after adding the source. Choose a skill there and press Install.</p>
   </div>

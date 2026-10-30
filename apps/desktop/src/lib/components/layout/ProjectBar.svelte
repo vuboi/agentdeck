@@ -1,12 +1,15 @@
 <script lang="ts">
-  import { ZButton, ZIcon, ZPopover, zModalService } from '@shival99/z-ui-svelte';
+  import { fade } from 'svelte/transition';
+  import { ZButton, ZIcon, ZPopover, ZSwitch, zModalService } from '@shival99/z-ui-svelte';
   import { glide, ROW_ON, TRIGGER_ON_PLAIN } from '../../app/ui/popover';
   import PickerPopover, { type PickerItem } from '../ui/PickerPopover.svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { inTauri } from '../../app/platform/history';
   import { activeSession, isRunning, isUnstarted, moveDraftToProject, NO_PROJECT, workspace } from '../../chat/sessions.svelte';
   import { toast } from '../../app/platform/toast';
-  import { addAccount, cancelLogin, connectors, installed, login, refreshAccounts, refreshAgyAccounts, switchAccount, switchAgyAccount, type Account, type AccountProvider, type AgyAccount } from '../../agents/connectors.svelte';
+  import { addAccount, cancelLogin, connectors, installed, login, refreshAccounts, refreshAgyAccounts, setConnectorAutoSwitch, switchAccount, switchAgyAccount, type Account, type AccountProvider, type AgyAccount, type ConnectorId } from '../../agents/connectors.svelte';
+  import { activeProviderKey, providerKeyEnv } from '../../agents/connectors.svelte';
+  import { parseCustomModel } from '../../agents/models.svelte';
   import AgentLogo from '../ui/AgentLogo.svelte';
   import QuotaBattery from '../settings/QuotaBattery.svelte';
   import { ticker } from '../../app/platform/clock.svelte';
@@ -29,8 +32,12 @@
 
   type QuickAccount = { provider: AccountProvider; account: Account } | { provider: 'agy'; account: AgyAccount };
   const accountProvider = $derived<AccountProvider | 'agy' | null>(
-    session?.agent === 'claude' || session?.agent === 'codex' ? session.agent : session?.agent === 'antigravity' ? 'agy' : null,
+    session?.agent === 'claude' || session?.agent === 'codex' || session?.agent === 'copilot' ? session.agent : session?.agent === 'antigravity' ? 'agy' : null,
   );
+  const customProvider = $derived(session?.agent === 'custom' ? connectors.custom.find((item) => item.id === parseCustomModel(session.model)?.providerId) : undefined);
+  const autoSwitchConnector = $derived((accountProvider === 'agy' ? 'agy' : accountProvider) as ConnectorId | null);
+  const activeKey = $derived(customProvider ? activeProviderKey(customProvider) : undefined);
+  const autoSwitchLabel = $derived(customProvider ? `${activeKey?.label || 'API key'}${activeKey?.apiKey ? ` ·••••${activeKey.apiKey.slice(-4)}` : providerKeyEnv(customProvider, activeKey) ? ' · environment key' : ''}` : '');
   const accountRows = $derived.by<QuickAccount[]>(() => {
     if (!accountProvider) return [];
     if (accountProvider === 'agy') return connectors.accounts.agy.map((account) => ({ provider: 'agy', account }));
@@ -302,7 +309,7 @@
   function pickProject(id: string) {
     if (session) moveDraftToProject(session.id, id);
     projectOpen = false;
-    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('main[aria-label="Conversation"] form textarea')?.focus());
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('main[aria-label="Conversation"] form [data-composer-editor]')?.focus());
   }
 
   // ---- git branch ----
@@ -361,7 +368,7 @@
 </script>
 
 {#if session}
-  <div class="mx-auto mt-1.5 flex min-w-0 max-w-full items-center gap-1 px-1 text-xs text-muted-foreground">
+  <div class="mx-auto mt-1.5 flex min-w-0 max-w-full items-center gap-1 px-1 text-sm text-muted-foreground">
     <!-- Project -->
     {#if canMove}
       <button
@@ -403,6 +410,23 @@
       </button>
     {/if}
 
+    {#if customProvider}
+      <button
+        type="button"
+        class="inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-[0.6875rem] text-muted-foreground outline-none transition-colors hover:bg-primary/10 hover:text-primary {((customProvider?.autoSwitch ?? (autoSwitchConnector ? connectors.autoSwitch[autoSwitchConnector] : false))) ? 'text-primary' : ''}"
+        aria-label="Toggle automatic account switching"
+        aria-pressed={customProvider?.autoSwitch ?? (autoSwitchConnector ? connectors.autoSwitch[autoSwitchConnector] : false)}
+        title="Automatically switch accounts or API keys when quota or authentication fails"
+        onclick={() => {
+          if (customProvider) customProvider.autoSwitch = !customProvider.autoSwitch;
+          else if (autoSwitchConnector) void setConnectorAutoSwitch(autoSwitchConnector, !connectors.autoSwitch[autoSwitchConnector]);
+        }}
+      >
+        <ZIcon zType={icon('lucideArrowLeftRight')} class="size-3" /> Auto switch
+      </button>
+      {#if customProvider}<span class="max-w-32 truncate text-[0.6875rem] text-muted-foreground" title={autoSwitchLabel}>{#key autoSwitchLabel}<span in:fade={{ duration: 180 }}>{autoSwitchLabel}</span>{/key}</span>{/if}
+    {/if}
+
     {#if accountProvider && canOpenAccountMenu}
       <button
         bind:this={accountTrigger}
@@ -415,7 +439,7 @@
         onclick={() => (accountOpen = !accountOpen)}
       >
         <ZIcon zType={icon(activeAccount && needsLogin(activeAccount) ? 'lucideShieldAlert' : 'lucideArrowLeftRight')} class="size-3.5 shrink-0 {activeAccount && needsLogin(activeAccount) ? 'text-warning' : ''}" />
-        <span class="min-w-0 truncate">{activeAccount?.account.email ?? `${labelFor(accountProvider)} account`}</span>
+        <span class="min-w-0 truncate">{#key activeAccount?.account.email ?? `${labelFor(accountProvider)} account`}<span in:fade={{ duration: 180 }}>{activeAccount?.account.email ?? `${labelFor(accountProvider)} account`}</span>{/key}</span>
         <ZIcon zType={icon('lucideChevronDown')} class="size-3 shrink-0" />
       </button>
     {/if}
@@ -427,8 +451,8 @@
 
   <ZPopover anchor={accountTrigger} bind:open={accountOpen} zTrigger="manual" zPosition="top-right" zOffset={6} zWidth={280}>
     {#snippet children()}
-      <div class="flex w-full flex-col text-xs" role="listbox" aria-label="{labelFor(accountProvider ?? 'agy')} accounts">
-        <div class="flex items-center gap-2 border-b border-border px-3 py-2 text-[11px] font-medium text-muted-foreground">
+      <div class="flex w-full flex-col text-sm" role="listbox" aria-label="{labelFor(accountProvider ?? 'agy')} accounts">
+        <div class="flex items-center gap-2 border-b border-border px-3 py-2 text-[0.6875rem] font-medium text-muted-foreground">
           <AgentLogo agent={accountProvider === 'agy' ? 'antigravity' : accountProvider ?? 'antigravity'} class="size-3.5 shrink-0" />
           <span class="min-w-0 flex-1">{labelFor(accountProvider ?? 'agy')} accounts</span>
           {#if canQuickAdd}
@@ -437,7 +461,7 @@
             </ZButton>
           {/if}
         </div>
-        <div class="flex max-h-[max(180px,30vh)] flex-col overflow-x-hidden overflow-y-auto p-1 [&>button+button]:mt-1 [&>button+button]:before:absolute [&>button+button]:before:inset-x-2 [&>button+button]:before:-top-0.5 [&>button+button]:before:h-px [&>button+button]:before:bg-border [&>button+button]:before:content-['']" {@attach glide()}>
+        <div class="flex max-h-[17.5rem] flex-col overflow-x-hidden overflow-y-auto p-1[&>button+button]:mt-1 [&>button+button]:before:absolute [&>button+button]:before:inset-x-2 [&>button+button]:before:-top-0.5 [&>button+button]:before:h-px [&>button+button]:before:bg-border [&>button+button]:before:content-['']" {@attach glide()}>
           {#each sortedAccountRows as entry (entryKey(entry))}
             {@const active = entry.account.active}
             {@const expired = needsLogin(entry)}
@@ -466,6 +490,14 @@
             </button>
           {/each}
         </div>
+        {#if autoSwitchConnector}
+          <!-- Fixed footer under the scrolling list, separated like the header. -->
+          <div class="flex items-center gap-2 border-t border-border px-3 py-2 text-[0.6875rem] font-medium text-muted-foreground">
+            <ZIcon zType={icon('lucideArrowLeftRight')} class="size-3.5 shrink-0" />
+            <span class="min-w-0 flex-1 truncate">Auto switch</span>
+            <ZSwitch zVariant="dot" zSize="sm" checked={connectors.autoSwitch[autoSwitchConnector]} onChange={(value) => void setConnectorAutoSwitch(autoSwitchConnector, value)} />
+          </div>
+        {/if}
       </div>
     {/snippet}
   </ZPopover>

@@ -1,12 +1,36 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { ZIcon, ZLoading, zTooltip } from '@shival99/z-ui-svelte';
-  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import { revealTab } from '../../app/ui/tab-strip';
+  import { closeOnScroll } from '../../app/ui/close-on-scroll';
   import { toast } from '../../app/platform/toast';
   import { browser, closeTab, MAX_TABS, newTab, selectTab, tabsFull } from '../../browser/browser.svelte';
   import TabListButton from '../ui/TabListButton.svelte';
+  import Menu from '../ui/Menu.svelte';
   import type { PickerItem } from '../ui/PickerPopover.svelte';
+
+  // Right click on a tab: its menu (new, close, close the others, copy the address).
+  let tabMenu = $state<{ x: number; y: number; id: string } | null>(null);
+  let tabMenuOpen = $state(false);
+  let tabMenuKey = $state(0);
+  $effect(() => closeOnScroll(() => tabMenuOpen, () => (tabMenuOpen = false)));
+  function openTabMenu(event: MouseEvent, id: string) {
+    event.preventDefault();
+    tabMenuKey++;
+    tabMenu = { x: event.clientX, y: event.clientY, id };
+    tabMenuOpen = true;
+  }
+  const menuTab = $derived(tabMenu ? browser.tabs.find((item) => item.id === tabMenu?.id) : undefined);
+  const tabContextItems = $derived<ZDropdownMenuItem[]>([
+    { label: 'New tab', icon: 'lucidePlus', iconSize: '12', class: 'text-sm! py-1', disabled: tabsFull(), onClick: () => addTab() },
+    { label: 'Copy address', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', divide: 'before', disabled: !menuTab?.url, onClick: () => menuTab?.url && void navigator.clipboard.writeText(menuTab.url) },
+    { label: 'Close tab', icon: 'lucideX', iconSize: '12', shortcut: 'Ctrl+W', divide: 'before', class: 'text-sm! py-1', onClick: () => tabMenu && void closeTab(tabMenu.id) },
+    { label: 'Close other tabs', icon: 'lucideX', iconSize: '12', class: 'text-sm! py-1', disabled: browser.tabs.length < 2, onClick: () => tabMenu && closeOtherTabs(tabMenu.id) },
+  ]);
+  function closeOtherTabs(id: string) {
+    for (const item of browser.tabs) if (item.id !== id) void closeTab(item.id);
+  }
 
   // Tabs: no scrollbar; when they do not fit an arrow lists them all, and the front one stays in view.
   let tabStrip: HTMLDivElement | undefined = $state();
@@ -51,9 +75,10 @@
         role="tab"
         tabindex="0"
         aria-selected={item.id === browser.activeId}
-        class="group/tab flex h-8 min-w-24 max-w-44 shrink-0 cursor-pointer items-center gap-1.5 rounded-md pr-1 pl-2 text-xs outline-none {item.id === browser.activeId ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
+        class="group/tab flex h-8 min-w-24 max-w-44 shrink-0 cursor-pointer items-center gap-1.5 rounded-md pr-1 pl-2 text-sm outline-none {item.id === browser.activeId ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary'}"
         onclick={() => selectTab(item.id)}
         onkeydown={(event) => event.key === 'Enter' && selectTab(item.id)}
+        oncontextmenu={(event) => openTabMenu(event, item.id)}
         title={tabTitle(item)}
       >
         <span class="grid size-3.5 shrink-0 place-items-center">
@@ -84,6 +109,11 @@
     <div class="flex shrink-0 items-center bg-background">
       <TabListButton items={tabListItems} onpick={selectTab} label="Open tabs" />
     </div>
+  {/if}
+  {#if tabMenu}
+    {#key tabMenuKey}
+      <Menu items={tabContextItems} bind:open={tabMenuOpen} at={{ x: tabMenu.x, y: tabMenu.y }} position="bottom-left" width={220} />
+    {/key}
   {/if}
   <button type="button" class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-primary/10 hover:text-primary {tabsFull() ? 'opacity-40' : ''}" aria-label="New tab" aria-disabled={tabsFull()} {@attach zTooltip({ content: tabsFull() ? `Tab limit reached (${MAX_TABS})` : 'New tab', position: 'top' })} onclick={addTab}>
     <ZIcon zType="lucidePlus" class="size-4" />

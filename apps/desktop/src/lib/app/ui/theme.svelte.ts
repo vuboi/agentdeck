@@ -2,8 +2,10 @@ import { neutralTokens, primaryTokens, radiusTokens, type Mode, type Neutral, ty
 
 const KEY = 'agentdeck.theme';
 export type ChatLayout = 'split' | 'single';
-type Saved = { primary: Primary; neutral: Neutral; mode: Mode; chatLayout: ChatLayout; turnDividers: boolean };
-const DEFAULTS: Saved = { primary: 'violet', neutral: 'zinc', mode: 'dark', chatLayout: 'split', turnDividers: true };
+/** The text size of the whole app, in px: the root size every rem (Tailwind's text sizes) follows. */
+export const UI_FONT_SIZE = { min: 11, max: 20, step: 1, default: 16 } as const;
+type Saved = { primary: Primary; neutral: Neutral; mode: Mode; chatLayout: ChatLayout; turnDividers: boolean; fontSize: number };
+const DEFAULTS: Saved = { primary: 'violet', neutral: 'zinc', mode: 'dark', chatLayout: 'split', turnDividers: true, fontSize: UI_FONT_SIZE.default };
 // The corner radii live in app.css (--radius-small / --radius-large). `--radius` itself is what z-ui falls back to when
 // something reads it directly: the large size.
 const RADIUS = 0.375;
@@ -29,6 +31,8 @@ class Theme {
   chatLayout = $state(initial.chatLayout);
   /** A thin line between two replies of the agent, and a line where a session was resumed or compacted (on by default). */
   turnDividers = $state(initial.turnDividers);
+  /** The app's text size in px (see UI_FONT_SIZE). */
+  uiFontSize = $state(Math.min(UI_FONT_SIZE.max, Math.max(UI_FONT_SIZE.min, initial.fontSize)));
   private systemDark = $state(media.matches);
 
   readonly dark = $derived(this.mode === 'system' ? this.systemDark : this.mode === 'dark');
@@ -45,9 +49,10 @@ class Theme {
       $effect(() => {
         const root = document.documentElement;
         root.classList.toggle('dark', this.dark);
+        root.style.fontSize = `${this.uiFontSize}px`;
         for (const [name, value] of Object.entries(this.tokens)) root.style.setProperty(name, value, 'important');
         try {
-          const saved: Saved = { primary: this.primary, neutral: this.neutral, mode: this.mode, chatLayout: this.chatLayout, turnDividers: this.turnDividers };
+          const saved: Saved = { primary: this.primary, neutral: this.neutral, mode: this.mode, chatLayout: this.chatLayout, turnDividers: this.turnDividers, fontSize: this.uiFontSize };
           localStorage.setItem(KEY, JSON.stringify(saved));
         } catch {
           // Persisting is best-effort.

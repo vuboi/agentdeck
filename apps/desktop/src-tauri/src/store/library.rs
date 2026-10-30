@@ -29,7 +29,7 @@ pub struct SkillItem {
 }
 
 pub fn library_root(home: &Path) -> PathBuf {
-    home.join(".agentdeck").join("library").join("skills")
+    home.join(crate::channel::home_folder_name()).join("library").join("skills")
 }
 
 /// The folders where an agent keeps its own skills. The first one is where AgentDeck links new skills.

@@ -1,6 +1,6 @@
 // Helpers for the things that go with a message: documents (icon and colour by type, size) and the clipboard format
 // that "Copy all" writes so pasting into the message box restores text, pictures, notes and files.
-import { fileSize, readImageDataUrl } from '../agent';
+import { fileSize, pictureUrl } from '../agent';
 import type { Block } from '../mock';
 import type { Attachment, FileAttachment, PageElement } from '../sessions.svelte';
 
@@ -182,11 +182,10 @@ const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 export async function attachmentBlocks(images: string[], files: string[]): Promise<Block[]> {
   const out: Block[] = [];
   for (const path of images.slice(0, 6)) {
-    try {
-      out.push({ kind: 'image', src: await readImageDataUrl(path), name: baseName(path) });
-    } catch {
-      out.push({ kind: 'file', name: baseName(path), path });
-    }
+    // The picture is drawn from its file (no base64 read into memory); a file that is gone becomes a file chip.
+    const size = await fileSize(path).catch(() => null);
+    if (size !== null) out.push({ kind: 'image', src: '', path, name: baseName(path) });
+    else out.push({ kind: 'file', name: baseName(path), path });
   }
   for (const path of files) {
     const size = await fileSize(path).catch(() => null);
@@ -202,11 +201,11 @@ export function imagePathsIn(output: string): string[] {
 }
 
 const loaded = new Map<string, Promise<string | null>>();
-/** The picture at a path as a data URL, read once; null when it cannot be read. */
+/** The picture at a path as a URL the page draws from its file (asset protocol); null when there is no such file. */
 export function loadImagePath(path: string): Promise<string | null> {
   let found = loaded.get(path);
   if (!found) {
-    found = readImageDataUrl(path).catch(() => null);
+    found = fileSize(path).then((size) => (size === null ? null : pictureUrl(path))).catch(() => null);
     loaded.set(path, found);
   }
   return found;

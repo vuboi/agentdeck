@@ -2,6 +2,7 @@
   import type { ZDropdownMenuItem } from '@shival99/z-ui-svelte';
   import Menu from './Menu.svelte';
   import { toast } from '../../app/platform/toast';
+  import { editorText, editorSelection, setEditorSelection, replaceEditorRange } from '../chat/composer-editor';
 
   let {
     onPasteText,
@@ -12,7 +13,7 @@
   } = $props();
   let open = $state(false);
   let at = $state({ x: 0, y: 0 });
-  let target = $state<HTMLTextAreaElement | null>(null);
+  let target = $state<HTMLElement | null>(null);
   let selection = $state({ start: 0, end: 0 });
   const mac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
   const modifier = mac ? '⌘' : 'Ctrl+';
@@ -22,10 +23,10 @@
   const popoverChrome = 23; // picker chrome plus the one-pixel context anchor
 
   /** Open the shared edit menu for a textarea and remember its selection before the menu takes focus. */
-  export function openAt(event: MouseEvent, textarea: HTMLTextAreaElement): void {
+  export function openAt(event: MouseEvent, editor: HTMLElement): void {
     event.preventDefault();
-    target = textarea;
-    selection = { start: textarea.selectionStart, end: textarea.selectionEnd };
+    target = editor;
+    selection = editor instanceof HTMLTextAreaElement ? { start: editor.selectionStart, end: editor.selectionEnd } : editorSelection(editor);
     const rules = items.filter((item) => item.divide === 'before').length;
     const menuHeight = items.length * rowHeight + rules * ruleHeight + menuPadding;
     const roomNeeded = menuHeight + popoverChrome;
@@ -37,17 +38,20 @@
   }
 
   function selectedText(): string {
-    return target?.value.slice(selection.start, selection.end) ?? '';
+    const text = target instanceof HTMLTextAreaElement ? target.value : target ? editorText(target) : '';
+    return text.slice(selection.start, selection.end);
   }
 
   function replaceSelection(text: string, inputType: string): void {
     if (!target) return;
-    const start = Math.min(selection.start, target.value.length);
-    const end = Math.min(selection.end, target.value.length);
+    const value = target instanceof HTMLTextAreaElement ? target.value : editorText(target);
+    const start = Math.min(selection.start, value.length);
+    const end = Math.min(selection.end, value.length);
     target.focus();
-    target.setRangeText(text, start, end, 'end');
+    if (target instanceof HTMLTextAreaElement) target.setRangeText(text, start, end, 'end');
+    else replaceEditorRange(target, start, end, text);
     target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType, data: text || null }));
-    selection = { start: target.selectionStart, end: target.selectionEnd };
+    selection = target instanceof HTMLTextAreaElement ? { start: target.selectionStart, end: target.selectionEnd } : editorSelection(target);
   }
 
   async function copySelection(cut: boolean): Promise<void> {
@@ -92,10 +96,14 @@
   }
 
   const items = $derived<ZDropdownMenuItem[]>([
-    { label: 'Cut', shortcut: `${modifier}X`, disabled: !selectedText(), class: 'text-xs! py-1', onClick: () => void copySelection(true) },
-    { label: 'Copy', shortcut: `${modifier}C`, disabled: !selectedText(), class: 'text-xs! py-1', onClick: () => void copySelection(false) },
-    { label: 'Paste', shortcut: `${modifier}V`, divide: 'before', class: 'text-xs! py-1', onClick: () => void paste() },
-    { label: 'Select all', shortcut: `${modifier}A`, divide: 'before', disabled: !target?.value, class: 'text-xs! py-1', onClick: () => target?.select() },
+    { label: 'Cut', shortcut: `${modifier}X`, disabled: !selectedText(), class: 'text-sm! py-1', onClick: () => void copySelection(true) },
+    { label: 'Copy', shortcut: `${modifier}C`, disabled: !selectedText(), class: 'text-sm! py-1', onClick: () => void copySelection(false) },
+    { label: 'Paste', shortcut: `${modifier}V`, divide: 'before', class: 'text-sm! py-1', onClick: () => void paste() },
+    { label: 'Select all', shortcut: `${modifier}A`, divide: 'before', disabled: !target, class: 'text-sm! py-1', onClick: () => {
+      if (!target) return;
+      if (target instanceof HTMLTextAreaElement) target.select();
+      else setEditorSelection(target, 0, editorText(target).length);
+    } },
   ]);
 </script>
 

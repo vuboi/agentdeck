@@ -281,7 +281,7 @@
     zTitle="Document task"
     zClosable
 >
-    <div class="flex min-h-0 flex-col gap-3 text-xs">
+    <div class="flex min-h-0 flex-col gap-3 text-sm">
         <p
             class="rounded-md border border-border bg-muted/30 p-3 text-muted-foreground"
         >
