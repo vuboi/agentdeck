@@ -427,6 +427,7 @@ async fn element_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> 
     if !chat.is_empty() {
         params.insert("chat".to_string(), chat.to_string());
     }
+    name_tab(&mut params, args);
     // The page's answer is the script's value, possibly as text that holds JSON.
     let value_of = |answer: Value| match &answer["result"] {
         Value::String(text) => {
@@ -503,16 +504,35 @@ async fn element_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> 
     }
 }
 
+/// What `tab_id` means, on every tool that acts on a page.
+const TAB_ID_ABOUT: &str = "the Preview tab to act on (the `tab` an earlier answer named). Left out: the tab this chat drives, else the tab in front. Tabs of different chats run in parallel.";
+
+/// Whether a tool acts on a page of the Preview, so it can be told which tab.
+fn takes_tab(name: &str) -> bool {
+    (name.starts_with("browser_") || name == "ui_audit")
+        && !matches!(name, "browser_serve" | "browser_open" | "browser_record_start" | "browser_record_stop")
+}
+
+/// The `tab_id` a tool call names, passed on as a request parameter.
+fn name_tab(params: &mut HashMap<String, String>, args: &Value) {
+    if let Some(tab) = args["tab_id"].as_str().filter(|tab| !tab.trim().is_empty()) {
+        params.insert("tab_id".to_string(), tab.to_string());
+    }
+}
+
 pub(crate) fn tool_list() -> Value {
     Value::Array(
         TOOLS
             .iter()
             .map(|tool| {
-                let properties: serde_json::Map<String, Value> = tool
+                let mut properties: serde_json::Map<String, Value> = tool
                     .args
                     .iter()
                     .map(|(name, kind, about, _)| (name.to_string(), json!({ "type": kind, "description": about })))
                     .collect();
+                if takes_tab(tool.name) {
+                    properties.entry("tab_id").or_insert_with(|| json!({ "type": "string", "description": TAB_ID_ABOUT }));
+                }
                 let required: Vec<&str> = tool.args.iter().filter(|arg| arg.3).map(|arg| arg.0).collect();
                 json!({
                     "name": tool.name,
@@ -583,7 +603,7 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Val
         let Some(factor) = args["factor"].as_f64() else {
             return error_reply("factor must be a number".into());
         };
-        let tab = crate::bridge::active_tab();
+        let tab = crate::bridge::tab_for(app, chat, args["tab_id"].as_str());
         return match crate::browser::browser_zoom(app.clone(), tab, factor) {
             Ok(()) => text_reply(format!("Preview zoom set to {:.0}%", factor.clamp(0.25, 3.0) * 100.0)),
             Err(error) => error_reply(error),
@@ -628,6 +648,7 @@ async fn call_tool(app: &AppHandle, name: &str, args: &Value, chat: &str) -> Val
     if !chat.is_empty() {
         params.insert("chat".to_string(), chat.to_string());
     }
+    name_tab(&mut params, args);
     let mut body = String::new();
     if let Some(map) = args.as_object() {
         for (key, value) in map {

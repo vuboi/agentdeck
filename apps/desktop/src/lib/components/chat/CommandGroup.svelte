@@ -160,6 +160,32 @@
     view.rows[index] = !view.rows[index];
   };
   const canOpenFiles = $derived(workspace.projects.some((project) => project.id === activeSession()?.projectId));
+  function stepFilePath(item: CommandBlock): string | null {
+    if (item.change?.path) return item.change.path;
+    const tool = toolOf(item.command);
+    const isFileTool = /^(read|view|read_file|read_many_files|open_file|cat|edit|multiedit|write|notebookedit|apply_patch|str_replace(_editor|_based_edit_tool)?|replace|write_file|create(_file)?|edit_file|insert|delete)$/i.test(tool);
+    if (!isFileTool) return null;
+    const rawArg = item.command.slice(tool.length).trim();
+    let candidate = rawArg;
+    if (rawArg.startsWith('{')) {
+      try {
+        const args = JSON.parse(rawArg) as Record<string, unknown>;
+        const val = ['path', 'file_path', 'filePath', 'file', 'target'].map((key) => args[key]).find((value) => typeof value === 'string' && value.trim());
+        if (typeof val === 'string') candidate = val;
+      } catch {}
+    }
+    let path = candidate.trim();
+    if ((path.startsWith('"') && path.endsWith('"')) || (path.startsWith("'") && path.endsWith("'"))) {
+      path = path.slice(1, -1).trim();
+    }
+    path = path.split(/:\d+(?::\d+)?$/)[0].trim();
+    if (!path) return null;
+    const hasSep = path.includes('/') || path.includes('\\');
+    const isAbs = /^[A-Za-z]:[\\/]/.test(path) || /^\\\\/.test(path) || path.startsWith('//') || (path.startsWith('/') && !path.startsWith('//')) || /^~[\\/]/.test(path);
+    const hasExt = /\.[A-Za-z0-9_-]{1,8}$/.test(path);
+    if (!isAbs && !hasSep && !hasExt) return null;
+    return path;
+  }
   function openChangedFile(path: string) {
     const root = projectRoot();
     if (root) openProjectFile(path, root, 'file');
@@ -281,6 +307,7 @@
           {@const item = entry.item}
           {@const index = entry.index}
           {@const step = describeStep(item)}
+          {@const filePath = canOpenFiles ? stepFilePath(item) : null}
           <div in:slide={{ duration: 220, easing: cubicOut }}>
             <button
               type="button"
@@ -294,15 +321,15 @@
                 <ZShimmerText class="min-w-0 truncate font-medium" zText={step.subject || '…'} />
               {:else}
                 <span class="shrink-0 {item.status === 'fail' ? 'text-destructive' : 'text-muted-foreground'}">{step.verb}</span>
-                {#if item.change && canOpenFiles}
+                {#if filePath}
                   <!-- The file's name opens it: underlined on hover, and the click does not fold the step. -->
                   <span
                     role="link"
                     tabindex="0"
                     class="min-w-0 cursor-pointer truncate font-medium hover:underline focus-visible:underline focus-visible:outline-none {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}"
-                    title="Open {displayPath(projectRoot(), item.change.path)}"
-                    onclick={(event) => { event.stopPropagation(); openChangedFile(item.change!.path); }}
-                    onkeydown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); event.preventDefault(); openChangedFile(item.change!.path); } }}
+                    title="Open {displayPath(projectRoot(), filePath)}"
+                    onclick={(event) => { event.stopPropagation(); openChangedFile(filePath); }}
+                    onkeydown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); event.preventDefault(); openChangedFile(filePath); } }}
                   >{step.subject}</span>
                 {:else}
                   <span class="min-w-0 truncate font-medium {item.status === 'fail' ? 'text-destructive' : 'text-foreground'}">{step.subject}</span>

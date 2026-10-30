@@ -5,6 +5,8 @@
   import { replyStyle } from '../../../chat/content/reply-style.svelte';
   import { readProjectMemory, writeProjectMemory, readProposals, writeProposals, parseProposals, dropProposal, MEMORY_FILE, PROPOSALS_FILE } from '../../../chat/content/project-memory';
   import { workspace } from '../../../chat/sessions.svelte';
+  import { clearProfile, loadProfile, profileHint } from '../../../chat/content/user-profile';
+  let profilePreview = $state('');
   import { settings } from '../../../agents/connectors.svelte';
 
   /** The project being edited stays chosen while the user visits other sections: kept by the modal shell. */
@@ -70,6 +72,18 @@
                   <p class="mt-1 text-[0.75rem] text-muted-foreground">A short note per project, kept in <code>{MEMORY_FILE}</code> inside it. Every agent that starts a conversation there reads it, and adds what it learns (a convention, a command that works, a pitfall). The same for Claude, Codex and the rest.</p>
                 </div>
                 <ZSwitch zVariant="dot" checked={replyStyle.projectMemory} zSize="sm" onChange={(value) => (replyStyle.projectMemory = value)} />
+              </section>
+              <section class="flex items-start gap-3 rounded-xl border border-border bg-card/40 p-4">
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold">How you talk</h3>
+                  <p class="mt-1 text-[0.75rem] text-muted-foreground">Learnt quietly from your own messages (language, tone, how you address the AI, habits) and given to every agent when a conversation starts, so they answer the way you like. Kept on this computer only.</p>
+                  <div class="mt-2 flex items-center gap-2">
+                    <ZButton zWave={false} zSize="sm" zType="outline" class="h-7 px-3 text-sm" onclick={() => (profilePreview = profileHint(loadProfile()) || 'Not enough messages yet.')}>Show</ZButton>
+                    <ZButton zWave={false} zSize="sm" zType="outline" class="h-7 px-3 text-sm" onclick={() => { clearProfile(); profilePreview = 'Cleared.'; }}>Clear</ZButton>
+                  </div>
+                  {#if profilePreview}<p class="mt-2 whitespace-pre-wrap text-[0.75rem]">{profilePreview}</p>{/if}
+                </div>
+                <ZSwitch zVariant="dot" checked={replyStyle.userProfile} zSize="sm" onChange={(value) => (replyStyle.userProfile = value)} />
               </section>
               <section class="rounded-xl border border-border p-4">
                 {#if workspace.projects.length === 0}

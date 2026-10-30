@@ -4,7 +4,7 @@
   import { LOADER, LOADER_SIZE } from '../../app/platform/loaders';
   import { ticker } from '../../app/platform/clock.svelte';
   import type { CommandBlock } from '../../chat/content/blocks';
-  import { describeStep, toolOf } from '../../chat/content/blocks';
+  import { describeStep, elapsed, toolOf } from '../../chat/content/blocks';
   import { jsonInText } from '../../app/text/json-text';
   import type { Block } from '../../chat/mock';
   import { modelLabel, modelSources } from '../../agents/models.svelte';
@@ -19,20 +19,11 @@
   const keyOf = (item: CommandBlock, index: number) => item.id ?? String(index);
   const live = (item: CommandBlock) => item.task?.status === 'started' || item.task?.status === 'progress';
   const status = (item: CommandBlock) => item.task?.status === 'done' ? 'Completed' : item.task?.status === 'failed' ? 'Failed' : 'Working';
-  /** h:mm:ss from one hour on, mm:ss before. */
-  function clock(ms: number) {
-    const total = Math.max(0, Math.floor(ms / 1000));
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const h = Math.floor(total / 3600);
-    const m = Math.floor((total % 3600) / 60);
-    const s = total % 60;
-    return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-  }
-  /** The running time of a task: it counts while live, and stops at its end. */
+  /** The running time of a task: it counts while live, and stops at its end. Same format as the Tasks cards (`elapsed`), so a time reads the same in both places. */
   const timeOf = (item: CommandBlock) => {
     const from = item.task?.startedAt;
     if (!from) return '';
-    return clock((item.task?.endedAt ?? (live(item) ? ticker.sec : from)) - from);
+    return elapsed((item.task?.endedAt ?? (live(item) ? ticker.sec : from)) - from);
   };
   const logs = (item: CommandBlock) => (item.children ?? []).filter((child): child is Extract<Block, { kind: 'command' | 'response' }> => {
     if (child.kind === 'response') return true;
@@ -61,7 +52,7 @@
 <section class="block-in w-full max-w-full overflow-hidden rounded-lg border border-border bg-background" aria-label="Agent and background activity">
   <header class="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 text-sm">
     <ZIcon zType="lucideGitBranch" class="size-3.5 text-muted-foreground" />
-    <span class="font-medium">Agent activity</span>
+    <span class="font-medium">Agent & background activity</span>
     <span class="ml-auto text-muted-foreground">{items.length} {items.length === 1 ? 'task' : 'tasks'}</span>
   </header>
   {#each items as item, index (keyOf(item, index))}
@@ -77,15 +68,13 @@
           {#if live(item)}<ZShimmerText zBase="var(--primary)" zPeak="var(--foreground)" zText={info.name} />{:else}{info.name}{/if}
         </span>
         <span class="min-w-0 flex-1 truncate text-muted-foreground">{info.task || task.summary || item.command}</span>
-        <span class="inline-flex w-[7.5rem] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap text-xs transition-colors duration-300 {task.status === 'failed' ? 'text-destructive' : task.status === 'done' ? 'text-emerald-500' : 'text-primary'}">
+        <span class="inline-flex w-[7.5rem] shrink-0 items-center justify-end gap-1.5 whitespace-nowrap text-xs transition-colors duration-300 {task.status === 'failed' ? 'text-destructive' : task.status === 'done' ? 'text-emerald-500' : 'text-primary'}">
           {#key live(item) ? "live" : task.status}
             <span class="grid size-3 shrink-0 place-items-center" in:fade={{ duration: 220 }}>{#if live(item)}<ZLoading zLoading zSpinner={LOADER.working} zSize={LOADER_SIZE} zColor="current" />{:else}<ZIcon zType={(task.status === "done" ? "lucideCircleCheck" : "lucideCircleX") as ZIconName} class="size-3" />{/if}</span>
           {/key}
-          <StatusRoller current={status(item)} sizes={['Working', 'Pending', 'Waiting', 'Completed', 'Failed']} />
-          {#if timeOf(item)}
-            <span class="tabular-nums text-muted-foreground">{timeOf(item)}</span>
-          {/if}
+          <StatusRoller current={status(item)} sizes={['Working', 'Pending', 'Waiting', 'Completed', 'Failed']} align="end" />
         </span>
+        <span class="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{timeOf(item)}</span>
         <ZIcon zType="lucideChevronRight" class="size-3.5 shrink-0 text-muted-foreground transition-transform {isOpen ? 'rotate-90' : ''}" />
       </button>
       <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">

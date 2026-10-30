@@ -392,10 +392,10 @@ impl Provider for Codex {
                 if turn.started.insert(id.clone()) {
                     events.push(AgentEvent::ToolCall {
                         id: id.clone(),
+                        background: super::delegate_wait(&name, &item["arguments"]),
                         name,
                         input: item["arguments"].to_string().chars().take(200).collect(),
                         change: None,
-                        background: false,
                     });
                 }
                 if value["type"] == "item.completed" {

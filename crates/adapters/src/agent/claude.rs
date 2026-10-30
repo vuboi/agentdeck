@@ -291,7 +291,8 @@ impl Claude {
                         input: summarize_tool_input(name, &block["input"]),
                         change: file_change(name, &block["input"]),
                         background: block["input"]["run_in_background"].as_bool() == Some(true)
-                            || matches!(name, "Agent" | "Task"),
+                            || matches!(name, "Agent" | "Task")
+                            || super::delegate_wait(name, &block["input"]),
                     }
                 })
                 .collect(),
@@ -536,6 +537,16 @@ mod tests {
                     ..
                 }
             ));
+        }
+    }
+
+    #[test]
+    fn delegate_waits_are_background_but_non_waiting_calls_are_not() {
+        for (input, expected) in [(serde_json::json!({"task":"x"}), true), (serde_json::json!({"wait":true}), true), (serde_json::json!({"wait":false}), false)] {
+            for name in ["mcp__agentdeck__delegate_task", "delegate_task"] {
+                let line = serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"x","name":name,"input":input}]}}).to_string();
+                assert!(matches!(&Claude.parse_line(&line)[0], AgentEvent::ToolCall { background, .. } if *background == expected));
+            }
         }
     }
 

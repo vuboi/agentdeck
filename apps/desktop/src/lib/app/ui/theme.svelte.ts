@@ -36,6 +36,11 @@ class Theme {
   private systemDark = $state(media.matches);
 
   readonly dark = $derived(this.mode === 'system' ? this.systemDark : this.mode === 'dark');
+  /**
+   * The theme as heavy views (the chat's rows) should see it: it follows `dark`/`primary`/`neutral` two painted frames
+   * later, so the new colours show at once and the rebuild of those views comes after instead of holding the swap.
+   */
+  settledKey = $state('');
   private readonly tokens = $derived({
     ...neutralTokens(this.neutral, this.dark),
     ...primaryTokens(this.primary, this.dark),
@@ -44,13 +49,35 @@ class Theme {
 
   constructor() {
     media.addEventListener('change', (event) => (this.systemDark = event.matches));
+    this.settledKey = this.keyNow();
+    let settle = 0;
+    let unfreeze = 0;
     // App-lifetime singleton: the root effect is never torn down.
     $effect.root(() => {
       $effect(() => {
         const root = document.documentElement;
+        const key = this.keyNow();
+        const changed = key !== this.settledKey;
+        // During a theme swap nothing animates: thousands of `transition-colors` elements easing at once on a busy
+        // page is what left the window half in the old theme and half in the new one.
+        if (changed) {
+          root.classList.add('theme-switching');
+          cancelAnimationFrame(unfreeze);
+        }
         root.classList.toggle('dark', this.dark);
+        root.style.colorScheme = this.dark ? 'dark' : 'light';
         root.style.fontSize = `${this.uiFontSize}px`;
         for (const [name, value] of Object.entries(this.tokens)) root.style.setProperty(name, value, 'important');
+        if (changed) {
+          cancelAnimationFrame(settle);
+          // First frame paints the new colours; then heavy views rebuild, and transitions come back a frame later.
+          settle = requestAnimationFrame(() => {
+            settle = requestAnimationFrame(() => {
+              this.settledKey = key;
+              unfreeze = requestAnimationFrame(() => root.classList.remove('theme-switching'));
+            });
+          });
+        }
         try {
           const saved: Saved = { primary: this.primary, neutral: this.neutral, mode: this.mode, chatLayout: this.chatLayout, turnDividers: this.turnDividers, fontSize: this.uiFontSize };
           localStorage.setItem(KEY, JSON.stringify(saved));
@@ -59,6 +86,10 @@ class Theme {
         }
       });
     });
+  }
+
+  private keyNow() {
+    return `${this.dark}|${this.primary}|${this.neutral}`;
   }
 
   toggle() {

@@ -25,15 +25,16 @@ export const MIN_TIMEOUT_S = 10;
 export const MAX_TIMEOUT_S = 7200;
 export const TASK_MAX_CHARS = 30_000;
 
-export type DelegateArgs = { agent: string; model?: string; task: string; wait: boolean; timeoutS: number };
+export type DelegateArgs = { agent: string; model?: string; task: string; wait: boolean; timeoutS: number; continueId?: string };
 
 const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
 
 /** The arguments of `delegate_task` with their defaults (wait: true, 30 minutes); the same rules as the Rust side. */
 export function parseDelegateArgs(raw: unknown): { ok: true; args: DelegateArgs } | { ok: false; error: string } {
   const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const agent = text(input.agent);
-  if (!agent) return { ok: false, error: 'agent is required: claude, codex, antigravity or an id from list_agents' };
+  const continueId = text(input.continue);
+  const agent = text(input.agent) ?? (continueId ? '' : undefined);
+  if (agent === undefined) return { ok: false, error: 'agent is required (unless continue is given): claude, codex, antigravity or an id from list_agents' };
   const task = text(input.task);
   if (!task) return { ok: false, error: 'task is required: say what the worker must do and report back' };
   if (task.length > TASK_MAX_CHARS) return { ok: false, error: `task is longer than ${TASK_MAX_CHARS} characters: give the goal and the paths, not whole files` };
@@ -49,10 +50,46 @@ export function parseDelegateArgs(raw: unknown): { ok: true; args: DelegateArgs 
     if (!Number.isFinite(seconds)) return { ok: false, error: 'timeout_s must be a number of seconds' };
     timeoutS = Math.min(MAX_TIMEOUT_S, Math.max(MIN_TIMEOUT_S, Math.round(seconds)));
   }
-  return { ok: true, args: { agent, model: text(input.model), task, wait, timeoutS } };
+  return { ok: true, args: { agent, model: text(input.model), task, wait, timeoutS, continueId } };
 }
 
 /** A task id as the tools hand it out: `t-` and a few letters and digits. */
+export const WORKER_LANGUAGE_RULE_BASE = 'Write your report and replies in the language of the user\'s original request (quoted below); keep code, paths, commands and quoted source text unchanged.';
+export const SAVE_TOKENS_RULE = 'Usage is above half of the quota: write your report and any plan in concise English to save tokens.';
+export const DEMANDED_LANGUAGE_RULE = 'The user asked for every reply in their language: follow it even in reports and plans.';
+const fold = (text: string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\u0111\u0110]/g, 'd').toLowerCase().replace(/\s+/g, ' ');
+const ALL_WORDS = '(?:all|every(?:thing)?|whole|entire(?:ly)?|always|only|toan bo|tat ca|het|moi|luon|chi)';
+const OUTPUT_WORDS = '(?:output|outputs|repl(?:y|ies)|answers?|responses?|reports?|plans?|messages?)';
+const TIENG = 'tieng (?:viet|anh|nhat|han|trung|hoa|phap|duc|nga|thai|y|tay ban nha|bo dao nha|lao|khmer|indonesia|a rap)';
+const LANGUAGE_DEMANDS = [
+  // "answer everything in Japanese", "all output in German", "write all replies in my language"
+  new RegExp(`\\b${ALL_WORDS}\\b[^.!?\\n]{0,40}\\bin (?:[a-z]+(?:ese|ish|ian)|korean|french|german|dutch|thai|greek|hindi|arabic|hebrew|czech|swedish|danish|turkish|my (?:own )?language)\\b`),
+  // "reply only in French", "answers always in Korean"
+  new RegExp(`\\b${OUTPUT_WORDS}\\b[^.!?\\n]{0,30}\\b(?:only|always|entirely) in [a-z]+`),
+  // "trả lời tất cả bằng tiếng Việt", "toàn bộ tiếng Việt", "luôn viết bằng tiếng Anh"
+  new RegExp(`\\b${ALL_WORDS}\\b[^.!?\\n]{0,40}\\b${TIENG}\\b`),
+  // "bằng tiếng Việt toàn bộ"
+  new RegExp(`\\b(?:bang|dung) ${TIENG}\\b[^.!?\\n]{0,30}\\b${ALL_WORDS}\\b`),
+];
+/** Whether the user's request explicitly demands that all output be in one language (any language). */
+export function demandsLanguage(sourceTask: string): boolean {
+  const text = fold(sourceTask);
+  return LANGUAGE_DEMANDS.some((pattern) => pattern.test(text));
+}
+/**
+ * The reminder line of a worker brief: the language of the user's request (the model infers it from the excerpt, so
+ * any language works), or concise English when the provider is at half its quota or more, unless the user demanded
+ * every reply in their language.
+ */
+export function workerLanguageRule(sourceTask: string, usagePct?: number | null): string {
+  const excerpt = sourceTask.replace(/\s+/g, ' ').trim().slice(0, 200);
+  const quoted = `User's original request (excerpt): "${excerpt}"`;
+  if (demandsLanguage(sourceTask)) return `${WORKER_LANGUAGE_RULE_BASE} ${DEMANDED_LANGUAGE_RULE} ${quoted}`;
+  if (typeof usagePct === 'number' && usagePct >= 50) return SAVE_TOKENS_RULE;
+  return `${WORKER_LANGUAGE_RULE_BASE} ${quoted}`;
+}
+export const FOLLOW_UP_PREFACE = 'Follow-up from the agent that delegated your previous task:';
+
 export const newTaskId = () => `t-${Math.random().toString(36).slice(2, 8)}`;
 export const isTaskId = (id: unknown): id is string => typeof id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(id);
 
@@ -239,6 +276,12 @@ export function parseTaskResult(output: string): { taskId: string; childId: stri
   return found ? { taskId: found[1], childId: found[2], verdict: found[3] as Verdict | 'running' } : null;
 }
 
+/** Carries a previous worker's context and failure reason into a fresh conversation. */
+export function replacementTask(task: string, label: string, transcript: string, report = '', reason = ''): string {
+  const context = transcript.trim() || report.trim();
+  return `${label} (previous worker)\n${reason ? `Reason: ${reason}\n` : ''}${context ? `${context}\n\n` : ''}New task:\n${task}`;
+}
+
 /** The immediate answer of a task started in the background. */
 export function startedText(head: Omit<TaskHeader, 'verdict' | 'took'>, queued = false): string {
   if (queued) return formatTaskResult({ ...head, verdict: 'running' }, `Queued: at most ${MAX_WORKERS} workers run at once, so it starts as soon as one finishes. Its short report is delivered to you as a new message when it is done, so do not poll or wait for it; task_status and task_stop are there if you need them.`);
@@ -300,6 +343,8 @@ export type TaskRecord = {
   sourceTask?: string;
   reportState?: 'waiting' | 'running' | 'done' | 'failed';
   childId: string;
+  /** Replacement conversation for later calls using this task or worker id. */
+  replacementChildId?: string;
   state: TaskState;
   /** User pause keeps this task and its result destination alive. */
   pausedAt?: number;
@@ -358,10 +403,41 @@ export function cardOf(call: { command: string; output: string; status: 'running
  * tool descriptions say the same (src-tauri/src/delegate.rs). Kept short: it is sent with the first turn of every chat.
  */
 export const DELEGATE_HINT =
-  'Delegation (delegate_task, list_agents): do not wait for the user to ask for sub-agents. For each nontrivial request decide whether independent workstreams would materially improve speed, coverage or quality; if so, delegate those parts and keep ownership of the main task and its integration. Keep ordinary Q&A, a small edit, a quick command and a simple artifact action in this chat; do not invent work just to delegate. Use 1-4 workers for genuinely independent capabilities (investigation, implementation on disjoint files, verification, browser/artifact work); never give two workers overlapping write scopes. Start independent work together with wait:false, carry on with the main task, and do not poll or block unless the next step depends on a result; wait=true only for dependent work. Give each worker a self-contained goal, paths/resources, constraints and a compact evidence-first handoff. Reuse worker conversations for follow-up; replan only when evidence shows a gap. Never delegate the final answer or merely relay the user\'s message. Light public work (search, public info, chat, emails, prompts, scripts, small text edits) may go to a FREE TIER agent in list_agents to save paid usage; it may train on what it receives, so send no project source, private or personal data, keys, passwords, tokens, environment variables, internal IPs/host names or secret files (.env, keys, credentials): AgentDeck refuses those, so keep sensitive work with a trusted agent or do it here.';
+  'Delegation (delegate_task, list_agents): do not wait for the user to ask for sub-agents. For each nontrivial request decide whether independent workstreams would materially improve speed, coverage or quality; if so, delegate those parts and keep ownership of the main task and its integration. Keep ordinary Q&A, a small edit, a quick command and a simple artifact action in this chat; do not invent work just to delegate. Use 1-4 workers for genuinely independent capabilities (investigation, implementation on disjoint files, verification, browser/artifact work); never give two workers overlapping write scopes. Start independent work together with wait:false, carry on with the main task, and do not poll or block unless the next step depends on a result; wait=true only for dependent work. Give each worker a self-contained goal, paths/resources, constraints and a compact evidence-first handoff. Reuse worker conversations for follow-up: to send a correction to a worker that already answered, call delegate_task with continue=<task_id>; replan only when evidence shows a gap. Never delegate the final answer or merely relay the user\'s message. Light public work (search, public info, chat, emails, prompts, scripts, small text edits) may go to a FREE TIER agent in list_agents to save paid usage; it may train on what it receives, so send no project source, private or personal data, keys, passwords, tokens, environment variables, internal IPs/host names or secret files (.env, keys, credentials): AgentDeck refuses those, so keep sensitive work with a trusted agent or do it here.';
 
 /** The line the app puts before a prompt: its parts joined into one paragraph that starts with `[AgentDeck] `. */
 export function agentdeckLead(...parts: string[]): string {
   const joined = parts.map((part) => part.replace(/^\[AgentDeck\]\s*/, '').trim()).filter(Boolean).join(' ');
   return joined ? `[AgentDeck] ${joined}\n\n` : '';
+}
+
+/** A short nudge for later turns (the full DELEGATE_HINT is only sent when a conversation starts). */
+export const DELEGATE_REMINDER =
+  'Delegation reminder: this request looks nontrivial; per the earlier delegation note, delegate independent parts with delegate_task (wait:false) if it clearly helps, else continue here.';
+
+const LONG_PROMPT_CHARS = 280;
+const LONG_PROMPT_LINES = 4;
+// "sửa"/"làm" alone ("ok làm đi", "sửa đi") still count: the user often starts real work with just those words.
+const NONTRIVIAL_WORDS =
+  /\b(implement|build|refactor|migrat\w*|research|investigat\w*|review|plan|redesign|rewrite|add (a )?feature|new feature|trien khai|nghien cuu|dieu tra|len ke hoach|thiet ke|viet lai|sua|lam|them tinh nang|them chuc nang|tinh nang moi)\b/;
+
+/** The user's own words: without the `[AgentDeck] ...` paragraph the app puts before a prompt. */
+const plainPrompt = (prompt: string) => prompt.replace(/^\[AgentDeck\][\s\S]*?\n\n/, '').trim();
+
+/** True when the prompt is long enough to carry real work (more than a short question or acknowledgement). */
+export function isLongPrompt(prompt: string): boolean {
+  const text = plainPrompt(prompt);
+  return text.length > LONG_PROMPT_CHARS || text.split(/\r?\n/).filter((line) => line.trim()).length > LONG_PROMPT_LINES;
+}
+
+/** Whether a prompt looks like work worth delegating: long, a work keyword (English/Vietnamese), or a project mention. */
+export function looksNontrivial(prompt: string, mentions: { kind: string }[] = []): boolean {
+  if (mentions.some((mention) => mention.kind === 'project')) return true;
+  if (isLongPrompt(prompt)) return true;
+  const folded = plainPrompt(prompt)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/gi, 'd')
+    .toLowerCase();
+  return NONTRIVIAL_WORDS.test(folded);
 }

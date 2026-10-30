@@ -72,21 +72,21 @@
           <span class="shrink-0 text-muted-foreground">Messaged agent</span>
           <span class="shrink-0 font-medium">{nameOf(card, record)}</span>
           <span class="min-w-0 flex-1 truncate text-muted-foreground">{doing(card) || firstLine(card.task)}</span>
-          <span class="inline-flex min-w-0 shrink items-center gap-1 overflow-hidden whitespace-nowrap {TONE[card.state]}">
+          <span class="inline-flex w-[7.5rem] shrink-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap {TONE[card.state]}">
             {#if card.state === 'running' || card.state === 'background' || card.state === 'queued'}
               <ActivityIndicator spinner={card.state === 'queued' ? LOADER.queued : LOADER.background} size={LOADER_SIZE} color="current" />
-              <span class="min-w-0 truncate"><StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} /></span>
+              <span class="min-w-0 truncate"><StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} align="end" /></span>
             {:else if card.state === 'approval'}
-              <ZIcon zType={'lucideShieldAlert' as ZIconName} class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} />
+              <ZIcon zType={'lucideShieldAlert' as ZIconName} class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} align="end" />
             {:else if card.state === 'done'}
-              <ZIcon zType="lucideCircleCheck" class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} />
+              <ZIcon zType="lucideCircleCheck" class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} align="end" />
             {:else if card.state === 'stopped'}
-              <ZIcon zType="lucideBan" class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} />
+              <ZIcon zType="lucideBan" class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} align="end" />
             {:else}
-              <ZIcon zType="lucideCircleX" class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} />
+              <ZIcon zType="lucideCircleX" class="size-3.5" /> <StatusRoller current={STATUS[card.state]} sizes={Object.values(STATUS)} align="end" />
             {/if}
-            {#if took(card)}<span class="text-muted-foreground tabular-nums">{took(card)}</span>{/if}
           </span>
+          <span class="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{took(card)}</span>
           {#if card.childId && needsApproval(card.childId)}<span class="shrink-0 rounded-full bg-warning/15 px-1.5 py-px text-[10px] font-medium text-warning">Open its chat to approve</span>{/if}
         </button>
         {#if live(card.state) && card.taskId}

@@ -639,7 +639,7 @@ function handleEventNow(
       const wasWaiting = sessionLanes[sessionId]?.find((lane) => lane.id === turn)?.state === 'waiting';
       updateLane(sessionId, { id: turn!, role: ownedRun.listener ? 'listener' : 'primary', state: wasWaiting && ownedRun.backgroundTools.size ? 'waiting' : 'running', backgroundWork: ownedRun.backgroundTools.size > 0 });
     }
-    if (event.kind === 'tool_call' && isBackgroundWait(event.name) && ownedRun.backgroundTools.size) {
+    if (event.kind === 'tool_call' && isBackgroundWait(event.name, event.background, event.input) && ownedRun.backgroundTools.size) {
       updateLane(sessionId, { id: turn!, role: ownedRun.listener ? 'listener' : 'primary', state: 'waiting', backgroundWork: true });
       sendNextQueued(sessionId);
     }

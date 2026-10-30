@@ -32,11 +32,18 @@ struct State {
     active: String,
     /// Which chat last opened a page in each tab: a tab driven by one chat is not taken over by another.
     owners: HashMap<String, String>,
+    /// The tab each chat drives: what its tools act on when they do not name a `tab_id`.
+    current: HashMap<String, String>,
+    /// The order in which chats first acted on a page: the number in the label of their pointer.
+    numbers: HashMap<String, usize>,
     tabs: HashMap<String, Tab>,
     waiting: HashMap<String, oneshot::Sender<Value>>,
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(Default::default);
+/// One lock per tab: two agents never fire input into the same page at once, while other tabs run in parallel.
+static TAB_LOCKS: LazyLock<Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(Default::default);
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
 fn push(list: &mut VecDeque<Value>, value: Value) {
@@ -52,6 +59,49 @@ pub fn active_tab() -> String {
         .lock()
         .map(|state| state.active.clone())
         .unwrap_or_default()
+}
+
+/// The tab a chat's tools act on: the one it names (`tab_id`), else the one that chat opened or drives, else the
+/// tab in front. A tab whose page is gone is skipped.
+pub fn tab_for(app: &AppHandle, chat: &str, explicit: Option<&str>) -> String {
+    let alive = |tab: &str| !tab.is_empty() && app.get_webview(&format!("browser-{tab}")).is_some();
+    if let Some(tab) = explicit.map(str::trim).filter(|tab| !tab.is_empty()) {
+        return tab.to_string();
+    }
+    if let Ok(state) = STATE.lock() {
+        if let Some(tab) = state.current.get(chat).filter(|tab| alive(tab)) {
+            return tab.clone();
+        }
+        return state.active.clone();
+    }
+    String::new()
+}
+
+/// The pointer label of a chat: its agent, numbered in the order the chats started acting on pages.
+fn agent_label(chat: &str) -> String {
+    if chat.is_empty() {
+        return "AI".to_string();
+    }
+    let Ok(mut state) = STATE.lock() else {
+        return "AI".to_string();
+    };
+    let next = state.numbers.len() + 1;
+    let number = *state.numbers.entry(chat.to_string()).or_insert(next);
+    format!("AI #{number}")
+}
+
+/// The lock of a tab's input (see `TAB_LOCKS`).
+async fn lock_tab(tab: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+    if tab.is_empty() {
+        return None;
+    }
+    let lock = TAB_LOCKS
+        .lock()
+        .ok()?
+        .entry(tab.to_string())
+        .or_default()
+        .clone();
+    Some(lock.lock_owned().await)
 }
 
 /// The tab the user is looking at: what the agent's requests are about.
@@ -289,7 +339,40 @@ async fn serve(mut stream: TcpStream, app: AppHandle) -> std::io::Result<()> {
     // The same browser as an MCP server, for agents that take tools rather than curl.
     if path == "/mcp" {
         let reply = if is_post_request(&head) {
-            let chat = params.get("chat").cloned().unwrap_or_default();
+            let mut chat = params.get("chat").cloned().unwrap_or_default();
+            // No chat in the URL (a CLI that reads one shared MCP config, like Antigravity): the session the client
+            // holds, else the process behind the connection. `delegate_task` names the caller it ends up with.
+            let session = crate::caller::header(&head, "Mcp-Session-Id").map(str::to_owned);
+            if chat.is_empty() {
+                let by_session = session.as_deref().and_then(crate::caller::chat_of_session);
+                chat = match by_session {
+                    Some(chat) => chat,
+                    None => {
+                        let local = PORT.load(Ordering::Relaxed);
+                        let found = match stream.peer_addr() {
+                            Ok(peer) => tokio::task::spawn_blocking(move || {
+                                crate::caller::chat_of_connection(peer.port(), local)
+                            })
+                            .await
+                            .ok()
+                            .flatten(),
+                            Err(_) => None,
+                        };
+                        found.unwrap_or_default()
+                    }
+                };
+            }
+            // A client that opens a session without one gets an id; once the chat is known the id keeps it.
+            let issued = (session.is_none() && body.contains("\"initialize\""))
+                .then(|| crate::caller::open_session(&chat));
+            if let (Some(id), false) = (session.as_deref(), chat.is_empty()) {
+                if crate::caller::chat_of_session(id).is_none() {
+                    crate::caller::remember_session(id, &chat);
+                }
+            }
+            let session_header = issued
+                .map(|id| format!("Mcp-Session-Id: {id}\r\n"))
+                .unwrap_or_default();
             if let Some(root) = params.get("root") {
                 crate::index::set_root(&chat, root);
             }
@@ -302,7 +385,7 @@ async fn serve(mut stream: TcpStream, app: AppHandle) -> std::io::Result<()> {
                 Some(text) => format!(
                     "HTTP/1.1 200 OK
 Content-Type: application/json
-Content-Length: {}
+{session_header}Content-Length: {}
 Connection: close
 
 {text}",
@@ -421,13 +504,33 @@ fn tail(lines: Vec<Value>, limit: usize) -> Value {
 /// Opens `url` in the Preview panel (a tab of its own when another page is open there) and waits until the page
 /// answers the injected script: then it is ready to act on.
 async fn open_page(app: &AppHandle, url: &str, new_tab: bool, chat: &str) -> Result<Value, String> {
-    app.emit_to("main", "agent-open", json!({ "url": url, "newTab": new_tab }))
-        .map_err(|error| error.to_string())?;
+    // A chat that already drives a tab of its own opens the page there, whichever tab is in front.
+    let own = if new_tab || chat.is_empty() {
+        None
+    } else {
+        let tab = tab_for(app, chat, None);
+        let owned = STATE
+            .lock()
+            .map_err(|_| "busy".to_string())?
+            .current
+            .get(chat)
+            .is_some_and(|current| *current == tab);
+        owned.then_some(tab)
+    };
+    app.emit_to(
+        "main",
+        "agent-open",
+        json!({ "url": url, "newTab": new_tab, "tab": own }),
+    )
+    .map_err(|error| error.to_string())?;
     let wanted = url.trim_end_matches('/').to_string();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let tab = STATE.lock().map_err(|_| "busy".to_string())?.active.clone();
+        let tab = match &own {
+            Some(tab) => tab.clone(),
+            None => STATE.lock().map_err(|_| "busy".to_string())?.active.clone(),
+        };
         if tab.is_empty() {
             continue;
         }
@@ -435,11 +538,9 @@ async fn open_page(app: &AppHandle, url: &str, new_tab: bool, chat: &str) -> Res
             let shown = report["url"].as_str().unwrap_or_default();
             if shown.trim_end_matches('/').starts_with(&wanted) {
                 if !chat.is_empty() {
-                    STATE
-                        .lock()
-                        .map_err(|_| "busy".to_string())?
-                        .owners
-                        .insert(tab.clone(), chat.to_string());
+                    let mut state = STATE.lock().map_err(|_| "busy".to_string())?;
+                    state.owners.insert(tab.clone(), chat.to_string());
+                    state.current.insert(chat.to_string(), tab.clone());
                 }
                 return Ok(
                     json!({ "opened": shown, "title": report["title"], "tab": tab, "newTab": new_tab }),
@@ -501,7 +602,20 @@ pub(crate) async fn answer(
     params: &HashMap<String, String>,
     body: &str,
 ) -> Result<Value, String> {
-    let active = STATE.lock().map_err(|_| "busy".to_string())?.active.clone();
+    let chat = params.get("chat").map_or("", String::as_str);
+    // The caller's own tab, not the one in front: chats drive their tabs side by side.
+    let active = tab_for(app, chat, params.get("tab_id").map(String::as_str));
+    // Input into one tab is one at a time; other tabs are not held up.
+    let _input = match path {
+        "/click" | "/hover" | "/scroll" | "/type" | "/key" | "/press" | "/fill" | "/drag"
+        | "/upload" => lock_tab(&active).await,
+        _ => None,
+    };
+    let who = if matches!(path, "/click" | "/hover" | "/scroll" | "/press") {
+        agent_label(chat)
+    } else {
+        String::new()
+    };
     let limit = params
         .get("limit")
         .and_then(|v| v.parse::<usize>().ok())
@@ -526,7 +640,8 @@ pub(crate) async fn answer(
             "GET /open?url=":"opens an address in the Preview panel and waits until the page is ready to act on",
             "GET /drag?from=&to=":"drags one element onto another (HTML5 drag and drop), both as CSS selectors",
             "GET /upload?selector=&path=": "uploads a file from disk: set on an input type=file, or dropped on a drop zone",
-            "GET /press?x=&y=": "a real mouse press at a point (moves the user's mouse, brings the app to the front); /click is usually enough",
+            "GET /press?x=&y=": "the same as /click (kept for older agents): input goes into the page, the user's mouse and focus are not touched",
+            "tab_id=": "any request below can name a tab (default: the tab of the chat that asks, else the tab in front); the answer of /click, /hover, /scroll, /type, /key says which tab it used",
         })),
         "/page" => {
             let state = STATE.lock().map_err(|_| "busy".to_string())?;
@@ -646,8 +761,10 @@ pub(crate) async fn answer(
         "/click" => {
             let (x, y) = point(params)?;
             let view = page(app, &active)?;
-            if crate::cdp::click(&view, x, y).await.is_ok() {
-                return Ok(json!({ "clicked": true, "x": x, "y": y }));
+            if crate::cdp::click(&view, x, y, &who).await.is_ok() {
+                return Ok(
+                    json!({ "clicked": true, "x": x, "y": y, "tab": active, "driver": "cdp", "background": true }),
+                );
             }
             // No DevTools access: the page's own events, dispatched from inside it.
             let report = ask(app, &active, "click", json!({ "x": x, "y": y })).await?;
@@ -658,10 +775,10 @@ pub(crate) async fn answer(
         }
         "/hover" => {
             let (x, y) = point(params)?;
-            if crate::cdp::hover(&page(app, &active)?, x, y).await.is_err() {
+            if crate::cdp::hover(&page(app, &active)?, x, y, &who).await.is_err() {
                 act_via_page(app, &active, "hover", json!({ "x": x, "y": y })).await?;
             }
-            Ok(json!({ "hovered": true, "x": x, "y": y }))
+            Ok(json!({ "hovered": true, "x": x, "y": y, "tab": active, "background": true }))
         }
         "/scroll" => {
             let (x, y) = point(params)?;
@@ -673,7 +790,7 @@ pub(crate) async fn answer(
                 .get("dx")
                 .and_then(|v| v.parse::<f64>().ok())
                 .unwrap_or(0.0);
-            if crate::cdp::scroll(&page(app, &active)?, x, y, dx, dy)
+            if crate::cdp::scroll(&page(app, &active)?, x, y, dx, dy, &who)
                 .await
                 .is_err()
             {
@@ -685,7 +802,7 @@ pub(crate) async fn answer(
                 )
                 .await?;
             }
-            Ok(json!({ "scrolled": true, "dx": dx, "dy": dy }))
+            Ok(json!({ "scrolled": true, "dx": dx, "dy": dy, "tab": active, "background": true }))
         }
         "/type" => {
             let text = params.get("text").cloned().ok_or("send ?text=")?;
@@ -695,39 +812,24 @@ pub(crate) async fn answer(
             {
                 act_via_page(app, &active, "type", json!(text)).await?;
             }
-            Ok(json!({ "typed": text }))
+            Ok(json!({ "typed": text, "tab": active, "background": true }))
         }
         "/key" => {
             let key = params.get("key").cloned().ok_or("send ?key=")?;
             if crate::cdp::key(&page(app, &active)?, &key).await.is_err() {
                 act_via_page(app, &active, "key", json!(key)).await?;
             }
-            Ok(json!({ "pressed": key }))
+            Ok(json!({ "pressed": key, "tab": active, "background": true }))
         }
         "/press" => {
-            // A real mouse press at a point of the page (CSS pixels, as in /shot): this moves the user's mouse.
-            let x = params
-                .get("x")
-                .and_then(|v| v.parse::<f64>().ok())
-                .ok_or("send ?x=&y= in CSS pixels, as in /shot")?;
-            let y = params
-                .get("y")
-                .and_then(|v| v.parse::<f64>().ok())
-                .ok_or("send ?x=&y= in CSS pixels, as in /shot")?;
-            // The page's zoom: the width the window shows over the width the page lays out at.
-            let report = ask(app, &active, "dom", Value::Null).await?;
-            let viewport = report["viewport"]["w"].as_f64().unwrap_or(1.0).max(1.0);
-            let view = app
-                .get_webview(&format!("browser-{active}"))
-                .ok_or("no page is open in the AgentDeck browser: call browser_open (or browser_serve to start the server) with the page address first")?;
-            let logical = view.size().map_err(|error| error.to_string())?;
-            let scale = view
-                .window()
-                .scale_factor()
-                .map_err(|error| error.to_string())?;
-            let zoom = (logical.width as f64 / scale) / viewport;
-            crate::browser::browser_press(app.clone(), active.clone(), x, y, zoom)?;
-            Ok(json!({ "pressed": true, "x": x, "y": y }))
+            // Kept for agents that still call it. It used to move the user's mouse and bring the app to the front;
+            // the page's own mouse events do the same job without touching either.
+            let (x, y) = point(params)?;
+            let view = page(app, &active)?;
+            if crate::cdp::click(&view, x, y, &who).await.is_err() {
+                act_via_page(app, &active, "click", json!({ "x": x, "y": y })).await?;
+            }
+            Ok(json!({ "pressed": true, "x": x, "y": y, "tab": active, "driver": "cdp", "background": true }))
         }
         "/fill" => {
             let selector = params

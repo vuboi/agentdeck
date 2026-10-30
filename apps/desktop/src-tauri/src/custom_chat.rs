@@ -2040,10 +2040,10 @@ pub async fn run_turn(
             };
             emit(AgentEvent::ToolCall {
                 id: id.clone(),
-                name: shown,
-                input: summarize_tool_input(&call.name, &args),
+                name: shown.clone(),
+                input: if call.name == "delegate_task" { args.to_string() } else { summarize_tool_input(&call.name, &args) },
                 change: change_for(&call.name, &args, turn.cwd.as_deref()),
-                background: crate::delegate::is_tool(&call.name) && args["wait"] == false,
+                background: (crate::delegate::is_tool(&call.name) && args["wait"] == false) || ag_adapters::agent::delegate_wait(&shown, &args),
             });
             let waits_only = user_tool.is_none()
                 && args.is_object()

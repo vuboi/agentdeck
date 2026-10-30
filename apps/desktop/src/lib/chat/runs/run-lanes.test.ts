@@ -45,3 +45,12 @@ test('Codex wait count is hidden when Agent activity already shows the child tas
   assert.equal(isRedundantAgentWait('wait  3 agent(s)', false), false);
   assert.equal(isRedundantAgentWait('Run command pnpm check', true), false);
 });
+
+test('a waiting delegate releases a listener without unlocking wait=false', () => {
+  for (const name of ['delegate_task', 'mcp__agentdeck__delegate_task', 'agentdeck.delegate_task']) {
+    assert.equal(isBackgroundWait(name, true), true);
+    assert.equal(isBackgroundWait(name, false), false);
+    assert.equal(isBackgroundWait(name, true, '{"wait":false}'), false);
+  }
+  assert.equal(isBackgroundWait('mcp__other__delegate_task', true), false);
+});

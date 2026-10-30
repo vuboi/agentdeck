@@ -182,7 +182,7 @@ async fn run_session(
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let mcp = mcp_servers(request.cwd.as_deref());
+    let mcp = mcp_servers(request.cwd.as_deref(), chat_id);
     let session_result = if request.resume {
         let mut config = ResumeSessionConfig::new(session_id.clone().into())
             .with_streaming(true)
@@ -358,7 +358,7 @@ async fn run_session(
                                     file_snapshots.insert(id.clone(), snapshot);
                                 }
                             }
-                            let background = name == "task" || args["mode"] == "background";
+                            let background = name == "task" || args["mode"] == "background" || ag_adapters::agent::delegate_wait(&name, &args);
                             Some(AgentEvent::ToolCall {
                                 id,
                                 name,
@@ -639,6 +639,7 @@ async fn start_client(token: String, cwd: Option<&Path>) -> Result<Client, Strin
 /// Converts AgentDeck's shared MCP configuration into the Copilot SDK's configuration format.
 fn mcp_servers(
     cwd: Option<&Path>,
+    chat: &str,
 ) -> indexmap::IndexMap<String, github_copilot_sdk::types::McpServerConfig> {
     crate::mcp_manage::servers_for_agent(cwd, "copilot")
         .into_iter()
@@ -646,6 +647,14 @@ fn mcp_servers(
         .filter_map(|server| {
             let name = server.name.clone();
             let value = if let Some(url) = server.url {
+                // AgentDeck's own browser server is reached at the address of this chat, so its calls name it.
+                let own = crate::channel::is_bridge_name(&name)
+                    && url.starts_with("http://127.0.0.1:")
+                    && url.ends_with("/mcp");
+                let url = match url.strip_suffix("/mcp").filter(|_| own) {
+                    Some(base) => ag_adapters::agent::mcp_url(base, Some(chat), cwd),
+                    None => url,
+                };
                 json!({ "type": "http", "url": url, "headers": server.headers })
             } else {
                 json!({ "type": "stdio", "command": server.command?, "args": server.args, "env": server.env })

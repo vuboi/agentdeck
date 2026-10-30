@@ -634,7 +634,7 @@
     <div bind:this={viewportEl} bind:clientWidth={listWidth} bind:clientHeight={viewportHeight} onscroll={onViewportScroll} onwheel={stopSticking} ontouchmove={stopSticking} onpointerdown={onViewportPointerDown} onkeydown={stopSticking} class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pl-2.5 [overflow-anchor:none] [scrollbar-gutter:stable] {chat.loading || !revealed ? 'pointer-events-none opacity-0' : 'motion-safe:transition-opacity motion-safe:duration-150 motion-safe:ease-out'}" aria-hidden={chat.loading || !revealed}>
       <div class="relative w-full" style:height="{listHeight}px" {@attach watchListHeight} role="log" aria-live="polite" aria-label="Conversation">
         <!-- A theme change repaints every row from scratch: a row kept from before can show the old theme's colours until the page is reloaded. -->
-        {#key `${theme.dark}|${theme.primary}|${theme.neutral}`}
+        {#key theme.settledKey}
         {#each virtualRows as row (row.key)}
           {@const message = chat.messages[row.index + from]}
           {@const mine = message?.role === 'user'}

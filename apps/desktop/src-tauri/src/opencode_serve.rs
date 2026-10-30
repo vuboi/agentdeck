@@ -496,7 +496,8 @@ fn translate(event: &Value, session: &str, turn: &mut Turn, out: &mut impl FnMut
                 call.name = "tool".into();
             }
             let name = call.name.clone();
-            let background = is_subagent(&name);
+            let subagent = is_subagent(&name);
+            let background = subagent || ag_adapters::agent::delegate_wait(&name, &data["input"]);
             out(AgentEvent::ToolCall {
                 id: id.clone(),
                 name,
@@ -505,7 +506,7 @@ fn translate(event: &Value, session: &str, turn: &mut Turn, out: &mut impl FnMut
                 background,
             });
             // A sub-agent's card starts with its call and ends with its result, as Claude's does.
-            if background {
+            if subagent {
                 out(subagent_event(&data["input"], &id, TaskStatus::Started, None));
             }
         }

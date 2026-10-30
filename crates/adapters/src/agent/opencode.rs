@@ -409,7 +409,7 @@ impl Provider for OpenCode {
                         name: tool.to_owned(),
                         input: input_summary(input),
                         change,
-                        background: tool == "subagent",
+                        background: tool == "subagent" || super::delegate_wait(tool, input),
                     });
                     if tool == "subagent" {
                         events.push(subagent_task(part, &id, TaskStatus::Started));

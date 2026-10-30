@@ -113,7 +113,7 @@ export async function listenToPage() {
   const { listen } = await import('../app/platform/tauri-event');
   void listenToNetwork();
   // The agent asked to open an address (browser_open): the same as a link opened in AgentDeck.
-  await listen<{ url: string; newTab?: boolean }>('agent-open', ({ payload }) => openForAgent(payload.url, payload.newTab === true));
+  await listen<{ url: string; newTab?: boolean; tab?: string | null }>('agent-open', ({ payload }) => openForAgent(payload.url, payload.newTab === true, payload.tab ?? undefined));
   // The agent switched the device (browser_device): pages are created again with that device's user agent.
   await listen<{ device: Device; landscape: boolean }>('agent-device', ({ payload }) => {
     if (!(payload.device in DEVICES)) return;
@@ -650,8 +650,15 @@ export function openInPreview(address: string, mode: 'auto' | 'current' | 'new' 
  * Otherwise the Preview panel is left alone: the page is created off-screen, where it keeps drawing, so the agent can
  * still look at it, click, read the console and take screenshots; the user finds it in the Preview when they open it.
  */
-function openForAgent(address: string, inNewTab: boolean) {
+function openForAgent(address: string, inNewTab: boolean, ownTab?: string) {
   const url = cleanAddress(address);
+  // A chat that drives a tab of its own opens the page there and leaves the tab in front as it is.
+  const own = ownTab ? browser.tabs.find((tab) => tab.id === ownTab) : undefined;
+  if (own) {
+    own.url = url;
+    if (own.opened) void call('browser_navigate', { tab: own.id, url }).catch(() => {});
+    return;
+  }
   if (!inTauri() || (layout.toolsOpen && layout.activeTool === 'Preview')) return openInPreview(url, inNewTab ? 'new' : 'current');
   const front = activeTab();
   const tab = inNewTab && front.url ? newTab(url) : front;

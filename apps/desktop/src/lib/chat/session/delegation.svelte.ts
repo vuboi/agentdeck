@@ -74,7 +74,12 @@ export function beginWorkflowRun(main: string, task: string, preset: import('../
 export function addWorkflowWorker(main: string, childId: string, agent: Agent, model: string, label: string, task: string, queued: boolean): string | undefined {
   const run = activeWorkflowByMain.get(main);
   if (!run || run.endedAt) return undefined;
-  run.nodes.push({ childId, agent, model, label, input: task, startedAt: Date.now(), state: queued ? 'idle' : 'running', note: queued ? 'Queued for an available worker slot' : undefined });
+  const node = { childId, agent, model, label, input: task, startedAt: Date.now(), state: queued ? 'idle' : 'running', note: queued ? 'Queued for an available worker slot' : undefined } as RunNode;
+  // A follow-up to a reused child is the same worker: refresh its node instead of counting it twice
+  // (updateWorkflowWorker finds the first node by childId, so a second one would never update).
+  const index = run.nodes.findIndex((item) => item.childId === childId);
+  if (index >= 0) run.nodes[index] = node;
+  else run.nodes.push(node);
   return run.id;
 }
 
@@ -230,7 +235,7 @@ const plainText = (message: Message) =>
     .trim();
 
 /** The last messages of a chat as plain text, newest kept when it is long. */
-function digestOf(messages: Message[], limit = 6000): string {
+export function digestOf(messages: Message[], limit = 6000): string {
   const lines = messages.slice(-8).map((message) => {
     const text = plainText(message);
     return `${message.role === 'user' ? 'User' : agentLabel(message.agent, message.model)}: ${text.length > 1500 ? `${text.slice(0, 1500)}…` : text}`;

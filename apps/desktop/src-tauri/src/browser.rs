@@ -542,6 +542,11 @@ pub async fn browser_show(
     allow_local_certificates(&view);
     crate::cdp::watch_frames(&view);
     crate::cdp::watch_network(&view);
+    // The page acts as focused and awake even when it is not the tab in front: an agent may drive it in the background.
+    {
+        let view = view.clone();
+        tauri::async_runtime::spawn(async move { crate::cdp::prepare(&view).await });
+    }
     layer(&view, BELOW.load(Ordering::Relaxed));
     hide_others(&app, &tab);
     Ok(())
@@ -712,12 +717,25 @@ fn copy_extension(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Hides every page but tab `tab`'s.
+/// Takes a page off the user's screen without hiding it: it is moved far off-screen but stays shown, so it keeps
+/// drawing. A hidden page stops rendering and a screenshot of it would hang; this way an agent that owns the tab
+/// can still look at it and act on it while another tab is in front.
+fn stash(view: &Webview) {
+    let scale = view.window().scale_factor().unwrap_or(1.0);
+    if let Ok(size) = view.size() {
+        let size = size.to_logical::<f64>(scale);
+        let _ = set_rect(view, -20000.0, -20000.0, size.width, size.height);
+    } else {
+        let _ = view.hide();
+    }
+}
+
+/// Takes every page but tab `tab`'s off the user's screen (see `stash`).
 fn hide_others(app: &AppHandle, tab: &str) {
     let keep = label(tab);
     for (name, view) in app.webviews() {
         if name.starts_with(PREFIX) && name != keep {
-            let _ = view.hide();
+            stash(&view);
         }
     }
 }
@@ -914,12 +932,13 @@ pub fn browser_bounds(
     place(&webview(&app, &tab)?, x, y, w, h)
 }
 
-/// Hides every tab's page (a menu or the annotation view needs the space, or another tab comes forward).
+/// Takes every tab's page off the screen (a menu or the annotation view needs the space, or another tab comes
+/// forward). The pages stay shown off-screen, so an agent can still act on them (see `stash`).
 #[tauri::command]
 pub fn browser_hide(app: AppHandle) -> Result<(), String> {
     for (name, view) in app.webviews() {
         if name.starts_with(PREFIX) {
-            view.hide().map_err(|error| error.to_string())?;
+            stash(&view);
         }
     }
     Ok(())

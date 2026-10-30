@@ -454,6 +454,18 @@ pub fn plan_json(input: &serde_json::Value) -> Option<String> {
     Some(serde_json::Value::Array(items).to_string())
 }
 
+/// Whether AgentDeck's delegate tool blocks until its worker finishes.
+pub fn delegate_wait(name: &str, input: &serde_json::Value) -> bool {
+    if !matches!(name, "delegate_task" | "mcp__agentdeck__delegate_task" | "agentdeck.delegate_task" | "agentdeck:delegate_task" | "agentdeck/delegate_task" | "agentdeck_delegate_task") { return false; }
+    match &input["wait"] {
+        serde_json::Value::Null => true,
+        serde_json::Value::Bool(flag) => *flag,
+        serde_json::Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
+        serde_json::Value::String(flag) => matches!(flag.trim().to_ascii_lowercase().as_str(), "true" | "yes" | "1"),
+        _ => false,
+    }
+}
+
 /// One line describing a tool call's input: the part a person would look at.
 pub fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {
     if matches!(name, "TodoWrite" | "update_plan") {
@@ -661,6 +673,13 @@ mod line_diff_tests {
         let diff = line_diff("", "x\ny\n");
         assert_eq!((diff.added, diff.removed), (2, 0));
     }
+
+    #[test]
+    fn antigravity_edit_file_target_and_replacement_make_a_change() {
+        let input = serde_json::json!({ "Path": "E:/a.ts", "Target": "a\nb", "Replacement": "a\nB\nc" });
+        let change = super::file_change("edit_file", &input).expect("a change");
+        assert_eq!((change.added, change.removed), (3, 2));
+    }
 }
 
 /// The first picture in a tool result's content, as a `data:` URL. Claude nests it under `source`; an MCP
@@ -700,12 +719,13 @@ pub fn file_change(name: &str, input: &serde_json::Value) -> Option<FileChange> 
             })
         }
         "edit" | "edit_file" | "editfile" | "replace_file_content" | "replacefilecontent" => {
-            if string_arg(input, &["old_string", "oldString", "oldText", "old_text", "oldContent"]).is_none()
-                && string_arg(input, &["new_string", "newString", "newText", "new_text", "newContent", "replacement"]).is_none()
-            {
+            // Antigravity's edit_file names them `Target` / `Replacement`.
+            const OLD: &[&str] = &["old_string", "oldString", "oldText", "old_text", "oldContent", "Target", "target", "TargetContent"];
+            const NEW: &[&str] = &["new_string", "newString", "newText", "new_text", "newContent", "replacement", "Replacement", "ReplacementContent"];
+            if string_arg(input, OLD).is_none() && string_arg(input, NEW).is_none() {
                 return None;
             }
-            let (old, new) = (text(input, &["old_string", "oldString", "oldText", "old_text", "oldContent"]), text(input, &["new_string", "newString", "newText", "new_text", "newContent", "replacement"]));
+            let (old, new) = (text(input, OLD), text(input, NEW));
             Some(FileChange {
                 path,
                 added: line_count(&new),

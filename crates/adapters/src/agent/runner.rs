@@ -78,6 +78,45 @@ pub(super) fn spawned(child: &tokio::process::Child) {
     }
 }
 
+/// The chat each agent CLI process the crate started works for (pid -> chat). A client that reaches the app's MCP
+/// bridge without a chat id in its URL (a CLI that reads one shared MCP config, like Antigravity) is identified by
+/// walking its process up to one of these.
+static CHAT_PIDS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u32, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Notes that `pid` is the CLI of `chat`.
+pub fn claim_pid(pid: u32, chat: &str) {
+    if !chat.is_empty() {
+        CHAT_PIDS.lock().unwrap_or_else(|p| p.into_inner()).insert(pid, chat.to_owned());
+    }
+}
+
+/// The live CLI processes started for a chat (including a warm process).
+pub fn pids_of_chat(chat: &str) -> Vec<u32> {
+    CHAT_PIDS.lock().unwrap_or_else(|p| p.into_inner()).iter()
+        .filter_map(|(&pid, owner)| (owner == chat).then_some(pid)).collect()
+}
+
+/// The CLI ended: its pid may be given to something else.
+pub fn release_pid(pid: u32) {
+    CHAT_PIDS.lock().unwrap_or_else(|p| p.into_inner()).remove(&pid);
+}
+
+/// The chat whose CLI process is `pid`.
+pub fn chat_of_pid(pid: u32) -> Option<String> {
+    CHAT_PIDS.lock().unwrap_or_else(|p| p.into_inner()).get(&pid).cloned()
+}
+
+/// Releases the pid of a one-turn process when the turn ends, however it ends.
+struct PidClaim(Option<u32>);
+
+impl Drop for PidClaim {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            release_pid(pid);
+        }
+    }
+}
 /// Stops the whole process tree of a turn that is dropped before it ends (the user stopped it, or sent an edited
 /// message). `kill_on_drop` ends only the process the app started: on Windows that is the `cmd /C` around a `.cmd`
 /// CLI, and everywhere a CLI started by a wrapper (an npm shim, `node`) keeps its own children. They kept running,
@@ -179,6 +218,10 @@ pub async fn drive_turn(
         }
     };
     spawned(&child);
+    if let (Some(pid), Some(chat)) = (child.id(), req.owner.as_deref()) {
+        claim_pid(pid, chat);
+    }
+    let _claim = PidClaim(child.id());
     let mut tree = TreeGuard(child.id());
 
     // Written apart from the reader: a long prompt must not hold up the output, and the CLI reads all of it

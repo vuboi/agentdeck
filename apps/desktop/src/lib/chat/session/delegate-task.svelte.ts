@@ -1,6 +1,7 @@
-import { type TaskRecord, type AgentRow, formatTaskResult, MAX_WORKERS, type Verdict, kindOfCommand, pickTask, argsOfCall, parseDelegateArgs, findAgent, formatAgents, privateContentIn, resolveModel, newTaskId, REPORT_RULE, startedText, reportDigest, reasonLine, isTaskId } from '../../tasks/delegate-task';
+import { invoke } from '@tauri-apps/api/core';
+import { type TaskRecord, type AgentRow, formatTaskResult, replacementTask, MAX_WORKERS, type Verdict, kindOfCommand, pickTask, argsOfCall, parseDelegateArgs, findAgent, formatAgents, privateContentIn, resolveModel, newTaskId, REPORT_RULE, startedText, reportDigest, reasonLine, isTaskId, workerLanguageRule, FOLLOW_UP_PREFACE } from '../../tasks/delegate-task';
 import { getPref, setPref } from '../../app/platform/prefs';
-import { connectors, roomLine, agentHasRoom } from '../../agents/connectors.svelte';
+import { connectors, roomLine, agentHasRoom, usagePct } from '../../agents/connectors.svelte';
 import { elapsed } from '../content/blocks';
 import { type Block } from '../mock';
 import { type DelegateCall, enterWorkerSlot, releaseWorkerSlot, replyDelegateCall, delegateReady, listenDelegateCalls, listenWorkerSlots, listenDelegateAborts } from '../agent';
@@ -11,10 +12,11 @@ import { startPageMemoryBridge } from '../../browser/page-memory-bridge';
 import { MODELS, localMessages, persistLocal, workspace, type Agent, type SessionItem } from './state.svelte';
 import { agentLabel, chatTurnOptions, failSessionWork, hasTurnWork, hiddenPrompt, queuePaused, queued, stopTurn, turnOptionsOf } from './turns.svelte';
 import { NO_HANDOUT, askText, liveAsks, liveReplies, messagesOf, replies, runReplies, sendNextQueued } from './run.svelte';
-import { addWorkflowWorker, delegateRuns, firstLineOf, needsApproval, settleWorkflowRun, updateWorkflowWorker } from './delegation.svelte';
-import { LANGUAGE_RULE, shorten, taskWaiters } from './orchestration.svelte';
+import { addWorkflowWorker, delegateRuns, digestOf, firstLineOf, needsApproval, settleWorkflowRun, updateWorkflowWorker } from './delegation.svelte';
+import { shorten, taskWaiters } from './orchestration.svelte';
 import { handbackPrompt, send } from './sending.svelte';
-import { manuallyStopped } from './events.svelte';
+import { lastEventAt, lastEventKind, manuallyStopped } from './events.svelte';
+import { activity } from '../runs/activity.svelte';
 import { continuePrompt } from '../recovery/turn-failure';
 
 // ---------- delegate_task: an agent hands a task to another agent during its own turn ----------
@@ -96,18 +98,9 @@ export function isWorkerChat(id: string): boolean {
   );
 }
 
-/** The chat of a call. A link that names none (Antigravity's stored one) is the chat of that agent running now. */
+/** The chat identified by the bridge; an unknown caller must not be assigned to another chat. */
 function callerOf(chatId: string): SessionItem | undefined {
-  const named = chatId
-    ? workspace.sessions.find((item) => item.id === chatId)
-    : undefined;
-  if (named) return named;
-  const running = workspace.sessions.filter(
-    (item) => item.status === 'working' && replies[item.id],
-  );
-  return running.length === 1
-    ? running[0]
-    : (running.find((item) => item.id === workspace.activeId) ?? running[0]);
+  return chatId ? workspace.sessions.find((item) => item.id === chatId) : undefined;
 }
 
 /** The agents `list_agents` shows and `delegate_task` takes: the installed CLIs, then each local provider. */
@@ -183,7 +176,7 @@ function statusText(record: TaskRecord): string {
         : 'failed';
   return formatTaskResult(
     { ...head, verdict },
-    record.digest ?? record.note ?? '',
+    (record.state === 'done' ? record.digest : record.note) ?? '',
   );
 }
 
@@ -220,18 +213,20 @@ export function bindTasks(callerId: string) {
 /** Starts the worker of a `delegate_task` call. `reply` answers the call; a task in the background answers at once. */
 function startTask(
   call: DelegateCall,
-  reply: (text: string, isError?: boolean) => void,
+  answer: (text: string, isError?: boolean) => void,
 ) {
   const parsed = parseDelegateArgs(call.args);
-  if (!parsed.ok) return reply(parsed.error, true);
+  if (!parsed.ok) return answer(parsed.error, true);
   const {
     agent: wanted,
     model: wantedModel,
     task,
     wait,
     timeoutS,
+    continueId,
   } = parsed.args;
   const caller = callerOf(call.caller);
+  const reply = answer;
   if (!caller)
     return reply(
       'AgentDeck could not tell which chat is calling. Do the task yourself, or ask the user to run it from the chat.',
@@ -242,52 +237,66 @@ function startTask(
       'You are a worker of a delegated task and cannot delegate further: do it yourself and report back.',
       true,
     );
+  // `continue`: reuse an idle worker chat (found by task id or chat id) instead of creating a new one.
+  let reuse: { session: SessionItem; record?: TaskRecord } | undefined;
+  if (continueId) {
+    const prior = delegateTasks[continueId];
+    let childId = prior?.childId ?? continueId;
+    // Follow persisted replacement links without changing historical task cards.
+    const seen = new Set<string>();
+    while (!seen.has(childId)) {
+      seen.add(childId);
+      const next = Object.values(delegateTasks).find((item) => item.childId === childId && item.replacementChildId)?.replacementChildId;
+      if (!next) break;
+      childId = next;
+    }
+    const session = workspace.sessions.find((item) => item.id === childId && item.parentId);
+    if (!session)
+      return reply(
+        `continue="${continueId}" is unknown: no delegated task or worker chat has that id. Use a task_id from an earlier delegate_task result or a worker chat id.`,
+        true,
+      );
+    const records = Object.values(delegateTasks).filter((item) => item.childId === childId);
+    if (session.status === 'working' || records.some((item) => taskRuns.has(item.id)))
+      return reply('worker is still running, use task_status or wait', true);
+    reuse = { session, record: records.sort((a, b) => a.startedAt - b.startedAt).at(-1) };
+  }
   const rows = agentRows();
-  const row = findAgent(rows, wanted);
-  if (!row)
-    return reply(
-      `No agent "${wanted}" is available. ${formatAgents(rows)}`,
-      true,
-    );
-  // A free tier may train on what it is sent: a task that carries a secret or the project's code never leaves.
-  const leak = row.restricted ? privateContentIn(task) : null;
-  if (leak)
-    return reply(
-      `Not sent: ${row.label} is a free tier that may keep what it is sent, and this task holds ${leak}. Do this part yourself or give it to another agent; send the free tier only public, non-sensitive text.`,
-      true,
-    );
-  // A worker of the same provider keeps the model selected in its parent chat unless the caller asked for one.
-  // Different providers cannot run that model id, so they use their own normal default.
-  const inheritedModel =
-    row.id === caller.agent &&
-    row.models.some((item) => item.value === caller.model)
-      ? caller.model
-      : undefined;
-  const chosen = resolveModel(
-    row.models,
-    wantedModel ?? inheritedModel,
-    row.id === 'claude' ? 'sonnet' : undefined,
+  const oldRowId = reuse?.record?.agentId ?? reuse?.session.agent;
+  const row = findAgent(rows, wanted || oldRowId || '');
+  if (!row) return reply(`No agent "${wanted || oldRowId}" is available. ${formatAgents(rows)}`, true);
+  const inheritedModel = row.id === caller.agent && row.models.some((item) => item.value === caller.model) ? caller.model : undefined;
+  const sameProvider = Boolean(reuse && row.id === oldRowId);
+  const chosen = sameProvider && !wantedModel ? { model: reuse!.session.model ?? '' } : resolveModel(
+    row.models, wantedModel ?? inheritedModel, row.id === 'claude' ? 'sonnet' : undefined,
   );
   if ('error' in chosen) return reply(chosen.error, true);
-  const agent: Agent =
-    row.id === 'claude' ||
-    row.id === 'codex' ||
-    row.id === 'antigravity' ||
-    row.id === 'opencode' ||
-    row.id === 'copilot'
-      ? row.id
-      : 'custom';
-  const model =
-    agent === 'custom' ? customModelId(row.id, chosen.model) : chosen.model;
+  const agent: Agent = row.id === 'claude' || row.id === 'codex' || row.id === 'antigravity' || row.id === 'opencode' || row.id === 'copilot' ? row.id : 'custom';
+  const model = sameProvider && !wantedModel ? chosen.model : agent === 'custom' ? customModelId(row.id, chosen.model) : chosen.model;
+  const old = reuse;
+  const failed = old?.record && (old.record.state === 'failed' || old.record.state === 'stopped');
+  const replace = Boolean(old && (failed || !sameProvider || model !== old.session.model));
+  let workerTask = task;
+  if (replace && old) {
+    const transcript = digestOf(messagesOf(old.session.id).filter((message) => message.blocks.some((block) => block.kind === 'response' ? Boolean(block.text.trim()) : block.kind === 'command' && Boolean(block.command.trim()))));
+    const report = old.record?.digest ?? '';
+    const reason = failed ? old.record?.note ?? `Previous worker ${old.record?.state}.` : '';
+    workerTask = replacementTask(task, old.record?.label ?? `${agentLabel(old.session.agent, old.session.model)} · ${modelLabel(old.session.model ?? '')}`, transcript, report, reason);
+    reuse = undefined;
+  }
+  // Check every byte of the seed as well as the new request before selecting a restricted provider.
+  const leak = row.restricted ? privateContentIn(workerTask) : null;
+  if (leak) return reply(`Not sent: ${row.label} is a free tier that may keep what it is sent, and this task holds ${leak}. Do this part yourself or give it to another agent; send the free tier only public, non-sensitive text.`, true);
   let taskId = newTaskId();
   while (delegateTasks[taskId]) taskId = newTaskId();
 
   const uuid = crypto.randomUUID();
-  const id = `${agent}:${uuid}`;
+  const id = reuse ? reuse.session.id : `${agent}:${uuid}`;
   const label = `${agentLabel(agent, model)} · ${modelLabel(model)}`;
+  if (replace && old) for (const record of Object.values(delegateTasks)) if (record.childId === old.session.id) record.replacementChildId = id;
   const originatingRun = [...runReplies.values()].find((run) => run.sessionId === caller.id && run.reply.blocks.some((block) => block.kind === 'command' && kindOfCommand(block.command) === 'delegate_task' && argsOfCall(block.command.replace(/^\S+\s*/, '')).task === task));
   const source = originatingRun?.ask ?? liveAsks[caller.id];
-  workspace.sessions.push({
+  if (!reuse) workspace.sessions.push({
     id,
     projectId: caller.projectId,
     title: `@${agentLabel(agent, model)}: ${firstLineOf(task, 50)}`,
@@ -301,7 +310,7 @@ function startTask(
   });
   // A chat with no messages and no draft flag is not a local chat: the next history import rebuilt the list without it, and a
   // worker waiting for a free place then had no chat to start in.
-  localMessages[id] = [];
+  localMessages[id] ??= [];
   delegateTasks[taskId] = {
     id: taskId,
     caller: caller.id,
@@ -359,7 +368,8 @@ function startTask(
     finishTask(taskId, verdict, run.ending ? '' : (error ?? ''), answer, workerReply);
   };
   taskWaiters.set(id, settle);
-  const brief = `You were asked by another agent (${agentLabel(caller.agent, caller.model)}), who is working for the user in this project, to do the task below on your own. Answer fully, as you would for the user. ${REPORT_RULE} ${LANGUAGE_RULE}`;
+  const languageRule = workerLanguageRule(delegateTasks[taskId].sourceTask ?? task, usagePct(row.id, model));
+  const brief = reuse ? `${FOLLOW_UP_PREFACE} ${REPORT_RULE} ${languageRule}` : `You were asked by another agent (${agentLabel(caller.agent, caller.model)}), who is working for the user in this project, to do the task below on your own. Answer fully, as you would for the user. ${REPORT_RULE} ${languageRule}`;
   // At most MAX_PARALLEL_WORKERS run at once (delegate.rs keeps the line); the rest wait as `queued`. A free place
   // starts the worker at once, so three calls of one turn run side by side.
   run.start = () => {
@@ -370,7 +380,7 @@ function startTask(
     updateWorkflowWorker(record.workflowRunId, record.childId, 'running');
     delete manuallyStopped[id];
     if (run.started) send(id, '', [], [], [], { prompt: continuePrompt('the user paused this worker', true, record.task), silent: NO_HANDOUT });
-    if (!run.started) send(id, task, [], [], [], { preface: `${brief}\n\n` });
+    if (!run.started) send(id, workerTask, [], [], [], { preface: `${brief}\n\n` });
     run.started = true;
     persistLocal();
   };
@@ -435,7 +445,7 @@ function finishTask(
   const body =
     verdict === 'done' ? reportDigest(answer) : reasonLine(verdict, detailOf);
   if (verdict === 'done') record.digest = body;
-  else record.note = body;
+  else { record.note = body; if (answer.trim()) record.digest = reportDigest(answer); }
   updateWorkflowWorker(record.workflowRunId, record.childId, verdict === 'done' ? 'done' : 'failed', body, workerReply);
   // Stopped by the user or the caller: no report is delivered, so nothing else would ever close the flow run.
   if (run.ending === 'user' || run.ending === 'caller') {
@@ -602,6 +612,88 @@ export function endWaitingTasks(callerId: string) {
   }
 }
 
+// ---------- watchdog: a worker that takes long is checked by its caller, a hung one is stopped ----------
+
+/** First check-in after this long; the next ones come after twice the time before (10, 20, 40 min...). */
+const CHECK_IN_MS = 10 * 60_000;
+/** A worker silent this long (no event from its CLI) is asked about. */
+const QUIET_MS = 4 * 60_000;
+/** A worker silent this long is hung: it is stopped, and its caller hands the task on or does it itself. */
+const HUNG_MS = 15 * 60_000;
+/** The same while one of its commands still runs without printing (builds, installs, debug sessions). */
+const HUNG_COMMAND_MS = 60 * 60_000;
+/** The output size of each task's running commands, and when it last grew. */
+const outputSeen = new Map<string, { size: number; at: number }>();
+const descendantSeen = new Map<string, number>();
+const checkIns = new Map<string, { at: number; count: number; quietTold: boolean }>();
+
+let watchingWorkers = false;
+async function watchWorkers() {
+  if (watchingWorkers) return;
+  watchingWorkers = true;
+  try {
+  const now = Date.now();
+  for (const [taskId, run] of taskRuns) {
+    const record = delegateTasks[taskId];
+    if (!record || record.state !== 'running' || record.pausedAt !== undefined || !run.started) continue;
+    const since = now - record.startedAt;
+    // Activity is the CLI's events, and also the output of a command it runs (a build, a test run, a dev server): a
+    // command that keeps printing is working even when the CLI itself says nothing until it ends.
+    const tools = activity.filter((item) => item.sessionId === record.childId && item.name !== 'Request' && (item.status === 'running' || item.status === 'background'));
+    const outputSize = tools.reduce((sum, item) => sum + (item.output?.length ?? 0), 0);
+    const seen = outputSeen.get(taskId);
+    if (!seen || seen.size !== outputSize) outputSeen.set(taskId, { size: outputSize, at: now });
+    const lastOutput = outputSeen.get(taskId)!.at;
+    // Sample every tick, so the decision compares CPU and I/O since the preceding check.
+    let descendantActive = false;
+    try {
+      descendantActive = await invoke<boolean>('worker_descendant_activity', { chat: record.childId });
+    } catch (error) {
+      // An unavailable process snapshot is not evidence that the worker is idle.
+      descendantActive = true;
+      logFlow(record.childId, 'watchdog', `process check failed: ${String(error)}`);
+    }
+    if (taskRuns.get(taskId) !== run || delegateTasks[taskId] !== record || record.state !== 'running' || record.pausedAt !== undefined) continue;
+    if (descendantActive) descendantSeen.set(taskId, Date.now());
+    const quiet = Date.now() - Math.max(lastEventAt.get(record.childId) ?? record.startedAt, tools.length ? lastOutput : 0, descendantSeen.get(taskId) ?? 0);
+    // A command still running with no output (a long build, a debugger at a breakpoint) gets far longer before it
+    // counts as hung; plain silence with nothing running is a stuck CLI sooner.
+    const hungAfter = tools.length ? HUNG_COMMAND_MS : HUNG_MS;
+    if (quiet >= hungAfter && !descendantActive) {
+      logFlow(record.childId, 'watchdog', `task=${taskId} hung (${span(quiet)} silent): stopped`);
+      checkIns.delete(taskId);
+      stopTask(taskId, 'timeout', `No activity from the worker for ${span(quiet)}: AgentDeck stopped it as hung. Hand the task to another agent from list_agents (delegate_task), or do it yourself if none can take it.`);
+      continue;
+    }
+    // A worker that waits for the caller's own answer is checked by the caller already.
+    if (run.callId) continue;
+    const state = checkIns.get(taskId) ?? { at: 0, count: 0, quietTold: false };
+    const due = since >= CHECK_IN_MS * 2 ** state.count && now - state.at > 60_000;
+    const quietDue = quiet >= QUIET_MS && !state.quietTold;
+    if (!due && !quietDue) continue;
+    if (due) state.count++;
+    if (quietDue) state.quietTold = true;
+    state.at = now;
+    checkIns.set(taskId, state);
+    logFlow(record.childId, 'watchdog', `task=${taskId} check-in (running ${span(since)}, quiet ${span(quiet)})`);
+    deliverReport(record.caller, {
+      taskId: `${taskId}#check${state.count}${state.quietTold ? 'q' : ''}`,
+      sourceMessageId: record.sourceMessageId,
+      sourceTask: record.sourceTask ?? record.task,
+      label: `${record.label} (task ${taskId}) - progress check, still running`,
+      text:
+        `Not finished yet: running ${span(since)}, last activity ${span(quiet)} ago (${lastEventKind.get(record.childId) ?? 'unknown'}). ` +
+        `Check it with task_status ${taskId}. If it is progressing, let it run and tell the user briefly. If it looks stuck, ` +
+        `stop it with task_stop and send a hint with delegate_task continue=${taskId}, or hand the task to another agent from list_agents, ` +
+        `or do it yourself if no agent can take it. A worker silent for ${span(HUNG_MS)} is stopped by AgentDeck.`,
+    });
+  }
+  for (const taskId of checkIns.keys()) if (!taskRuns.has(taskId)) checkIns.delete(taskId);
+  for (const taskId of outputSeen.keys()) if (!taskRuns.has(taskId)) outputSeen.delete(taskId);
+  for (const taskId of descendantSeen.keys()) if (!taskRuns.has(taskId)) descendantSeen.delete(taskId);
+  } finally { watchingWorkers = false; }
+}
+
 /** A call of one of the delegation tools, from the Rust side. */
 function onDelegateCall(call: DelegateCall) {
   const reply = (text: string, isError = false) =>
@@ -626,6 +718,8 @@ if (inTauri()) {
   void delegateReady().catch(() => undefined);
   void listenDelegateCalls(onDelegateCall);
   void listenWorkerSlots(startQueued);
+  // The watchdog (watchWorkers): long workers get a progress check by their caller, hung ones are stopped.
+  setInterval(() => void watchWorkers(), 60_000);
   // The Preview agent's memory of pages (page-memory.ts): its tools read and write the store through this.
   void startPageMemoryBridge();
   void listenDelegateAborts((callId) => {

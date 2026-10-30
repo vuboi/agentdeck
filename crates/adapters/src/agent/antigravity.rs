@@ -564,12 +564,13 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
                         turn.file_snapshots.insert(index, snapshot);
                     }
                 }
+                let background = is_subagent_tool(raw_name) || super::delegate_wait(&name, if raw_name == "call_mcp_tool" { &parameters["Arguments"] } else { parameters });
                 events.push(AgentEvent::ToolCall {
                     id: index.to_string(),
                     name,
                     input,
                     change,
-                    background: is_subagent_tool(raw_name),
+                    background,
                 });
                 // agy runs a sub-agent in a conversation of its own and says nothing of what it does until it ends:
                 // the card shows who it is from the start.

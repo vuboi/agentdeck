@@ -12,6 +12,8 @@ export const replyStyle = $state({
   linkPaths: true,
   /** Tell agents about the project's memory file at the start of a conversation (project-memory.ts). */
   projectMemory: true,
+  /** Learn the user's language, tone and form of address from their prompts and tell agents (user-profile.ts). */
+  userProfile: true,
   /** Show `![](https://…)` pictures through the app (a copy in the cache), not straight from the web. */
   proxyImages: true,
   /** The Piper voice that reads Vietnamese aloud (see `VOICES` in speech.ts). */

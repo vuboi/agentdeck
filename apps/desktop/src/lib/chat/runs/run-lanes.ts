@@ -28,6 +28,13 @@ export function deliveryFor(lanes: readonly RunLane[]): MessageDelivery {
 }
 
 /** Only an explicit provider wait releases a foreground slot; spawning a child alone does not mean the lead is idle. */
-export function isBackgroundWait(name: string): boolean {
+export function isBackgroundWait(name: string, background = false, input = ''): boolean {
+  if (background && /^(?:delegate_task|mcp__agentdeck__delegate_task|agentdeck[.:/_]delegate_task)$/i.test(name)) {
+    try {
+      const wait = JSON.parse(input).wait;
+      if (wait === false || wait === 0 || (typeof wait === 'string' && /^(false|no|0)$/i.test(wait.trim()))) return false;
+    } catch { /* Provider summaries can be truncated; background is authoritative. */ }
+    return true;
+  }
   return /(?:^|[._/])(?:wait|wait_agent|wait_agents|wait_task|wait_for_completion)$/i.test(name);
 }

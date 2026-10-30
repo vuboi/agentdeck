@@ -372,41 +372,82 @@ pub async fn evaluate_for(
     Ok(answer["result"]["value"].clone())
 }
 
+/// Makes a page work for the agent while it is not the one in front or the app is in the background: the page
+/// believes it has focus (`:focus`, `focus`/`blur`, `document.hasFocus()`), and it is kept in the active
+/// lifecycle state so timers and animation frames keep running. Best effort: a page that refuses one still works.
+pub async fn prepare(view: &Webview) {
+    let _ = call(
+        view,
+        "Emulation.setFocusEmulationEnabled",
+        json!({ "enabled": true }),
+        None,
+    )
+    .await;
+    let _ = call(
+        view,
+        "Page.setWebLifecycleState",
+        json!({ "state": "active" }),
+        None,
+    )
+    .await;
+}
+
 /// The agent's pointer, drawn in the page so the user sees where it acts: a cursor glides to the point, then a
-/// ring pulses for a click. It never takes events and fades after a moment of rest.
-const CURSOR: &str = r##"((x, y, kind) => {
+/// ring pulses for a click. It lives in a Shadow DOM, takes no events (`pointer-events: none`, above everything)
+/// and fades after a moment of rest. Its colour and label tell the agents of several chats apart.
+const CURSOR: &str = r##"((x, y, kind, label) => {
   const id = '__agentdeck_cursor';
-  const root = document.body || document.documentElement;
-  let box = document.getElementById(id);
-  if (!box) {
-    box = document.createElement('div');
-    box.id = id;
-    box.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;opacity:0;will-change:transform;transition:transform 520ms cubic-bezier(.2,.9,.25,1),opacity 220ms ease';
-    box.innerHTML = `
-      <div data-halo style="position:absolute;left:-14px;top:-14px;width:40px;height:40px;border-radius:50%;background:radial-gradient(circle,rgba(124,92,255,.35),rgba(124,92,255,0) 70%);filter:blur(2px)"></div>
-      <svg data-arrow width="20" height="20" viewBox="0 0 20 20" style="position:relative;display:block;transform-origin:2px 2px;transition:transform 140ms ease;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.35)) drop-shadow(0 4px 10px rgba(0,0,0,.18))">
-        <path d="M2.2 1.6c-.3-.2-.7.1-.6.5l3.9 15.1c.1.4.7.5.9.1l2.5-4.9c.1-.2.3-.3.5-.3l5.4-.4c.4 0 .6-.5.3-.8L2.2 1.6z" fill="#111827" stroke="#ffffff" stroke-width="1.4" stroke-linejoin="round"/>
-      </svg>
-      <div style="position:absolute;left:16px;top:17px;display:flex;align-items:center;gap:4px;padding:2px 8px 2px 6px;border-radius:999px;background:linear-gradient(135deg,#7c5cff,#5b8cff);box-shadow:0 2px 8px rgba(91,92,255,.35),inset 0 0 0 1px rgba(255,255,255,.25);color:#fff;font:600 10.5px/16px ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;letter-spacing:.01em;white-space:nowrap">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="#fff"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg>AI
+  const root = document.documentElement;
+  let hue = 0;
+  for (const ch of label) hue = (hue * 31 + ch.charCodeAt(0)) % 360;
+  const tint = `hsl(${hue} 85% 62%)`;
+  const tintSoft = `hsl(${hue} 85% 62% / .35)`;
+  const tintDark = `hsl(${(hue + 30) % 360} 80% 52%)`;
+  let host = document.getElementById(id);
+  let shadow = host && host.shadowRoot;
+  if (!host || !shadow) {
+    host = document.createElement('div');
+    host.id = id;
+    host.style.cssText = 'all:initial;position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none';
+    shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <style>
+        *, :host { pointer-events: none !important; box-sizing: border-box; }
+        .box { position: fixed; left: 0; top: 0; opacity: 0; will-change: transform; transition: transform 520ms cubic-bezier(.2,.9,.25,1), opacity 220ms ease; }
+        .halo { position: absolute; left: -14px; top: -14px; width: 40px; height: 40px; border-radius: 50%; filter: blur(2px); }
+        .arrow { position: relative; display: block; transform-origin: 2px 2px; transition: transform 140ms ease; filter: drop-shadow(0 1px 1.5px rgba(0,0,0,.35)) drop-shadow(0 4px 10px rgba(0,0,0,.18)); }
+        .tag { position: absolute; left: 16px; top: 17px; display: flex; align-items: center; gap: 4px; padding: 2px 8px 2px 6px; border-radius: 999px; color: #fff; font: 600 10.5px/16px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif; letter-spacing: .01em; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.25); }
+        .ring { position: fixed; border-radius: 50%; }
+      </style>
+      <div class="box">
+        <div class="halo"></div>
+        <svg class="arrow" width="20" height="20" viewBox="0 0 20 20">
+          <path d="M2.2 1.6c-.3-.2-.7.1-.6.5l3.9 15.1c.1.4.7.5.9.1l2.5-4.9c.1-.2.3-.3.5-.3l5.4-.4c.4 0 .6-.5.3-.8L2.2 1.6z" fill="#111827" stroke="#ffffff" stroke-width="1.4" stroke-linejoin="round"/>
+        </svg>
+        <div class="tag"><svg width="10" height="10" viewBox="0 0 24 24" fill="#fff"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg><span data-label></span></div>
       </div>`;
-    root.appendChild(box);
-    box.style.transform = `translate(${x + 24}px, ${y + 24}px)`;
+    root.appendChild(host);
+    const first = shadow.querySelector('.box');
+    first.style.transform = `translate(${x + 24}px, ${y + 24}px)`;
   }
+  const box = shadow.querySelector('.box');
+  box.querySelector('.halo').style.background = `radial-gradient(circle, ${tintSoft}, transparent 70%)`;
+  const tag = box.querySelector('.tag');
+  tag.style.background = `linear-gradient(135deg, ${tint}, ${tintDark})`;
+  tag.querySelector('[data-label]').textContent = label;
   box.getBoundingClientRect();
   box.style.opacity = '1';
   box.style.transform = `translate(${x - 2}px, ${y - 2}px)`;
   if (kind === 'click') {
     setTimeout(() => {
-      const arrow = box.querySelector('[data-arrow]');
-      if (arrow) {
-        arrow.style.transform = 'scale(.82)';
-        setTimeout(() => (arrow.style.transform = ''), 140);
-      }
+      const arrow = box.querySelector('.arrow');
+      arrow.style.transform = 'scale(.82)';
+      setTimeout(() => (arrow.style.transform = ''), 140);
       for (const [delay, size] of [[0, 34], [90, 52]]) {
         const ring = document.createElement('div');
-        ring.style.cssText = `position:fixed;left:${x - size / 2}px;top:${y - size / 2}px;width:${size}px;height:${size}px;border-radius:50%;border:1.5px solid rgba(124,92,255,.85);background:rgba(124,92,255,.10);z-index:2147483646;pointer-events:none`;
-        root.appendChild(ring);
+        ring.className = 'ring';
+        ring.style.cssText = `left:${x - size / 2}px;top:${y - size / 2}px;width:${size}px;height:${size}px;border:1.5px solid ${tint};background:${tintSoft}`;
+        shadow.appendChild(ring);
         ring.animate([{ transform: 'scale(.3)', opacity: 0.9 }, { transform: 'scale(1)', opacity: 0 }], { duration: 520, delay, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'both' }).onfinish = () => ring.remove();
       }
     }, 470);
@@ -416,9 +457,10 @@ const CURSOR: &str = r##"((x, y, kind) => {
   return true;
 })"##;
 
-/// Shows the agent's pointer moving to a point; returns once it has arrived.
-async fn show_pointer(view: &Webview, x: f64, y: f64, kind: &str) {
-    let script = format!("{CURSOR}({x}, {y}, {kind:?})");
+/// Shows the agent's pointer, labelled `who`, moving to a point; returns once it has arrived.
+async fn show_pointer(view: &Webview, x: f64, y: f64, kind: &str, who: &str) {
+    let label = if who.is_empty() { "AI" } else { who };
+    let script = format!("{CURSOR}({x}, {y}, {kind:?}, {})", json!(label));
     // Without DevTools access the page runs it as an ordinary script; nothing to wait for but the glide.
     if evaluate(view, &script, None).await.is_ok() || view.eval(script.as_str()).is_ok() {
         tokio::time::sleep(std::time::Duration::from_millis(520)).await;
@@ -426,8 +468,8 @@ async fn show_pointer(view: &Webview, x: f64, y: f64, kind: &str) {
 }
 
 /// A press at a point of the page (CSS pixels of the viewport), as the browser's own mouse events.
-pub async fn click(view: &Webview, x: f64, y: f64) -> Result<(), String> {
-    show_pointer(view, x, y, "click").await;
+pub async fn click(view: &Webview, x: f64, y: f64, who: &str) -> Result<(), String> {
+    show_pointer(view, x, y, "click", who).await;
     let at = |kind: &str, buttons: u8| json!({ "type": kind, "x": x, "y": y, "button": "left", "buttons": buttons, "clickCount": 1 });
     call(
         view,
@@ -454,8 +496,8 @@ pub async fn click(view: &Webview, x: f64, y: f64) -> Result<(), String> {
 }
 
 /// Moves the mouse over a point (hover menus, tooltips).
-pub async fn hover(view: &Webview, x: f64, y: f64) -> Result<(), String> {
-    show_pointer(view, x, y, "hover").await;
+pub async fn hover(view: &Webview, x: f64, y: f64, who: &str) -> Result<(), String> {
+    show_pointer(view, x, y, "hover", who).await;
     call(
         view,
         "Input.dispatchMouseEvent",
@@ -467,8 +509,15 @@ pub async fn hover(view: &Webview, x: f64, y: f64) -> Result<(), String> {
 }
 
 /// Scrolls at a point, as a mouse wheel would.
-pub async fn scroll(view: &Webview, x: f64, y: f64, dx: f64, dy: f64) -> Result<(), String> {
-    show_pointer(view, x, y, "scroll").await;
+pub async fn scroll(
+    view: &Webview,
+    x: f64,
+    y: f64,
+    dx: f64,
+    dy: f64,
+    who: &str,
+) -> Result<(), String> {
+    show_pointer(view, x, y, "scroll", who).await;
     let params = json!({ "type": "mouseWheel", "x": x, "y": y, "deltaX": dx, "deltaY": dy });
     call(view, "Input.dispatchMouseEvent", params, None).await?;
     Ok(())

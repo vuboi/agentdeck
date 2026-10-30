@@ -23,12 +23,11 @@
   let { message, index, agent, questionMessageId }: { message: Message; index: number; agent: string; questionMessageId: string | undefined } = $props();
 
   const parts = $derived(segments(message.blocks));
-  // Replies of the same agent and model that follow one another (a divider between them) share one name line
-  // and one footer: only the first carries the name, only the last the copy button.
+  // Replies of the same agent and model that follow one another share one name line, while each actual answer keeps
+  // its own footer so copy, fork and read-aloud actions remain available for every completed reply.
   const place = $derived(runPosition(chat.messages, index, agent));
   const quiet = $derived(place.quiet);
   const grouped = $derived(place.grouped);
-  const lastOfRun = $derived(place.lastOfRun);
   // The numbers on the name line are the whole run's: the replies a newer message cut off are in them too.
   const usage = $derived(grouped || quiet ? undefined : runUsage(chat.messages, index, estimateCost));
   // Live only while the chat really runs: a reply left marked live (a lost "done") shows its footer.
@@ -68,7 +67,7 @@
   {/if}
 </div>
 <!-- The status line and the footer share one fixed-height slot, so the row does not jump when the reply ends. -->
-{#if showLive || ((message.blocks.length > 0 || message.stoppedAfter !== undefined) && lastOfRun)}
+{#if showLive || ((message.blocks.length > 0 || message.stoppedAfter !== undefined) && !quiet)}
   <div class="relative h-[30px] w-full shrink-0">
     {#if showLive}
       <!-- Before any content, match the first response line's gap and line height below the agent header. -->

@@ -722,6 +722,24 @@ export function roomLine(agent: string, now = Date.now()): string {
   return windows.length ? `usage ${windows.join(', ')}` : '';
 }
 
+/**
+ * The highest live usage window (5h or weekly) of the signed-in account, in percent; null when unknown.
+ * Antigravity: the quota group of the model's family (`gemini` or `3p`), or every group when no model is given.
+ * Other agents (OpenCode, Copilot, …) expose no usage figures, so they read as unknown.
+ */
+export function usagePct(agent: string, model?: string, now = Date.now()): number | null {
+  if (agent === 'antigravity') {
+    const groups = connectors.agyQuota?.groups ?? [];
+    const family = model ? (model.startsWith('gemini-') ? 'gemini' : '3p') : null;
+    const live = groups.filter((group) => !family || group.id === family).flatMap((group) => group.windows).filter((window) => liveWindow(window, now));
+    return live.length ? Math.max(...live.map((window) => window.pct)) : null;
+  }
+  if (agent !== 'claude' && agent !== 'codex') return null;
+  const active = connectors.accounts[agent]?.accounts.find((account) => account.active);
+  const live = active?.usage.filter((window) => liveWindow(window, now)) ?? [];
+  return live.length ? Math.max(...live.map((window) => window.pct)) : null;
+}
+
 const announced = new Set<string>();
 
 function announce(warning: Warning) {

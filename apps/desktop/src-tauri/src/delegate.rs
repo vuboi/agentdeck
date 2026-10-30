@@ -37,17 +37,18 @@ pub fn tool_defs() -> Vec<Value> {
     vec![
         json!({
             "name": DELEGATE_TOOL,
-            "description": format!("Hands a task to another AI agent running in AgentDeck (Claude, Codex, Antigravity or a local model) and returns its short report. Use this for cross-provider handoffs or independent work that benefits from another AgentDeck agent. If your CLI already has native sub-agents, use those for its own internal orchestration; do not replace them with this cross-provider tool. Do NOT delegate small things: keep ordinary Q&A, a small edit, a quick command or a simple artifact action in the current chat, and do not invent work just to delegate. Use 1-4 workers for genuinely independent capabilities such as investigation, implementation on disjoint files, verification, browser or artifact work; never assign overlapping write scopes. Give each worker a self-contained goal, paths/resources, constraints and evidence-first handoff: it sees nothing of this conversation. Independent tasks go out together in ONE turn with wait=false so they work in the background while you continue the main task; use wait=true only when the next step depends on a report. At most {MAX_PARALLEL_WORKERS} workers run at a time; more wait in line and start as others finish. Keep ownership of the main task and final integration. Never delegate merely to relay the user's message; never delegate the final answer. Reuse worker conversations for corrections and replan only after evidence shows a real gap. Call list_agents first when unsure which agent or model to use. A FREE TIER agent sees no file or project and may train on the task: send it only public, non-sensitive text."),
+            "description": format!("Hands a task to another AI agent running in AgentDeck (Claude, Codex, Antigravity or a local model) and returns its short report. Use this for cross-provider handoffs or independent work that benefits from another AgentDeck agent. If your CLI already has native sub-agents, use those for its own internal orchestration; do not replace them with this cross-provider tool. Do NOT delegate small things: keep ordinary Q&A, a small edit, a quick command or a simple artifact action in the current chat, and do not invent work just to delegate. Use 1-4 workers for genuinely independent capabilities such as investigation, implementation on disjoint files, verification, browser or artifact work; never assign overlapping write scopes. Give each worker a self-contained goal, paths/resources, constraints and evidence-first handoff: it sees nothing of this conversation. Independent tasks go out together in ONE turn with wait=false so they work in the background while you continue the main task; use wait=true only when the next step depends on a report. At most {MAX_PARALLEL_WORKERS} workers run at a time; more wait in line and start as others finish. Keep ownership of the main task and final integration. Never delegate merely to relay the user's message; never delegate the final answer. Reuse worker conversations for corrections: to send a correction to a worker that already answered, call delegate_task with continue=<task_id>. Replan only after evidence shows a real gap. Call list_agents first when unsure which agent or model to use. A FREE TIER agent sees no file or project and may train on the task: send it only public, non-sensitive text."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "agent": { "type": "string", "description": "claude, codex, antigravity, or the id of a local model provider as listed by list_agents" },
+                    "continue": { "type": "string", "description": "a task_id (e.g. t-ab12cd) or worker chat id of a worker that already answered and is idle: its chat is reused and `task` is sent to it as a follow-up. agent and model may then be left out" },
                     "model": { "type": "string", "description": "a model of that agent as listed by list_agents (a part of its name is enough); left out: the agent's usual one" },
                     "task": { "type": "string", "description": "the self-contained task: goal, paths, constraints, what to report back" },
                     "wait": { "type": "boolean", "description": "true (default): wait for the report because the next step depends on it. false: run in the background and return a task_id now" },
                     "timeout_s": { "type": "number", "description": format!("seconds the worker may take before it is stopped (default {DEFAULT_TIMEOUT_S}, at most {MAX_TIMEOUT_S})") },
                 },
-                "required": ["agent", "task"],
+                "required": ["task"],
             },
         }),
         json!({
@@ -76,6 +77,8 @@ pub struct DelegateArgs {
     pub task: String,
     pub wait: bool,
     pub timeout_s: u64,
+    /// A task id or worker chat id whose chat is reused for a follow-up.
+    pub continue_id: Option<String>,
 }
 
 fn text_of(value: &Value) -> Option<String> {
@@ -109,8 +112,12 @@ fn seconds_of(value: &Value) -> Option<f64> {
 }
 
 pub fn parse_delegate(args: &Value) -> Result<DelegateArgs, String> {
-    let agent = text_of(&args["agent"])
-        .ok_or("agent is required: claude, codex, antigravity or an id from list_agents")?;
+    let continue_id = text_of(&args["continue"]);
+    let agent = match text_of(&args["agent"]) {
+        Some(agent) => agent,
+        None if continue_id.is_some() => String::new(),
+        None => return Err("agent is required (unless continue is given): claude, codex, antigravity or an id from list_agents".into()),
+    };
     let task = text_of(&args["task"])
         .ok_or("task is required: say what the worker must do and report back")?;
     if task.chars().count() > TASK_MAX_CHARS {
@@ -135,6 +142,7 @@ pub fn parse_delegate(args: &Value) -> Result<DelegateArgs, String> {
         task,
         wait,
         timeout_s,
+        continue_id,
     })
 }
 
@@ -255,7 +263,7 @@ fn reply_value(text: String, is_error: bool) -> Value {
 pub async fn call(app: &AppHandle, tool: &str, args: &Value, chat: &str) -> Value {
     let checked = match tool {
         DELEGATE_TOOL => parse_delegate(args).map(|parsed| {
-            json!({ "agent": parsed.agent, "model": parsed.model, "task": parsed.task, "wait": parsed.wait, "timeout_s": parsed.timeout_s })
+            json!({ "agent": parsed.agent, "model": parsed.model, "task": parsed.task, "wait": parsed.wait, "timeout_s": parsed.timeout_s, "continue": parsed.continue_id })
         }),
         "task_status" | "task_stop" => parse_task_id(args).map(|id| json!({ "task_id": id })),
         _ => Ok(json!({})),
@@ -401,7 +409,8 @@ mod tests {
                 model: None,
                 task: "read the logs".into(),
                 wait: true,
-                timeout_s: 1800
+                timeout_s: 1800,
+                continue_id: None
             }
         );
     }
@@ -413,6 +422,15 @@ mod tests {
         assert!(parse_delegate(&json!({ "agent": "codex", "task": "   " })).is_err());
         assert!(parse_delegate(&json!({ "agent": 3, "task": "x" })).is_err());
         assert!(parse_delegate(&Value::Null).is_err());
+    }
+
+    #[test]
+    fn continue_replaces_agent() {
+        let parsed = parse_delegate(&json!({ "continue": " t-ab12cd ", "task": "fix it" })).expect("valid");
+        assert_eq!(parsed.continue_id.as_deref(), Some("t-ab12cd"));
+        assert!(parsed.agent.is_empty());
+        assert!(parse_delegate(&json!({ "continue": "   ", "task": "x" })).is_err());
+        assert!(parse_delegate(&json!({ "continue": "t-ab12cd" })).is_err());
     }
 
     #[test]
@@ -587,10 +605,11 @@ mod tests {
             "Do NOT delegate small things",
             "never delegate the final answer",
             "1-4 workers",
+            "continue=<task_id>",
         ] {
             assert!(text.contains(phrase), "the description lacks: {phrase}");
         }
-        assert_eq!(defs[0]["inputSchema"]["required"], json!(["agent", "task"]));
+        assert_eq!(defs[0]["inputSchema"]["required"], json!(["task"]));
     }
 
     // One test: both use the shared registry, and a reload empties it for everyone.

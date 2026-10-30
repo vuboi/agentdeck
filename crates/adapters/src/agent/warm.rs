@@ -67,6 +67,7 @@ impl Drop for Warm {
     /// in every case the CLI goes, with everything it started.
     fn drop(&mut self) {
         if let Some(pid) = self.child.id() {
+            super::runner::release_pid(pid);
             kill_tree(pid);
         }
     }
@@ -291,6 +292,9 @@ pub(super) fn start(binary: OsString, provider: &dyn Provider, args: &[String], 
         .spawn()
         .map_err(|error| format!("could not start {}: {error}. Check that its CLI is installed in Settings → Connectors.", provider.binary()))?;
     super::runner::spawned(&child);
+    if let (Some(pid), Some(chat)) = (child.id(), req.owner.as_deref()) {
+        super::runner::claim_pid(pid, chat);
+    }
     let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take()) else {
         return Err(format!("could not talk to {}", provider.binary()));
     };

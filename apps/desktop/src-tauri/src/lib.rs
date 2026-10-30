@@ -6,6 +6,7 @@ mod agent_runs;
 mod awake;
 mod answers;
 mod bridge;
+mod caller;
 mod channel;
 mod browser;
 mod browser_extensions;
@@ -2410,6 +2411,7 @@ pub fn run() {
             agent_runs::agent_stop,
             agent_runs::agent_stop_all,
             agent_runs::agent_inject,
+            caller::worker_descendant_activity,
             delegate::delegate_reply,
             delegate::delegate_ready,
             delegate::delegate_enter,

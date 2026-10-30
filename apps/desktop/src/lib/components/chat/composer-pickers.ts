@@ -10,6 +10,8 @@ import {
   workspace,
   type Mention,
 } from '../../chat/sessions.svelte';
+import { CREDIT_PREFIX } from '../../agents/credit-model';
+import { isFreeModel, isPaidOnlyModel } from '../../agents/models.svelte';
 
 export const chipIcon: Record<Mention['kind'], ZIconName> = {
   session: 'lucideMessageSquare' as ZIconName,
@@ -17,6 +19,18 @@ export const chipIcon: Record<Mention['kind'], ZIconName> = {
   ai: 'lucideBot' as ZIconName,
   workflow: 'lucideWorkflow' as ZIconName,
 };
+
+/** Keeps duplicate model names selectable in mentions: plan, credit and paid-only variants must be visible. */
+function mentionModelLabel(agent: string, model: { value: string; label: string }) {
+  const variant = model.value.startsWith(CREDIT_PREFIX)
+    ? 'Credit'
+    : isPaidOnlyModel(model)
+      ? 'Paid'
+      : isFreeModel(model) && !/\bfree\b/i.test(model.label)
+        ? 'Free'
+        : '';
+  return `${agent} · ${model.label}${variant ? ` (${variant})` : ''}`;
+}
 
 /** The agent's own commands and skills, plus AgentDeck's, grouped under headings. */
 export function buildSlashGroups(
@@ -104,12 +118,12 @@ export function buildMentionGroups(kind?: Mention['kind']): ZCommandGroup<Mentio
     items: AGENTS.flatMap((entry) =>
       MODELS[entry.value].map((entryModel) => ({
         id: `ai:${entry.value}/${entryModel.value}`,
-        label: `${entry.label} · ${entryModel.label}`,
+        label: mentionModelLabel(entry.label, entryModel),
         icon: agentIcon[entry.value],
         data: {
           kind: 'ai' as const,
           id: `${entry.value}/${entryModel.value}`,
-          label: `${entry.label} · ${entryModel.label}`,
+          label: mentionModelLabel(entry.label, entryModel),
         },
       })),
     ),

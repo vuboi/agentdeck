@@ -6,6 +6,7 @@ import { pictureUrl, type AgentEvent } from '../agent';
 import { inTauri } from '../../app/platform/history';
 import { planRunRestore, terminalStep, updateInflight, loadInflight, withTerminal, withoutTerminal, type InflightRun, type ServerLike } from './inflight';
 import { sessionTail, watchOutput } from '../../terminal/terminal-session';
+import { endedByTask, statusAfterResult } from './activity-status';
 
 export type ActivityStatus = 'running' | 'background' | 'ok' | 'fail' | 'stopped';
 export type Activity = {
@@ -325,10 +326,10 @@ export function trackActivity(sessionId: string, title: string, project: string,
     if (!item) return;
     item.output = event.output.length > 4000 ? `${event.output.slice(0, 4000)}…` : event.output;
     if (event.image) item.image = event.image;
-    if (event.is_error) item.status = 'fail';
-    // A background shell answers at once with its id; it keeps running after that.
-    else item.status = item.background ? 'background' : 'ok';
-    if (item.status !== 'background') {
+    // A call its task event already ended was recorded then: the result adds output and keeps that status.
+    const ended = endedByTask(item);
+    item.status = statusAfterResult(item, event.is_error);
+    if (item.status !== 'background' && !ended) {
       item.endedAt = Date.now();
       record(item);
       // The log keeps the picture; the live list does not need a copy of it.

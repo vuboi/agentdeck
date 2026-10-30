@@ -545,3 +545,6 @@ body {
   top: 0 !important;
   left: 0 !important;
 }
+
+/* Theme swap (theme.svelte.ts): nothing eases between the old and new colours, so the window flips in one frame. */
+.theme-switching *, .theme-switching *::before, .theme-switching *::after { transition: none !important; }

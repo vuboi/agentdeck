@@ -1,3 +1,9 @@
+<script lang="ts" module>
+  // Open state of the work list and of its rows, per chat. Kept for the app's lifetime, not per mount.
+  const workOpen = $state<Record<string, boolean>>({});
+  const workDetails = $state<Record<string, boolean>>({});
+</script>
+
 <script lang="ts">
   import { ZButton, ZIcon, ZLoading, ZShimmerText, zTooltip } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
@@ -19,8 +25,10 @@
   /** Outside the virtual transcript: scrolling and loading old messages cannot unmount the work list. */
   let { items, sessionId }: { items: ChatWork[]; sessionId: string } = $props();
   // Folded by default: each chat keeps its own open state, so the list opens only when the user asks for it.
-  let open = $state<Record<string, boolean>>({});
-  let details = $state<Record<string, boolean>>({});
+  // Module level (like the chat's scroll position): the state outlives this component, so switching to another chat
+  // and back shows the list as the user left it.
+  const open = workOpen;
+  const details = workDetails;
   const isOpen = $derived(Boolean(open[sessionId]));
   const active = $derived(items.filter(isWorkActive));
   const paused = $derived(active.filter((item) => item.state === 'paused'));

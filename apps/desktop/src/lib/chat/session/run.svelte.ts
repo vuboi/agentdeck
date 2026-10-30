@@ -13,10 +13,11 @@ import { parseCustomModel } from '../../agents/models.svelte';
 import { customProviderOf } from '../../agents/provider-registry';
 import { automation } from '../../app/platform/automation.svelte';
 import { logError } from '../../app/platform/error-log.svelte';
-import { DELEGATE_HINT, agentdeckLead } from '../../tasks/delegate-task';
+import { DELEGATE_HINT, DELEGATE_REMINDER, agentdeckLead, isLongPrompt, looksNontrivial } from '../../tasks/delegate-task';
 import { houseStyleHint } from '../content/house-style';
 import { replyStyle } from '../content/reply-style.svelte';
 import { memoryHint, readProjectMemory } from '../content/project-memory';
+import { learnFromPrompt, loadProfile, profileHint } from '../content/user-profile';
 import { logRequest } from '../runs/activity.svelte';
 import { setPref } from '../../app/platform/prefs';
 import { type RunLane, deliveryFor } from '../runs/run-lanes';
@@ -36,20 +37,19 @@ const touchedThisRun = new Set<string>();
 export const pendingNew = new Set<string>();
 
 /** When each chat's CLI was last asked to start ahead (by chat, agent and model), so typing does not ask on every key. */
+/** Chats whose previous turn got DELEGATE_REMINDER (not repeated for a short follow-up). */
+const reminded = new Map<string, boolean>();
 const prewarmedAt = new Map<string, number>();
 
 function prehandleProvider() {
   const score = (model: string) => {
     const value = model.toLowerCase();
-    return (/(vision|vl|gemini|flash|haiku|mini|nano)/.test(value) ? 4 : 0) +
+    return (/(vision|vl|gemini|flash|haiku|mini|nano|scout|pixtral|internvl|moondream|minicpm|qwen|gemma-3|llama-4)/.test(value) ? 4 : 0) +
       (/(free|local|ollama)/.test(value) ? 2 : 0);
   };
   return connectors.custom
     .filter((provider) => provider.enabled && !provider.restricted && provider.kind !== 'anthropic' && provider.baseUrl.trim())
-    .map((provider) => {
-      const model = [...provider.models, provider.defaultModel].find(Boolean) ?? '';
-      return { provider, model, score: score(model) };
-    })
+    .flatMap((provider) => [...new Set([...provider.models, provider.defaultModel].filter(Boolean))].map((model) => ({ provider, model, score: score(model) })))
     .filter((item) => item.model && item.score > 0)
     .sort((a, b) => b.score - a.score)[0];
 }
@@ -384,6 +384,7 @@ export function startTurn(
     if (automation.prehandle && (paths.length || files.length)) {
       const selected = prehandleProvider();
       if (selected) {
+        logFlow(session.id, 'attachment pre-handle started', `provider=${selected.provider.kind}:${selected.provider.id} model=${selected.model} images=${paths.length} files=${files.length}`);
         try {
           const memo = await within(
             prehandleAttachments({
@@ -401,10 +402,14 @@ export function startTurn(
           if (memo.trim()) {
             dispatchBody = `${body}\n\n[Attachment pre-handle memo]\n${memo.trim()}`;
             dispatchPaths = [];
+            logFlow(session.id, 'attachment pre-handle completed', `model=${selected.model} memo=${memo.trim().length} chars`);
           }
         } catch (error) {
+          logFlow(session.id, 'attachment pre-handle failed', String(error).slice(0, 300));
           logError('turn', 'attachment pre-handle failed; sending original attachments', error);
         }
+      } else {
+        logFlow(session.id, 'attachment pre-handle skipped', 'no eligible custom vision provider');
       }
     }
     if (session.agent === 'custom') {
@@ -493,6 +498,14 @@ export function startTurn(
         : told !== false
           ? NO_DELEGATE_HINT
           : '';
+    // Later turns: a short reminder for nontrivial prompts only (not twice in a row for a short one, and not with inline
+    // @ai mentions, which already carry delegation instructions).
+    let reminder = '';
+    if (orchestrate && !nativeDelegation && !isWorkerChat(session.id) && !delegateHint && !preface.includes('inline sub-agent requests')) {
+      const kinds = /Project "[^"]*" is at /.test(preface) ? [{ kind: 'project' }] : [];
+      if (looksNontrivial(text, kinds) && !(reminded.get(hintKey) && !isLongPrompt(text))) reminder = DELEGATE_REMINDER;
+    }
+    if (!isWorkerChat(session.id)) reminded.set(hintKey, Boolean(reminder));
     if (!isWorkerChat(session.id)) orchestrateTold.set(hintKey, orchestrate);
     if (delegateHint === DELEGATE_HINT) rememberDelegateHint(hintKey);
     else if (delegateHint === NATIVE_DELEGATION_HINT) rememberNativeDelegationHint(hintKey);
@@ -502,7 +515,12 @@ export function startTurn(
     // project begins with what earlier ones learned.
     const memoryNote = !resume && !isWorkerChat(session.id) && cwd && replyStyle.projectMemory ? memoryHint(true, cwd, await within(readProjectMemory(cwd), PREPARE_LIMIT_MS, "reading the project's memory", () => '')) : '';
     if (!runReplies.has(turn)) return;
-    const hint = agentdeckLead(openHint, delegateHint, styleHint, memoryNote, LANGUAGE_RULE);
+    // The user's way of talking (user-profile.ts): learnt quietly from each prompt of a main chat, and told to the agent
+    // when a conversation starts. Workers keep their own language rule.
+    const mainChat = !isWorkerChat(session.id) && asked?.role === 'user';
+    if (mainChat && replyStyle.userProfile) learnFromPrompt(text);
+    const profileNote = !resume && mainChat && replyStyle.userProfile ? profileHint(loadProfile()) : '';
+    const hint = agentdeckLead(openHint, delegateHint, reminder, styleHint, memoryNote, profileNote, LANGUAGE_RULE);
     // Pictures and documents are on disk: the prompt names their paths, which the agent opens with its own tools.
     const attached =
       (dispatchPaths.length

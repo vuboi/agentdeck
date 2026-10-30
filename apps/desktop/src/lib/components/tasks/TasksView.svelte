@@ -166,7 +166,7 @@
   const failures = $derived(shown.filter((item) => item.status === 'fail'));
 
   const runningCount = $derived(activity.filter(live).length);
-  const allFolded = $derived(days.length > 0 && days.every((day) => folded[day.key]));
+  const allFolded = $derived(days.some((day) => day.key !== RUNNING) && days.every((day) => day.key === RUNNING || folded[day.key]));
 
   // The same id before and after a call ends (the log entry's key is the live key plus its start), so the row
   // keeps its place and its open state when the spinner turns into a check.
@@ -184,7 +184,7 @@
     const out: Flat[] = [];
     for (const group of days) {
       out.push({ id: `day:${group.key}`, day: group.key, kind: 'day', group });
-      if (folded[group.key]) continue;
+      if (folded[group.key] && group.key !== RUNNING) continue;
       if (group.key === RUNNING && group.items.length === 0 && group.chats.length === 0) out.push({ id: 'empty:running', day: group.key, kind: 'empty' });
       for (const chat of group.chats) out.push({ id: `chat:${chat.id}`, day: group.key, kind: 'chat', chat });
       for (const item of group.items) out.push({ id: rowId(item), day: group.key, kind: 'row', item });
@@ -315,7 +315,7 @@
   }
 
   function foldAll(value: boolean) {
-    for (const day of days) folded[day.key] = value;
+    for (const day of days) if (day.key !== RUNNING) folded[day.key] = value;
   }
 
   // The failures as plain text, for pasting into a chat to fix them.
@@ -380,10 +380,11 @@
   <button
     type="button"
     class="flex h-7 min-h-7 w-full shrink-0 cursor-pointer items-center gap-2 border-b border-border bg-background px-1.5 text-left text-[10px] font-medium tracking-wider text-muted-foreground uppercase outline-none hover:text-foreground focus-visible:text-foreground"
-    aria-expanded={!folded[group.key]}
-    onclick={() => (folded[group.key] = !folded[group.key])}
+    aria-expanded={group.key === RUNNING || !folded[group.key]}
+    disabled={group.key === RUNNING}
+    onclick={() => { if (group.key !== RUNNING) folded[group.key] = !folded[group.key]; }}
   >
-    <ZIcon zType={'lucideChevronRight' as ZIconName} class="size-3 shrink-0 transition-transform duration-200 {folded[group.key] ? '' : 'rotate-90'}" />
+    <ZIcon zType={'lucideChevronRight' as ZIconName} class="size-3 shrink-0 transition-transform duration-200 {group.key === RUNNING ? 'invisible' : folded[group.key] ? '' : 'rotate-90'}" />
     <span>{dayLabel(group.key, group.at)}</span>
     <span class="tabular-nums normal-case">{countsOf(group).total}</span>
     {#if countsOf(group).failed > 0}<span class="rounded bg-destructive/15 px-1 tabular-nums normal-case text-destructive">{countsOf(group).failed} failed</span>{/if}
@@ -526,11 +527,12 @@
     {:else}
       {#if pinned}{@render dayHeader(pinned, true)}{/if}
       <div class="shrink-0" style="padding-top: {win.padTop}px; padding-bottom: {win.padBottom}px">
-        <!-- A row that moves (a running entry that ends up in its day, or the list changing above it) glides to its place;
-             the Running rows fade in and out. Rows scrolled in or out of view do not fade: their duration is 0. -->
+        <!-- Only the Running rows glide and fade. Rows of a day stay put: with many workers ending steps every moment the
+             list (and the virtual window's padding) changes again before a glide ends, and each restarted glide left the
+             rows drawn over one another. Rows scrolled in or out of view do not fade either: their duration is 0. -->
         {#each visible as entry (entry.id)}
           {@const live = entry.kind !== 'day' && entry.day === RUNNING}
-          <div {@attach measure(entry.id)} animate:flip={{ duration: 220 }} in:fade={{ duration: live ? 180 : 0 }} out:fade={{ duration: live ? 150 : 0 }}>
+          <div {@attach measure(entry.id)} animate:flip={{ duration: live ? 220 : 0 }} in:fade={{ duration: live ? 180 : 0 }} out:fade={{ duration: 0 }}>
             {#if entry.kind === 'day'}{@render dayHeader(entry.group, false)}
             {:else if entry.kind === 'chat'}
               <div class="flex items-center gap-2 border-b border-border px-1.5 py-1.5 text-sm">

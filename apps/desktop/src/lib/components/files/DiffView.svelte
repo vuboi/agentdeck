@@ -101,20 +101,20 @@
   });
 </script>
 
-<div bind:this={scroller} bind:clientHeight={viewHeight} onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)} oncontextmenu={(event) => { event.preventDefault(); picked = window.getSelection()?.toString() ?? ''; menu = { x: event.clientX, y: event.clientY }; menuOpen = true; }} class="h-full min-h-0 select-text overflow-auto bg-background font-mono text-sm leading-5" role="document" aria-label="Changes of the file">
+<div bind:this={scroller} bind:clientHeight={viewHeight} onscroll={() => (scrollTop = scroller?.scrollTop ?? 0)} oncontextmenu={(event) => { event.preventDefault(); picked = window.getSelection()?.toString() ?? ''; menu = { x: event.clientX, y: event.clientY }; menuOpen = true; }} class="isolate h-full min-h-0 select-text overflow-auto bg-background font-mono text-sm leading-5" role="document" aria-label="Changes of the file">
   <div class="w-max min-w-full" style:height="{rows.length * ROW}px" style:padding-top="{first * ROW}px" style:box-sizing="border-box">
     {#each slice as row, index (first + index)}
       {@const line = version >= 0 && row.kind !== 'hunk' ? tokens.get(first + index) : undefined}
       <div class="flex h-5 w-full min-w-max whitespace-pre {tone[row.kind]}">
         {#if row.kind === 'hunk'}
-          <span class="sticky left-0 pl-3">{row.text}</span>
+          <span class="sticky left-0 z-20 w-max bg-background px-3">{row.text}</span>
         {:else}
-          <span class="sticky left-0 z-10 flex shrink-0 bg-background {row.kind === 'add' ? 'bg-emerald-500/20!' : row.kind === 'del' ? 'bg-red-500/20!' : ''} select-none">
-            <span class="w-10 pr-2 text-right text-muted-foreground/60">{row.old ?? ''}</span>
-            <span class="w-10 pr-2 text-right text-muted-foreground/60">{row.now ?? ''}</span>
-            <span class="w-5 text-center font-bold {gutter[row.kind]}">{sign[row.kind]}</span>
+          <span class="sticky left-0 z-20 flex h-5 w-[100px] flex-none bg-background {row.kind === 'add' ? 'bg-emerald-500/20!' : row.kind === 'del' ? 'bg-red-500/20!' : ''} select-none">
+            <span class="w-10 shrink-0 pr-2 text-right text-muted-foreground/60">{row.old ?? ''}</span>
+            <span class="w-10 shrink-0 pr-2 text-right text-muted-foreground/60">{row.now ?? ''}</span>
+            <span class="w-5 shrink-0 text-center font-bold {gutter[row.kind]}">{sign[row.kind]}</span>
           </span>
-          <span class="pr-6">
+          <span class="relative z-0 pr-6">
             {#if line && line.length > 0}
               {#each line as token, at (at)}<span style:color={token.color}>{token.content}</span>{/each}
             {:else}
