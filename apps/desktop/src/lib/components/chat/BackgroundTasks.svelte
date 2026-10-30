@@ -22,6 +22,7 @@
   import { returnTaskResult, pauseDelegateTask, resumeDelegateTask } from '../../chat/session/delegate-task.svelte';
   import { stopTurnForResume, resumeStoppedTurn } from '../../chat/session/events.svelte';
   import { stopTurn } from '../../chat/session/turns.svelte';
+  import { closeRunningActivity } from '../../chat/runs/activity.svelte';
 
   /** Outside the virtual transcript: scrolling and loading old messages cannot unmount the work list.
    *  `title` names the list; `stateKey` keys its open state (the chat by default, so each card can have its own). */
@@ -149,7 +150,7 @@
               {/if}
               {#if item.canStop && !item.delegateId && !item.childId}
                 <!-- Provider-native work (a background command, a sub agent) has no worker of its own: Stop ends its chat's background run. -->
-                <button type="button" class={ICON_BUTTON} aria-label="Stop: {item.title}" {@attach zTooltip({ content: "Stop this task: its chat's background run ends", position: 'top' })} onclick={() => stopTurn(item.sessionId)}>
+                <button type="button" class={ICON_BUTTON} aria-label="Stop: {item.title}" {@attach zTooltip({ content: "Stop this task: its chat's background run ends", position: 'top' })} onclick={() => { stopTurn(item.sessionId); closeRunningActivity(item.sessionId); }}>
                   <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="currentColor" /></svg>
                 </button>
               {/if}
