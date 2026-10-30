@@ -896,7 +896,7 @@ export function removeProvider(id: string) {
   for (const key of removed?.keys ?? []) forgetSecret(`provider-key:${key.id}`);
   // A Claude Console key removed from the list is no longer the credit key either (the Claude card shows it as not added).
   if (removed?.kind === 'anthropic' && connectors.claudeCredit.apiKey && removed.keys.some((entry) => entry.apiKey === connectors.claudeCredit.apiKey)) {
-    connectors.claudeCredit = { ...connectors.claudeCredit, apiKey: '' };
+    connectors.claudeCredit = { ...connectors.claudeCredit, apiKey: '', sessionKey: '' };
   }
   connectors.custom = connectors.custom.filter((item) => item.id !== id);
 }

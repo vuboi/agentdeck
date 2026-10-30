@@ -15,8 +15,11 @@
   );
 </script>
 
-{#if spinner === LOADER.background}
-  <PhyllotaxisLoader className={tone} />
-{:else}
-  <ZLoading zLoading zSpinner={spinner} zSize={size} zColor={color} />
-{/if}
+<!-- A fixed 14px slot (the widest loader is 14px): swapping one spinner for another, or for an icon, never moves the text. -->
+<span class="grid size-3.5 shrink-0 place-items-center">
+  {#if spinner === LOADER.background}
+    <PhyllotaxisLoader className={tone} />
+  {:else}
+    <ZLoading zLoading zSpinner={spinner} zSize={size} zColor={color} />
+  {/if}
+</span>

@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
+use super::codex::APP_CONTEXT;
 use super::{AgentEvent, Provider, TaskStatus, TurnRequest};
 
 /// Where a `subagent` tool call stands. The child runs in a session of its own (`metadata.sessionID`); its text is not
@@ -170,6 +171,11 @@ impl Provider for OpenCode {
     /// takes the 32k command-line limit out of the way for a long paste.
     fn prompt_on_stdin(&self) -> bool {
         true
+    }
+    /// OpenCode has no system prompt flag here, so the app and ask instructions open each new session.
+    fn opening_context(&self, req: &TurnRequest) -> Option<String> {
+        let continues = req.resume && req.session_id.as_ref().is_some_and(|session| session.starts_with("ses_"));
+        (!continues).then(|| format!("{APP_CONTEXT}{}", super::claude::ASK_CONTEXT))
     }
     fn environment(&self, req: &TurnRequest) -> Vec<(String, String)> {
         let Ok(bridge) = std::env::var("AGENTDECK_BRIDGE") else {
@@ -354,6 +360,17 @@ mod tests {
             owner: None,
             api_key: None,
         }
+    }
+
+    #[test]
+    fn the_opening_context_goes_only_to_a_new_session() {
+        let mut fresh = request("hi");
+        assert!(OpenCode::default().opening_context(&fresh).is_some_and(|text| text.contains("```agentdeck-ask")));
+        fresh.session_id = Some("ses_1".into());
+        fresh.resume = true;
+        assert!(OpenCode::default().opening_context(&fresh).is_none());
+        fresh.session_id = Some("draft-uuid".into());
+        assert!(OpenCode::default().opening_context(&fresh).is_some());
     }
 
     #[test]

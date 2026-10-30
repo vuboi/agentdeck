@@ -237,11 +237,12 @@
     // While the frame glides the native page stays away: resizing it every frame tears the picture and re-lays out the site.
     if (morphing) return;
     // An empty tab (a new one, nothing typed yet) shows no page: the previous tab's page must go away.
-    if (inTauri() && !started && !layout.dragging) {
+    // An address that could not be opened takes the page's place (its error shows there instead).
+    if (inTauri() && (!started || browser.navError) && !layout.dragging) {
       await takePageAway();
       return;
     }
-    if (!inTauri() || !started || layout.dragging) return;
+    if (!inTauri() || !started || browser.navError || layout.dragging) return;
     try {
       // Only the tab in front is on screen: showing it hides the others (once it is up, so no frame is left empty).
       const { x, y, w, h } = place.rect;
@@ -262,7 +263,7 @@
         again = true;
         return;
       }
-      browser.error = String(error);
+      if (!browser.navError) browser.error = String(error);
     }
   }
 
@@ -289,7 +290,7 @@
       await sync();
     } catch (error) {
       navigatingTab.loading = false;
-      browser.error = String(error);
+      browser.navError = String(error);
     }
   }
 
@@ -474,6 +475,7 @@
     void browser.landscape;
     void browser.device;
     void started;
+    void browser.navError;
     // The mark-up bar opens in this very update, so the page moves before the next frame is drawn.
     void browser.annotating;
     // A floating window being carried or resized: the page steps aside and comes back where it lands.
@@ -870,6 +872,12 @@
 
     {#if !started}
       <BrowserStartPage {deviceBox} {targets} {starting} onrun={(target) => void runProject(target)} />
+    {/if}
+    {#if browser.navError}
+      <div class="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-sm" role="alert">
+        <ZIcon zType={'lucideCircleAlert' as ZIconName} zSize="28" class="size-7 text-destructive" />
+        <p class="m-0 max-w-96 break-words text-destructive">{browser.navError}</p>
+      </div>
     {/if}
     </div>
 

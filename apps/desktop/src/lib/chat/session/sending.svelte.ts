@@ -9,10 +9,10 @@ import { mimeOfPath } from '../agent';
 import { enqueue, enqueueNext } from '../runs/queue';
 import { getPref, setPref } from '../../app/platform/prefs';
 import { presetById, presetOf, type WorkflowPreset } from '../../tasks/workflows.svelte';
-import { automation, contextWindow, COMPRESS_AT } from '../../app/platform/automation.svelte';
+import { automation, contextWindow, COMPRESS_AT, COMPRESS_TOKENS } from '../../app/platform/automation.svelte';
 import { needsContext } from '../recovery/context-need';
 import { activeSession, localMessages, nextId, persistLocal, workspace, type Attachment, type Effort, type FileAttachment, type Mention, type PageElement, type SessionItem } from './state.svelte';
-import { afterSwitch, beginSessionWork, continuationGroups, hiddenPrompt, isRunning, modelFor, queuePaused, queued, stopTurn, switchingAgent, turnOptions, withElements, type Queued } from './turns.svelte';
+import { afterSwitch, beginSessionWork, continuationGroups, hasTurnWork, hiddenPrompt, isRunning, modelFor, queuePaused, queued, stopTurn, switchingAgent, turnOptions, withElements, type Queued } from './turns.svelte';
 import { SKIPPED_PERMISSION, SKIPPED_QUESTIONS, SKIPPED_REQUIRED, canListenToSession, closePendingPermissions, continueCurrentRun, liveReplies, messagesOf, needsUserInput, openQuestions, pendingInput, pendingNew, replies, sendNextQueued, startTurn } from './run.svelte';
 import { cancelAutoSwitch, recoveries, resumeAutoChoice, resumeSince, resumes } from './events.svelte';
 import { beginWorkflowIntegration, beginWorkflowRun, delegateRuns, mentionContext, statsOf, type DelegateReports } from './delegation.svelte';
@@ -101,7 +101,8 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
   }
   // Explicit provider background work may outlive its current answer. Give a new prompt its own CLI conversation
   // and reply message while that waiter continues; never use this route for ambiguous waits or another active listener.
-  if (whileRunning === 'queue' && canListenToSession(session.id) && !needsUserInput(session.id) && !mentions.some((mention) => mention.kind === 'ai' || mention.kind === 'workflow')) {
+  // Messages already waiting keep their order: a new one joins the line, it does not jump ahead of them.
+  if (whileRunning === 'queue' && canListenToSession(session.id) && !queued[session.id]?.length && !needsUserInput(session.id) && !mentions.some((mention) => mention.kind === 'ai' || mention.kind === 'workflow')) {
     const preface = handoffDigest(messagesOf(session.id), 'The user sent a new message while your previous task continues in the background. Handle this request independently and keep your reply under the new message. Avoid modifying files likely owned by the still-running task; if the requests conflict, explain the conflict before changing shared files. Do not claim the background task has finished.');
     send(session.id, text, images, elements, mentions, {
       files,
@@ -127,7 +128,8 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
       return;
     }
   }
-  if (replies[session.id] || isRunning(session.id) || needsUserInput(session.id)) {
+  // The same test the queue runs on (sendNextQueued): a message waits while the chat's turn is busy or a line is waiting.
+  if (hasTurnWork(session.id) || queued[session.id]?.length) {
     const runGroup = continueCurrentRun(session.id);
     if (whileRunning !== 'interrupt') {
       // Every queued message gets its own turn; Alt+Enter puts it next without interrupting the current answer.
@@ -142,6 +144,7 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
       };
       if (whileRunning === 'next') enqueueNext(queued, session.id, item);
       else enqueue(queued, session.id, item);
+      sendNextQueued(session.id);
       return;
     }
     if (needsUserInput(session.id)) {
@@ -486,12 +489,13 @@ function workflowInstructions(preset: WorkflowPreset): string {
 
 export const COMPACT_COMMAND = '/compact';
 
-/** The context of `session` is near its model's window: the last Claude call read more than COMPRESS_AT of it. */
+/** The context of `session` is big enough to compact: the last Claude call read COMPRESS_TOKENS (or COMPRESS_AT of a
+ *  smaller window). Tokens, not characters: a short chat is never compacted. */
 function needsCompress(session: SessionItem, messages: Message[]): boolean {
   if (!automation.compress || session.agent !== 'claude' || !session.agentStarted || !session.agentSession) return false;
   const last = [...messages].reverse().find((message) => message.role === 'assistant' && message.agent === 'claude');
   if (!last?.context || last.compressed) return false;
-  return last.context >= contextWindow(last.model) * COMPRESS_AT;
+  return last.context >= Math.min(COMPRESS_TOKENS, contextWindow(last.model) * COMPRESS_AT);
 }
 
 /** Runs `/compact` in the chat's Claude conversation, shown as one "Compressing context" line. */
@@ -535,19 +539,27 @@ const EDIT_LEAD = 'The user edited an earlier message, so this is a new session 
 /** What a model change carries over: a new CLI conversation cannot resume the old one, so the turns so far go with the next message. */
 export const MODEL_LEAD = 'The model was changed, so this is a new session of the same conversation. Continue the work in progress; do not redo what is already done.';
 
-/** How many of the last messages a digest keeps whole when "Compress context" is on, and how much of each older one. */
+/** When a digest is compressed: how many of the last messages it keeps whole, and how much of each older one. */
 const DIGEST_WHOLE = 6;
 const DIGEST_OLD_CHARS = 400;
 
-/** What a fork is told of the conversation it came from: the turns so far, newest kept when it is long. */
+/** The tokens a chat's context holds: the last Claude call's read, else the text's size at about 4 characters a token. */
+function chatTokens(list: Message[]): number {
+  const last = [...list].reverse().find((message) => message.role === 'assistant' && message.context);
+  if (last?.context) return last.context;
+  const chars = list.reduce((sum, message) => sum + message.blocks.reduce((size, block) => size + (block.kind === 'response' ? block.text.length : 0), 0), 0);
+  return Math.ceil(chars / 4);
+}
+
+/** What a fork is told of the conversation it came from: the whole turns so far. Only a chat as big as COMPRESS_TOKENS
+ *  (with "Compress context" on) is compressed: older turns keep their start and the digest is capped. */
 function forkDigest(list: Message[], lead = 'This chat is a fork of an earlier conversation.'): string {
   const shown = list.filter((message) => !hiddenPrompt(message));
-  // With "Compress context" on, only the last turns go whole: older ones keep their start, so a long chat moved to a new
-  // session reads like a summary instead of filling the window with the full history.
-  const whole = automation.compress ? Math.max(0, shown.length - DIGEST_WHOLE) : 0;
+  const compressing = automation.compress && chatTokens(shown) >= COMPRESS_TOKENS;
+  const whole = compressing ? Math.max(0, shown.length - DIGEST_WHOLE) : 0;
   const lines = shown
     .map((message, index) => {
-      const limit = index < whole ? DIGEST_OLD_CHARS : 2500;
+      const limit = !compressing ? Infinity : index < whole ? DIGEST_OLD_CHARS : 2500;
       const text = message.blocks
         .flatMap((block) => (block.kind === 'response' ? [block.text] : block.kind === 'command' ? [`(ran: ${block.command.slice(0, 160)})`] : []))
         .join('\n')
@@ -557,7 +569,7 @@ function forkDigest(list: Message[], lead = 'This chat is a fork of an earlier c
     .filter(Boolean);
   if (!lines.length) return '';
   let digest = lines.join('\n\n');
-  if (digest.length > 16000) digest = `…${digest.slice(-16000)}`;
+  if (compressing && digest.length > 16000) digest = `…${digest.slice(-16000)}`;
   return `${lead} What was said so far:\n\n${digest}\n\n---\nNow the user says:\n`;
 }
 
@@ -566,11 +578,15 @@ function forkDigest(list: Message[], lead = 'This chat is a fork of an earlier c
  * parent's transcript file or CLI conversation. Sharing those made the fork show the parent's replies again each time it
  * was opened, run under the parent's conversation, and disturb the parent's status.
  */
-export function forkSession(sourceId: string) {
+export function forkSession(sourceId: string, fromMessageId?: string) {
   const source = workspace.sessions.find((item) => item.id === sourceId);
   if (!source) return;
   const id = nextId();
-  const copy = (JSON.parse(JSON.stringify(messagesOf(sourceId))) as Message[]).map((message) => ({ ...message, live: false }));
+  // Fork from a message: only the chat up to and including it. Turns after it (and a run still going) stay with the parent.
+  const all = messagesOf(sourceId);
+  const cut = fromMessageId ? all.findIndex((message) => message.id === fromMessageId) : -1;
+  const kept = cut >= 0 ? all.slice(0, cut + 1) : all;
+  const copy = (JSON.parse(JSON.stringify(kept)) as Message[]).map((message) => ({ ...message, live: false }));
   localMessages[id] = copy;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { path, source: _origin, updatedAt, messageCount, agentSession, agentStarted, agentIds, conversationModel, agentModels, ...rest } = source;

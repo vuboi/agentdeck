@@ -29,7 +29,8 @@ export function setFallback(on: boolean) {
   connectors.recovery = { ...connectors.recovery, enabled: on, chosen: true };
 }
 
-/** Share of the model's window a Claude context may fill before the next turn compacts it first. */
+/** A chat's context is compacted once it reaches this many tokens (or the window's share, for a small window). */
+export const COMPRESS_TOKENS = 200_000;
 export const COMPRESS_AT = 0.75;
 
 /** The context window of a Claude model, in tokens: `[1m]` models have a million, the others 200k. */

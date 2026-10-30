@@ -22,7 +22,7 @@ import { type RunLane, deliveryFor } from '../runs/run-lanes';
 import { parseQuestions, type Question } from '../recovery/questions';
 import { dequeue } from '../runs/queue';
 import { MODELS, activeSession, advanceRun, localMessages, nextId, persistLocal, runEpochs, sessionCwd, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type SessionItem } from './state.svelte';
-import { AGENTDECK_HINT, KNOWS_PREVIEW, NATIVE_DELEGATION, NATIVE_DELEGATION_HINT, NO_DELEGATE_HINT, OPEN_WORDS, PERMISSION_MODE, agentLabel, approved, continuationGroups, delegateHinted, hasOutstandingSessionWork, hiddenPrompt, isRunning, lastPrompt, missedTurns, modelFor, nativeDelegationHinted, notifySessionWorkDone, orchestrateTold, priorDelegateHinted, queuePaused, queued, rememberDelegateHint, rememberLastChat, rememberNativeDelegationHint, turnOptions, turns } from './turns.svelte';
+import { AGENTDECK_HINT, KNOWS_PREVIEW, NATIVE_DELEGATION, NATIVE_DELEGATION_HINT, NO_DELEGATE_HINT, OPEN_WORDS, PERMISSION_MODE, agentLabel, approved, continuationGroups, delegateHinted, hasOutstandingSessionWork, hasTurnWork, hiddenPrompt, isRunning, lastPrompt, missedTurns, modelFor, nativeDelegationHinted, notifySessionWorkDone, orchestrateTold, priorDelegateHinted, queuePaused, queued, rememberDelegateHint, rememberLastChat, rememberNativeDelegationHint, turnOptions, turns } from './turns.svelte';
 import { handleAgentEvent, lastEventAt, lastEventKind, recoveryChain } from './events.svelte';
 import { backlog, flushReports, isWorkerChat } from './delegate-task.svelte';
 import { LANGUAGE_RULE } from './orchestration.svelte';
@@ -775,12 +775,12 @@ export function closePendingPermissions(sessionId: string) {
 
 /** Dispatches one queued message only after the active turn and all user decisions are complete. */
 export function sendNextQueued(sessionId: string) {
-  if (queuePaused[sessionId] || hasOutstandingSessionWork(sessionId)) return;
+  if (queuePaused[sessionId] || hasTurnWork(sessionId)) return;
   // Let the current event stack finish before taking an item. Ctrl/Cmd+Enter stops the current turn and
   // starts its message synchronously; taking an older queue item before that message starts would
   // remove it from the queue, then `send` would reject it because the priority turn is now running.
   setTimeout(() => {
-    if (queuePaused[sessionId] || hasOutstandingSessionWork(sessionId)) return;
+    if (queuePaused[sessionId] || hasTurnWork(sessionId)) return;
     // Run only one queued user message per turn; the rest stay in line until this reply is rendered.
     const next = dequeue(queued, sessionId);
     if (next) logFlow(sessionId, 'queue', `sending one waiting message (${queued[sessionId]?.length ?? 0} remain)`);

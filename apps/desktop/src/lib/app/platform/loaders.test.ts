@@ -8,6 +8,8 @@ test('maps chat work to the Matrix Trace family and focused task loaders', () =>
   assert.equal(LOADER.check, 'scan');
   assert.equal(LOADER.background, 'matrix-orbit');
   assert.equal(LOADER.queued, 'lift');
+  assert.equal(LOADER.command, LOADER.thinking);
+  assert.equal(LOADER.writing, LOADER.action);
 });
 
 test('selects the matching loader for a running step', () => {

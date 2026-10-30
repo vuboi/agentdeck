@@ -50,7 +50,11 @@ export type AgentTurnSettings = {
  *  spends API credit (models.svelte.ts). */
 function billing(args: AgentTurnSettings): { model: string | null; apiKey: string | null } {
   const credit = args.agent === 'claude' ? creditModel(args.model) : null;
-  return { model: credit ?? args.model, apiKey: credit ? connectors.claudeCredit.apiKey.trim() || null : null };
+  if (!credit) return { model: args.model, apiKey: null };
+  const apiKey = connectors.claudeCredit.apiKey.trim();
+  // Never falls back to the plan's subscription: the turn stops and names what is missing.
+  if (!apiKey) throw new Error('chưa có key Console');
+  return { model: credit, apiKey };
 }
 
 /** Start one turn. Resolves as soon as the CLI is started; the answer arrives as `agent-event`s. */

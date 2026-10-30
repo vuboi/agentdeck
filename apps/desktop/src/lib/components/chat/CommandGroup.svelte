@@ -224,11 +224,11 @@
     {:else}
       <!-- Always an icon, by the kind of work: the step running now, else what the group did most (terminal, file edit,
            search, skill, a plug for an MCP tool). The bulb only for a group that holds nothing but reasoning. -->
-      <ZIcon zType={(items.length > 0 ? groupIcon(items) : 'lucideLightbulb') as ZIconName} class="size-3 shrink-0" />
+      <span class="grid size-3.5 shrink-0 place-items-center"><ZIcon zType={(items.length > 0 ? groupIcon(items) : 'lucideLightbulb') as ZIconName} class="size-3" /></span>
       {#if runningStep}
         <!-- While a step runs the line is that step ("Running pnpm test", "Using officecli load_skill word"), cut to the
              width; once every step is done it goes back to the summary. -->
-        <span class="min-w-0 truncate" title={runningLine}><ZShimmerText class="font-medium" zText={runningLine} /></span>
+        <span class="min-w-0 truncate" title={runningLine}><ZShimmerText class="block truncate font-medium" zText={runningLine} /></span>
       {:else if working}
         <ZShimmerText class="truncate font-medium" zText={summarize(items)} />
       {:else}

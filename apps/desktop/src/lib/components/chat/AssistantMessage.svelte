@@ -72,7 +72,7 @@
     {:else if typing}
       <!-- Nothing yet: the slot keeps its height. -->
     {:else}
-      <MessageFooter {message} onfork={() => forkSession(workspace.activeId)} speak={spokenRun(index)} />
+      <MessageFooter {message} onfork={() => forkSession(workspace.activeId, message.id)} speak={spokenRun(index)} />
     {/if}
   </div>
 {/if}

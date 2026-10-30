@@ -184,7 +184,7 @@ pub async fn drive_turn(
     // Written apart from the reader: a long prompt must not hold up the output, and the CLI reads all of it
     // before it starts working, so a closed or early-exiting child only ends this write.
     if let Some(mut stdin) = child.stdin.take() {
-        let prompt = req.prompt.clone();
+        let prompt = super::turn_prompt(provider, req);
         tokio::spawn(async move {
             use tokio::io::AsyncWriteExt;
             let _ = stdin.write_all(prompt.as_bytes()).await;

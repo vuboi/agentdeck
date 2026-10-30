@@ -167,6 +167,14 @@ pub struct TurnRequest {
     pub api_key: Option<String>,
 }
 
+/// The message a turn sends: the provider's opening context (when it has one) ahead of the user's prompt.
+pub fn turn_prompt(provider: &dyn Provider, req: &TurnRequest) -> String {
+    match provider.opening_context(req) {
+        Some(context) => format!("{context}\n\n{}", req.prompt),
+        None => req.prompt.clone(),
+    }
+}
+
 /// Everything provider-specific: how to start a turn and how to read its output.
 pub trait Provider: Send + Sync {
     /// Short name, used in events and logs.
@@ -181,6 +189,11 @@ pub trait Provider: Send + Sync {
     /// about 32k characters, so a long prompt (pasted files, logs) has to go this way.
     fn prompt_on_stdin(&self) -> bool {
         false
+    }
+    /// Instructions for the first message of a conversation, for a CLI with no system prompt flag. `None` when the
+    /// CLI gets them through its system prompt already, or when this turn continues a conversation.
+    fn opening_context(&self, _req: &TurnRequest) -> Option<String> {
+        None
     }
     /// One line of stdout to zero or more events. Lines this provider does not understand give none.
     fn parse_line(&self, line: &str) -> Vec<AgentEvent>;

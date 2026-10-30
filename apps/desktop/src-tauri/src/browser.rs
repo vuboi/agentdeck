@@ -333,8 +333,15 @@ fn destination(tab: &str, url: &str) -> Result<tauri::Url, String> {
     }
 }
 
+/// The address without terminal colour codes: a server's log prints its port in colour (`\x1b[1m1431\x1b[22m`).
+fn without_colours(text: &str) -> String {
+    regex::Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]")
+        .map_or_else(|_| text.to_string(), |codes| codes.replace_all(text, "").into_owned())
+}
+
 pub(crate) fn parse(url: &str) -> Result<tauri::Url, String> {
     // A bare host or "localhost:4200" is what people type; give it a scheme.
+    let url = without_colours(url);
     let url = url.trim();
     let text = if url.contains("://") || url.starts_with("about:") || url.starts_with("data:") {
         url.to_owned()
@@ -1668,6 +1675,13 @@ mod tests {
             ready_within(&wanted, Duration::from_millis(300)).await,
             Some(wanted)
         );
+    }
+
+    #[test]
+    fn colour_codes_from_a_log_are_not_part_of_the_address() {
+        let coloured = "http://127.0.0.1:\u{1b}[1m1431\u{1b}[22m/\u{1b}[39m";
+        assert_eq!(parse(coloured).expect("url").as_str(), "http://127.0.0.1:1431/");
+        assert_eq!(parse("  localhost:4200 ").expect("url").as_str(), "http://localhost:4200/");
     }
 
     #[test]

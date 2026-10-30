@@ -3,6 +3,7 @@
   import { ZButton } from '@shival99/z-ui-svelte';
   import { toast } from '../../app/platform/toast';
   import { copyMessage } from '../../chat/content/attachments';
+  import { pictureSrc } from '../../chat/agent';
   import { attachmentsOf, forkSession, workspace } from '../../chat/sessions.svelte';
   import { theme } from '../../app/ui/theme.svelte';
   import { openAttachment, openImages } from '../../browser/preview.svelte';
@@ -42,7 +43,7 @@
         aria-label="Preview {picture.name}"
         onclick={() => openImages(pictures, index)}
       >
-        <img src={picture.src} alt={picture.name} class="size-full object-cover" />
+        <img src={pictureSrc(picture)} alt={picture.name} class="size-full object-cover" />
       </button>
     {/each}
   </div>
@@ -95,5 +96,5 @@
       {/each}
     </div>
   {/if}
-  <MessageFooter {message} end={theme.chatLayout === 'split'} onfork={() => forkSession(workspace.activeId)} onedit={() => startEdit(message)} oncopyall={pictures.length + documents.length + message.blocks.filter((block) => block.kind === 'element').length > 0 ? () => copyAll(message) : undefined} />
+  <MessageFooter {message} end={theme.chatLayout === 'split'} onfork={() => forkSession(workspace.activeId, message.id)} onedit={() => startEdit(message)} oncopyall={pictures.length + documents.length + message.blocks.filter((block) => block.kind === 'element').length > 0 ? () => copyAll(message) : undefined} />
 {/if}

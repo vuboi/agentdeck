@@ -10,10 +10,12 @@ export const LOADER = {
   thinking: 'matrix-grid',
   /** Reasoning text is streaming. */
   reasoning: 'matrix-orbit',
-  /** A shell command is running. */
-  command: 'matrix',
+  /** A shell command is running: the same motif as thinking, so the timeline has one busy icon. */
+  command: 'matrix-grid',
   /** The agent is changing files. */
   action: 'merge',
+  /** The reply text is streaming: the merge motif, from the same set. */
+  writing: 'merge',
   /** Reading, searching, checking. */
   check: 'scan',
   /** Fetching from the network. */

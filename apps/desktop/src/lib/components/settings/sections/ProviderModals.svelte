@@ -3,6 +3,8 @@
   import { ZButton, ZIcon, ZInput, ZModal, ZSelect, ZSwitch } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import SecretInput from '../../ui/SecretInput.svelte';
+  import AgentLogo from '../../ui/AgentLogo.svelte';
+  import { openExternal } from '../../../browser/browser.svelte';
   import { ENDPOINTS } from '../../../agents/endpoints';
   import { brandLogoFor } from '../../../agents/brand-icons';
   import { connectors } from '../../../agents/connectors.svelte';
@@ -21,7 +23,7 @@
 </script>
 
 <!-- The provider form, over the settings (as adding an MCP server is). -->
-<ZModal bind:open={form.providerModal} zTitle={form.draft && connectors.custom.some((item) => item.id === form.draft?.id) ? `Edit ${form.draft.name || 'provider'}` : form.freePreset ? `Add ${form.freePreset.name}` : 'New provider'} zWidth="640px" zBodyClass="scrollbar-full py-4" zOkText="Save provider" zCancelText="Cancel" zOkDisabled={!form.draft?.baseUrl.trim() || form.probing} zLoading={form.probing} onOk={() => void form.commit()} onClosed={() => (form.draft = null)}>
+<ZModal bind:open={form.providerModal} zTitle={form.draft && connectors.custom.some((item) => item.id === form.draft?.id) ? `Edit ${form.draft.name || 'provider'}` : form.fixedName ? `Add ${form.fixedName}` : 'New provider'} zWidth="640px" zBodyClass="scrollbar-full py-4" zOkText="Save provider" zCancelText="Cancel" zOkDisabled={!form.draft?.baseUrl.trim() || form.probing || (form.isClaude && !form.draft?.keys.some((key) => key.apiKey.trim()))} zLoading={form.probing} onOk={() => void form.commit()} onClosed={() => (form.draft = null)}>
   {#if form.draft}
     {@const draft = form.draft}
     <form class="flex flex-col gap-5" onsubmit={(event) => { event.preventDefault(); void form.commit(); }}>
@@ -31,7 +33,9 @@
         <div class="flex min-w-0 items-center gap-2.5">
           <!-- A known provider shows its own logo (no upload). A free cloud provider's name is read-only; a
                custom endpoint takes an uploaded logo and any name. -->
-          {#if brandLogoFor(draft.baseUrl)}
+          {#if form.isClaude}
+            <span class="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-muted/40"><AgentLogo agent="claude" class="size-5" /></span>
+          {:else if brandLogoFor(draft.baseUrl)}
             <span class="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-muted/40"><img src={brandLogoFor(draft.baseUrl)} alt="" class="size-6 object-contain" /></span>
           {:else}
             <label class="group relative grid size-9 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-lg border border-dashed border-border bg-muted/40 transition-colors hover:border-primary/60 hover:bg-primary/5" title="Upload a logo">
@@ -39,8 +43,8 @@
               <input type="file" accept="image/*" class="sr-only" onchange={(event) => { void form.pickLogo(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} />
             </label>
           {/if}
-          {#if form.freePreset}
-            <div class="min-w-0 flex-1" title="The name of a free cloud provider is fixed"><ZInput value={form.freePreset.name} zReadonly /></div>
+          {#if form.fixedName}
+            <div class="min-w-0 flex-1" title="The name of a free cloud provider or of the Claude Console is fixed"><ZInput value={form.fixedName} zReadonly /></div>
           {:else}
             <div class="min-w-0 flex-1"><ZInput bind:value={draft.name} zPlaceholder="My LiteLLM" /></div>
           {/if}
@@ -98,6 +102,19 @@
           <ZSwitch zVariant="dot" checked={draft.autoSwitch} zSize="sm" onChange={(value) => (draft.autoSwitch = value)} />
         </div>
       </section>
+
+      <!-- Claude Console only: the sign-in that reads the credit left (the Console has no API for it). -->
+      {#if form.isClaude}
+        <section class="flex flex-col gap-2 rounded-xl border border-border bg-muted/20 p-4">
+          <div class="text-sm font-medium">Console sign-in <span class="font-normal text-muted-foreground">· optional, to read the credit left</span></div>
+          <SecretInput bind:value={form.consoleSession} kept={connectors.claudeCredit.sessionKey} placeholder="sk-ant-sid…" />
+          <p class="text-[0.6875rem] leading-snug text-muted-foreground">
+            The Console has no API for the balance, so AgentDeck reads it the way the Console's billing page does. Open
+            <button type="button" class="cursor-pointer text-primary underline underline-offset-2" onclick={() => void openExternal(ENDPOINTS.anthropic.billingPage)}>platform.claude.com</button>
+            signed in, press F12, then Application &gt; Cookies &gt; platform.claude.com and copy the value of <code>sessionKey</code>. It works like a password: it stays on this computer and is sent only to platform.claude.com. It lasts until you sign out there.
+          </p>
+        </section>
+      {/if}
 
       <!-- Models: load them from the endpoint, or type one id. -->
       <section class="rounded-xl border border-border bg-muted/20 p-4">

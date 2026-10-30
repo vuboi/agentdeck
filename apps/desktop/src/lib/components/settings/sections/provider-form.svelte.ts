@@ -1,5 +1,5 @@
 import { ENDPOINTS } from '../../../agents/endpoints';
-import { newProviderId, probeProvider, saveProvider, type CustomProvider } from '../../../agents/connectors.svelte';
+import { connectors, newProviderId, probeProvider, refreshClaudeCredit, saveProvider, type CustomProvider } from '../../../agents/connectors.svelte';
 
 export const KINDS = [
   { value: 'openai', label: 'OpenAI-compatible', hint: 'LM Studio, llama.cpp, vLLM, OpenRouter, LiteLLM…', base: ENDPOINTS.providerKinds.openai },
@@ -22,6 +22,10 @@ const accountOf = (base: string, url: string) => {
   const [head, tail] = base.split('{account_id}');
   return tail !== undefined && url.startsWith(head) && url.endsWith(tail) ? url.slice(head.length, url.length - tail.length).replace('{account_id}', '') : '';
 };
+
+/** A Claude Console key: the Anthropic API with a key, shown with the Claude logo and read for the credit left. */
+export const isClaudeConsole = (provider: { kind: string; baseUrl: string }) =>
+  provider.kind === 'anthropic' && provider.baseUrl.trim().replace(/\/+$/, '') === ENDPOINTS.anthropic.api;
 
 const blank = (): CustomProvider => {
   const keyId = `key-${Date.now().toString(36)}`;
@@ -49,14 +53,39 @@ export class ProviderForm {
     return this.draft ? FREE_CLOUD.find((preset) => samePreset(preset.base, this.draft?.baseUrl ?? '') || preset.base === this.draft?.baseUrl) : undefined;
   }
 
+  /** The draft is a Claude Console key: the Claude logo and name are fixed, and the Console sign-in is asked for. */
+  get isClaude() {
+    return this.draft ? isClaudeConsole(this.draft) : false;
+  }
+
+  /** The name a provider cannot change: a free cloud provider's, or the Claude Console's. */
+  get fixedName() {
+    return this.freePreset?.name ?? (this.isClaude ? 'Claude Console' : undefined);
+  }
+
+  /** The Console sign-in (`sessionKey`) read for the credit left; one for the account, so it is shared by every Claude key. */
+  consoleSession = $state('');
+
   edit(provider?: CustomProvider) {
     // A provider saved before keys were kept as text has none: the field binds a string either way.
     this.draft = provider ? { ...provider, keys: provider.keys.map((key) => ({ ...key })), models: [...provider.models] } : blank();
     this.keptKeys = Object.fromEntries((provider?.keys ?? []).map((key) => [key.id, key.apiKey]));
     this.keptKey = '';
     this.account = provider ? accountOf(FREE_CLOUD.find((preset) => samePreset(preset.base, provider.baseUrl))?.base ?? '', provider.baseUrl) : '';
+    this.consoleSession = connectors.claudeCredit.sessionKey;
     this.providerModal = true;
     this.probeNote = null;
+  }
+
+  /** Opens the provider form for a Claude Console key: paste the key, Save; it becomes the Claude credit key. */
+  useClaude() {
+    this.draft = { ...blank(), name: 'Claude Console', kind: 'anthropic', baseUrl: ENDPOINTS.anthropic.api };
+    this.keptKey = '';
+    this.keptKeys = {};
+    this.account = '';
+    this.consoleSession = connectors.claudeCredit.sessionKey;
+    this.providerModal = true;
+    this.probeNote = { ok: true, text: 'Paste your Claude API key, then Save.' };
   }
 
   async test() {
@@ -89,8 +118,15 @@ export class ProviderForm {
     if (this.draft.models.length === 0 && this.draft.baseUrl.trim()) await this.test();
     const draft = this.draft;
     if (!draft) return;
-    draft.name = this.freePreset?.name ?? (draft.name.trim() || KINDS.find((kind) => kind.value === draft.kind)?.label || 'Provider');
-    saveProvider($state.snapshot(draft) as CustomProvider);
+    draft.name = this.fixedName ?? (draft.name.trim() || KINDS.find((kind) => kind.value === draft.kind)?.label || 'Provider');
+    const saved = $state.snapshot(draft) as CustomProvider;
+    saveProvider(saved);
+    // The active key of a Claude Console provider is the credit key (Claude picker's "Claude credit" models).
+    if (isClaudeConsole(saved)) {
+      const active = saved.keys.find((key) => key.id === saved.activeKeyId) ?? saved.keys[0];
+      connectors.claudeCredit = { ...connectors.claudeCredit, apiKey: active?.apiKey ?? '', sessionKey: this.consoleSession.trim().replace(/^sessionKey=/, ''), enabled: true };
+      void refreshClaudeCredit();
+    }
     this.providerModal = false;
   }
 

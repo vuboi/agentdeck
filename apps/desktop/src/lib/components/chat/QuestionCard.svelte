@@ -208,7 +208,7 @@
       <ZButton zWave={false} zType="ghost" zSize="sm" onclick={skip}>Skip</ZButton>
       {#if at > 0}<ZButton zWave={false} zType="ghost" zSize="sm" onclick={() => at--}>Back</ZButton>{/if}
       {#if last}
-        <ZButton zWave={false} zType="default" zSize="sm" onclick={send}><ZIcon zType={icon('lucideSend')} class="size-3.5" />Send answers</ZButton>
+        <ZButton zWave={false} zType="default" zSize="sm" onclick={send}><ZIcon zType={icon('lucideSend')} class="size-3.5" />Send</ZButton>
       {:else}
         <ZButton zWave={false} zType="default" zSize="sm" onclick={() => at++}>Next</ZButton>
       {/if}

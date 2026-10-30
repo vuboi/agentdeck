@@ -173,7 +173,7 @@ impl Provider for Antigravity {
         }
         let mut args = vec![
             "-p".to_string(),
-            req.prompt.clone(),
+            super::turn_prompt(self, req),
             "--output-format".to_string(),
             "stream-json".to_string(),
         ];
@@ -202,6 +202,12 @@ impl Provider for Antigravity {
         args.push("--print-timeout".to_string());
         args.push("30m".to_string());
         args
+    }
+
+    /// Antigravity has no system prompt flag here, so the app and ask instructions open each new conversation.
+    fn opening_context(&self, req: &TurnRequest) -> Option<String> {
+        let continues = req.resume && req.session_id.is_some();
+        (!continues).then(|| format!("{}{}", super::codex::APP_CONTEXT, super::claude::ASK_CONTEXT))
     }
 
     /// The same settings with each message read as a JSON line (`--input-format stream-json`, agy 1.1.15+). The prompt
@@ -623,6 +629,16 @@ mod tests {
         let resumed = Antigravity::default().args(&req(true));
         assert_eq!(after(&resumed, "--conversation"), Some("c1"));
         assert_eq!(after(&resumed, "--output-format"), Some("stream-json"));
+        assert_eq!(after(&resumed, "-p"), Some("hi"));
+    }
+
+    #[test]
+    fn only_the_first_message_of_a_conversation_carries_the_opening_context() {
+        let fresh = Antigravity::default().args(&req(false));
+        let opening = after(&fresh, "-p").unwrap_or_default();
+        assert!(opening.contains("```agentdeck-ask"));
+        assert!(opening.ends_with("\n\nhi"));
+        let resumed = Antigravity::default().args(&req(true));
         assert_eq!(after(&resumed, "-p"), Some("hi"));
     }
 

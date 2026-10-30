@@ -487,7 +487,7 @@ pub async fn drive_warm_turn_with(binary: OsString, provider: &dyn Provider, req
     };
     let env = provider.environment(req);
     let key = key_for(provider, &args, &env);
-    let line = format!("{}\n", provider.warm_message(&req.prompt));
+    let line = format!("{}\n", provider.warm_message(&super::turn_prompt(provider, req)));
 
     let mut warm = match take(&chat, &key, req.session_id.as_deref()) {
         Some(mut warm) => {

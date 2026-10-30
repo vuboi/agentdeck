@@ -8,7 +8,7 @@
   import { brandLogoFor, providerLogo } from '../../../agents/brand-icons';
   import { connectors, removeProvider, scanLocal } from '../../../agents/connectors.svelte';
   import { zModalService } from '@shival99/z-ui-svelte';
-  import { FREE_CLOUD, KINDS, samePreset, type ProviderForm } from './provider-form.svelte';
+  import { FREE_CLOUD, KINDS, isClaudeConsole, samePreset, type ProviderForm } from './provider-form.svelte';
 
   // Deleting a provider asks first, in the app's danger confirm (the same as deleting a file).
   function confirmRemove(id: string, name: string) {
@@ -58,7 +58,7 @@
                 <h3 class="mb-2 text-sm font-semibold tracking-wide text-muted-foreground uppercase">Cloud providers</h3>
                 <p class="mb-2 text-[0.75rem] text-muted-foreground">Claude Console API credit, and official APIs with a free tier for small jobs (an email, a summary, a quick search). The key button opens the page where you create a key; then press + , paste it and Save. Free limits change often.</p>
                 <ul class="grid gap-2 sm:grid-cols-2">
-                  <ClaudeCreditCard />
+                  <ClaudeCreditCard {form} />
                   {#each FREE_CLOUD as preset (preset.name)}
                     <li class="flex min-w-0 items-center gap-2.5 rounded-lg border border-border px-3 py-2 text-sm">
                       <img src={brandLogoFor(preset.base)} alt="" class="size-5 shrink-0 rounded-sm object-contain" />
@@ -98,7 +98,7 @@
                     {#each connectors.custom as provider (provider.id)}
                       {@const activeKey = provider.keys.find((key) => key.id === provider.activeKeyId) ?? provider.keys[0]}
                       <li class="flex items-center gap-3 rounded-lg border border-border p-3">
-                        <span class="grid size-8 shrink-0 place-items-center rounded-md bg-muted">{#if providerLogo(provider)}<img src={providerLogo(provider)} alt="" class="size-5 object-contain" />{:else if provider.baseUrl.includes('anthropic.com')}<AgentLogo agent="claude" class="size-4" />{:else}<ZIcon zType={icon('lucideServer')} class="size-4" />{/if}</span>
+                        <span class="grid size-8 shrink-0 place-items-center rounded-md bg-muted">{#if isClaudeConsole(provider)}<AgentLogo agent="claude" class="size-4" />{:else if providerLogo(provider)}<img src={providerLogo(provider)} alt="" class="size-5 object-contain" />{:else}<ZIcon zType={icon('lucideServer')} class="size-4" />{/if}</span>
                         <span class="min-w-0 flex-1">
                           <span class="flex items-center gap-1.5 truncate text-sm font-medium">{provider.name}{#if provider.restricted}<span class="shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400" title="May train on what it is sent: gets no project data">Free tier</span>{/if}{#if provider.autoSwitch}<span class="shrink-0 rounded bg-primary/10 px-1.5 py-px text-[10px] font-medium text-primary">Auto switch</span>{/if}</span>
                           <span class="block truncate text-[0.75rem] text-muted-foreground">{KINDS.find((kind) => kind.value === provider.kind)?.label} · {provider.baseUrl}{provider.defaultModel ? ` · ${provider.defaultModel}` : ''}{activeKey?.apiKey ? ` · ${activeKey.label || 'key'} ••••${activeKey.apiKey.slice(-4)}` : ''}{provider.keys.length > 1 ? ` · ${provider.keys.length} keys` : ''}</span>

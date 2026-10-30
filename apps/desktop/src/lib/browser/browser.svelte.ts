@@ -2,6 +2,7 @@
 // injected into each page reports console, network and navigation, and answers DOM / screenshot / element requests.
 import { listenToNetwork } from './devtools-net.svelte';
 import { inTauri, isPreviewCopy } from '../app/platform/history';
+import { stripAnsi } from '../app/text/ansi';
 import { layout, setToolsOpen } from '../app/ui/layout.svelte';
 
 export type Device = 'desktop' | 'tablet' | 'mobile';
@@ -68,6 +69,8 @@ export const browser = $state({
   console: [] as ConsoleLine[],
   network: [] as NetworkLine[],
   error: '',
+  /** The address of the front tab could not be opened (an invalid address, nothing answering): shown in the page's place until it changes. */
+  navError: '',
   /** A project command from the Run list that did not bring a page up: shown until dismissed. */
   problem: null as RunProblem | null,
   /** Open the page at once when the browser view mounts (developer hook, links). */
@@ -216,6 +219,7 @@ export function newTab(url = '') {
   }
   if (browser.annotating) void stopAnnotating();
   browser.error = '';
+  browser.navError = '';
   const tab = blankTab(url);
   browser.tabs.push(tab);
   browser.activeId = tab.id;
@@ -230,6 +234,7 @@ export async function closeTab(id: string) {
     browser.annotateCount = 0;
   }
   browser.error = '';
+  browser.navError = '';
   const [tab] = browser.tabs.splice(index, 1);
   if (tab.opened && inTauri()) await call('browser_close', { tab: id }).catch(() => {});
   if (browser.tabs.length === 0) browser.tabs.push(blankTab());
@@ -239,7 +244,10 @@ export async function closeTab(id: string) {
 export function selectTab(id: string) {
   if (!browser.tabs.some((tab) => tab.id === id)) return;
   // An error belongs to the page it came from.
-  if (id !== browser.activeId) browser.error = '';
+  if (id !== browser.activeId) {
+    browser.error = '';
+    browser.navError = '';
+  }
   // The marks and the picker belong to the page they are on: leaving it ends them there (before the switch, so the
   // old page is the one told).
   if (browser.annotating && id !== browser.activeId) void stopAnnotating();
@@ -376,6 +384,7 @@ async function openBrowser(rect: Rect) {
     tab.opened = true;
   } catch (error) {
     tab.loading = false;
+    browser.navError = String(error);
     throw error;
   }
 }
@@ -390,15 +399,21 @@ export const resetBrowser = () => (inTauri() && !isPreviewCopy() ? call('browser
 export const capturePage = (scale = 1, fullPage = false) => call<string>('browser_capture', { tab: activeTab().id, scale, fullPage });
 export const zoomBrowser = (factor: number) => call('browser_zoom', { tab: activeTab().id, factor });
 
-export async function goTo(url: string) {
+/** The address as it came: colour codes copied from a server's log and the spaces around it are not part of it. */
+export const cleanAddress = (url: string) => stripAnsi(url).trim();
+
+export async function goTo(address: string) {
+  const url = cleanAddress(address);
   const tab = activeTab();
   tab.url = url;
+  browser.navError = '';
   if (tab.opened) {
     tab.loading = true;
     try {
       await call('browser_navigate', { tab: tab.id, url });
     } catch (error) {
       tab.loading = false;
+      browser.navError = String(error);
       throw error;
     }
   }
@@ -616,7 +631,8 @@ export const isLocalUrl = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1|
  * `auto` (a link): a page already open in a tab is shown as it is; any other address gets a tab of its own, never the
  * open page's. `current` (the agent): the front tab goes to the address. `new`: a tab of its own.
  */
-export function openInPreview(url: string, mode: 'auto' | 'current' | 'new' = 'auto') {
+export function openInPreview(address: string, mode: 'auto' | 'current' | 'new' = 'auto') {
+  const url = cleanAddress(address);
   if (mode === 'new') newTab(url);
   else if (mode === 'auto') {
     const shown = browser.tabs.find((tab) => tab.url === url);
@@ -634,7 +650,8 @@ export function openInPreview(url: string, mode: 'auto' | 'current' | 'new' = 'a
  * Otherwise the Preview panel is left alone: the page is created off-screen, where it keeps drawing, so the agent can
  * still look at it, click, read the console and take screenshots; the user finds it in the Preview when they open it.
  */
-function openForAgent(url: string, inNewTab: boolean) {
+function openForAgent(address: string, inNewTab: boolean) {
+  const url = cleanAddress(address);
   if (!inTauri() || (layout.toolsOpen && layout.activeTool === 'Preview')) return openInPreview(url, inNewTab ? 'new' : 'current');
   const front = activeTab();
   const tab = inNewTab && front.url ? newTab(url) : front;

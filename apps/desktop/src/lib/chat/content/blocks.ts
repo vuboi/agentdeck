@@ -286,7 +286,7 @@ export function liveState(blocks: Block[]): { label: string; spinner: ZLoadingSp
   if (running) return activityOf(running);
   const last = blocks.filter((block) => block.kind !== 'loading').at(-1);
   if (last?.kind === 'thinking' && last.streaming) return { label: 'Reasoning', spinner: LOADER.reasoning };
-  if (last?.kind === 'response' && last.streaming) return { label: 'Writing reply', spinner: LOADER.thinking };
+  if (last?.kind === 'response' && last.streaming) return { label: 'Writing reply', spinner: LOADER.writing };
   // Between steps, or before the first token: the model is deciding what to do next.
   return { label: 'Thinking', spinner: LOADER.thinking };
 }

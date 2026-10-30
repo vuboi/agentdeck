@@ -31,7 +31,8 @@
     return {
       agent,
       model: undefined,
-      name: looksLikeModelId ? modelLabel(prefix) : label || toolOf(item.command) || 'Background task',
+      // The label is the task text: the title names the tool, so the task is not shown twice.
+      name: looksLikeModelId ? modelLabel(prefix) : toolOf(item.command) || 'Background task',
       task: looksLikeModelId ? rest.join(': ').trim() : label,
     };
   }
@@ -66,9 +67,9 @@
         <div class="min-h-0 overflow-hidden" inert={!isOpen}>
           <div class="border-t border-border/70 bg-muted/20">
             <div class="max-h-[min(60vh,32rem)] overflow-y-auto overscroll-contain">
-              <div class="flex flex-col gap-2 px-4 py-3 text-[0.6875rem]">
+              <div class="flex flex-col gap-2 px-4 py-3 text-xs">
           {#if task.summary}<p class="m-0 whitespace-pre-wrap break-words text-muted-foreground">{task.summary}</p>{/if}
-          {#if info.task && info.task !== task.summary}<p class="m-0 whitespace-pre-wrap break-words text-foreground/90">{info.task}</p>{/if}
+          {#if info.task && info.task !== task.summary}<p class="m-0 whitespace-pre-wrap break-words text-sm font-medium text-foreground">{info.task}</p>{/if}
           {#if task.tools && !children.length}<p class="m-0 text-muted-foreground">Ran {task.tools} tool{task.tools === 1 ? '' : 's'}</p>{/if}
           {#if children.length}
             <div class="divide-y divide-border/70 overflow-hidden rounded-md border border-border bg-background">
@@ -93,8 +94,8 @@
                       <div class="border-t border-border/70 bg-muted/20">
                         <div class="max-h-[min(40vh,20rem)] overflow-y-auto overscroll-contain">
                           <div class="flex flex-col gap-1.5 px-3 py-2">
-                            <pre class="m-0 whitespace-pre-wrap break-all font-mono text-[10px] text-muted-foreground">{child.command}</pre>
-                            {#if child.output}<pre class="m-0 whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-[10px] text-foreground/90">{child.output}</pre>{:else if child.status === 'running'}<p class="m-0 text-[10px] text-muted-foreground">Waiting for tool output…</p>{/if}
+                            <pre class="m-0 whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground">{child.command}</pre>
+                            {#if child.output}<pre class="m-0 whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-xs text-foreground/90">{child.output}</pre>{:else if child.status === 'running'}<p class="m-0 text-xs text-muted-foreground">Waiting for tool output…</p>{/if}
                           </div>
                         </div>
                       </div>
@@ -107,7 +108,7 @@
               {/each}
             </div>
           {:else if item.output.trim()}
-            <pre class="m-0 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-[10px] text-muted-foreground">{item.output}</pre>
+            <pre class="m-0 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-xs text-muted-foreground">{item.output}</pre>
           {:else if live(item)}
             <p class="m-0 text-muted-foreground/70 italic">The provider has not exposed child logs yet. This task will update here when more activity arrives.</p>
           {:else}

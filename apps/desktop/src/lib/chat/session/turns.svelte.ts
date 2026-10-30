@@ -4,6 +4,7 @@ import { inTauri } from '../../app/platform/history';
 import { openInPreview } from '../../browser/browser.svelte';
 import { guide } from '../../app/ui/guide.svelte';
 import { connectors } from '../../agents/connectors.svelte';
+import { creditModel } from '../../agents/credit-model';
 import { sendSystemNotification, requestSystemNotificationPermission } from '../../app/platform/system-notifications';
 import { stopAgentTurn } from '../agent';
 import { logFlow } from '../../tasks/flow-log';
@@ -297,14 +298,19 @@ export function failSessionWork(sessionId: string) {
   if (batch) batch.failed = true;
 }
 
-export function hasOutstandingSessionWork(sessionId: string): boolean {
+/** The chat's own turn is busy: a reply streams, a lane runs, a reply is still drawn, or the user must answer. Background delegation does not count, so a queued message starts while an agent still works. */
+export function hasTurnWork(sessionId: string): boolean {
   if ((sessionLanes[sessionId]?.length ?? 0) > 0) return true;
-  if (
+  return Boolean(
     replies[sessionId] ||
-    renderWaiters[sessionId] ||
-    needsUserInput(sessionId)
-  )
-    return true;
+      renderWaiters[sessionId] ||
+      needsUserInput(sessionId),
+  );
+}
+
+/** Any work of the chat is outstanding, delegated work included: used to decide the "done" notification. */
+export function hasOutstandingSessionWork(sessionId: string): boolean {
+  if (hasTurnWork(sessionId)) return true;
   if (delegateRuns.some((run) => run.main === sessionId && !run.endedAt))
     return true;
   if (
@@ -424,11 +430,19 @@ void getPref<Record<string, string[]>>('permissions.allowed').then((saved) => {
 
 /** The chat's model if its agent offers it, else that agent's first model. */
 export function modelFor(session: SessionItem): string | null {
+  // A Console credit model stays picked while its key is missing: the turn then stops and says so (agent.ts), instead of
+  // quietly running on the plan's model. Only the user's own pick changes it.
+  if (creditModel(session.model)) return session.model;
   const list = MODELS[session.agent] ?? [];
   if (session.model && list.some((item) => item.value === session.model))
     return session.model;
   const fallback = list[0]?.value ?? null;
-  if (fallback) session.model = fallback;
+  if (fallback && session.model !== fallback) {
+    const previous = session.model;
+    session.model = fallback;
+    // The picker follows the model the chat really runs on (Composer listens for agent-moved).
+    if (previous) window.dispatchEvent(new CustomEvent('agentdeck:agent-moved', { detail: { sessionId: session.id, agent: session.agent, model: fallback } }));
+  }
   return fallback;
 }
 
