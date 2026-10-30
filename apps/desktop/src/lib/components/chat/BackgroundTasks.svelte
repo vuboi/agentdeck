@@ -21,15 +21,17 @@
   import { isWorkActive, type ChatWork } from '../../chat/runs/chat-work';
   import { returnTaskResult, pauseDelegateTask, resumeDelegateTask } from '../../chat/session/delegate-task.svelte';
   import { stopTurnForResume, resumeStoppedTurn } from '../../chat/session/events.svelte';
+  import { stopTurn } from '../../chat/session/turns.svelte';
 
-  /** Outside the virtual transcript: scrolling and loading old messages cannot unmount the work list. */
-  let { items, sessionId }: { items: ChatWork[]; sessionId: string } = $props();
+  /** Outside the virtual transcript: scrolling and loading old messages cannot unmount the work list.
+   *  `title` names the list; `stateKey` keys its open state (the chat by default, so each card can have its own). */
+  let { items, sessionId, title = 'Work', stateKey = sessionId }: { items: ChatWork[]; sessionId: string; title?: string; stateKey?: string } = $props();
   // Folded by default: each chat keeps its own open state, so the list opens only when the user asks for it.
   // Module level (like the chat's scroll position): the state outlives this component, so switching to another chat
   // and back shows the list as the user left it.
   const open = workOpen;
   const details = workDetails;
-  const isOpen = $derived(Boolean(open[sessionId]));
+  const isOpen = $derived(Boolean(open[stateKey]));
   const active = $derived(items.filter(isWorkActive));
   const paused = $derived(active.filter((item) => item.state === 'paused'));
   const finished = $derived(items.filter((item) => !isWorkActive(item) && item.state !== 'unknown'));
@@ -72,13 +74,13 @@
 
 <section class="mb-2 min-w-0 overflow-hidden rounded-lg border border-border/70 text-xs" aria-label="Chat tasks">
   <div class="flex h-8 w-full min-w-0 items-center gap-1 pr-2">
-  <button type="button" class="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 px-3 text-left text-muted-foreground outline-none hover:text-foreground" aria-label="Toggle chat tasks" aria-expanded={isOpen} onclick={() => (open[sessionId] = !isOpen)}>
+  <button type="button" class="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 px-3 text-left text-muted-foreground outline-none hover:text-foreground" aria-label="Toggle {title}" aria-expanded={isOpen} onclick={() => (open[stateKey] = !isOpen)}>
     {#if running > 0}
       <ZLoading zLoading zSpinner={LOADER.working} zSize={LOADER_SIZE} zColor="current" />
     {:else}
       <ZIcon zType={'lucideListChecks' as ZIconName} class="size-3.5 shrink-0" />
     {/if}
-    <ZShimmerText class="font-medium" zBase="var(--muted-foreground)" zPeak="var(--foreground)" zText="Work" />
+    <ZShimmerText class="font-medium" zBase="var(--muted-foreground)" zPeak="var(--foreground)" zText={title} />
     <span class="flex min-w-0 flex-1 items-center gap-2 truncate tabular-nums">
       {#if running > 0}<span>{Math.round(countRunning.current)} active</span>{/if}
       {#if paused.length > 0}<span>{Math.round(countPaused.current)} paused</span>{/if}
@@ -86,7 +88,6 @@
       {#if finished.length > 0}<span>{Math.round(countSaved.current)} saved</span>{/if}
       {#if items.length === 0}<span>All work settled</span>{/if}
     </span>
-    <ZIcon zType={'lucideChevronDown' as ZIconName} class="size-3 shrink-0 transition-transform duration-300 motion-reduce:transition-none {isOpen ? '' : '-rotate-90'}" />
   </button>
   {#if pausable.length > 0}
     <button type="button" class="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.6875rem] text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/60" aria-label="Pause all running work" title="Pause all running workers" onclick={pauseAll}>
@@ -94,6 +95,9 @@
       Pause all
     </button>
   {/if}
+  <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60" aria-label="Toggle {title}" aria-expanded={isOpen} onclick={() => (open[stateKey] = !isOpen)}>
+    <ZIcon zType={'lucideChevronDown' as ZIconName} class="size-3 shrink-0 transition-transform duration-300 motion-reduce:transition-none {isOpen ? '' : '-rotate-90'}" />
+  </button>
   </div>
   <!-- The list folds in place with a grid-row transition: 0fr closed, 1fr open. Closed, it is also inert. -->
   <div class="grid transition-[grid-template-rows] duration-300 ease-in-out motion-reduce:transition-none {isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
@@ -141,6 +145,12 @@
                   {:else}
                     <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
                   {/if}
+                </button>
+              {/if}
+              {#if item.canStop && !item.delegateId && !item.childId}
+                <!-- Provider-native work (a background command, a sub agent) has no worker of its own: Stop ends its chat's background run. -->
+                <button type="button" class={ICON_BUTTON} aria-label="Stop: {item.title}" {@attach zTooltip({ content: "Stop this task: its chat's background run ends", position: 'top' })} onclick={() => stopTurn(item.sessionId)}>
+                  <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="currentColor" /></svg>
                 </button>
               {/if}
               {#if item.childId}
