@@ -234,6 +234,7 @@
     if (target && at >= 0) {
       // Back from a child chat: the view goes to the message it was on, at the same place on screen, not to the end.
       stopSticking();
+      following = false;
       const put = () => {
         $virtualizer.scrollToIndex(at, { align: 'start' });
         if (viewportEl) viewportEl.scrollTop = Math.max(0, viewportEl.scrollTop - target.offset);
@@ -316,6 +317,8 @@
       shownSession = id;
       const left = readingAt.get(id);
       restoreTarget = left && (restoreFor === id || !left.atEnd) ? left : null;
+      // A restored place is not the end: `following` (left by the chat before) must not pull a working reply to the bottom.
+      if (restoreTarget) following = false;
       restoreFor = '';
       // Back at a place read earlier (scrolled up): the jump button belongs there at once. Opening at the end: it waits
       // until the list has settled, so it does not flash while rows are still measured.
