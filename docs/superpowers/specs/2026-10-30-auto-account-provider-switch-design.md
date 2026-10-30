@@ -49,9 +49,11 @@ Transient failures continue through the existing retry policy. When auto-switch 
 ## Data and migration
 
 - Persist auto-switch configuration per connector and per custom provider.
-- Replace `CustomProvider.apiKey` with a list of named key records (`id`, label, secret, optional environment key name) and an active key id, plus the provider's auto-switch setting.
-- During preference hydration, convert a legacy `apiKey` and `keyEnv` into the first key record and choose it as active. Save the new shape without losing provider id, model list, base URL, logo, enabled state, or restricted flag.
-- Secrets remain local to the existing preferences flow and are never rendered in full or included in progress text.
+- Extend the app's existing IndexedDB database (`agentdeck`) with dedicated `accounts` and `providers` object stores. Route account cache keys to `accounts` and provider definitions/keys to `providers`; keep the existing `index` object store for indexed listings.
+- Cache connector account identity/status and quota snapshots by connector and account id, including an observation timestamp. Rehydrate from IndexedDB immediately for candidate ranking, then refresh live state before attempting a switch. A stale cache may prioritize candidates but never proves that a credential works.
+- Replace `CustomProvider.apiKey` with a list of named key records (`id`, label, secret, optional environment key name) and an active key id, plus the provider's auto-switch setting. Cache per-key provider quota snapshots by provider id and key id when the endpoint exposes them.
+- Upgrade the IndexedDB schema and move `providers.custom` from the current `prefs` store into `providers`. During hydration/migration, convert a legacy `apiKey` and `keyEnv` into the first key record and choose it as active. Preserve provider id, model list, base URL, logo, enabled state, and restricted flag.
+- Connector authentication secrets remain in their existing native account managers; IndexedDB stores account IDs and quota/status metadata, not copied access/refresh tokens. Custom API keys remain local in IndexedDB as they are today, and are never rendered in full or included in progress text.
 
 ## Quota and connector limits
 
@@ -71,7 +73,8 @@ Transient failures continue through the existing retry policy. When auto-switch 
 
 ## Implementation areas
 
-- `apps/desktop/src/lib/agents/connectors.svelte.ts` and `apps/desktop/src-tauri/src/connectors.rs`: config, account candidate refresh/check/switch, custom-provider key data/probe.
+- `apps/desktop/src/lib/app/platform/prefs-db.ts` and `prefs.ts`: IndexedDB schema upgrade, new stores, key routing, and migration.
+- `apps/desktop/src/lib/agents/connectors.svelte.ts` and `apps/desktop/src-tauri/src/connectors.rs`: config, cached account/quota hydration, account candidate refresh/check/switch, custom-provider key data/probe.
 - `apps/desktop/src/lib/chat/session/events.svelte.ts`, `sending.svelte.ts`, and `run.svelte.ts`: recovery coordinator, progress block, key-specific provider request, hidden continuation.
 - `apps/desktop/src/lib/components/settings/sections/ConnectorsSection.svelte`, `ProvidersSection.svelte`, `ProviderModals.svelte`, and `provider-form.svelte.ts`: settings toggles and API-key editor.
 - `apps/desktop/src/lib/components/chat/ComposerDock.svelte`, `ComposerQuota.svelte`, and related composer components: active account/provider key display and mirrored toggle.
