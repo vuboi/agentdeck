@@ -60,10 +60,19 @@
   };
   const tone = (item: ChatWork) => item.state === 'failed' ? 'text-destructive' : item.state === 'input' || item.state === 'unknown' ? 'text-amber-500' : item.state === 'done' ? 'text-emerald-500' : 'text-muted-foreground';
   const ICON_BUTTON = 'grid size-4 shrink-0 cursor-pointer place-items-center text-muted-foreground outline-none transition-colors hover:text-primary disabled:cursor-default disabled:opacity-40 disabled:hover:text-muted-foreground';
+  // Pause all: the workers that can pause and are still running (a paused one is not counted again).
+  const pausable = $derived(active.filter((item) => item.canPause && item.state !== 'paused'));
+  function pauseAll() {
+    for (const item of pausable) {
+      if (item.delegateId) pauseDelegateTask(item.delegateId);
+      else if (item.childId) stopTurnForResume(item.childId);
+    }
+  }
 </script>
 
 <section class="mb-2 min-w-0 overflow-hidden rounded-lg border border-border/70 text-xs" aria-label="Chat tasks">
-  <button type="button" class="flex h-8 w-full min-w-0 cursor-pointer items-center gap-2 px-3 text-left text-muted-foreground outline-none hover:text-foreground" aria-label="Toggle chat tasks" aria-expanded={isOpen} onclick={() => (open[sessionId] = !isOpen)}>
+  <div class="flex h-8 w-full min-w-0 items-center gap-1 pr-2">
+  <button type="button" class="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 px-3 text-left text-muted-foreground outline-none hover:text-foreground" aria-label="Toggle chat tasks" aria-expanded={isOpen} onclick={() => (open[sessionId] = !isOpen)}>
     {#if running > 0}
       <ZLoading zLoading zSpinner={LOADER.working} zSize={LOADER_SIZE} zColor="current" />
     {:else}
@@ -79,6 +88,13 @@
     </span>
     <ZIcon zType={'lucideChevronDown' as ZIconName} class="size-3 shrink-0 transition-transform duration-300 motion-reduce:transition-none {isOpen ? '' : '-rotate-90'}" />
   </button>
+  {#if pausable.length > 0}
+    <button type="button" class="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.6875rem] text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/60" aria-label="Pause all running work" title="Pause all running workers" onclick={pauseAll}>
+      <svg class="size-2.5" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="3.5" height="11" rx="1" fill="currentColor" /><rect x="10" y="2.5" width="3.5" height="11" rx="1" fill="currentColor" /></svg>
+      Pause all
+    </button>
+  {/if}
+  </div>
   <!-- The list folds in place with a grid-row transition: 0fr closed, 1fr open. Closed, it is also inert. -->
   <div class="grid transition-[grid-template-rows] duration-300 ease-in-out motion-reduce:transition-none {isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">
     <div class="min-h-0 overflow-hidden" inert={!isOpen}>

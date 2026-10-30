@@ -31,3 +31,10 @@ test('an error result becomes fail unless the task already ended the call', () =
   assert.equal(statusAfterResult({ background: true, status: 'fail', nativeTaskId: 'x', endedAt: 3 }, true), 'fail');
   assert.equal(statusAfterResult({ background: true, status: 'ok', nativeTaskId: 'x', endedAt: 3 }, true), 'ok');
 });
+
+test('a foreground call that a task event marked background still ends when its result comes', () => {
+  // trackActivity passes launchedInBackground (false here): the task event's background mark is not the call's own.
+  const call = { background: false, status: 'background' as const, nativeTaskId: 'bash-1' };
+  assert.equal(statusAfterResult(call, false), 'ok');
+  assert.equal(statusAfterResult({ ...call, background: true }, false), 'background', 'a real background shell waits for its task');
+});

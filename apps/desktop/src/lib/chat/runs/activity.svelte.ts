@@ -27,6 +27,9 @@ export type Activity = {
   name: string;
   input: string;
   background: boolean;
+  /** Whether the call itself was started as background work (a shell with run_in_background, an agent). A task event
+   *  later sets `background` too, but a foreground call with a task event still ends when its result comes. */
+  launchedInBackground?: boolean;
   status: ActivityStatus;
   startedAt: number;
   endedAt?: number;
@@ -304,6 +307,7 @@ export function trackActivity(sessionId: string, title: string, project: string,
       name: event.name,
       input: event.input,
       background: event.background,
+      launchedInBackground: event.background,
       status: 'running',
       startedAt: Date.now(),
     };
@@ -328,7 +332,7 @@ export function trackActivity(sessionId: string, title: string, project: string,
     if (event.image) item.image = event.image;
     // A call its task event already ended was recorded then: the result adds output and keeps that status.
     const ended = endedByTask(item);
-    item.status = statusAfterResult(item, event.is_error);
+    item.status = statusAfterResult({ ...item, background: item.launchedInBackground ?? item.background }, event.is_error);
     if (item.status !== 'background' && !ended) {
       item.endedAt = Date.now();
       record(item);
