@@ -322,10 +322,13 @@
       jumpReady = Boolean(restoreTarget);
       revealed = false;
       setEagerColour(true);
-      if (!restoreTarget) stickToEnd(6000);
+      // Read here, not after the transcript loads: revealAtEnd takes restoreTarget (sets it to null) before this promise
+      // settles, and the null then pinned a restored view to the end for 3 s.
+      const restoring = Boolean(restoreTarget);
+      if (!restoring) stickToEnd(6000);
       else stopSticking();
       void openTranscript(workspace.sessions.find((item) => item.id === id)).then(() => {
-        if (!restoreTarget) stickToEnd();
+        if (!restoring) stickToEnd();
       });
     });
   });
