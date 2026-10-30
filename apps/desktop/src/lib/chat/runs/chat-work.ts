@@ -76,7 +76,7 @@ export function projectChatWork(events: readonly Activity[], tasks: readonly Tas
       work.push({
         id: `workflow:${run.id}:${node.childId}`, sessionId: run.main, title: node.input || run.task,
         state: node.state === 'idle' ? 'queued' : node.state,
-        agent: node.agent, model: node.model, kind: 'agent', sourceTitle: run.task, childId: node.childId, canPause: node.state === 'running',
+        agent: node.agent, model: node.model, kind: 'agent', sourceTitle: run.task, childId: node.childId, canPause: node.state === 'running', canStop: node.state === 'running',
         startedAt: node.startedAt, endedAt: node.endedAt, detail: node.output ?? node.note ?? '',
       });
     }

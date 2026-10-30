@@ -19,7 +19,7 @@
   import { elapsed } from '../../chat/content/blocks';
   import { requestFocusMessage } from '../../chat/content/focus-message.svelte';
   import { isWorkActive, type ChatWork } from '../../chat/runs/chat-work';
-  import { returnTaskResult, pauseDelegateTask, resumeDelegateTask } from '../../chat/session/delegate-task.svelte';
+  import { returnTaskResult, pauseDelegateTask, resumeDelegateTask, stopDelegateTask } from '../../chat/session/delegate-task.svelte';
   import { stopTurnForResume, resumeStoppedTurn } from '../../chat/session/events.svelte';
   import { stopTurn } from '../../chat/session/turns.svelte';
   import { closeRunningActivity } from '../../chat/runs/activity.svelte';
@@ -65,6 +65,15 @@
   const ICON_BUTTON = 'grid size-4 shrink-0 cursor-pointer place-items-center text-muted-foreground outline-none transition-colors hover:text-primary disabled:cursor-default disabled:opacity-40 disabled:hover:text-muted-foreground';
   // Pause all: the workers that can pause and are still running (a paused one is not counted again).
   const pausable = $derived(active.filter((item) => item.canPause && item.state !== 'paused'));
+  // Stop ends what the row runs: a worker's task, a child chat's turn, or a provider-native task (its chat's background run).
+  function stopItem(item: ChatWork) {
+    if (item.delegateId) stopDelegateTask(item.delegateId);
+    else if (item.childId) stopTurn(item.childId);
+    else {
+      stopTurn(item.sessionId);
+      closeRunningActivity(item.sessionId);
+    }
+  }
   function pauseAll() {
     for (const item of pausable) {
       if (item.delegateId) pauseDelegateTask(item.delegateId);
@@ -148,9 +157,8 @@
                   {/if}
                 </button>
               {/if}
-              {#if item.canStop && !item.delegateId && !item.childId}
-                <!-- Provider-native work (a background command, a sub agent) has no worker of its own: Stop ends its chat's background run. -->
-                <button type="button" class={ICON_BUTTON} aria-label="Stop: {item.title}" {@attach zTooltip({ content: "Stop this task: its chat's background run ends", position: 'top' })} onclick={() => { stopTurn(item.sessionId); closeRunningActivity(item.sessionId); }}>
+              {#if item.canStop}
+                <button type="button" class={ICON_BUTTON} aria-label="Stop: {item.title}" {@attach zTooltip({ content: 'Stop this task', position: 'top' })} onclick={() => stopItem(item)}>
                   <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="currentColor" /></svg>
                 </button>
               {/if}
