@@ -31,6 +31,11 @@
 
   let chip = $state<HTMLElement | null>(null);
   let cardOpen = $state(false);
+  let failedImageSrc = $state<string | null>(null);
+  const renderedImageSrc = $derived(block.kind === 'image' ? pictureSrc(block) : '');
+  const imageUnavailable = $derived(
+    block.kind === 'image' && (!renderedImageSrc || failedImageSrc === renderedImageSrc),
+  );
 
   const statusIcon = { running: 'lucideLoaderCircle', ok: 'lucideCircleCheck', fail: 'lucideCircleX' } as const;
   const statusTone = { running: 'text-warning', ok: 'text-success', fail: 'text-destructive' } as const;
@@ -115,7 +120,19 @@
     {/snippet}
   </ZPopover>
 {:else if block.kind === 'image'}
-  <img src={pictureSrc(block)} alt={block.name} class="block-in max-h-56 max-w-full self-start rounded-lg border border-border object-contain" />
+  {#if imageUnavailable}
+    <div role="img" aria-label="Image not found" class="block-in size-56 max-w-full self-start overflow-hidden rounded-lg border border-border">
+      <img src="/assets/image-not-found.png" alt="" aria-hidden="true" class="size-full object-contain" />
+    </div>
+  {:else}
+    <img
+      src={renderedImageSrc}
+      alt={block.name}
+      class="block-in max-h-56 max-w-full self-start rounded-lg border border-border object-contain"
+      onerror={() => (failedImageSrc = renderedImageSrc)}
+      onload={() => (failedImageSrc = null)}
+    />
+  {/if}
 {:else if block.kind === 'loading'}
   <div class="block-in flex items-center gap-2 text-sm text-muted-foreground">
     <ZLoading zLoading zSpinner={LOADER.thinking} zSize={LOADER_SIZE} zColor="primary" />

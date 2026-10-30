@@ -31,7 +31,9 @@
   import { openAttachment, openMedia } from '../../browser/preview.svelte';
   import { toast } from '../../app/platform/toast';
   import { inTauri } from '../../app/platform/history';
+  import { closeOnScroll } from '../../app/ui/close-on-scroll';
   import FileChip from './FileChip.svelte';
+  import Menu from '../ui/Menu.svelte';
   import MenuButton from '../ui/MenuButton.svelte';
   import type { Block } from '../../chat/mock';
 
@@ -199,7 +201,7 @@
       toast.error(`Could not save: ${error}`);
     }
   }
-  // The apps that can open each file, for "Open with" in its ⋯ menu (the file card itself has no right-click menu).
+  // The apps that can open each file, for "Open with" in either its ⋯ or right-click menu.
   // Preload only the targeted menu on hover/focus, with an open fallback: looking up every file while
   // the chat loads reads app icons on the main thread and can freeze it.
   let apps = $state<Record<string, OpenWithOption[]>>({});
@@ -213,6 +215,16 @@
     { label: 'Save as…', icon: 'lucideDownload', iconSize: '12', class: 'text-sm! py-1', onClick: () => void saveAs(item) },
     { label: 'Show in folder', icon: 'lucideFolderOpen', iconSize: '12', class: 'text-sm! py-1', onClick: () => void revealFile(item.path).catch(() => toast.error('Could not show the file')) },
   ];
+  let contextMenu = $state<{ x: number; y: number; item: Artifact } | null>(null);
+  let contextMenuOpen = $state(false);
+  $effect(() => closeOnScroll(() => contextMenuOpen, () => (contextMenuOpen = false)));
+  function openContextMenu(event: MouseEvent, item: Artifact) {
+    event.preventDefault();
+    contextMenu = { x: event.clientX, y: event.clientY, item };
+    contextMenuOpen = true;
+    loadApps(item.path);
+  }
+  const contextItems = $derived(contextMenu ? menuOf(contextMenu.item) : []);
   const typeLabel = (item: Artifact) => `${fileKind(item.name).label} ${item.kind === 'audio' ? 'audio' : item.kind === 'video' ? 'video' : ''}`.trim();
 </script>
 
@@ -243,7 +255,7 @@
       <div class="flex flex-wrap gap-2">
         {#each images as item (item.path)}
           {#if pictures[item.path] && pictures[item.path] !== 'failed'}
-            <div class="group/pic relative">
+            <div role="group" aria-label={item.name} class="group/pic relative" oncontextmenu={(event) => openContextMenu(event, item)}>
               <button type="button" class="{live ? 'artifact-in' : ''} block cursor-zoom-in overflow-hidden rounded-xl border border-border bg-muted/30 outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Open {item.name}" onclick={() => openPicture(item)}>
                 <img src={pictures[item.path]} alt={item.name} class="block h-36 w-auto max-w-64 object-cover" />
               </button>
@@ -251,12 +263,16 @@
             </div>
           {:else if pictures[item.path] === ''}
             <div class="relative h-36 w-52 overflow-hidden rounded-xl border border-border bg-muted/30" aria-hidden="true"></div>
+          {:else if item.kind === 'image'}
+            <button type="button" class="block cursor-zoom-in overflow-hidden rounded-xl border border-border bg-muted/30 outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Open {item.name}" onclick={() => void openAttachment(item.path, item.name, sizes[item.path])} oncontextmenu={(event) => openContextMenu(event, item)}>
+              <img src="/assets/image-not-found.png" alt="" aria-hidden="true" class="block h-36 w-52 object-contain" />
+            </button>
           {:else}
             <FileChip name={item.name} path={item.path} size={sizes[item.path]} onclick={() => void openAttachment(item.path, item.name, sizes[item.path])} />
           {/if}
         {/each}
         {#each videos as item (item.path)}
-          <div class="group/pic relative">
+          <div role="group" aria-label={item.name} class="group/pic relative" oncontextmenu={(event) => openContextMenu(event, item)}>
             <button type="button" class="{live ? 'artifact-in' : ''} relative block cursor-pointer overflow-hidden rounded-xl border border-border bg-black outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Play {item.name}" onclick={() => void openVisual(item)}>
               {#if blobs[item.path]}
                 <!-- The first frame is the thumbnail: `#t=0.1` makes the engine decode it without playing. -->
@@ -278,7 +294,7 @@
     {#each others as item (item.path)}
       {#if item.kind === 'audio'}
         {@const state = stateOf(item.path)}
-        <div class="{live ? 'artifact-in' : ''} flex w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border bg-muted/30">
+        <div role="group" aria-label={item.name} class="{live ? 'artifact-in' : ''} flex w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border bg-muted/30" oncontextmenu={(event) => openContextMenu(event, item)}>
           <div class="flex items-center gap-3 px-3 py-2.5">
             <span class="grid size-11 shrink-0 place-items-center rounded-lg bg-background text-primary"><ZIcon zType={'lucideAudioLines' as ZIconName} class="size-5 {state.playing ? 'animate-pulse' : ''}" /></span>
             <span class="flex min-w-0 flex-1 flex-col leading-tight">
@@ -299,7 +315,7 @@
       {:else if item.kind === 'video'}
         <!-- Videos are drawn above, as thumbnails (see `videos`). -->
       {:else}
-        <div class="{live ? 'artifact-in' : ''} flex flex-wrap items-center gap-1.5">
+        <div role="group" aria-label={item.name} class="{live ? 'artifact-in' : ''} flex flex-wrap items-center gap-1.5" oncontextmenu={(event) => openContextMenu(event, item)}>
           <FileChip name={item.name} path={item.path} size={sizes[item.path]} onclick={() => void openAttachment(item.path, item.name, sizes[item.path])} />
           <MenuButton items={menuOf(item)} onprepare={() => loadApps(item.path)} onopen={() => loadApps(item.path)} label="Actions for {item.name}" />
         </div>
@@ -307,6 +323,15 @@
     {/each}
   </div>
 {/if}
+
+<Menu
+  items={contextItems}
+  bind:open={contextMenuOpen}
+  at={contextMenu ? { x: contextMenu.x, y: contextMenu.y } : null}
+  position="bottom-left"
+  width={220}
+  label="File actions"
+/>
 
 <style>
   /* A card appears with a short rise, so a file that just finished does not pop in. */

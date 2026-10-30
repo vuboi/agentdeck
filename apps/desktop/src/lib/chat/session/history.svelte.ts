@@ -129,9 +129,21 @@ function applyHistory(all: HistorySession[]) {
   const seen = new Set<string>();
   const found = all.filter((item) => !seen.has(item.id) && seen.add(item.id));
   const ids = new Set(found.map((item) => item.id));
+  const current = new Map(workspace.sessions.map((item) => [item.id, item]));
   const projectIds = new Map<string, string>();
   const projects: Project[] = [];
   for (const item of found) {
+    // A chat created in AgentDeck can already have a matching Claude/Codex history file after its first turn. Keep
+    // the project chosen in the app even when the history index has not recognised that folder as a project yet.
+    const existing = current.get(item.id);
+    const existingProject = existing && !existing.path && existing.projectId !== NO_PROJECT
+      ? workspace.projects.find((project) => project.id === existing.projectId)
+      : undefined;
+    if (existingProject) {
+      projectIds.set(item.cwd, existingProject.id);
+      if (!projects.some((project) => project.id === existingProject.id)) projects.push(existingProject);
+      continue;
+    }
     if (!item.is_project && !addedProjects.some((path) => samePath(path, item.cwd))) continue;
     if (!projectIds.has(item.cwd)) {
       const id = `dir:${item.cwd}`;
@@ -144,10 +156,17 @@ function applyHistory(all: HistorySession[]) {
     }
   }
   const sessions: SessionItem[] = found.map((item) => ({
+    // The history file is the provider's storage, but its sidebar placement belongs to AgentDeck. A local session
+    // may therefore become history-backed without changing from its selected project or from This computer.
+    ...(current.get(item.id) && !current.get(item.id)?.path
+      ? { made: current.get(item.id)!.made ?? true }
+      : {}),
     // A saved chat continued with another agent: which agents it has had, and their own conversation ids.
     ...(mixed[item.id] ?? {}),
     id: item.id,
-    projectId: projectIds.get(item.cwd) ?? NO_PROJECT,
+    projectId: current.get(item.id)?.path
+      ? projectIds.get(item.cwd) ?? NO_PROJECT
+      : current.get(item.id)?.projectId ?? projectIds.get(item.cwd) ?? NO_PROJECT,
     workingDirectory: item.cwd || undefined,
     title: item.title,
     agent: mixed[item.id]?.agents?.at(-1) ?? item.source,
@@ -202,7 +221,6 @@ function applyHistory(all: HistorySession[]) {
   // A chat already listed keeps its object, updated in place: a turn running in it (in this chat, or on another
   // chat's import) still holds that object and its "working" state. A new object with `status: 'idle'` dropped both,
   // so the chat looked done while its agent was still answering.
-  const current = new Map(workspace.sessions.map((item) => [item.id, item]));
   const merged = sessions.map((item) => {
     const existing = current.get(item.id);
     if (!existing) return item;

@@ -422,6 +422,79 @@ fn mcp_call(parameters: &Value) -> Option<(String, String)> {
     ))
 }
 
+/// How much of a read the Read card shows again: the lines and the bytes it alone carries.
+const READ_MAX_LINES: u64 = 2_000;
+const READ_MAX_BYTES: usize = 2_000_000;
+
+/// Whether a text is only the stat agy reports for a read: `147 lines, 5046 bytes` (the word `lines` is plural
+/// even for one, so it stays exact).
+fn is_stat_line(output: &str) -> bool {
+    let count_of = |part: Option<&str>, unit: &str| -> bool {
+        part.and_then(|part| part.trim().strip_suffix(unit))
+            .map(|number| !number.trim().is_empty() && number.trim().chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or(false)
+    };
+    let mut parts = output.trim().split(',');
+    if !count_of(parts.next(), " lines") {
+        return false;
+    }
+    if !count_of(parts.next(), " bytes") {
+        return false;
+    }
+    parts.next().is_none()
+}
+
+/// A number a Read parameter carries, as a JSON number or the string of one.
+fn parameter_number(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+}
+
+/// A path a Read parameter carries, without the quotes a text parameter can still hold around it.
+fn parameter_path(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(|path| path.trim_matches(|c| c == '"' || c == '\'').to_owned())
+}
+
+/// Reads again what a read_file / view_file read, as the lines its own `StartLine`..`EndLine` window names, so the
+/// Read card can show the content: agy's whole streamed output for such a call is the stat line (`147 lines, 5046
+/// bytes`), the content itself went only to the model. The file is read directly, cut to the size a card carries;
+/// `None` keeps the stat (a read that failed, a file too big, a picture).
+fn read_output(root: Option<&std::path::Path>, parameters: &Value, output: &str) -> Option<String> {
+    if !is_stat_line(output) {
+        return None;
+    }
+    let raw_path = ["Path", "AbsolutePath", "TargetFile"]
+        .iter()
+        .find_map(|key| parameter_path(&parameters[*key]))?;
+    let path = std::path::Path::new(&raw_path);
+    let path = if path.is_absolute() { path.to_path_buf() } else { root.map(|root| root.join(path))? };
+    let bytes = std::fs::read(&path).ok()?;
+    if bytes.len() > READ_MAX_BYTES || bytes.contains(&0) {
+        // Too big or not a text a card can show: the stat line stays.
+        return None;
+    }
+    let text = String::from_utf8(bytes).ok()?;
+    let first = parameter_number(&parameters["StartLine"]).unwrap_or(1).max(1);
+    // The `EndLine` a call asked for only ever shortens the read; `READ_MAX_LINES` is the widest it can be.
+    let last = parameter_number(&parameters["EndLine"]).unwrap_or(first + READ_MAX_LINES - 1);
+    let span = last.saturating_sub(first).saturating_add(1);
+    let window: Vec<&str> = text.lines().skip(first as usize - 1).take(span.min(READ_MAX_LINES) as usize).collect();
+    let mut shown = window.join("\n");
+    // A cut only because the card cannot carry every line the read asked for says so; a window smaller than the
+    // file is what the call itself asked for.
+    let cut = span > READ_MAX_LINES || shown.len() > READ_MAX_BYTES;
+    if shown.len() > READ_MAX_BYTES {
+        shown = String::from_utf8_lossy(&shown.as_bytes()[..READ_MAX_BYTES]).into_owned();
+    }
+    if cut {
+        shown.push_str("\n[The read was longer than this card shows; the file itself has all of it.]");
+    }
+    Some(shown)
+}
+
 fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
     let state = update["state"].as_str().unwrap_or_default();
     match update["step_type"].as_str().unwrap_or_default() {
@@ -519,7 +592,14 @@ fn step(update: &Value, turn: &mut Turn) -> Vec<AgentEvent> {
                         other => other.clone(),
                     };
                     events.extend(subagents_ended(&listed, &index.to_string(), agy_transcript));
-                    let output = info["output"].as_str().unwrap_or_default().to_string();
+                    // A read's streamed output is only its stat line; the file the call named is read again so the
+                    // Read card can show what was read.
+                    let mut output = info["output"].as_str().unwrap_or_default().to_string();
+                    if matches!(raw_name, "read_file" | "view_file") {
+                        if let Some(content) = read_output(turn.root.as_deref(), parameters, &output) {
+                            output = content;
+                        }
+                    }
                     let image = offloaded_image(&output);
                     let change = turn
                         .file_snapshots
@@ -1035,6 +1115,59 @@ mod tests {
             matches!(provider.parse_line(line).as_slice(), [AgentEvent::Raw { label, .. }] if label == "something_new")
         );
         assert!(provider.parse_line(r#"{"event":"step_update","step_update":{"step_type":"something_new","state":"ACTIVE"}}"#).is_empty());
+    }
+
+    #[test]
+    fn only_a_stat_line_is_replaced_and_a_read_shows_the_file_it_read() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-agy-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("probe.txt"), "one\ntwo\nthree\nfour\n").unwrap();
+        let path = dir.join("probe.txt").to_string_lossy().replace('\\', "\\\\");
+        let call = |output: &str| {
+            let provider = Antigravity::default();
+            let mut request = req(true);
+            request.cwd = Some(dir.clone());
+            provider.prepare(&request).unwrap();
+            let line = format!(
+                r#"{{"event":"step_update","step_update":{{"step_index":1,"state":"DONE","step_type":"tool","tool_name":"read_file","tool_info":{{"name":"read_file","parameters":{{"Path":"{path}","StartLine":2,"EndLine":3}},"output":"{output}"}}}}}}"#
+            );
+            (provider, line)
+        };
+        // The window the call asked for (lines 2..3) is what shows, not the stat.
+        let (provider, line) = call("4 lines, 24 bytes");
+        let outputs: Vec<String> = provider
+            .parse_line(&line)
+            .into_iter()
+            .filter_map(|event| match event {
+                AgentEvent::ToolResult { output, .. } => Some(output),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs.as_slice(), ["two\nthree"]);
+        // A result that is not a stat (a failed read) keeps the text agy gave.
+        let (provider, line) = call("file does not exist");
+        let outputs: Vec<String> = provider
+            .parse_line(&line)
+            .into_iter()
+            .filter_map(|event| match event {
+                AgentEvent::ToolResult { output, .. } => Some(output),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs.as_slice(), ["file does not exist"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_stat_list_is_exact_and_a_read_beyond_the_card_cap_is_cut() {
+        assert!(is_stat_line("1 lines, 729 bytes"));
+        assert!(is_stat_line("2 lines, 27 bytes"));
+        assert!(is_stat_line("147 lines, 5046 bytes"));
+        assert!(!is_stat_line("file does not exist"));
+        assert!(!is_stat_line(""));
+        assert!(!is_stat_line("many lines, many bytes"));
+        assert!(!is_stat_line("12 lines, 34 bytes, and more"));
     }
 
     #[test]

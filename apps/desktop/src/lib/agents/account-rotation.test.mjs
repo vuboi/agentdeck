@@ -51,11 +51,12 @@ async function harness({ provider = 'codex', rows = [account('a', 100), account(
     '@tauri-apps/api/core': { invoke },
     '../app/platform/history': { inTauri: () => true },
     '../app/platform/prefs': { getPref: async (key) => copy(prefs[key] ?? null), setPref: async (key, value) => { prefs[key] = copy(value); } },
+    '../app/platform/secrets': { loadSecret: async () => null, saveSecret: async () => true },
     '../app/platform/toast': { toast: { success() {}, error() {} } },
     '../chat/runs/account-epoch.svelte': { accountSwitched: (id) => epochs.push(id) },
     '../app/platform/system-notifications': { requestSystemNotificationPermission: async () => false, sendSystemNotification: async () => {} },
     '../app/platform/tauri-event': { listen: async () => () => {} },
-    './models.svelte': { loadModels: async () => {} },
+    './models.svelte': { loadModels: async () => {}, reloadModels: async () => {} },
   };
   const cache = new Map();
   async function load(specifier) {

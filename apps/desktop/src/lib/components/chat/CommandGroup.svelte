@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { slide } from 'svelte/transition';
+  import { fade, slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { ZButton, ZIcon, ZLoading, ZShowMore, ZShimmerText, zModalService } from '@shival99/z-ui-svelte';
   import { jsonInText } from '../../app/text/json-text';
@@ -229,7 +229,13 @@
       {#if runningStep}
         <!-- While a step runs the line is that step ("Running pnpm test", "Using officecli load_skill word"), cut to the
              width; once every step is done it goes back to the summary. -->
-        <span class="min-w-0 truncate"><ZShimmerText class="block truncate font-medium" zText={runningLine} /></span>
+        <span class="min-w-0 truncate">
+          {#key runningLine}
+            <span class="block truncate" in:fade={{ duration: 120 }} out:fade={{ duration: 90 }}>
+              <ZShimmerText class="block truncate font-medium" zText={runningLine} />
+            </span>
+          {/key}
+        </span>
       {:else if working}
         <ZShimmerText class="truncate font-medium" zText={summarize(items)} />
       {:else}
