@@ -2124,6 +2124,7 @@ async fn file_read_bytes(root: String, path: String) -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            flow_log::note("rust", "-", "window", "shown by a second launch");
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
@@ -2227,6 +2228,7 @@ pub fn run() {
                         if button_state == tauri::tray::MouseButtonState::Up
                             && button == tauri::tray::MouseButton::Left
                         {
+                            flow_log::note("rust", "-", "window", "shown from the tray (left click)");
                             if let Some(window) = tray.app_handle().get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.unminimize();
@@ -2479,9 +2481,18 @@ pub fn run() {
                 ..
             } if label == "main" => {
                 api.prevent_close();
+                flow_log::note("rust", "-", "window", "close requested: hiding to the tray");
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
                 }
+            }
+            // Focus changes show whether the window is on screen again after a close (a hidden window gets no focus).
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Focused(focused),
+                ..
+            } if label == "main" => {
+                flow_log::note("rust", "-", "window", if focused { "focused" } else { "blurred" });
             }
             // The dev servers the agents asked for end only when the user chooses Exit from the tray.
             tauri::RunEvent::Exit => {
