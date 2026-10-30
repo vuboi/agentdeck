@@ -1983,6 +1983,45 @@ pub(crate) fn delete_secret(target: &str) -> Result<(), String> {
     }
 }
 
+/// Only AgentDeck's own secrets (`agentdeck:` targets) can be reached from the webview, never other credentials.
+fn secret_target(target: &str) -> Result<String, String> {
+    if target.starts_with("agentdeck:") && target.len() > "agentdeck:".len() && !target.contains('\0') {
+        Ok(target.to_string())
+    } else {
+        Err("not an AgentDeck secret".to_string())
+    }
+}
+
+/// The system credential store entry for an AgentDeck secret: Windows Credential Manager, the macOS Keychain or the
+/// Linux Secret Service, whichever the system has.
+fn secret_entry(target: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new("AgentDeck", target).map_err(|error| error.to_string())
+}
+
+/// Saves a provider key or sign-in in the system credential store.
+#[tauri::command]
+pub fn secret_save(target: String, value: String) -> Result<(), String> {
+    let target = secret_target(&target)?;
+    secret_entry(&target)?.set_password(&value).map_err(|error| error.to_string())
+}
+
+/// Reads a secret saved by `secret_save`; `None` when there is none or the store is not available.
+#[tauri::command]
+pub fn secret_load(target: String) -> Option<String> {
+    let target = secret_target(&target).ok()?;
+    secret_entry(&target).ok()?.get_password().ok()
+}
+
+/// Removes a secret saved by `secret_save`; a missing one is not an error.
+#[tauri::command]
+pub fn secret_delete(target: String) -> Result<(), String> {
+    let target = secret_target(&target)?;
+    match secret_entry(&target)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn agy_accounts_path() -> Result<PathBuf, String> {
     crate::home_folder().map(|home| home.join(crate::channel::home_folder_name()).join("antigravity-accounts.json"))
 }

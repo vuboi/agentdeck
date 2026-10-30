@@ -1,6 +1,7 @@
 import { cancelCredentialRotations, credentialBusy, credentialDelay, exclusiveCredential, waitForCredential, rotateCredential, type CredentialAttempt } from './credential-switch';
 import { inTauri } from '../app/platform/history';
 import { getPref, setPref } from '../app/platform/prefs';
+import { loadSecret, saveSecret } from '../app/platform/secrets';
 import { toast } from '../app/platform/toast';
 import { accountSwitched } from '../chat/runs/account-epoch.svelte';
 import { requestSystemNotificationPermission, sendSystemNotification } from '../app/platform/system-notifications';
@@ -892,6 +893,7 @@ export function saveProvider(provider: CustomProvider, automatic = false) {
 export function removeProvider(id: string) {
   cancelCredentialRotations(id);
   const removed = connectors.custom.find((item) => item.id === id);
+  for (const key of removed?.keys ?? []) forgetSecret(`provider-key:${key.id}`);
   // A Claude Console key removed from the list is no longer the credit key either (the Claude card shows it as not added).
   if (removed?.kind === 'anthropic' && connectors.claudeCredit.apiKey && removed.keys.some((entry) => entry.apiKey === connectors.claudeCredit.apiKey)) {
     connectors.claudeCredit = { ...connectors.claudeCredit, apiKey: '' };
@@ -903,10 +905,86 @@ export const newProviderId = () => `custom-${Date.now().toString(36)}`;
 
 // --- Saved settings ---------------------------------------------------------------------------------------
 
+// Keys saved to the system store this session, by name: one is written again only when it changed.
+const savedSecrets = new Map<string, string>();
+
+/** What the database keeps for a key: nothing when the system store holds it, the value itself when the store refused it. */
+async function keepSecret(name: string, value: string): Promise<string> {
+  if (!value) {
+    if (savedSecrets.delete(name)) await saveSecret(name, '');
+    return '';
+  }
+  if (savedSecrets.get(name) === value) return '';
+  if (await saveSecret(name, value)) {
+    savedSecrets.set(name, value);
+    return '';
+  }
+  return value;
+}
+
+/** A key's value: the database copy when it still has one (an older save, or the store was unavailable), else the system store. */
+async function restoreSecret(name: string, stored: string | undefined): Promise<string> {
+  if (stored) return stored;
+  const value = (await loadSecret(name)) ?? '';
+  if (value) savedSecrets.set(name, value);
+  return value;
+}
+
+/** Removes a key from the system store when its provider is removed. */
+function forgetSecret(name: string) {
+  savedSecrets.delete(name);
+  void saveSecret(name, '');
+}
+
+async function persistCustom(custom: CustomProvider[]) {
+  const stored = await Promise.all(
+    custom.map(async (provider) => ({
+      ...provider,
+      apiKey: undefined,
+      keys: await Promise.all(provider.keys.map(async (key) => ({ ...key, apiKey: await keepSecret(`provider-key:${key.id}`, key.apiKey) }))),
+    })),
+  );
+  void setPref('providers.custom', stored);
+}
+
+async function persistClaudeCredit(credit: ClaudeCredit) {
+  void setPref('providers.claudeCredit', {
+    ...credit,
+    apiKey: await keepSecret('claude-credit:apiKey', credit.apiKey),
+    sessionKey: await keepSecret('claude-credit:sessionKey', credit.sessionKey),
+  });
+}
+
+/** The providers and the Console credit with their keys, for an export that includes keys (the database copy has none). */
+export function providerKeysForExport() {
+  return { custom: $state.snapshot(connectors.custom) as CustomProvider[], claudeCredit: $state.snapshot(connectors.claudeCredit) as ClaudeCredit };
+}
+
 let hydrated = false;
-Promise.all([getPref<StoredCustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts'), getPref<typeof connectors.recovery>('connectors.recovery'), getPref<ClaudeCredit>('providers.claudeCredit')]).then(([custom, alerts, recovery, credit]) => {
-  if (custom) connectors.custom = custom.map(normalizeCustomProvider);
-  if (credit) connectors.claudeCredit = { ...connectors.claudeCredit, ...credit };
+Promise.all([getPref<StoredCustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts'), getPref<typeof connectors.recovery>('connectors.recovery'), getPref<ClaudeCredit>('providers.claudeCredit')]).then(async ([custom, alerts, recovery, credit]) => {
+  if (custom) {
+    connectors.custom = await Promise.all(
+      custom.map(async (provider) =>
+        normalizeCustomProvider({
+          ...provider,
+          keys: await Promise.all(
+            (provider.keys ?? []).map(async (key, index) => {
+              const id = key.id || `${provider.id}-key-${index + 1}`;
+              return { ...key, id, apiKey: await restoreSecret(`provider-key:${id}`, key.apiKey) };
+            }),
+          ),
+        }),
+      ),
+    );
+  }
+  if (credit) {
+    connectors.claudeCredit = {
+      ...connectors.claudeCredit,
+      ...credit,
+      apiKey: await restoreSecret('claude-credit:apiKey', credit.apiKey),
+      sessionKey: await restoreSecret('claude-credit:sessionKey', credit.sessionKey),
+    };
+  }
   if (recovery) connectors.recovery = { ...connectors.recovery, ...recovery };
   // Moving to another agent used to run by itself: it is off now until the user switches it on (model popover).
   if (!connectors.recovery.chosen) connectors.recovery = { ...connectors.recovery, enabled: false, chosen: true };
@@ -923,8 +1001,8 @@ Promise.all([getPref<StoredCustomProvider[]>('providers.custom'), getPref<typeof
 
 $effect.root(() => {
   $effect(() => {
-    const custom = $state.snapshot(connectors.custom);
-    if (hydrated) setPref('providers.custom', custom);
+    const custom = $state.snapshot(connectors.custom) as CustomProvider[];
+    if (hydrated) void persistCustom(custom);
   });
   $effect(() => {
     const alerts = { ...connectors.alerts };
@@ -935,7 +1013,7 @@ $effect.root(() => {
     if (hydrated) setPref('connectors.recovery', recovery);
   });
   $effect(() => {
-    const credit = $state.snapshot(connectors.claudeCredit);
-    if (hydrated) setPref('providers.claudeCredit', credit);
+    const credit = $state.snapshot(connectors.claudeCredit) as ClaudeCredit;
+    if (hydrated) void persistClaudeCredit(credit);
   });
 });

@@ -109,6 +109,13 @@ export function describeExport(file: ExportFile): string {
 export async function exportData(options: { withKeys: boolean; withHistory: boolean }): Promise<{ path: string; summary: string } | null> {
   const { dumpStores } = await import('./prefs');
   const stores = (await dumpStores([...SETTINGS_STORES, ...(options.withHistory ? HISTORY_STORES : [])])) as Record<string, [string, unknown][]>;
+  if (options.withKeys) {
+    // The keys are in the system credential store, not in the database: take the providers as they are in memory.
+    const { providerKeysForExport } = await import('../../agents/connectors.svelte');
+    const { custom, claudeCredit } = providerKeysForExport();
+    const others = (stores.providers ?? []).filter(([key]) => key !== 'providers.custom' && key !== 'providers.claudeCredit');
+    stores.providers = [...others, ['providers.custom', custom], ['providers.claudeCredit', claudeCredit]];
+  }
   const local: Record<string, string> = {};
   for (const key of LOCAL_KEYS) {
     const value = globalThis.localStorage?.getItem(key);
