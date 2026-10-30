@@ -272,7 +272,7 @@ test('a delegate_task tool event becomes a command block the card reads', () => 
 test('the delegation hint stays short, because it goes with the first turn of every chat', () => {
   // The bound only catches the hint growing into an essay; the exact count moves with every wording change.
   assert.ok(DELEGATE_HINT.length < 1500, `${DELEGATE_HINT.length} characters`);
-  for (const phrase of ['BIG or clearly separable', 'self-contained', 'wait:false', 'in parallel', 'yourself', "relay the user's message", 'final answer', '1-4 workers']) {
+  for (const phrase of ['nontrivial request', 'independent capabilities', 'self-contained', 'wait:false', 'overlapping write scopes', "relay the user's message", 'final answer', '1-4 workers', 'FREE TIER']) {
     assert.ok(DELEGATE_HINT.includes(phrase), `the hint lacks: ${phrase}`);
   }
   const lead = agentdeckLead('[AgentDeck] You run inside AgentDeck. Use the tools.', DELEGATE_HINT);
