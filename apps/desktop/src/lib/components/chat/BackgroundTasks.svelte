@@ -91,7 +91,7 @@
   </button>
   {#if pausable.length > 0}
     <button type="button" class="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.6875rem] text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/60" aria-label="Pause all running work" title="Pause all running workers" onclick={pauseAll}>
-      <svg class="size-2.5" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="3.5" height="11" rx="1" fill="currentColor" /><rect x="10" y="2.5" width="3.5" height="11" rx="1" fill="currentColor" /></svg>
+      <ZIcon zType={'lucideSquarePause' as ZIconName} zSize="12" class="size-3" />
       Pause all
     </button>
   {/if}
@@ -143,7 +143,7 @@
                   {#if item.canResume}
                     <ZIcon zSvg={lucidePlay} zSize="12" class="[&>svg]:fill-current" />
                   {:else}
-                    <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
+                    <ZIcon zType={'lucideSquarePause' as ZIconName} zSize="12" class="size-3" />
                   {/if}
                 </button>
               {/if}
