@@ -29,8 +29,10 @@ export type Message = {
   at?: string;
   /** Reply still being written by an agent. */
   live?: boolean;
-  /** Handed to its agent but no event has come back yet: shown as "Sending task to <agent>". Cleared by the first event. */
+  /** Handed to its agent but no event has come back yet. Cleared by the first event. */
   dispatching?: boolean;
+  /** The reply is a task another agent handed to this one (a worker chat): its wait reads "Sending task to <agent · model>". */
+  handedOff?: boolean;
   /** While the pictures are read ahead by `reader` (a model's name): shown as "Waiting to extract info from image by <reader>". */
   dispatchingImages?: { count: number; reader: string };
   startedAt?: number;

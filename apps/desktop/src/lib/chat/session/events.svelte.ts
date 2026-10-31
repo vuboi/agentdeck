@@ -39,6 +39,10 @@ export function cancelAutoSwitch(sessionId: string): void {
 /** A turn the user stopped can be continued from the composer without adding a visible user message. */
 export const manuallyStopped = $state<Record<string, boolean>>({});
 
+/** When the user last pressed Stop in a chat: a report the CLI sends right after that is a leftover of the stop, not news. */
+export const userStoppedAt: Record<string, number> = {};
+const STOP_REPORT_GRACE_MS = 30_000;
+
 /** Stops the active turn and exposes the composer's one-click continuation action. */
 export function stopTurnForResume(sessionId: string) {
   const task = Object.values(delegateTasks).find((item) => item.childId === sessionId && taskRuns.has(item.id) && ['queued', 'running'].includes(item.state));
@@ -513,7 +517,10 @@ function beginAutoTurn(sessionId: string, turn: string, messageId?: string) {
   if (!session || runReplies.has(turn)) return;
   const besideForeground = Boolean(liveReplies[sessionId]?.live);
   const list = messagesOf(sessionId);
-  const candidates = activity.filter((item) => item.sessionId === sessionId && item.background && item.sourceMessageId && (!item.endedAt || Date.now() - item.endedAt < 10_000));
+  // Work the user stopped is not reported on: its "stopped" row is not a finished job.
+  const candidates = activity.filter((item) => item.sessionId === sessionId && item.background && item.status !== 'stopped' && item.sourceMessageId && (!item.endedAt || Date.now() - item.endedAt < 10_000));
+  // Right after the user's Stop, a report with no live background work behind it is the stopped work's leftover.
+  if (candidates.length === 0 && Date.now() - (userStoppedAt[sessionId] ?? 0) < STOP_REPORT_GRACE_MS) return;
   const sources = new Set(candidates.map((item) => item.sourceMessageId));
   const source = messageId ?? (sources.size === 1 ? candidates[0]?.sourceMessageId : undefined);
   const runGroup = list.find((item) => item.id === source)?.runGroup ?? nextId();

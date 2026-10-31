@@ -21,7 +21,7 @@
   import { isWorkActive, type ChatWork } from '../../chat/runs/chat-work';
   import { returnTaskResult, pauseDelegateTask, resumeDelegateTask, stopDelegateTask } from '../../chat/session/delegate-task.svelte';
   import { stopTurnForResume, resumeStoppedTurn } from '../../chat/session/events.svelte';
-  import { stopChatWork, stopTurn } from '../../chat/session/turns.svelte';
+  import { stopTurn } from '../../chat/session/turns.svelte';
 
   /** Outside the virtual transcript: scrolling and loading old messages cannot unmount the work list.
    *  `title` names the list; `stateKey` keys its open state (the chat by default, so each card can have its own). */
@@ -64,14 +64,10 @@
   const ICON_BUTTON = 'grid size-4 shrink-0 cursor-pointer place-items-center text-muted-foreground outline-none transition-colors hover:text-primary disabled:cursor-default disabled:opacity-40 disabled:hover:text-muted-foreground';
   // Pause all: the workers that can pause and are still running (a paused one is not counted again).
   const pausable = $derived(active.filter((item) => item.canPause && item.state !== 'paused'));
-  // Stop ends what the row runs: a worker's task, a child chat's turn, or a provider-native task (its chat's background run).
+  // Stop ends what the row runs: a worker's task or a child chat's turn. A provider-native task has no Stop (see chat-work.ts).
   function stopItem(item: ChatWork) {
     if (item.delegateId) stopDelegateTask(item.delegateId);
     else if (item.childId) stopTurn(item.childId);
-    else {
-      stopTurn(item.sessionId);
-      stopChatWork(item.sessionId);
-    }
   }
   function pauseAll() {
     for (const item of pausable) {

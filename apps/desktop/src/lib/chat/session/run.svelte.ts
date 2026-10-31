@@ -367,6 +367,7 @@ export function startTurn(
           live: true,
           // Shown from here, before the CLI is started: the attachments and the command are still being read.
           dispatching: true,
+          ...(isWorkerChat(session.id) ? { handedOff: true } : {}),
           ...(pictureReader ? { dispatchingImages: { count: images.length, reader: modelLabel(pictureReader.model) || pictureReader.model } } : {}),
           startedAt: Date.now(),
           agent: session.agent,

@@ -6,18 +6,28 @@
   import { ticker } from '../../app/platform/clock.svelte';
   import { elapsed, liveState } from '../../chat/content/blocks';
   import { agentDisplayName } from '../../agents/provider-registry';
+  import { modelLabel } from '../../agents/models.svelte';
   import type { Message } from '../../chat/mock';
 
   // "Thinking 24s": what the agent is doing, and how long it has taken.
   let { message }: { message: Message } = $props();
 
-  // Before the first event the reply belongs to this message only: it names the agent its task went to.
+  // The agent and its model, as the cards and pickers name them: "Codex · GPT 5.6".
+  const who = $derived(
+    message.agent
+      ? [agentDisplayName(message.agent, message.model), modelLabel(message.model) || message.model].filter(Boolean).join(' · ')
+      : 'agent',
+  );
+
+  // Before the first event a task another agent handed over, or pictures read ahead, say who they went to. A message the
+  // user sent to the main agent shows its normal state ("Thinking") like any other turn.
+  const placeholder = $derived(message.dispatching && (message.handedOff || Boolean(message.dispatchingImages)));
   const live = $derived(
-    message.dispatching
+    placeholder
       ? {
           label: message.dispatchingImages
             ? `Waiting to extract info from ${message.dispatchingImages.count === 1 ? 'image' : 'images'} by ${message.dispatchingImages.reader}`
-            : `Sending task to ${message.agent ? agentDisplayName(message.agent, message.model) : 'agent'}`,
+            : `Sending task to ${who}`,
           spinner: LOADER.thinking,
         }
       : liveState(message.blocks),
@@ -42,7 +52,7 @@
   {#key live.spinner}
     <ActivityIndicator spinner={live.spinner} size={LOADER_SIZE} color="primary" />
   {/key}
-  {#if message.dispatching}
+  {#if placeholder}
     <ZShimmerText class="font-medium" zText={live.label} />
   {:else}
     <StatusRoller current={shown} />

@@ -45,6 +45,7 @@
         createVirtualizer,
         zFuzzyMatch,
         zHighlightPositions,
+        zTooltip,
     } from '@shival99/z-ui-svelte';
     import type { ZPopoverPosition } from '@shival99/z-ui-svelte';
     import { tick, untrack } from 'svelte';
@@ -566,6 +567,7 @@
                                                 />{/if}
                                             <span
                                                 class="min-w-0 shrink truncate"
+                                                {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}
                                                 >{#each marked(item.label) as part, at (at)}{#if part.match}<span
                                                             class="font-semibold text-primary"
                                                             >{part.text}</span

@@ -14,7 +14,7 @@ import { agentDisplayName } from '../../agents/provider-registry';
 import { isHandbackPrompt } from '../runs/handback';
 import { MODELS, advanceRun, nextId, persistLocal, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type Mention, type PageElement, type Permission, type SessionItem } from './state.svelte';
 import { liveReplies, messagesOf, needsUserInput, replies, runReplies, sendNextQueued, sessionLanes } from './run.svelte';
-import { cancelAutoSwitch, handleAgentEvent, recoveries } from './events.svelte';
+import { cancelAutoSwitch, handleAgentEvent, recoveries, userStoppedAt } from './events.svelte';
 import { delegateRuns } from './delegation.svelte';
 import { delegateTasks, isWorkerChat, stopDelegateTask, taskRuns } from './delegate-task.svelte';
 import { clipText } from './orchestration.svelte';
@@ -397,6 +397,7 @@ export function stopChatWork(sessionId: string) {
 
 export function stopTurn(sessionId: string, quiet = false) {
   cancelAutoSwitch(sessionId);
+  if (!quiet) userStoppedAt[sessionId] = Date.now();
   if (!quiet && (queued[sessionId]?.length ?? 0) > 0)
     queuePaused[sessionId] = 'interrupted';
   if (!quiet) {

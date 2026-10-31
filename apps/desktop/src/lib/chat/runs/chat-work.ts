@@ -52,8 +52,8 @@ export function projectChatWork(events: readonly Activity[], tasks: readonly Tas
       state: event.status === 'ok' ? 'done' : event.status === 'fail' ? 'failed' : event.status === 'stopped' ? 'stopped' : 'running',
       agent: event.agent, model: event.model, kind: event.nativeTaskId || /agent|task|spawn/i.test(event.name) ? 'agent' : 'command',
       sourceMessageId: event.sourceMessageId, sourceTitle: event.sourceTitle,
-      // A live native task (a background command, a sub agent) is stopped through its chat's run.
-      canStop: event.status === 'running' || event.status === 'background',
+      // A native task has no stop of its own here: stopping it would end the chat's whole reply. Only the chat's Stop does that.
+      canStop: false,
       startedAt: event.startedAt, endedAt: event.endedAt, detail: event.output ?? '',
     });
   }

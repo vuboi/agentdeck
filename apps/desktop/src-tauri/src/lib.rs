@@ -2483,12 +2483,12 @@ pub fn run() {
                 event: tauri::WindowEvent::CloseRequested { api, .. },
                 ..
             } if label == "main" => {
-                // Close keeps the app running: the window minimises to the taskbar, where it can be clicked back up.
-                // (A hidden window leaves the taskbar; the tray icon still restores it.)
+                // Close keeps the app running in the background, like the Claude app: the window hides, so it leaves the
+                // taskbar and only the tray icon remains. The tray icon (left click) or a second launch shows it again.
                 api.prevent_close();
-                flow_log::note("rust", "-", "window", "close requested: minimising to the taskbar");
+                flow_log::note("rust", "-", "window", "close requested: hiding to the tray");
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.minimize();
+                    let _ = window.hide();
                 }
             }
             // Focus changes show whether the window is on screen again after a close (a hidden window gets no focus).
