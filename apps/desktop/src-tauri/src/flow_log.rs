@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -33,6 +34,8 @@ const COALESCE: Duration = Duration::from_secs(2);
 const HEARTBEAT: Duration = Duration::from_secs(20);
 
 static WRITER: OnceLock<SyncSender<String>> = OnceLock::new();
+/// Whether the debug log is written (Settings > Debug). On until the page says otherwise.
+static ENABLED: AtomicBool = AtomicBool::new(true);
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 /// When the page last wrote, and its last line (cut): a page that stops writing has stopped answering.
 static PAGE_LAST: Mutex<Option<(Instant, String)>> = Mutex::new(None);
@@ -180,6 +183,9 @@ pub fn install(app: &AppHandle) {
 
 /// Notes one step. Never blocks: a full queue drops the note.
 pub fn note(src: &str, chat: &str, kind: &str, detail: &str) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     if let Some(writer) = WRITER.get() {
         let _ = writer.try_send(line(src, chat, kind, detail));
     }
@@ -372,10 +378,19 @@ pub fn flow_log_append(lines: Vec<String>) {
         }
     }
     if let Some(writer) = WRITER.get() {
+        if !ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
         for entry in lines {
             let _ = writer.try_send(entry);
         }
     }
+}
+
+/// Turns the debug log on or off (Settings > Debug). Off, nothing is written to `debug.log`; `errors.log` is not touched.
+#[tauri::command]
+pub fn debug_log_set_enabled(on: bool) {
+    ENABLED.store(on, Ordering::Relaxed);
 }
 
 fn read_tail(path: &PathBuf, keep: usize) -> String {

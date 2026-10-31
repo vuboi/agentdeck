@@ -44,6 +44,7 @@ pub fn tool_defs() -> Vec<Value> {
                     "agent": { "type": "string", "description": "claude, codex, antigravity, or the id of a local model provider as listed by list_agents" },
                     "continue": { "type": "string", "description": "a task_id (e.g. t-ab12cd) or worker chat id of a worker that already answered and is idle: its chat is reused and `task` is sent to it as a follow-up. agent and model may then be left out" },
                     "model": { "type": "string", "description": "a model of that agent as listed by list_agents (a part of its name is enough); left out: the agent's usual one" },
+                    "role": { "type": "string", "description": "the kind of work, as set in Settings > Tasks: read, research, plan, review, write, text or logic. AgentDeck then sends the work to the first agent set for that role, so agent and model can be left out" },
                     "task": { "type": "string", "description": "the self-contained task: goal, paths, constraints, what to report back" },
                     "wait": { "type": "boolean", "description": "true (default): wait for the report because the next step depends on it. false: run in the background and return a task_id now" },
                     "timeout_s": { "type": "number", "description": format!("seconds the worker may take before it is stopped (default {DEFAULT_TIMEOUT_S}, at most {MAX_TIMEOUT_S})") },
@@ -113,10 +114,12 @@ fn seconds_of(value: &Value) -> Option<f64> {
 
 pub fn parse_delegate(args: &Value) -> Result<DelegateArgs, String> {
     let continue_id = text_of(&args["continue"]);
+    // A role names its agent in Settings > Task roles, so it needs none here.
+    let role = text_of(&args["role"]);
     let agent = match text_of(&args["agent"]) {
         Some(agent) => agent,
-        None if continue_id.is_some() => String::new(),
-        None => return Err("agent is required (unless continue is given): claude, codex, antigravity or an id from list_agents".into()),
+        None if continue_id.is_some() || role.is_some() => String::new(),
+        None => return Err("agent is required (unless continue or role is given): claude, codex, antigravity or an id from list_agents".into()),
     };
     let task = text_of(&args["task"])
         .ok_or("task is required: say what the worker must do and report back")?;

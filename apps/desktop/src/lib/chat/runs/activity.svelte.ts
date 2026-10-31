@@ -270,6 +270,19 @@ function flushThinking(sessionId: string, turn?: string) {
   record({ key: `${sessionId}:thinking:${++calls}`, sessionId, title: thought.title, project: thought.project, name: 'Thinking', input: text.replace(/\s+/g, ' ').slice(0, 200), background: false, status: 'ok', startedAt: thought.at, endedAt: Date.now(), output: text });
 }
 
+/** A dev server the agent starts with browser_serve keeps running after its call: a background task, shown as a project run. */
+const SERVE_TOOL = /(?:^|[._/:-])browser_serve$/i;
+
+/** The command and folder of a browser_serve call, once its input is whole JSON (null while it still streams). */
+function serveArgs(input: string): { command: string; cwd: string } | null {
+  try {
+    const args = JSON.parse(input) as { command?: unknown; cwd?: unknown };
+    return typeof args.command === 'string' && typeof args.cwd === 'string' ? { command: args.command, cwd: args.cwd } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Keeps the log in step with one event of a chat's run. */
 export function trackActivity(sessionId: string, title: string, project: string, event: AgentEvent, turn?: string, context?: { agent: string; model?: string; messageId?: string; request?: string }) {
   if (event.kind === 'scoped') {
@@ -293,6 +306,8 @@ export function trackActivity(sessionId: string, title: string, project: string,
     const now = Date.now();
     record({ key: `${sessionId}:raw:${++calls}`, sessionId, title, project, name: `${event.source} · ${event.label}`, input: event.line.slice(0, 200), background: false, status: 'ok', startedAt: now, endedAt: now, output: event.line });
   } else if (event.kind === 'tool_call') {
+    const serving = SERVE_TOOL.test(event.name);
+    const serve = serving ? serveArgs(event.input) : null;
     const item: Activity = {
       key: `${sessionId}:${event.id}:${++calls}`,
       callId: event.id,
@@ -304,11 +319,12 @@ export function trackActivity(sessionId: string, title: string, project: string,
       sourceTitle: context?.request,
       title,
       project,
-      name: event.name,
-      input: event.input,
-      background: event.background,
-      launchedInBackground: event.background,
-      status: 'running',
+      // A served project lists as a Run project, so its log and Stop button are the same as the Preview's Run.
+      name: serve ? 'Run project' : event.name,
+      input: serve ? `${serve.command}\n${serve.cwd}` : event.input,
+      background: serving || event.background,
+      launchedInBackground: serving || event.background,
+      status: serving ? 'background' : 'running',
       startedAt: Date.now(),
     };
     activity.push(item);

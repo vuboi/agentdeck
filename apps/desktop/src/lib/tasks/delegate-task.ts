@@ -25,7 +25,7 @@ export const MIN_TIMEOUT_S = 10;
 export const MAX_TIMEOUT_S = 7200;
 export const TASK_MAX_CHARS = 30_000;
 
-export type DelegateArgs = { agent: string; model?: string; task: string; wait: boolean; timeoutS: number; continueId?: string };
+export type DelegateArgs = { agent: string; model?: string; task: string; wait: boolean; timeoutS: number; continueId?: string; role?: string };
 
 const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
 
@@ -33,8 +33,9 @@ const text = (value: unknown) => (typeof value === 'string' && value.trim() ? va
 export function parseDelegateArgs(raw: unknown): { ok: true; args: DelegateArgs } | { ok: false; error: string } {
   const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const continueId = text(input.continue);
-  const agent = text(input.agent) ?? (continueId ? '' : undefined);
-  if (agent === undefined) return { ok: false, error: 'agent is required (unless continue is given): claude, codex, antigravity or an id from list_agents' };
+  const role = text(input.role);
+  const agent = text(input.agent) ?? (continueId || role ? '' : undefined);
+  if (agent === undefined) return { ok: false, error: 'agent is required (unless continue or role is given): claude, codex, antigravity or an id from list_agents' };
   const task = text(input.task);
   if (!task) return { ok: false, error: 'task is required: say what the worker must do and report back' };
   if (task.length > TASK_MAX_CHARS) return { ok: false, error: `task is longer than ${TASK_MAX_CHARS} characters: give the goal and the paths, not whole files` };
@@ -50,7 +51,7 @@ export function parseDelegateArgs(raw: unknown): { ok: true; args: DelegateArgs 
     if (!Number.isFinite(seconds)) return { ok: false, error: 'timeout_s must be a number of seconds' };
     timeoutS = Math.min(MAX_TIMEOUT_S, Math.max(MIN_TIMEOUT_S, Math.round(seconds)));
   }
-  return { ok: true, args: { agent, model: text(input.model), task, wait, timeoutS, continueId } };
+  return { ok: true, args: { agent, model: text(input.model), task, wait, timeoutS, continueId, role } };
 }
 
 /** A task id as the tools hand it out: `t-` and a few letters and digits. */

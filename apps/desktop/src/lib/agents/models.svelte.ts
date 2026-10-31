@@ -195,12 +195,13 @@ void loadModels();
  */
 export function modelLabel(value: string | undefined | null): string {
   if (!value) return '';
+  // The same name the pickers show: `credit:` models carry the "· Credit" suffix.
+  const credit = creditModel(value);
+  if (credit) return `${modelLabel(credit)} · Credit`;
   const listed = Object.values(catalog)
     .flat()
     .find((item) => item.value === value);
   if (listed) return listed.label;
-  const credit = creditModel(value);
-  if (credit) return modelLabel(credit);
   const isNumber = (text: string) => /^\d+(\.\d+)*$/.test(text);
   const parts = value
     .replace(/\[.*\]$/, '')

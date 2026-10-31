@@ -104,6 +104,8 @@ export function sendMessage(text: string, images: Attachment[] = [], elements: P
       return;
     }
   }
+  // Ctrl/Cmd+Enter stops the answer that runs and sends this message right after it.
+  if (whileRunning === 'interrupt' && hasTurnWork(session.id)) stopForSend(session.id);
   // The same test the queue runs on (sendNextQueued): a message waits while the chat's turn is busy or a line is waiting.
   if (hasTurnWork(session.id) || queued[session.id]?.length) {
     const runGroup = continueCurrentRun(session.id);
@@ -173,7 +175,27 @@ export function steerQueued(sessionId: string, item: Queued) {
   const rest = (queued[sessionId] ?? []).filter((entry) => entry !== item);
   if (rest.length) queued[sessionId] = rest;
   else delete queued[sessionId];
+  // Send now stops the answer that runs, as Ctrl/Cmd+Enter does, and sends this message right after it.
+  if (hasTurnWork(sessionId)) stopForSend(sessionId);
+  delete queuePaused[sessionId];
   sendImmediate(sessionId, item);
+}
+
+/** Stops the answer that runs, for Ctrl/Cmd+Enter and Send now. A chat whose first run is stopped before it wrote anything
+ *  has no conversation to resume yet (Codex writes its rollout, Claude its session file, only once a run has started): its
+ *  next message starts a new one instead of resuming that id and failing. */
+function stopForSend(sessionId: string) {
+  const session = workspace.sessions.find((item) => item.id === sessionId);
+  const list = messagesOf(sessionId);
+  const replyId = replies[sessionId];
+  const wrote = (message: Message | undefined) => Boolean(message?.blocks.some((block) => block.kind !== 'loading'));
+  const earlierAnswer = list.some((item) => item.role === 'assistant' && item.id !== replyId && wrote(item));
+  if (session && !earlierAnswer && !wrote(list.find((item) => item.id === replyId))) {
+    session.agentStarted = false;
+    session.agentSession = undefined;
+  }
+  stopTurn(sessionId);
+  delete queuePaused[sessionId];
 }
 
 /** Messages waiting in a chat (sent while its reply runs, not yet started). */

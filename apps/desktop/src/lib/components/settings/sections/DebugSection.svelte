@@ -1,11 +1,19 @@
 <script lang="ts">
   import { fade } from 'svelte/transition';
-  import { ZButton, ZIcon, ZInput } from '@shival99/z-ui-svelte';
+  import { ZButton, ZIcon, ZInput, ZSwitch } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
-  import { debugLogFolder, saveDebugBundle } from '../../../tasks/flow-log';
+  import { debugLogFolder, debugLogOn, debugLogReady, saveDebugBundle, setDebugLog } from '../../../tasks/flow-log';
   import { toast } from '../../../app/platform/toast';
 
   const icon = (name: string) => name as ZIconName;
+
+  // On by default; the saved choice is read once the app starts.
+  let logOn = $state(debugLogOn());
+  void debugLogReady.then(() => (logOn = debugLogOn()));
+  function toggle(value: boolean) {
+    logOn = value;
+    setDebugLog(value);
+  }
 
   let saving = $state(false);
   let folder = $state('');
@@ -37,10 +45,13 @@
   <section class="flex items-start gap-3 rounded-xl border border-border bg-card/40 p-4">
     <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary"><ZIcon zType={icon('lucideBug')} class="size-4.5" /></span>
     <div class="min-w-0 flex-1">
-      <h3 class="text-sm font-semibold">Debug log is always on</h3>
+      <div class="flex items-center gap-3">
+        <h3 class="min-w-0 flex-1 text-sm font-semibold">Write the debug log</h3>
+        <ZSwitch zVariant="dot" zSize="sm" checked={logOn} onChange={(value) => toggle(value)} />
+      </div>
       <p class="mt-1 text-[0.75rem] text-muted-foreground">
         The page's memory and page size, every step that takes 50 ms or more, the batches of streamed events, and the step
-        it was on when it stopped answering are written to the log all the time. Nothing you type or the agent answers is
+        it was on when it stopped answering are written to the log while it is on. Nothing you type or the agent answers is
         written. Lines older than 2 days are removed.
       </p>
     </div>

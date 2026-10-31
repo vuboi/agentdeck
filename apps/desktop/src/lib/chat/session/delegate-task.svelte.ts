@@ -18,6 +18,8 @@ import { handbackPrompt, send } from './sending.svelte';
 import { lastEventAt, lastEventKind, manuallyStopped } from './events.svelte';
 import { activity } from '../runs/activity.svelte';
 import { continuePrompt } from '../recovery/turn-failure';
+import { canonicalRole, routesOf } from '../../agents/task-roles';
+import { taskRoles } from '../../agents/task-roles.svelte';
 
 // ---------- delegate_task: an agent hands a task to another agent during its own turn ----------
 // Claude, Codex, Antigravity and local models can call the app's `delegate_task` tool (src-tauri/src/delegate.rs). The Rust
@@ -211,6 +213,17 @@ export function bindTasks(callerId: string) {
 }
 
 /** Starts the worker of a `delegate_task` call. `reply` answers the call; a task in the background answers at once. */
+/** The first agent of a role's routes (Settings > Task roles) that is available now, with its model. */
+function firstRouted(role: string, rows: AgentRow[]): { agent: string; model: string } | undefined {
+  const id = canonicalRole(role);
+  if (!id) return undefined;
+  for (const route of routesOf(taskRoles, id)) {
+    const [agent, ...rest] = route.split('|');
+    if (findAgent(rows, agent)) return { agent, model: rest.join('|').replace(/^credit:/, '') };
+  }
+  return undefined;
+}
+
 function startTask(
   call: DelegateCall,
   answer: (text: string, isError?: boolean) => void,
@@ -219,11 +232,12 @@ function startTask(
   if (!parsed.ok) return answer(parsed.error, true);
   const {
     agent: wanted,
-    model: wantedModel,
+    model: requestedModel,
     task,
     wait,
     timeoutS,
     continueId,
+    role,
   } = parsed.args;
   const caller = callerOf(call.caller);
   const reply = answer;
@@ -262,8 +276,11 @@ function startTask(
     reuse = { session, record: records.sort((a, b) => a.startedAt - b.startedAt).at(-1) };
   }
   const rows = agentRows();
+  // A role with agents set in Task roles: the first of them that is available is used, whatever agent the caller named.
+  const routed = role ? firstRouted(role, rows) : undefined;
+  const wantedModel = routed ? routed.model : requestedModel;
   const oldRowId = reuse?.record?.agentId ?? reuse?.session.agent;
-  const row = findAgent(rows, wanted || oldRowId || '');
+  const row = findAgent(rows, routed?.agent ?? (wanted || oldRowId || ''));
   if (!row) return reply(`No agent "${wanted || oldRowId}" is available. ${formatAgents(rows)}`, true);
   const inheritedModel = row.id === caller.agent && row.models.some((item) => item.value === caller.model) ? caller.model : undefined;
   const sameProvider = Boolean(reuse && row.id === oldRowId);

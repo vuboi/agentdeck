@@ -280,25 +280,36 @@
     }
   }
 
-  async function colour(container: HTMLElement, dark: boolean) {
-    reveal(container);
+  // The newest full colouring of this reply. An older one still waiting on shiki (a theme switch, a re-render) must not
+  // write its colours after the newer one: its late answer would put the old theme's colours back on a block that is
+  // marked for the new theme, and nothing would correct it until the text changed (no error, the colours just stay wrong).
+  let colourRun = 0;
+
+  async function colour(container: HTMLElement, dark: boolean, staleOnly = false) {
+    if (!staleOnly) reveal(container);
     // A block coloured for the other theme (the theme changed, or the app was still settling) is coloured again.
-    const blocks = [...container.querySelectorAll<HTMLElement>(`.md-code:not([data-coloured="${dark ? 'dark' : 'light'}"])`)];
+    // `staleOnly` leaves the blocks never coloured yet alone (a streaming reply's new code waits for its end).
+    const run = staleOnly ? colourRun : ++colourRun;
+    const mine = dark ? 'dark' : 'light';
+    const selector = staleOnly ? `.md-code[data-coloured]:not([data-coloured="${mine}"])` : `.md-code:not([data-coloured="${mine}"])`;
+    const blocks = [...container.querySelectorAll<HTMLElement>(selector)];
     if (blocks.length === 0) return;
     colourStarted();
     try {
-      await colourBlocks(container, dark, blocks);
+      await colourBlocks(container, dark, blocks, run);
     } finally {
       colourFinished();
     }
   }
 
-  async function colourBlocks(container: HTMLElement, dark: boolean, blocks: HTMLElement[]) {
+  async function colourBlocks(container: HTMLElement, dark: boolean, blocks: HTMLElement[], run: number) {
+    const mine = dark ? 'dark' : 'light';
     for (const block of blocks) {
+      if (run !== colourRun) return;
       const code = block.querySelector('code');
       const pre = block.querySelector('pre');
       if (!code || !pre) continue;
-      block.dataset.coloured = dark ? 'dark' : 'light';
+      block.dataset.coloured = mine;
       const source = code.textContent ?? '';
       if (source.length > COLOUR_MAX_CHARS) continue;
       const language = block.dataset.lang || 'text';
@@ -314,7 +325,7 @@
         if (inner === null) continue;
         coloured.set(key, inner);
         if (coloured.size > COLOURED_MAX) coloured.delete(coloured.keys().next().value as string);
-        if (container.contains(block)) code.innerHTML = inner;
+        if (run === colourRun && container.contains(block)) code.innerHTML = inner;
       } catch {
         // An unknown language stays plain.
       }
@@ -324,8 +335,14 @@
   $effect(() => {
     void html;
     const dark = theme.dark;
-    if (streaming || catching || !root) return;
+    if (!root) return;
     const container = root;
+    // A reply still streaming (or revealing) gets its colours at the end. Code already coloured for the other theme is
+    // redone now, so a theme switch during a run does not leave the old theme's token colours on the new background.
+    if (streaming || catching) {
+      untrack(() => void colour(container, dark, true));
+      return;
+    }
     // Right away, not when the page is idle: a chat is kept hidden until it sits at its end, and colouring in that
     // window means code never shows plain first and then changes colour in front of the reader (a visible blink).
     // Colours already worked out come from the cache synchronously; shiki itself is loaded ahead (see above).

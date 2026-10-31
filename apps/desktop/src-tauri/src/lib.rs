@@ -2350,6 +2350,7 @@ pub fn run() {
             error_log::error_log_clear,
             flow_log::flow_log_append,
             flow_log::flow_log_read,
+            flow_log::debug_log_set_enabled,
             flow_log::debug_bundle_save,
             flow_log::debug_log_path,
             connectors::local_scan,
@@ -2410,6 +2411,8 @@ pub fn run() {
             awake::keep_awake_set,
             agent_runs::custom_send,
             agent_runs::prehandle_attachments,
+            agent_runs::prehandle_opencode,
+            agent_runs::prehandle_antigravity,
             agent_runs::agent_stop,
             agent_runs::agent_stop_all,
             agent_runs::agent_inject,
@@ -2480,10 +2483,12 @@ pub fn run() {
                 event: tauri::WindowEvent::CloseRequested { api, .. },
                 ..
             } if label == "main" => {
+                // Close keeps the app running: the window minimises to the taskbar, where it can be clicked back up.
+                // (A hidden window leaves the taskbar; the tray icon still restores it.)
                 api.prevent_close();
-                flow_log::note("rust", "-", "window", "close requested: hiding to the tray");
+                flow_log::note("rust", "-", "window", "close requested: minimising to the taskbar");
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
+                    let _ = window.minimize();
                 }
             }
             // Focus changes show whether the window is on screen again after a close (a hidden window gets no focus).

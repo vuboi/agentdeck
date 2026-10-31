@@ -112,6 +112,18 @@ export async function prehandleAttachments(args: {
   return invoke<string>('prehandle_attachments', args);
 }
 
+/** The same memo read by a free OpenCode model through the OpenCode CLI (its pictures go in as files). */
+export async function prehandleOpencode(args: { model: string; prompt: string; images: string[]; files: string[] }): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('prehandle_opencode', args);
+}
+
+/** The same memo read by an Antigravity model through its CLI, with the full options the user allowed for it. */
+export async function prehandleAntigravity(args: { model: string; prompt: string; images: string[]; files: string[] }): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('prehandle_antigravity', args);
+}
+
 /** Saves an image (base64, no prefix) where the agent CLI can open it, and returns its path. */
 export async function saveAttachment(mime: string, data: string): Promise<string> {
   const { invoke } = await import('@tauri-apps/api/core');

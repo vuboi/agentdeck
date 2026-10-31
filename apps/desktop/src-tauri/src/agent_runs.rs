@@ -410,6 +410,28 @@ pub(crate) async fn prehandle_attachments(
     .await
 }
 
+/// Reads a turn's attachments with a free OpenCode model through the OpenCode CLI (see `custom_chat::prehandle_opencode`).
+#[tauri::command]
+pub(crate) async fn prehandle_opencode(
+    model: String,
+    prompt: String,
+    images: Vec<String>,
+    files: Vec<String>,
+) -> Result<String, String> {
+    custom_chat::prehandle_opencode(model, prompt, images, files).await
+}
+
+/// Reads a turn's attachments with Antigravity's CLI (see `custom_chat::prehandle_antigravity`).
+#[tauri::command]
+pub(crate) async fn prehandle_antigravity(
+    model: String,
+    prompt: String,
+    images: Vec<String>,
+    files: Vec<String>,
+) -> Result<String, String> {
+    custom_chat::prehandle_antigravity(model, prompt, images, files).await
+}
+
 /// Hands a message to a running turn only when its provider guarantees a distinct reply for that message. Merged steer
 /// and native queue events stay under AgentDeck's message queue because this command has no independent reply identity.
 #[tauri::command]

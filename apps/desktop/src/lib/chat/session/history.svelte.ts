@@ -2,6 +2,7 @@ import { messages as mockMessages, type Message, type Block } from '../mock';
 import { loadHistory, inTauri, type HistorySession, listHistory, type HistoryMessage, clock, toBlocks, loadHistoryPage, renameHistory, deleteHistory } from '../../app/platform/history';
 import { restoreCommandImages, stripCommandImageData, deleteCommandImages } from '../content/command-images';
 import { samePath } from '../../files/paths';
+import { CREDIT_PREFIX, baseModel } from '../../agents/credit-model';
 import { getPref, setPref, setPrefs } from '../../app/platform/prefs';
 import { splitAttachments, attachmentBlocks } from '../content/attachments';
 import { isHandbackPrompt, stripLead } from '../runs/handback';
@@ -164,14 +165,15 @@ function applyHistory(all: HistorySession[]) {
     // A saved chat continued with another agent: which agents it has had, and their own conversation ids.
     ...(mixed[item.id] ?? {}),
     id: item.id,
-    projectId: current.get(item.id)?.path
-      ? projectIds.get(item.cwd) ?? NO_PROJECT
-      : current.get(item.id)?.projectId ?? projectIds.get(item.cwd) ?? NO_PROJECT,
+    // A chat already listed keeps the project it was placed in: its cwd is only the place for a chat seen first here.
+    projectId: current.get(item.id)?.projectId ?? projectIds.get(item.cwd) ?? NO_PROJECT,
     workingDirectory: item.cwd || undefined,
     title: item.title,
     agent: mixed[item.id]?.agents?.at(-1) ?? item.source,
-    // Sonnet unless the chat was changed: the first model of the list is the biggest one.
+    // A chat already listed keeps the model the user picked (Claude transcripts record none, so a re-import used to reset it).
+    // Sonnet otherwise, unless the chat was changed: the first model of the list is the biggest one.
     model:
+      current.get(item.id)?.model ??
       item.model ??
       (item.source === 'claude'
         ? 'claude-sonnet-5-5'
@@ -227,6 +229,13 @@ function applyHistory(all: HistorySession[]) {
     return Object.assign(existing, item, { status: existing.status });
   });
 
+  // A local chat keeps its project while the project still exists, even when no imported chat is in its folder yet (a chat
+  // that has not written its history file, or a project that holds only local chats). Otherwise it fell to This computer.
+  for (const item of local) {
+    if (item.projectId === NO_PROJECT || projects.some((project) => project.id === item.projectId)) continue;
+    const kept = workspace.projects.find((project) => project.id === item.projectId);
+    if (kept) projects.push(kept);
+  }
   // Local chats saved under the old cwd-based projects survive reclassification too.
   for (const item of local) {
     if (projects.some((project) => project.id === item.projectId)) continue;
@@ -427,7 +436,11 @@ async function toMessages(
               cacheRead: message.usage.cache_read,
               cacheWrite: message.usage.cache_write,
             },
-            model: message.model,
+            // The transcript records the plain id: a chat run on the Console credit shows the `credit:` name it was picked by.
+            model:
+              session.model?.startsWith(CREDIT_PREFIX) && baseModel(session.model) === message.model
+                ? session.model
+                : message.model,
           }
         : {}),
     })),

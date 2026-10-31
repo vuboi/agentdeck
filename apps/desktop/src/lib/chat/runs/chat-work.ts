@@ -13,6 +13,8 @@ export type ChatWork = {
   kind: 'agent' | 'command';
   sourceMessageId?: string;
   sourceTitle?: string;
+  /** The tool call a provider-native task belongs to: the chat's transcript card finds its row by it. */
+  callId?: string;
   childId?: string;
   delegateId?: string;
   canStop?: boolean;
@@ -45,7 +47,7 @@ export function projectChatWork(events: readonly Activity[], tasks: readonly Tas
   for (const event of events) {
     if ((!event.background && event.name !== 'Run project') || /delegate_task/i.test(event.name)) continue;
     work.push({
-      id: `native:${event.key}`, sessionId: event.sessionId,
+      id: `native:${event.key}`, sessionId: event.sessionId, callId: event.callId,
       title: event.taskLabel || workTitle(event.input) || event.name,
       state: event.status === 'ok' ? 'done' : event.status === 'fail' ? 'failed' : event.status === 'stopped' ? 'stopped' : 'running',
       agent: event.agent, model: event.model, kind: event.nativeTaskId || /agent|task|spawn/i.test(event.name) ? 'agent' : 'command',

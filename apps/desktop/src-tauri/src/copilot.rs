@@ -12,6 +12,7 @@ use std::time::Duration;
 use github_copilot_sdk::handler::{PermissionHandler, PermissionResult};
 use github_copilot_sdk::types::{
     Attachment, DeliveryMode, MessageOptions, PermissionRequestData, ResumeSessionConfig, SessionConfig,
+    SystemMessageConfig,
 };
 use github_copilot_sdk::subscription::RecvErrorKind;
 use github_copilot_sdk::{CliProgram, Client, ClientOptions};
@@ -188,7 +189,8 @@ async fn run_session(
             .with_streaming(true)
             .with_permission_handler(permissions)
             .with_enable_session_store(true)
-            .with_enable_skills(true);
+            .with_enable_skills(true)
+            .with_system_message(app_system_message());
         if let Some(model) = request.model.as_deref() {
             config = config.with_model(model);
         }
@@ -212,7 +214,8 @@ async fn run_session(
             .with_streaming(true)
             .with_enable_session_store(true)
             .with_enable_skills(true)
-            .with_permission_handler(permissions);
+            .with_permission_handler(permissions)
+            .with_system_message(app_system_message());
         if let Some(model) = request.model.as_deref() {
             config = config.with_model(model);
         }
@@ -637,6 +640,14 @@ async fn start_client(token: String, cwd: Option<&Path>) -> Result<Client, Strin
 }
 
 /// Converts AgentDeck's shared MCP configuration into the Copilot SDK's configuration format.
+/// The app's instructions (Preview, dev servers, code index), appended to Copilot's system message as Claude and Codex get them.
+fn app_system_message() -> SystemMessageConfig {
+    let mut message = SystemMessageConfig::default();
+    message.mode = Some("append".to_string());
+    message.content = Some(ag_adapters::agent::codex::APP_CONTEXT.to_string());
+    message
+}
+
 fn mcp_servers(
     cwd: Option<&Path>,
     chat: &str,

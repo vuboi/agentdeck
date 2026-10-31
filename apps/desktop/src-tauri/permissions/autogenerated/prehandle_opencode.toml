@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prehandle-opencode"
+description = "Enables the prehandle_opencode command without any pre-configured scope."
+commands.allow = ["prehandle_opencode"]
+
+[[permission]]
+identifier = "deny-prehandle-opencode"
+description = "Denies the prehandle_opencode command without any pre-configured scope."
+commands.deny = ["prehandle_opencode"]

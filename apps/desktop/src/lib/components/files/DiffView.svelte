@@ -107,12 +107,19 @@
       {@const line = version >= 0 && row.kind !== 'hunk' ? tokens.get(first + index) : undefined}
       <div class="flex h-5 w-full min-w-max whitespace-pre {tone[row.kind]}">
         {#if row.kind === 'hunk'}
-          <span class="sticky left-0 z-20 w-max bg-background px-3">{row.text}</span>
+          <!-- Same tint as the row, over an opaque base: the sticky part is only as wide as its text, so the row's own tint must match it. -->
+          <span class="sticky left-0 z-20 w-max bg-background px-3"><span class="pointer-events-none absolute inset-0 bg-primary/10"></span><span class="relative">{row.text}</span></span>
         {:else}
-          <span class="sticky left-0 z-20 flex h-5 w-[100px] flex-none bg-background {row.kind === 'add' ? 'bg-emerald-500/20!' : row.kind === 'del' ? 'bg-red-500/20!' : ''} select-none">
-            <span class="w-10 shrink-0 pr-2 text-right text-muted-foreground/60">{row.old ?? ''}</span>
-            <span class="w-10 shrink-0 pr-2 text-right text-muted-foreground/60">{row.now ?? ''}</span>
-            <span class="w-5 shrink-0 text-center font-bold {gutter[row.kind]}">{sign[row.kind]}</span>
+          <!-- The tint is a layer over an opaque background: a translucent background let the scrolled text show through. -->
+          <span class="sticky left-0 z-20 flex h-5 w-[100px] flex-none bg-background select-none">
+            {#if row.kind === 'add' || row.kind === 'del'}
+              <span class="pointer-events-none absolute inset-0 {row.kind === 'add' ? 'bg-emerald-500/20' : 'bg-red-500/20'}"></span>
+            {/if}
+            <span class="relative flex h-5 w-full">
+              <span class="w-10 shrink-0 pr-2 text-right text-muted-foreground/60">{row.old ?? ''}</span>
+              <span class="w-10 shrink-0 pr-2 text-right text-muted-foreground/60">{row.now ?? ''}</span>
+              <span class="w-5 shrink-0 text-center font-bold {gutter[row.kind]}">{sign[row.kind]}</span>
+            </span>
           </span>
           <span class="relative z-0 pr-6">
             {#if line && line.length > 0}

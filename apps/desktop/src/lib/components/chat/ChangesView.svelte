@@ -3,25 +3,26 @@
   const lastRead = new Map<string, { path: string; abs: string; status: string; staged: boolean; added: number; removed: number }[]>();
   /** The project whose changes were shown last: used while the open chat has none. */
   let lastRoot = '';
+  /** The row whose file is open, per project: kept while the panel is unmounted, so it stays lit when it comes back. */
+  const lastOpened = new Map<string, string>();
 </script>
 
 <script lang="ts">
   import { untrack } from 'svelte';
+  import { fade } from 'svelte/transition';
   import { ZButton, ZIcon, createVirtualizer, zModalService } from '@shival99/z-ui-svelte';
+  import type { ZDropdownMenuItem, ZIconName } from '@shival99/z-ui-svelte';
   import LoadingBar from '../ui/LoadingBar.svelte';
-  import type { ZIconName } from '@shival99/z-ui-svelte';
+  import Menu from '../ui/Menu.svelte';
   import { activeSession, workspace } from '../../chat/sessions.svelte';
   import { fileWrites } from '../../chat/runs/activity.svelte';
   import { inTauri } from '../../app/platform/history';
   import { toast } from '../../app/platform/toast';
+  import { closeOnScroll } from '../../app/ui/close-on-scroll';
   import { openInViewer } from '../../files/file-viewer.svelte';
   import { imageMimeOf, readProjectFile } from '../../files/files';
   import { fileKey, invalidateDiffCache, preloadDiff, rememberText } from '../../files/file-cache';
   import PickerPopover, { compact, type PickerItem } from '../ui/PickerPopover.svelte';
-
-  // Narrow: the labels of the header's buttons go, their icons stay (with a tooltip).
-  let headWidth = $state(0);
-  const narrow = $derived(headWidth > 0 && headWidth < 300);
 
   // Everything the agent left changed in the project, read from git (so it holds for every agent): files with
   // their +/- counts, a click opens the file in a tab. Revert puts a file back to the last commit; an untracked file is
@@ -117,11 +118,18 @@
       .catch(() => {});
   }
 
+  // The row whose file is open in the viewer, or whose menu is open, stays lit like a selected row.
+  let openedKey = $state(untrack(() => lastOpened.get(root) ?? ''));
+  $effect(() => {
+    openedKey = lastOpened.get(root) ?? '';
+  });
   function openChange(change: Change) {
     if (change.status === 'D') {
       toast.info('That file is deleted');
       return;
     }
+    openedKey = rowKey(change);
+    lastOpened.set(root, openedKey);
     openInViewer(change.abs, topOf(change), 'changes');
   }
 
@@ -139,7 +147,12 @@
     }
   }
 
-  const revert = (path: string) => act(() => call('change_revert', { root, path }), 'Reverted');
+  // Files are staged or reverted one by one (git works per path).
+  async function revertRows(list: Change[]) {
+    await act(async () => {
+      for (const change of list) await call('change_revert', { root, path: change.path });
+    }, 'Reverted');
+  }
   // Many files take a moment: the button shows a loader until git is done.
   let reverting = $state(false);
   const revertAll = async () => {
@@ -150,19 +163,59 @@
       reverting = false;
     }
   };
-  const stage = (path: string, on: boolean) => act(() => call('change_stage', { root, path, stage: on }), on ? 'Staged' : 'Unstaged');
+  async function stageRows(list: Change[], on: boolean) {
+    await act(async () => {
+      for (const change of list) await call('change_stage', { root, path: change.path, stage: on });
+    }, on ? 'Staged' : 'Unstaged');
+  }
 
-  function ask(target: { all: boolean; path: string }) {
+  function ask(target: { all: boolean; list: Change[] }) {
+    const count = target.all ? changes.length : target.list.length;
     zModalService.danger({
-      zTitle: target.all ? `Revert all ${changes.length} files?` : `Revert ${nameOf(target.path)}?`,
+      zTitle: target.all ? `Revert all ${count} files?` : count === 1 ? `Revert ${nameOf(target.list[0].path)}?` : `Revert ${count} files?`,
       zContent: `${target.all ? 'Every changed file goes back to the last commit; new files are deleted.' : 'The file goes back to the last commit; a new file is deleted.'} This cannot be undone.`,
       zConfirmStyle: 'dialog',
       zOkText: 'Revert',
       zOkIcon: 'lucideUndo2',
       zCancelText: 'Cancel',
       zWidth: '400px',
-      onOk: () => void (target.all ? revertAll() : revert(target.path)),
+      onOk: () => void (target.all ? revertAll() : revertRows(target.list)),
     });
+  }
+
+  // The list is two groups: Tracked (not staged) above Staged. Each group has a header, then its files; the virtual
+  // rows index into this one run of rows.
+  const rowKey = (change: Change) => `${change.staged ? 'staged' : 'tracked'}:${change.path}`;
+  const tracked = $derived(changes.filter((change) => !change.staged));
+  const staged = $derived(changes.filter((change) => change.staged));
+  type ListRow = { key: string; change?: Change; group?: 'tracked' | 'staged'; count?: number };
+  const listRows = $derived<ListRow[]>([
+    ...(tracked.length ? [{ key: 'group:tracked', group: 'tracked' as const, count: tracked.length }] : []),
+    ...tracked.map((change) => ({ key: rowKey(change), change })),
+    ...(staged.length ? [{ key: 'group:staged', group: 'staged' as const, count: staged.length }] : []),
+    ...staged.map((change) => ({ key: rowKey(change), change })),
+  ]);
+  // The header buttons stage what is not staged yet, or unstage everything once all of it is staged.
+  const stageAllLabel = $derived(tracked.length ? 'Stage all' : 'Unstage all');
+
+  // Right-click menu of a row. While it is open its row keeps its buttons showing, as a hovered row does.
+  let menu = $state<{ x: number; y: number; change: Change } | null>(null);
+  let menuOpen = $state(false);
+  $effect(() => closeOnScroll(() => menuOpen, () => (menuOpen = false)));
+  function openMenu(event: MouseEvent, change: Change) {
+    event.preventDefault();
+    menu = { x: event.clientX, y: event.clientY, change };
+    menuOpen = true;
+  }
+  const menuKey = $derived(menuOpen && menu ? rowKey(menu.change) : '');
+  const lit = (change: Change) => menuKey === rowKey(change) || openedKey === rowKey(change);
+  function menuItems(change: Change): ZDropdownMenuItem[] {
+    return [
+      { label: 'Open', icon: 'lucideFile', iconSize: '12', class: 'text-sm! py-1', onClick: () => openChange(change) } as ZDropdownMenuItem,
+      { label: change.staged ? 'Unstage' : 'Stage', icon: change.staged ? 'lucideMinus' : 'lucidePlus', iconSize: '12', class: 'text-sm! py-1', onClick: () => void stageRows([change], !change.staged) } as ZDropdownMenuItem,
+      { label: 'Revert', icon: 'lucideUndo2', iconSize: '12', class: 'text-sm! py-1', divide: 'after', onClick: () => ask({ all: false, list: [change] }) } as ZDropdownMenuItem,
+      { label: 'Copy path', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', onClick: () => void navigator.clipboard.writeText(change.abs) } as ZDropdownMenuItem,
+    ];
   }
 
   // The project changed, a file was written, or a turn ended (status back to idle): read git again.
@@ -190,24 +243,26 @@
     added: changes.reduce((sum, item) => sum + item.added, 0),
     removed: changes.reduce((sum, item) => sum + item.removed, 0),
   });
-  const ROW = 28;
-  // git can list one path twice (staged and unstaged edits), so the position is part of the key.
-  const changeKey = (index: number) => `${changes[index]?.path ?? 'row'}:${index}`;
+  // A file row is ROW high; a group header is HEADER high. git can list one path twice (staged and unstaged edits),
+  // so the group is part of the key.
+  const ROW = 30;
+  const HEADER = 24;
+  const rowSize = (index: number) => (listRows[index]?.group ? HEADER : ROW);
+  const changeKey = (index: number) => listRows[index]?.key ?? `row:${index}`;
   // TanStack Virtual (through z-ui), as the chat uses: only the rows in view are mounted.
   let scroller = $state<HTMLDivElement>();
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
     getScrollElement: () => scroller ?? null,
-    estimateSize: () => ROW,
+    estimateSize: rowSize,
     getItemKey: (index) => changeKey(index),
     overscan: 10,
   });
   $effect(() => {
-    const count = changes.length;
-    untrack(() => $virtualizer.setOptions({ count, getScrollElement: () => scroller ?? null, estimateSize: () => ROW, getItemKey: (index) => changeKey(index), overscan: 10 }));
+    const count = listRows.length;
+    untrack(() => $virtualizer.setOptions({ count, getScrollElement: () => scroller ?? null, estimateSize: rowSize, getItemKey: (index) => changeKey(index), overscan: 10 }));
   });
   const changeRows = $derived($virtualizer.getVirtualItems());
-  const allStaged = $derived(changes.length > 0 && changes.every((item) => item?.staged));
   const STATUS: Record<string, { label: string; tone: string }> = {
     M: { label: 'Modified', tone: 'text-amber-500' },
     A: { label: 'Added', tone: 'text-emerald-500' },
@@ -218,7 +273,7 @@
   const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 </script>
 
-<div class="flex h-full min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Changes">
+<div class="flex h-full min-h-0 min-w-64 flex-1 flex-col" role="tabpanel" aria-label="Changes">
   {#if root && changes.length > 0}
     <!-- Find a changed file by name: the same bar as the file tree's, over the changed files only. -->
     <div bind:this={findAnchor} class="flex h-9 shrink-0 items-center border-b border-border p-1.5 text-sm">
@@ -242,47 +297,54 @@
         <p class="m-0">No changes since the last commit.</p>
       </div>
     {:else}
-      <div class="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-1.5 text-sm" bind:clientWidth={headWidth}>
-        <span class="font-medium tabular-nums" title="{changes.length} {changes.length === 1 ? 'file' : 'files'}">{compact(changes.length)}{narrow ? '' : changes.length === 1 ? ' file' : ' files'}</span>
-        <span class="text-emerald-500 tabular-nums" title="{totals.added} lines added">+{compact(totals.added)}</span>
-        <span class="text-red-500 tabular-nums" title="{totals.removed} lines removed">−{compact(totals.removed)}</span>
+      <div class="flex h-9 min-w-0 shrink-0 items-center gap-1.5 overflow-hidden border-b border-border px-2 text-sm">
+        <span class="shrink-0 font-medium tabular-nums" title="{changes.length} {changes.length === 1 ? 'file' : 'files'}">{compact(changes.length)} {changes.length === 1 ? 'file' : 'files'}</span>
+        <span class="shrink-0 text-emerald-500 tabular-nums" title="{totals.added} lines added">+{compact(totals.added)}</span>
+        <span class="shrink-0 text-red-500 tabular-nums" title="{totals.removed} lines removed">−{compact(totals.removed)}</span>
         <span class="flex-1"></span>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 {narrow ? 'size-6! p-0' : 'px-2'} text-sm" disabled={busy} aria-label={allStaged ? 'Unstage all' : 'Stage all'} title={allStaged ? 'Unstage all' : 'Stage all'} onclick={() => void stage('', !allStaged)}>
-          {#if narrow}<ZIcon zType={icon(allStaged ? 'lucideMinus' : 'lucidePlus')} class="size-3.5" />{:else}{allStaged ? 'Unstage all' : 'Stage all'}{/if}
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! shrink-0 p-0" disabled={busy} aria-label={stageAllLabel} title={stageAllLabel} onclick={() => void (tracked.length ? stageRows(tracked, true) : stageRows(staged, false))}>
+          <ZIcon zType={icon(tracked.length ? 'lucidePlus' : 'lucideMinus')} class="size-3.5" />
         </ZButton>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="h-6 gap-1 {narrow ? 'size-6! p-0' : 'px-2'} text-sm hover:!bg-destructive/10 hover:!text-destructive" disabled={busy} aria-label="Revert all" title="Revert all" onclick={() => (ask({ all: true, path: '' }))}>
-          <ZIcon zType={icon(reverting ? 'lucideLoaderCircle' : 'lucideUndo2')} class="size-3.5 {reverting ? 'animate-spin' : ''}" />{#if !narrow} {reverting ? 'Reverting…' : 'Revert all'}{/if}
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! shrink-0 p-0 hover:!text-destructive" disabled={busy} aria-label="Revert all" title="Revert all" onclick={() => ask({ all: true, list: [] })}>
+          <ZIcon zType={icon(reverting ? 'lucideLoaderCircle' : 'lucideUndo2')} class="size-3.5 {reverting ? 'animate-spin' : ''}" />
         </ZButton>
       </div>
 
-      <!-- Virtual list: every row has the same height, so only the rows in view (plus a margin) are rendered. -->
-      <div bind:this={scroller} class="min-h-0 flex-1 overflow-auto p-1.5">
+      <!-- Virtual list: each row has its own height, so only the rows in view (plus a margin) are rendered. -->
+      <div bind:this={scroller} class="min-h-0 flex-1 overflow-auto pb-1.5">
         <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px">
           {#each changeRows as row (row.key)}
-            {@const change = changes[row.index]}
+            {@const item = listRows[row.index]}
             <!-- The virtual rows are updated after the list (an effect): for one frame a row can point past a list that shrank. -->
-            {#if change}
-            <!-- The slot is ROW high (the list is virtual); the row inside leaves 1px above and below, so rows do not touch. -->
-            <div class="absolute top-0 left-0 w-full" style:height="{row.size}px" style:transform="translateY({row.start}px)">
-            <!-- The whole row opens the file; the stage and revert buttons at its end do their own thing. -->
-            <div class="group flex h-full cursor-pointer items-center gap-1.5 rounded-[3px] px-2.5 text-sm hover:bg-muted/50" role="presentation" onpointerenter={() => warm(change)} onclick={(event) => !(event.target as Element).closest('[data-row-action]') && openChange(change)}>
-              <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left no-underline outline-none" title="Open {change.path}">
-                <span class="w-3 shrink-0 text-center font-mono {STATUS[change.status]?.tone}" title={STATUS[change.status]?.label}>{change.status}</span>
-                <span class="min-w-0 truncate" title={change.path}><span class="text-muted-foreground">{dirOf(change.path)}</span>{nameOf(change.path)}</span>
-              </button>
-              {#if change.staged}<span class="shrink-0 rounded bg-primary/15 px-1 text-[10px] text-primary">staged</span>{/if}
-              <span class="shrink-0 font-mono text-emerald-500" title="{change.added} lines added">+{compact(change.added)}</span>
-              <span class="shrink-0 font-mono text-red-500" title="{change.removed} lines removed">−{compact(change.removed)}</span>
-              <span class="flex shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100" data-row-action>
-                <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0" aria-label={change.staged ? 'Unstage' : 'Stage'} title={change.staged ? 'Unstage' : 'Stage'} disabled={busy} onclick={() => void stage(change.path, !change.staged)}>
-                  <ZIcon zType={icon(change.staged ? 'lucideMinus' : 'lucidePlus')} class="size-3.5" />
-                </ZButton>
-                <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0 hover:!text-destructive" aria-label="Revert file" title="Revert file" disabled={busy} onclick={() => (ask({ all: false, path: change.path }))}>
-                  <ZIcon zType={icon('lucideUndo2')} class="size-3.5" />
-                </ZButton>
-              </span>
-            </div>
-            </div>
+            {#if item?.group}
+              <div class="absolute top-0 left-0 w-full" style:height="{row.size}px" style:transform="translateY({row.start}px)">
+                <div class="flex h-full w-full items-center gap-1.5 border-b border-border px-2.5 text-xs font-medium text-muted-foreground" in:fade={{ duration: 150 }}>
+                  <span>{item.group === 'tracked' ? 'Tracked' : 'Staged'}</span>
+                  <span class="tabular-nums">{item.count}</span>
+                </div>
+              </div>
+            {:else if item?.change}
+              {@const change = item.change}
+              <div class="absolute top-0 left-0 w-full px-1.5" style:height="{row.size}px" style:transform="translateY({row.start}px)">
+                <!-- The whole row opens the file; the buttons at its end do their own thing. They show on hover, or while the row's menu is open. -->
+                <div class="group my-px flex h-[calc(100%-2px)] cursor-pointer items-center gap-1.5 rounded-[3px] px-2 text-sm hover:bg-muted/50 {lit(change) ? 'bg-muted font-medium text-foreground' : ''}" role="presentation" in:fade={{ duration: 150 }} onpointerenter={() => warm(change)} onclick={(event) => !(event.target as Element).closest('[data-row-action]') && openChange(change)} oncontextmenu={(event) => openMenu(event, change)}>
+                  <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left no-underline outline-none" title="Open {change.path}">
+                    <span class="w-3 shrink-0 text-center font-mono {STATUS[change.status]?.tone}" title={STATUS[change.status]?.label}>{change.status}</span>
+                    <span class="shrink-0 whitespace-nowrap">{nameOf(change.path)}</span>
+                    <span class="min-w-0 truncate text-muted-foreground">{dirOf(change.path)}</span>
+                  </button>
+                  <span class="flex shrink-0 items-center gap-0.5 {lit(change) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}" data-row-action>
+                    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0" aria-label={change.staged ? 'Unstage' : 'Stage'} title={change.staged ? 'Unstage' : 'Stage'} disabled={busy} onclick={() => void stageRows([change], !change.staged)}>
+                      <ZIcon zType={icon(change.staged ? 'lucideMinus' : 'lucidePlus')} class="size-3.5" />
+                    </ZButton>
+                    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0 hover:!text-destructive" aria-label="Revert file" title="Revert file" disabled={busy} onclick={() => ask({ all: false, list: [change] })}>
+                      <ZIcon zType={icon('lucideUndo2')} class="size-3.5" />
+                    </ZButton>
+                  </span>
+                  <span class="shrink-0 font-mono text-emerald-500" title="{change.added} lines added">+{compact(change.added)}</span>
+                  <span class="shrink-0 font-mono text-red-500" title="{change.removed} lines removed">−{compact(change.removed)}</span>
+                </div>
+              </div>
             {/if}
           {/each}
         </div>
@@ -290,6 +352,10 @@
     {/if}
   {/if}
 </div>
+
+{#if menu}
+  <Menu items={menuItems(menu.change)} bind:open={menuOpen} at={{ x: menu.x, y: menu.y }} position="bottom-left" width={200} label="Change actions" />
+{/if}
 
 <PickerPopover
   anchor={from ?? findAnchor}

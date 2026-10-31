@@ -291,6 +291,14 @@ html[data-warming] [data-z-popover] {
   40% { opacity: 1; transform: translateY(-2px); }
 }
 @media (prefers-reduced-motion: reduce) { .loading-dots span { animation: none; } }
+/* A running chat in the sidebar tree that has not been opened since it started: its label blinks between the text colour
+   and the primary, so it is easy to find. A click on it ends the blink (Sidebar.svelte: blinking). */
+.row-running-blink { animation: row-running-blink 1.4s ease-in-out infinite; }
+@keyframes row-running-blink {
+  0%, 100% { color: var(--foreground); }
+  50% { color: var(--primary); }
+}
+@media (prefers-reduced-motion: reduce) { .row-running-blink { animation: none; color: var(--primary); } }
 .md a.md-path-ok { font-weight: 600; }
 .md a.md-path-dir::before {
   content: ''; display: inline-block; width: 1em; height: 1em; margin-right: 0.25em; vertical-align: -0.15em; background: currentColor;

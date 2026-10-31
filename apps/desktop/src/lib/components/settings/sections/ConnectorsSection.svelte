@@ -174,6 +174,12 @@
   {#if card?.svg}<ZIcon zSvg={card.svg} class="size-3.5" />{:else if card}<ZIcon zType={icon(card.brand)} class="size-3.5" />{/if}
 {/snippet}
 
+<!-- The tab strip stays put; only the body below it scrolls, so nothing shifts and the body never runs under the strip. -->
+<div class="flex h-full min-h-0 min-w-0 flex-col">
+  <div class="shrink-0 min-w-0 max-w-full border-b border-border px-3.5 pt-2 pb-2 [&_.z-tab-item]:items-center [&_.z-tab-item>span:first-child]:flex [&_.z-tab-item>span:first-child]:items-center">
+    <ZTabs zTabs={cardTabs} zType="bar" zSize="sm" zTabsOnly zShowNavWrapper zCache={false} activeTab={activeCard} onTabChange={(value) => (connectorTab = value)} />
+  </div>
+  <div class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3.5 [scrollbar-gutter:stable]">
             {#if connectors.errors.detect && connectors.detected}
               <div class="mb-4 flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm" role="alert">
                 <p class="min-w-0 flex-1 text-destructive">Could not check installed connectors: {connectors.errors.detect}</p>
@@ -224,10 +230,6 @@
               </div>
             {:else}
             <div class="col-start-1 row-start-1 flex min-w-0 flex-col gap-4" in:fade={{ duration: 220, delay: 60 }}>
-              <!-- The strip folds the tabs that do not fit into its own menu, so it holds on a narrow window. -->
-              <div class="min-w-0 max-w-full">
-                <ZTabs zTabs={cardTabs} zType="bar" zSize="sm" zTabsOnly zShowNavWrapper zCache={false} activeTab={activeCard} onTabChange={(value) => (connectorTab = value)} />
-              </div>
               {#each CARDS.filter((item) => item.id === activeCard) as card (card.id)}
                 {@const info = loginOf(card.id)}
                 {@const path = tool(card.binary)?.path}
@@ -560,3 +562,5 @@
             </div>
 
             {/if}
+  </div>
+</div>

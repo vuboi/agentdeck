@@ -42,7 +42,7 @@
 </script>
 
 {#if files.length}
-  <section class="mt-2 overflow-hidden rounded-lg border border-border bg-muted/25 text-sm" aria-label="Files changed in this reply">
+  <section class="mt-2 overflow-hidden rounded-lg border border-border bg-muted/25 text-sm" aria-label="Files changed in this reply" in:slide={{ duration: 200 }}>
     <button type="button" class="flex min-h-10 w-full cursor-pointer items-center gap-2 px-3 py-2 text-left outline-none hover:bg-muted/50" aria-expanded={open} onclick={() => (open = !open)}>
       <ZIcon zType="lucideGitCompare" class="size-4 shrink-0 text-muted-foreground" />
       <span class="font-semibold">Edited {files.length} {files.length === 1 ? 'file' : 'files'}</span>
@@ -54,7 +54,7 @@
       <div class="overflow-hidden border-t border-border" transition:slide={{ duration: 200 }}>
         {#each files as file (file.change.path)}
           {@const label = displayPath(projectRoot, file.change.path)}
-          <div class="border-b border-border last:border-b-0">
+          <div class="border-b border-border last:border-b-0" in:slide={{ duration: 180 }}>
             <div class="flex min-h-9 w-full items-center gap-2 px-3 py-1.5 hover:bg-muted/40">
               <ZIcon zType={file.deleted ? 'lucideTrash2' : file.change.create ? 'lucideFilePlus' : 'lucideFile'} class="size-3.5 shrink-0 text-muted-foreground" />
               <button type="button" class="min-w-0 flex-1 cursor-pointer truncate text-left font-mono underline-offset-2 outline-none hover:underline focus-visible:underline focus-visible:ring-2 focus-visible:ring-ring" title={file.change.path} aria-label={`Open file ${label}`} onclick={() => openProjectFile(file.change.path, projectRoot, 'file')}>{label}</button>

@@ -4,6 +4,7 @@ import { LOADER } from '../../app/platform/loaders';
 import { kindOfCommand } from '../../tasks/delegate-task';
 import { isRedundantAgentWait } from '../runs/run-lanes';
 import type { Block } from '../mock';
+import { ROLE_STATUS, roleOfCall } from '../../agents/task-roles';
 import { askAsStep } from '../recovery/questions';
 import { AGENT, ASK, CREATE, askSubject, EDIT, FETCH, ICON, detailOf, innerCommand, PAGE_ACT, PAGE_LOOK, PAGE_READ, PAGE_SCRIPT, READ, RUN, SEARCH, WEB_SEARCH, toolIcon } from './tool-kind';
 
@@ -186,7 +187,10 @@ function wordsOf(item: CommandBlock): Omit<Step, 'icon'> {
   if (PAGE_READ.test(tool)) return { verb: verbs('Found on page', 'Finding on page'), subject: '' };
   if (tool === 'Plan') return { verb: verbs('Planned', 'Planning'), subject: '' };
   const delegation = kindOfCommand(item.command);
-  if (delegation === 'delegate_task') return { verb: verbs('Messaged an agent', 'Messaging an agent'), subject: '' };
+  if (delegation === 'delegate_task') {
+    const role = roleOfCall(item.command);
+    return role ? { verb: verbs(ROLE_STATUS[role].done, ROLE_STATUS[role].running), subject: '' } : { verb: verbs('Messaged an agent', 'Messaging an agent'), subject: '' };
+  }
   if (delegation === 'list_agents') return { verb: verbs('Listed the agents', 'Listing the agents'), subject: '' };
   if (delegation === 'task_status') return { verb: verbs('Checked a task', 'Checking a task'), subject: '' };
   if (delegation === 'task_stop') return { verb: verbs('Stopped a task', 'Stopping a task'), subject: '' };
@@ -266,7 +270,10 @@ function activityOf(item: CommandBlock): { label: string; spinner: ZLoadingSpinn
   if (ASK.test(tool)) return { label: 'Waiting for your answer', spinner: LOADER.background };
   if (AGENT.test(tool)) return { label: 'Running agent', spinner: LOADER.background };
   const delegation = kindOfCommand(item.command);
-  if (delegation === 'delegate_task') return { label: 'Waiting for an agent', spinner: LOADER.background };
+  if (delegation === 'delegate_task') {
+    const role = roleOfCall(item.command);
+    return { label: role ? ROLE_STATUS[role].running : 'Waiting for an agent', spinner: LOADER.background };
+  }
   if (delegation) return { label: 'Checking agents', spinner: LOADER.background };
   if (PAGE_ACT.test(tool)) return { label: 'Interacting with page', spinner: LOADER.action };
   if (PAGE_SCRIPT.test(tool)) return { label: 'Running page script', spinner: LOADER.command };

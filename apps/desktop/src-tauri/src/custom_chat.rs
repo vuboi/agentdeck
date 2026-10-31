@@ -183,15 +183,160 @@ pub struct PrehandleRequest {
     pub files: Vec<String>,
 }
 
+/// The instructions of a pre-handle pass with the user's message and the text of any attached text files.
+async fn memo_prompt(prompt: &str, files: &[String]) -> String {
+    let mut text = format!(
+        "You are AgentDeck's attachment pre-handler. Extract only useful facts from the attached images/files for another coding agent. \
+Return a compact plain-text memo with these headings: Visible facts, Text/OCR, User intent, Uncertainty. \
+Do not invent details, do not repeat secrets, and keep it under 1200 words. User message:\n{}",
+        prompt.trim()
+    );
+    for path in files.iter().take(8) {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.clone());
+        if crate::privacy::sensitive_file(path) {
+            text.push_str(&format!("\n\nAttached file {name}: [content omitted because it may contain secrets]"));
+            continue;
+        }
+        let extension = std::path::Path::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if TEXT_EXTENSIONS.contains(&extension.as_str()) {
+            if let Ok(body) = tokio::fs::read_to_string(path).await {
+                let cut: String = body.chars().take(12_000).collect();
+                text.push_str(&format!("\n\nAttached text file {name}:\n{cut}"));
+            } else {
+                text.push_str(&format!("\n\nAttached file: {name}"));
+            }
+        } else {
+            text.push_str(&format!("\n\nAttached file: {name}"));
+        }
+    }
+    text
+}
+
+/// The same memo, read by a free OpenCode model through the OpenCode CLI: the pictures go in as `--file`, the prompt on
+/// stdin. Standalone, so the pass does not share the user's OpenCode session. The JSON event stream's text parts are the memo.
+pub async fn prehandle_opencode(model: String, prompt: String, images: Vec<String>, files: Vec<String>) -> Result<String, String> {
+    if images.is_empty() && files.is_empty() {
+        return Ok(String::new());
+    }
+    use tokio::io::AsyncWriteExt;
+    let binary = ag_adapters::agent::resolve::resolve_binary(&ag_adapters::agent::opencode::OpenCode::default());
+    let mut command = Command::new(binary);
+    command.args(["run", "--standalone", "--format", "json", "--model", &model]);
+    for path in images.iter().take(4) {
+        command.args(["--file", path]);
+    }
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not start OpenCode: {error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(memo_prompt(&prompt, &files).await.as_bytes())
+            .await
+            .map_err(|error| format!("could not send the pre-handle prompt: {error}"))?;
+    }
+    let output = tokio::time::timeout(Duration::from_secs(120), child.wait_with_output())
+        .await
+        .map_err(|_| "OpenCode did not answer in time".to_owned())?
+        .map_err(|error| format!("OpenCode failed: {error}"))?;
+    // The CLI reports a failed call (expired key, no quota) as an `error` event on stdout, not on stderr.
+    let events: Vec<Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect();
+    if let Some(error) = events.iter().find(|event| event["type"] == "error") {
+        let message: String = error["error"]["message"]
+            .as_str()
+            .unwrap_or("unknown error")
+            .chars()
+            .take(200)
+            .collect();
+        return Err(format!("OpenCode could not read the attachments: {message}"));
+    }
+    if !output.status.success() {
+        return Err("OpenCode could not read the attachments".to_owned());
+    }
+    let memo: String = events
+        .iter()
+        .filter(|event| event["type"] == "text")
+        .filter_map(|event| event["part"]["text"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>()
+        .join("");
+    let memo = memo.trim().to_owned();
+    if memo.is_empty() {
+        Err("pre-handler returned an empty memo".to_owned())
+    } else {
+        Ok(memo)
+    }
+}
+
+/// The same memo, read by Antigravity's CLI in print mode. That CLI runs as an agent, so it reads the pictures with its own
+/// tools: they are named in the prompt and their folders are opened with `--add-dir`. Its permissions are skipped (the full
+/// options the user chose), with `--sandbox` on so its terminal stays restricted. The prompt is an argument, so it is capped.
+pub async fn prehandle_antigravity(model: String, prompt: String, images: Vec<String>, files: Vec<String>) -> Result<String, String> {
+    if images.is_empty() && files.is_empty() {
+        return Ok(String::new());
+    }
+    let binary = ag_adapters::agent::resolve::resolve_binary(&ag_adapters::agent::antigravity::Antigravity::default());
+    let mut text = memo_prompt(&prompt, &files).await;
+    let pictures: Vec<&String> = images.iter().take(4).collect();
+    if !pictures.is_empty() {
+        let names = pictures.iter().map(|path| path.as_str()).collect::<Vec<_>>().join("\n");
+        text.push_str(&format!("\n\nAttached pictures, open each with your file tools and describe it:\n{names}"));
+    }
+    let text: String = text.chars().take(24_000).collect();
+    let mut command = Command::new(binary);
+    command.arg(format!("-p={text}"));
+    command.args(["--model", &model, "--effort", "low", "--dangerously-skip-permissions", "--sandbox"]);
+    for path in &pictures {
+        let folder = std::path::Path::new(path.as_str())
+            .parent()
+            .map(|folder| folder.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        command.args(["--add-dir", &folder]);
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let child = command
+        .spawn()
+        .map_err(|error| format!("could not start Antigravity: {error}"))?;
+    let output = tokio::time::timeout(Duration::from_secs(120), child.wait_with_output())
+        .await
+        .map_err(|_| "Antigravity did not answer in time".to_owned())?
+        .map_err(|error| format!("Antigravity failed: {error}"))?;
+    if !output.status.success() {
+        return Err("Antigravity could not read the attachments".to_owned());
+    }
+    let memo = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if memo.is_empty() {
+        Err("pre-handler returned an empty memo".to_owned())
+    } else {
+        Ok(memo)
+    }
+}
+
 /// Runs a short, stateless vision pass. It deliberately has no tools or chat history: the result is only a compact memo
 /// that the main agent can use instead of paying to ingest the original pictures on every provider.
 pub async fn prehandle_attachments(request: PrehandleRequest) -> Result<String, String> {
     if request.images.is_empty() && request.files.is_empty() {
         return Ok(String::new());
     }
-    if request.kind == "anthropic" {
-        return Err("Attachment pre-handle needs an OpenAI-compatible provider".to_owned());
-    }
+    // Anthropic's Messages API takes pictures as `source` blocks, not as data URLs.
+    let anthropic = request.kind == "anthropic";
 
     use base64::Engine;
     let mut parts = Vec::new();
@@ -219,65 +364,68 @@ pub async fn prehandle_attachments(request: PrehandleRequest) -> Result<String, 
             continue;
         }
         image_count += 1;
-        parts.push(json!({
-            "type": "image_url",
-            "image_url": {
-                "url": format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))
-            }
-        }));
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        parts.push(if anthropic {
+            json!({ "type": "image", "source": { "type": "base64", "media_type": mime, "data": data } })
+        } else {
+            json!({ "type": "image_url", "image_url": { "url": format!("data:{mime};base64,{data}") } })
+        });
     }
 
-    let mut text = format!(
-        "You are AgentDeck's attachment pre-handler. Extract only useful facts from the attached images/files for another coding agent. \
-Return a compact plain-text memo with these headings: Visible facts, Text/OCR, User intent, Uncertainty. \
-Do not invent details, do not repeat secrets, and keep it under 1200 words. User message:\n{}",
-        request.prompt.trim()
-    );
-    for path in request.files.iter().take(8) {
-        let name = std::path::Path::new(path)
-            .file_name()
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.clone());
-        if crate::privacy::sensitive_file(path) {
-            text.push_str(&format!("\n\nAttached file {name}: [content omitted because it may contain secrets]"));
-            continue;
-        }
-        let extension = std::path::Path::new(path)
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if TEXT_EXTENSIONS.contains(&extension.as_str()) {
-            if let Ok(body) = tokio::fs::read_to_string(path).await {
-                let cut: String = body.chars().take(12_000).collect();
-                text.push_str(&format!("\n\nAttached text file {name}:\n{cut}"));
-            } else {
-                text.push_str(&format!("\n\nAttached file: {name}"));
-            }
-        } else {
-            text.push_str(&format!("\n\nAttached file: {name}"));
-        }
-    }
     if image_count == 0 && request.files.is_empty() {
         return Ok(String::new());
     }
+    let text = memo_prompt(&request.prompt, &request.files).await;
     parts.insert(0, json!({ "type": "text", "text": text }));
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(45))
         .build()
         .map_err(|error| format!("could not create pre-handler client: {error}"))?;
-    let mut builder = client
-        .post(chat_url(&request.kind, &request.base_url))
-        .json(&json!({
-            "model": request.model,
-            "messages": [{ "role": "user", "content": parts }],
-            "temperature": 0.1,
-            "max_tokens": 1400,
-            "stream": false
-        }));
-    if let Some(key) = request.api_key.filter(|value| !value.trim().is_empty()) {
-        builder = builder.bearer_auth(key);
+    let mut builder = if anthropic {
+        // A base typed with its version (`https://api.anthropic.com/v1`) is the same address, as in `models_url`.
+        let base = request.base_url.trim().trim_end_matches('/');
+        client
+            .post(format!("{}/v1/messages", base.trim_end_matches("/v1")))
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({
+                "model": request.model,
+                "messages": [{ "role": "user", "content": parts }],
+                "temperature": 0.1,
+                "max_tokens": 1400,
+                // The cheapest effort: a memo of what the picture shows needs no deep thinking.
+                "output_config": { "effort": "low" }
+            }))
+    } else {
+        client
+            .post(chat_url(&request.kind, &request.base_url))
+            .json(&json!({
+                "model": request.model,
+                "messages": [{ "role": "user", "content": parts }],
+                "temperature": 0.1,
+                "max_tokens": 1400,
+                "reasoning_effort": "low",
+                "stream": false
+            }))
+    };
+    // Copilot takes the signed-in `gh` token, the same as its model list, and the headers its clients send.
+    let copilot = request.kind == "copilot";
+    let key = if copilot {
+        Some(crate::copilot::github_token().await?)
+    } else {
+        request.api_key
+    };
+    if copilot {
+        builder = builder
+            .header("Copilot-Integration-Id", "vscode-chat")
+            .header("Editor-Version", "vscode/1.99.0");
+    }
+    if let Some(key) = key.filter(|value| !value.trim().is_empty()) {
+        builder = if anthropic {
+            builder.header("x-api-key", key)
+        } else {
+            builder.bearer_auth(key)
+        };
     }
     let response = builder
         .send()
@@ -294,11 +442,16 @@ Do not invent details, do not repeat secrets, and keep it under 1200 words. User
             .unwrap_or("pre-handler provider returned an error")
             .to_owned());
     }
-    let content = value["choices"][0]["message"]["content"]
+    let answer = if anthropic {
+        &value["content"]
+    } else {
+        &value["choices"][0]["message"]["content"]
+    };
+    let content = answer
         .as_str()
         .map(str::to_owned)
         .or_else(|| {
-            value["choices"][0]["message"]["content"]
+            answer
                 .as_array()
                 .map(|parts| {
                     parts
@@ -1701,7 +1854,7 @@ fn system_prompt(cwd: Option<&Path>, skills: &[ProviderCommand]) -> String {
          4 EDIT. One small change at a time with Edit (Read the file first; old_string copied exactly from what Read showed). Put it exactly where the request says, written like the code around it. Never rewrite a whole file for a small change and never create something elsewhere because it is easier. \
          5 VERIFY. Run the project's own check with Bash (build, lint, type check, tests: see its scripts), read the errors and fix them, check with code_references that nothing that used a changed name broke, and if the Preview is open look at the page. Only then answer, saying what changed and in which files, and what you checked. \
          A question or an explanation needs no plan: answer from what the tools show. \
-         Browser: the browser_* tools drive the Preview panel, the page the user is looking at. To run a dev server use browser_serve (a server started with Bash dies when the command ends), then browser_open if needed. \
+         Browser: the browser_* tools drive the Preview panel, the page the user is looking at. To run a dev server use browser_serve (a server started with Bash dies when the command ends), then browser_open if needed. When the user asks you to run a project or its source (also \"chạy project\", \"chạy source\"), that is a dev server even when no page is named: find its start command from the project's own scripts or launch config (.claude/launch.json, a Makefile, a task runner), or from its build or manifest files and README for the language and toolchain, whatever it is; then start it with browser_serve. \
          To act on a page, call browser_elements for the list of buttons, links and fields with their numbers, then browser_click_element with a number (or the visible text, or a CSS selector); use browser_fill to fill a field by selector. Do not guess coordinates. \
          A dialog, drawer or menu that is open blocks the page behind it: close it first (its close button, or browser_key Escape) before acting on anything else. \
          After each action call browser_elements or browser_dom again to see the result, and check browser_console for errors. \

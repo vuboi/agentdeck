@@ -2,6 +2,7 @@
   import type { CommandBlock } from '../../chat/content/blocks';
   import { toolOf } from '../../chat/content/blocks';
   import type { ChatWork } from '../../chat/runs/chat-work';
+  import { chatWork } from '../../chat/session/work.svelte';
   import { modelLabel, modelSources } from '../../agents/models.svelte';
   import BackgroundTasks from './BackgroundTasks.svelte';
 
@@ -27,10 +28,15 @@
   }
 
   // Each item becomes a Work tray row: the state follows the provider's task status.
+  // The Work tray's row for each call, from the same projection: working, done, failed, stopped and paused read alike
+  // in both places. A call the log no longer holds (an older chat, a reload) keeps the state its transcript recorded.
+  const shared = $derived(new Map(chatWork(sessionId).flatMap((row) => (row.callId ? [[row.callId, row] as const] : []))));
   const work = $derived(items.map((item, index): ChatWork => {
     const task = item.task!;
     const info = identity(item);
-    const state: ChatWork['state'] = task.status === 'started' || task.status === 'progress' ? 'running' : task.status === 'done' ? 'done' : task.status === 'failed' ? 'failed' : 'stopped';
+    const recorded: ChatWork['state'] = task.status === 'started' || task.status === 'progress' ? 'running' : task.status === 'done' ? 'done' : task.status === 'failed' ? 'failed' : 'stopped';
+    const live = item.id ? shared.get(item.id) : undefined;
+    const state = live?.state ?? recorded;
     return {
       id: item.id ?? `activity-${index}`,
       sessionId: sessionId ?? '',
@@ -42,7 +48,7 @@
       kind: toolOf(item.command) === 'Bash' ? 'command' : 'agent',
       canStop: state === 'running' && Boolean(sessionId),
       startedAt: task.startedAt ?? Date.now(),
-      endedAt: task.endedAt,
+      endedAt: live?.endedAt ?? task.endedAt,
       detail: task.summary ?? item.output ?? '',
     };
   }));

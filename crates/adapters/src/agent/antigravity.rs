@@ -412,14 +412,18 @@ fn offloaded_image(output: &str) -> Option<String> {
 }
 
 /// `call_mcp_tool` carries the server and the tool in its parameters: shown like Claude shows them, as
-/// `mcp__<server>__<tool>`, with the tool's own arguments as the input.
+/// `mcp__<server>__<tool>`, with the tool's own arguments as the input. A `browser_serve` keeps its arguments
+/// whole (JSON), since the chat reads the command and folder of the project run from them.
 fn mcp_call(parameters: &Value) -> Option<(String, String)> {
     let server = parameters["ServerName"].as_str()?;
     let tool = parameters["ToolName"].as_str()?;
-    Some((
-        format!("mcp__{server}__{tool}"),
-        super::summarize_tool_input("", &parameters["Arguments"]),
-    ))
+    let arguments = &parameters["Arguments"];
+    let input = if tool == "browser_serve" {
+        arguments.to_string()
+    } else {
+        super::summarize_tool_input("", arguments)
+    };
+    Some((format!("mcp__{server}__{tool}"), input))
 }
 
 /// How much of a read the Read card shows again: the lines and the bytes it alone carries.
@@ -1236,6 +1240,16 @@ mod tests {
             None
         );
         assert_eq!(percent_decode("a%20b%2Fc%zz"), "a b/c%zz");
+    }
+
+    #[test]
+    fn a_served_project_keeps_its_arguments_as_json() {
+        let call = serde_json::json!({ "ServerName": "agentdeck", "ToolName": "browser_serve", "Arguments": { "command": "pnpm dev", "cwd": "C:/app" } });
+        let (name, input) = mcp_call(&call).expect("a call");
+        assert_eq!(name, "mcp__agentdeck__browser_serve");
+        let args: Value = serde_json::from_str(&input).expect("JSON input");
+        assert_eq!(args["command"], "pnpm dev");
+        assert_eq!(args["cwd"], "C:/app");
     }
 
     #[test]

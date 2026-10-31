@@ -4,6 +4,7 @@
   import { closeOnScroll } from '../../app/ui/close-on-scroll';
   import { customProviderName } from '../../agents/models.svelte';
   import { tick, untrack } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import { ZButton, ZDropdownMenu, ZIcon, ZInput, ZLoading, ZModal, ZPopover, zModalService } from '@shival99/z-ui-svelte';
   import Tree from '../ui/Tree.svelte';
   import type { ZDropdownMenuItem, ZIconName, ZTreeNode } from '@shival99/z-ui-svelte';
@@ -152,6 +153,36 @@
     return ['session', 'list', 'pin', 'recent'].map((key) => `${key}:${id}`).find((row) => rowIds.has(row)) ?? `session:${id}`;
   }
   const pending = $derived(pendingProject());
+
+  // A running chat stands out in the tree: its label blinks until the chat is opened (a click on it, or it being the
+  // open chat, ends the blink for this run). The chats it forked from keep a steady tint, so the running one is easy to find.
+  const working = $derived(new Set(workspace.sessions.filter((item) => item.status === 'working').map((item) => item.id)));
+  const runningParents = $derived.by(() => {
+    const byId = new Map(workspace.sessions.map((item) => [item.id, item]));
+    const parents = new Set<string>();
+    for (const id of working) {
+      for (let cursor = byId.get(id)?.parentId; cursor && !parents.has(cursor); cursor = byId.get(cursor)?.parentId) parents.add(cursor);
+    }
+    return parents;
+  });
+  const seenRun = new SvelteSet<string>();
+  let lastWorking = new Set<string>();
+  $effect(() => {
+    const now = working;
+    const active = workspace.activeId;
+    untrack(() => {
+      // A new run of a chat starts blinking again, even if the last one was opened.
+      for (const id of now) if (!lastWorking.has(id)) seenRun.delete(id);
+      if (now.has(active)) seenRun.add(active);
+      lastWorking = new Set(now);
+    });
+  });
+  function labelClass(id: string, selected: boolean) {
+    if (selected) return 'font-medium text-primary';
+    if (working.has(id)) return seenRun.has(id) ? 'font-medium text-primary/90' : 'row-running-blink font-medium';
+    if (runningParents.has(id)) return 'font-medium text-primary/65';
+    return '';
+  }
   let selected = $state<string[]>([]);
   // The highlight of the open chat. ZTree moves `selected` to the row clicked first; a folder click puts this back.
   let highlight: string[] = [];
@@ -160,13 +191,21 @@
     selected = highlight;
   });
 
+  // The tree's label click is off (expandOnClick): only the arrow folds a session, so a parent chat keeps its forks open.
+  // A project's label still folds it, as before.
+  function toggleExpanded(id: string) {
+    sidebarTree.expanded = sidebarTree.expanded.includes(id) ? sidebarTree.expanded.filter((item) => item !== id) : [...sidebarTree.expanded, id];
+  }
+
   function onSelect(node: ZTreeNode<TreeData>) {
-    // Projects only expand; only sessions switch the chat.
+    // Projects fold; only sessions switch the chat.
     // Opens the session's chat tab even when it is already the active session (its tab may have been closed).
     if (node.data?.kind === 'session' && node.data.session) {
       clickedRow = node.id;
+      seenRun.add(node.data.session.id);
       showSession(node.data.session.id);
     }
+    else if (node.data?.kind === 'project') toggleExpanded(node.id);
     else if (node.data?.kind === 'section' && node.data.count) toggleSection(sectionKey(node.id));
     else if (node.data?.kind === 'more' && node.data.group) toggleMore(node.data.group, node.data.done);
     if (node.data?.kind !== 'session') selected = highlight;
@@ -639,6 +678,7 @@
       class="text-sm"
       maxHeight={treeHeight}
       label="Projects and sessions"
+      expandOnClick={false}
       bind:expanded={sidebarTree.expanded}
       bind:selected
       {onSelect}
@@ -707,7 +747,7 @@
             {#if editing === ctx.node.id}
               {@render renameField(data.session.id)}
             {:else}
-              <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}" {@attach clipTip(ctx.node.label)}>{ctx.node.label}</span>
+              <span class="min-w-0 flex-1 truncate {labelClass(data.session.id, ctx.selected)}" {@attach clipTip(ctx.node.label)}>{ctx.node.label}</span>
             {/if}
             {#if editing !== ctx.node.id}{@render agentBadge(data.session, ctx.node.id)}{/if}
           {:else if data?.kind === 'session' && data.session}
@@ -724,7 +764,7 @@
             {#if editing === ctx.node.id}
               {@render renameField(data.session.id)}
             {:else}
-              <span class="min-w-0 flex-1 truncate {ctx.selected ? 'font-medium text-primary' : ''}" {@attach clipTip(ctx.node.label)}>{ctx.node.label}</span>
+              <span class="min-w-0 flex-1 truncate {labelClass(data.session.id, ctx.selected)}" {@attach clipTip(ctx.node.label)}>{ctx.node.label}</span>
             {/if}
             {#if editing !== ctx.node.id}{@render agentBadge(data.session, ctx.node.id)}{/if}
           {:else}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { ZIcon, ZPopover, ZSlider, ZSwitch, ZTabs } from '@shival99/z-ui-svelte';
+  import { ZIcon, ZPopover, ZSlider, ZTabs } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import { layout } from '../../app/ui/layout.svelte';
   import { theme, UI_FONT_SIZE } from '../../app/ui/theme.svelte';
@@ -132,11 +132,6 @@
           onTabChange={(value) => (theme.chatLayout = value as ChatLayout)}
         />
         {/key}
-        <!-- A thin line between two replies of the agent, and where a session was resumed or compacted. -->
-        <label class="mt-2.5 flex cursor-pointer items-center gap-2 text-sm">
-          <span class="min-w-0 flex-1">Separate replies<span class="block text-[0.75rem] text-muted-foreground">A line between replies, and where a session resumed</span></span>
-          <ZSwitch zVariant="dot" zSize="sm" checked={theme.turnDividers} onChange={(value) => (theme.turnDividers = value)} />
-        </label>
       </div>
     </div>
   {/snippet}

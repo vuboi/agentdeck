@@ -1,15 +1,18 @@
 import { credentialBusy } from '../../agents/credential-switch';
 import { inTauri, clock } from '../../app/platform/history';
 import { accountEpoch } from '../runs/account-epoch.svelte';
-import { pictureData, prehandleAttachments, prewarmAgent, saveAttachment, sendCustomTurn, sendAgentTurn, stopAgentTurn, answerCopilotPermission } from '../agent';
-import { activeProviderKey, connectors, currentCredentialId } from '../../agents/connectors.svelte';
+import { pictureData, prehandleAntigravity, prehandleAttachments, prehandleOpencode, prewarmAgent, saveAttachment, sendCustomTurn, sendAgentTurn, stopAgentTurn, answerCopilotPermission } from '../agent';
+import { activeProviderKey, claudeCreditOn, claudeCreditState, connectors, currentCredentialId, providerQuotas, usagePct } from '../../agents/connectors.svelte';
 import { type Message, messages as mockMessages } from '../mock';
 import { guide } from '../../app/ui/guide.svelte';
 import { logFlow } from '../../tasks/flow-log';
 import { sessionMark } from '../content/chat-dividers';
 import { within, PREPARE_LIMIT_MS } from '../../app/text/within';
 import { expandSlash } from '../slash.svelte';
-import { parseCustomModel } from '../../agents/models.svelte';
+import { modelLabel, parseCustomModel } from '../../agents/models.svelte';
+import { routesOf, taskRoleHint } from '../../agents/task-roles';
+import { taskRoles } from '../../agents/task-roles.svelte';
+import { agentDisplayName } from '../../agents/provider-registry';
 import { customProviderOf } from '../../agents/provider-registry';
 import { automation } from '../../app/platform/automation.svelte';
 import { logError } from '../../app/platform/error-log.svelte';
@@ -25,7 +28,7 @@ import { parseQuestions, type Question } from '../recovery/questions';
 import { dequeue } from '../runs/queue';
 import { MODELS, activeSession, advanceRun, localMessages, nextId, persistLocal, runEpochs, sessionCwd, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type SessionItem } from './state.svelte';
 import { AGENTDECK_HINT, KNOWS_PREVIEW, NATIVE_DELEGATION, NATIVE_DELEGATION_HINT, NO_DELEGATE_HINT, OPEN_WORDS, PERMISSION_MODE, agentLabel, approved, continuationGroups, delegateHinted, hasOutstandingSessionWork, hasTurnWork, hiddenPrompt, isRunning, lastPrompt, missedTurns, modelFor, nativeDelegationHinted, notifySessionWorkDone, orchestrateTold, priorDelegateHinted, queuePaused, queued, rememberDelegateHint, rememberLastChat, rememberNativeDelegationHint, turnOptions, turnOptionsOf, turns } from './turns.svelte';
-import { handleAgentEvent, lastEventAt, lastEventKind, manuallyStopped, recoveryChain } from './events.svelte';
+import { handleAgentEvent, lastEventAt, lastEventKind, manuallyStopped, recoveryChain, recoveryModelFor } from './events.svelte';
 import { answerWorkerApproval, backlog, flushReports, isWorkerChat } from './delegate-task.svelte';
 import { LANGUAGE_RULE } from './orchestration.svelte';
 import { COMPACT_COMMAND, MODEL_LEAD, compressIfNeeded, handoffDigest, liveModel, send, sendImmediate } from './sending.svelte';
@@ -41,18 +44,71 @@ export const pendingNew = new Set<string>();
 const reminded = new Map<string, boolean>();
 const prewarmedAt = new Map<string, number>();
 
-function prehandleProvider() {
-  const score = (model: string) => {
-    const value = model.toLowerCase();
-    return (/(vision|vl|gemini|flash|haiku|mini|nano|scout|pixtral|internvl|moondream|minicpm|qwen|gemma-3|llama-4)/.test(value) ? 4 : 0) +
-      (/(free|local|ollama)/.test(value) ? 2 : 0);
-  };
-  return connectors.custom
-    .filter((provider) => provider.enabled && !provider.restricted && provider.kind !== 'anthropic' && provider.baseUrl.trim())
-    .flatMap((provider) => [...new Set([...provider.models, provider.defaultModel].filter(Boolean))].map((model) => ({ provider, model, score: score(model) })))
-    .filter((item) => item.model && item.score > 0)
-    .sort((a, b) => b.score - a.score)[0];
+type PreHandler =
+  | { via: 'http'; label: string; kind: string; baseUrl: string; apiKey: string | null; model: string }
+  | { via: 'opencode' | 'antigravity'; label: string; model: string };
+/** `route` is the `agent|model` the Task roles settings name this model by (see agents/task-roles.ts). */
+type Candidate = { pick: PreHandler; route: string };
+/** The wait for a CLI pre-handle: the CLI starts, then the model answers (the Rust side stops at 120 s). */
+const CLI_PREPARE_LIMIT_MS = 120_000;
+/** The Claude 5 models the Console credit runs (the `credit:` ids without the prefix). */
+const CLAUDE_CREDIT_MODELS = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'];
+/**
+ * The model that reads a turn's attachments: only the models picked for the image role in Task roles, in priority order.
+ * Nothing is picked by default: with no pick, or the role switched off, the main agent reads the pictures itself. A pick
+ * that fails at run time also goes back to the main agent, and is left out for a while (prehandleFailed).
+ */
+function prehandleProvider(): PreHandler | undefined {
+  if (!routesOf(taskRoles, 'read').length) return undefined;
+  const candidates: Candidate[] = [];
+  for (const provider of connectors.custom.filter((item) => item.enabled && !item.restricted && item.baseUrl.trim())) {
+    const key = activeProviderKey(provider);
+    if (providerQuotas[`${provider.id}:${key?.id ?? 'default'}`]?.remaining === 0) continue;
+    for (const model of new Set([...provider.models, provider.defaultModel].filter(Boolean))) {
+      candidates.push({
+        route: `${provider.id}|${model}`,
+        pick: { via: 'http', label: `${provider.kind}:${provider.id}`, kind: provider.kind, baseUrl: provider.baseUrl, apiKey: key?.apiKey || null, model },
+      });
+    }
+  }
+  if (claudeCreditOn() && !((claudeCreditState.reading?.balance ?? 1) <= 0)) {
+    for (const model of CLAUDE_CREDIT_MODELS) {
+      candidates.push({
+        route: `claude|credit:${model}`,
+        pick: { via: 'http', label: 'claude-credit', kind: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: connectors.claudeCredit.apiKey.trim(), model },
+      });
+    }
+  }
+  for (const item of MODELS.copilot) {
+    candidates.push({ route: `copilot|${item.value}`, pick: { via: 'http', label: 'copilot', kind: 'copilot', baseUrl: 'https://api.githubcopilot.com', apiKey: null, model: item.value } });
+  }
+  for (const item of MODELS.opencode) {
+    candidates.push({ route: `opencode|${item.value}`, pick: { via: 'opencode', label: 'opencode', model: item.value } });
+  }
+  // An Antigravity model at its usage limit is skipped; its CLI prints no usable memo once it is out.
+  for (const item of MODELS.antigravity) {
+    if ((usagePct('antigravity', item.value) ?? 0) >= 100) continue;
+    candidates.push({ route: `antigravity|${item.value}`, pick: { via: 'antigravity', label: 'antigravity', model: item.value } });
+  }
+  // A model that failed lately (expired key, no quota) is left out for a while: the turn that failed went to the main
+  // agent, and the next turns take the next model instead of failing on the same one again.
+  const usable = candidates.filter((item) => Date.now() - (prehandleFailed.get(pickKey(item.pick)) ?? 0) > PREHANDLE_COOLDOWN_MS);
+  return routesOf(taskRoles, 'read')
+    .map((route) => usable.find((item) => item.route === route))
+    .find((item) => item !== undefined)?.pick;
 }
+
+/** A route as the user reads it: "Codex GPT 5.6 Terra". */
+const routeLabel = (route: string) => {
+  const [agent, ...rest] = route.split('|');
+  return `${agentDisplayName(agent)} ${modelLabel(rest.join('|'))}`;
+};
+
+/** The pick a failed pre-handle is remembered by. */
+const pickKey = (pick: PreHandler) => `${pick.label}|${pick.model}`;
+/** When each pick last failed to read pictures, and how long it is left out after that. */
+const prehandleFailed = new Map<string, number>();
+const PREHANDLE_COOLDOWN_MS = 10 * 60_000;
 
 
 /** The conversation id a Claude chat takes after an account switch (by account epoch), so the CLI started ahead for it is the one used. */
@@ -134,7 +190,7 @@ export function prewarmChat(sessionId: string) {
 function prewarmFallback(session: SessionItem) {
   if (!connectors.recovery.enabled || !inTauri()) return;
   const target = recoveryChain().find((agent) => agent !== session.agent && ['codex', 'antigravity'].includes(agent));
-  const model = target ? MODELS[target as Agent]?.[0]?.value : undefined;
+  const model = target ? (recoveryModelFor(target) ?? MODELS[target as Agent]?.[0]?.value) : undefined;
   if (!target || !model) return;
   const throttle = `${session.id}|${target}|${model}|fallback`;
   const now = Date.now();
@@ -297,6 +353,8 @@ export function startTurn(
     host.role === 'assistant' &&
     !host.live &&
     host.agent === session.agent;
+  // With pictures, the model that reads them is picked now, so the placeholder can name it while it waits.
+  const pictureReader = images.length && automation.prehandle ? prehandleProvider() : undefined;
   const reply: Message =
     !listener && continues && host
       ? host
@@ -307,6 +365,9 @@ export function startTurn(
           at: new Date().toISOString(),
           blocks: [],
           live: true,
+          // Shown from here, before the CLI is started: the attachments and the command are still being read.
+          dispatching: true,
+          ...(pictureReader ? { dispatchingImages: { count: images.length, reader: modelLabel(pictureReader.model) || pictureReader.model } } : {}),
           startedAt: Date.now(),
           agent: session.agent,
           model: selectedModel ?? session.model,
@@ -384,19 +445,15 @@ export function startTurn(
     if (automation.prehandle && (paths.length || files.length)) {
       const selected = prehandleProvider();
       if (selected) {
-        logFlow(session.id, 'attachment pre-handle started', `provider=${selected.provider.kind}:${selected.provider.id} model=${selected.model} images=${paths.length} files=${files.length}`);
+        logFlow(session.id, 'attachment pre-handle started', `provider=${selected.label} model=${selected.model} images=${paths.length} files=${files.length}`);
         try {
+          const request = { model: selected.model, prompt: body, images: paths, files: files.map((file) => file.path) };
+          // A CLI start (OpenCode, Antigravity) takes longer than an HTTP call, so it gets the CLI's own limit.
           const memo = await within(
-            prehandleAttachments({
-              kind: selected.provider.kind,
-              baseUrl: selected.provider.baseUrl,
-              apiKey: activeProviderKey(selected.provider)?.apiKey || null,
-              model: selected.model,
-              prompt: body,
-              images: paths,
-              files: files.map((file) => file.path),
-            }),
-            PREPARE_LIMIT_MS,
+            selected.via === 'http'
+              ? prehandleAttachments({ ...request, kind: selected.kind, baseUrl: selected.baseUrl, apiKey: selected.apiKey })
+              : selected.via === 'opencode' ? prehandleOpencode(request) : prehandleAntigravity(request),
+            selected.via === 'http' ? PREPARE_LIMIT_MS : CLI_PREPARE_LIMIT_MS,
             'preparing attachment notes',
           );
           if (memo.trim()) {
@@ -406,10 +463,13 @@ export function startTurn(
           }
         } catch (error) {
           logFlow(session.id, 'attachment pre-handle failed', String(error).slice(0, 300));
+          prehandleFailed.set(pickKey(selected), Date.now());
           logError('turn', 'attachment pre-handle failed; sending original attachments', error);
         }
+        // The reading is over (memo, or back to the main agent): the placeholder stops naming a reader.
+        reply.dispatchingImages = undefined;
       } else {
-        logFlow(session.id, 'attachment pre-handle skipped', 'no eligible custom vision provider');
+        logFlow(session.id, 'attachment pre-handle skipped', 'no model picked for the image role: the main agent reads the pictures');
       }
     }
     if (session.agent === 'custom') {
@@ -520,7 +580,9 @@ export function startTurn(
     const mainChat = !isWorkerChat(session.id) && asked?.role === 'user';
     if (mainChat && replyStyle.userProfile) learnFromPrompt(text);
     const profileNote = !resume && mainChat && replyStyle.userProfile ? profileHint(loadProfile()) : '';
-    const hint = agentdeckLead(openHint, delegateHint, reminder, styleHint, memoryNote, profileNote, LANGUAGE_RULE);
+    // Task routing (Settings > Task roles) hands work to other agents, so it follows auto-orchestrate: off, nothing is routed.
+    const routing = !isWorkerChat(session.id) && orchestrate ? taskRoleHint(taskRoles, routeLabel) : '';
+    const hint = agentdeckLead(openHint, delegateHint, reminder, styleHint, memoryNote, profileNote, routing, LANGUAGE_RULE);
     // Pictures and documents are on disk: the prompt names their paths, which the agent opens with its own tools.
     const attached =
       (dispatchPaths.length

@@ -7,7 +7,7 @@ export type Session = { id: string; title: string; agent: Agent; status: 'workin
 export type Block =
   | { kind: 'thinking'; text: string; streaming?: boolean }
   | { kind: 'response'; text: string; streaming?: boolean }
-  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; /** A delegate_task call: the task it started (see delegate-task.ts). */ taskId?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string; /** Work done under this call by a sub-agent: its steps and what it wrote. */ children?: Block[]; /** Started in the background by its own flag (run_in_background, a sub agent): only such a call takes a task event as a task row. */ background?: boolean; /** A sub-agent or background job this call started, and how far it is. */ task?: { status: 'started' | 'progress' | 'done' | 'failed'; label?: string; summary?: string; tools?: number; /** When the task first showed: its running time counts from here. */ startedAt?: number; endedAt?: number } }
+  | { kind: 'command'; command: string; output: string; status: 'running' | 'ok' | 'fail'; id?: string; /** A delegate_task call: the task it started (see delegate-task.ts). */ taskId?: string; change?: FileChange; /** A screenshot the tool returned, as a data: URL. */ image?: string; /** Work done under this call by a sub-agent: its steps and what it wrote. */ children?: Block[]; /** Started in the background by its own flag (run_in_background, a sub agent): only such a call takes a task event as a task row. */ background?: boolean; /** A sub-agent or background job this call started, and how far it is. */ task?: { status: 'started' | 'progress' | 'done' | 'failed' | 'stopped'; label?: string; summary?: string; tools?: number; /** When the task first showed: its running time counts from here. */ startedAt?: number; endedAt?: number } }
   | { kind: 'loading'; label: string }
   /** A sub-agent running in its own child chat; `state` follows that chat. */
   | { kind: 'delegate'; childId: string; agent: Agent; model: string; state: 'queued' | 'running' | 'asking' | 'done' | 'failed' | 'skipped'; note?: string }
@@ -29,6 +29,10 @@ export type Message = {
   at?: string;
   /** Reply still being written by an agent. */
   live?: boolean;
+  /** Handed to its agent but no event has come back yet: shown as "Sending task to <agent>". Cleared by the first event. */
+  dispatching?: boolean;
+  /** While the pictures are read ahead by `reader` (a model's name): shown as "Waiting to extract info from image by <reader>". */
+  dispatchingImages?: { count: number; reader: string };
   startedAt?: number;
   /** How long the reply took, once finished. */
   ms?: number;

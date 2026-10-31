@@ -21,8 +21,7 @@
   import { isWorkActive, type ChatWork } from '../../chat/runs/chat-work';
   import { returnTaskResult, pauseDelegateTask, resumeDelegateTask, stopDelegateTask } from '../../chat/session/delegate-task.svelte';
   import { stopTurnForResume, resumeStoppedTurn } from '../../chat/session/events.svelte';
-  import { stopTurn } from '../../chat/session/turns.svelte';
-  import { closeRunningActivity } from '../../chat/runs/activity.svelte';
+  import { stopChatWork, stopTurn } from '../../chat/session/turns.svelte';
 
   /** Outside the virtual transcript: scrolling and loading old messages cannot unmount the work list.
    *  `title` names the list; `stateKey` keys its open state (the chat by default, so each card can have its own). */
@@ -71,7 +70,7 @@
     else if (item.childId) stopTurn(item.childId);
     else {
       stopTurn(item.sessionId);
-      closeRunningActivity(item.sessionId);
+      stopChatWork(item.sessionId);
     }
   }
   function pauseAll() {

@@ -12,7 +12,7 @@ import { applyAgentEvent } from '../agent-reply';
 import { customProviderName } from '../../agents/models.svelte';
 import { agentDisplayName } from '../../agents/provider-registry';
 import { isHandbackPrompt } from '../runs/handback';
-import { MODELS, advanceRun, nextId, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type Mention, type PageElement, type Permission, type SessionItem } from './state.svelte';
+import { MODELS, advanceRun, nextId, persistLocal, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type Mention, type PageElement, type Permission, type SessionItem } from './state.svelte';
 import { liveReplies, messagesOf, needsUserInput, replies, runReplies, sendNextQueued, sessionLanes } from './run.svelte';
 import { cancelAutoSwitch, handleAgentEvent, recoveries } from './events.svelte';
 import { delegateRuns } from './delegation.svelte';
@@ -378,6 +378,23 @@ export const isRunning = (sessionId: string) =>
 
 /** Stops the reply of a chat now. What was written so far stays. `quiet`: the stop is only to make room for a newer
  *  message (sent while the reply ran, an edit), not the user's Stop button: the reply does not say "You stopped after". */
+/**
+ * Ends the chat's background work everywhere it is shown: the Work tray (the activity log) and the chat's own task cards
+ * (the sub agent and background-command rows in the transcript). Both stop paths use it, so the two views cannot disagree.
+ */
+export function stopChatWork(sessionId: string) {
+  closeRunningActivity(sessionId);
+  let changed = false;
+  for (const message of messagesOf(sessionId)) {
+    for (const block of message.blocks) {
+      if (block.kind !== 'command' || (block.task?.status !== 'started' && block.task?.status !== 'progress')) continue;
+      block.task = { ...block.task, status: 'stopped', endedAt: Date.now() };
+      changed = true;
+    }
+  }
+  if (changed) persistLocal(sessionId);
+}
+
 export function stopTurn(sessionId: string, quiet = false) {
   cancelAutoSwitch(sessionId);
   if (!quiet && (queued[sessionId]?.length ?? 0) > 0)
@@ -403,7 +420,7 @@ export function stopTurn(sessionId: string, quiet = false) {
   logFlow(sessionId, 'stop', `turn=${turns[sessionId] ?? '-'} quiet=${quiet} live=${Boolean(liveReplies[sessionId]?.live)}`);
   // The user's own Stop ends everything of this chat. An interrupt for a new message (quiet) does not: the work that
   // already runs in the background goes on, and a stop aimed at one side lane returned above.
-  if (!quiet) closeRunningActivity(sessionId);
+  if (!quiet) stopChatWork(sessionId);
   // Stopped by the user: a retry or a hand-over waiting to start does not start.
   delete recoveries[sessionId];
   advanceRun(sessionId, { type: 'cancel' });

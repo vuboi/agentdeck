@@ -3,6 +3,24 @@
 // The audit log only holds calls that finished and the error log only holds failures: a turn that never ends, a lock
 // nobody gives or a queue that waits for a render that never comes leaves nothing in either. Never one line per token.
 import { inTauri } from '../app/platform/history';
+import { getPref, setPref } from '../app/platform/prefs';
+
+const DEBUG_KEY = 'debug.log';
+/** On until the user switches it off in Settings > Debug. */
+let debugOn = true;
+/** Turns the debug log on or off: the page stops writing and the Rust side stops writing `debug.log` with it. */
+export function setDebugLog(on: boolean) {
+  debugOn = on;
+  void setPref(DEBUG_KEY, on);
+  if (!inTauri()) return;
+  void import('@tauri-apps/api/core').then(({ invoke }) => invoke('debug_log_set_enabled', { on })).catch(() => undefined);
+}
+export const debugLogOn = () => debugOn;
+/** Settled once the saved choice is read and applied. */
+export const debugLogReady = getPref<boolean>(DEBUG_KEY).then((saved) => {
+  if (saved === false) setDebugLog(false);
+  else if (inTauri()) void import('@tauri-apps/api/core').then(({ invoke }) => invoke('debug_log_set_enabled', { on: true })).catch(() => undefined);
+});
 
 let pending: string[] = [];
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -22,7 +40,7 @@ async function flush() {
 
 /** Notes a step of a chat's flow. Safe anywhere: it never throws and never waits. */
 export function logFlow(chat: string, kind: string, detail?: string) {
-  if (!inTauri()) return;
+  if (!inTauri() || !debugOn) return;
   try {
     pending.push(JSON.stringify({ at: new Date().toISOString(), src: 'page', chat, kind, detail: (detail ?? '').slice(0, 400) }));
     if (pending.length >= 64) void flush();
@@ -32,9 +50,9 @@ export function logFlow(chat: string, kind: string, detail?: string) {
   }
 }
 
-// Hang trace: always on. The page writes its own timings every few seconds and each step that is slow, so a freeze is
-// always visible in the log.
-export const hangTraceOn = () => true;
+// Hang trace: on with the debug log (Settings > Debug). The page writes its own timings every few seconds and each step
+// that is slow, so a freeze is visible in the log.
+export const hangTraceOn = () => debugOn;
 
 // The page cannot write while its main thread is stuck, so the last step it started is kept here: a watchdog that runs
 // after the freeze names where it was. Set by the steps that do the heavy work.

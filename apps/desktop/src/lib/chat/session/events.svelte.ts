@@ -76,15 +76,29 @@ export function resumeStoppedTurn(sessionId: string) {
 type RecoveryState = { retries: number; tried: string[] };
 export const recoveries: Record<string, RecoveryState> = {};
 const CLI_OF: Record<string, string> = { claude: 'claude', codex: 'codex', antigravity: 'agy', opencode: 'opencode', copilot: 'gh' };
+/** What a provider's CLI says when the conversation an id names does not exist (a run stopped before it wrote anything,
+ *  or a session cleaned up): Codex rollout, Claude session, OpenCode session, Antigravity conversation, Copilot thread. */
+const NO_CONVERSATION = /no (rollout|conversation|session|thread) (was )?found|(conversation|session|thread) (not found|does not exist)|unknown (conversation|session|thread)/i;
+
+/** The chain's rows are `agent|model` (a model picked in Settings) or a bare agent (the agent's first model). */
+const chainAgent = (row: string) => row.split('|')[0];
 
 /** The agents a chat can move to now, in the user's order: installed, with models, not at their limit. */
 export function recoveryChain(): string[] {
-  return connectors.recovery.chain.filter((agent) => {
+  const agents = [...new Set(connectors.recovery.chain.map(chainAgent))];
+  return agents.filter((agent) => {
     const tool = CLI_OF[agent];
     if (!tool) return false;
     const installed = connectors.detected?.tools.find((item) => item.id === tool)?.path !== null;
     return installed && (MODELS[agent as Agent] ?? []).length > 0 && agentHasRoom(agent);
   });
+}
+
+/** The model the chain picked for an agent (its first row with a model), or undefined for the agent's first model. */
+export function recoveryModelFor(agent: string): string | undefined {
+  const row = connectors.recovery.chain.find((item) => chainAgent(item) === agent && item.includes('|'));
+  const model = row?.slice(row.indexOf('|') + 1);
+  return model || undefined;
 }
 
 /** What to do about a turn of `session` that ended with `message`; null when nothing is (off, or stopped by the user). */
@@ -139,8 +153,8 @@ function noteModelFallback(session: SessionItem, reply: Message, line: string) {
 }
 
 /** Moves a chat to another agent (its first model), as picking it in the composer would. */
-export function moveChatTo(session: SessionItem, agent: Agent) {
-  const model = MODELS[agent]?.[0]?.value ?? session.model;
+export function moveChatTo(session: SessionItem, agent: Agent, picked?: string) {
+  const model = picked ?? MODELS[agent]?.[0]?.value ?? session.model;
   if (session.agent !== agent && !session.draft) {
     session.agents = [...new Set([...(session.agents ?? [session.source ?? session.agent]), agent])];
     rememberMixed(session);
@@ -172,7 +186,7 @@ async function runRecovery(sessionId: string, plan: Recovery, reason: string) {
     if (replies[sessionId] || recoveries[sessionId] !== state) return;
     forgetUnstartedConversation(session);
   } else {
-    moveChatTo(session, plan.agent as Agent);
+    moveChatTo(session, plan.agent as Agent, recoveryModelFor(plan.agent));
     state.retries = 0;
     state.tried.push(plan.agent);
   }
@@ -598,6 +612,8 @@ function handleEventNow(
   messageId?: string,
 ) {
   const ownedRun = turn ? runReplies.get(turn) : undefined;
+  // The agent answered: the reply stops saying it is being handed over.
+  if (ownedRun?.reply.dispatching) ownedRun.reply.dispatching = false;
   // Task ids correlate to their original cards even after the user has started a newer turn.
   if (event.kind === 'task') {
     updateHistoricalTask(messagesOf(sessionId), event);
@@ -662,12 +678,15 @@ function handleEventNow(
   if (
     !ownedRun?.listener &&
     event.kind === 'error' &&
-    /no rollout found|no conversation found/i.test(event.message)
+    NO_CONVERSATION.test(event.message)
   ) {
     // The CLI no longer has the conversation this id named (a thread whose run was cut short, a cleaned-up session).
     // The next turn starts a new one, and is given what was said so far as text, so the work in progress is not lost.
+    // Every provider's own id is reset: the chat's first agent and any agent it moved to later.
     session.agentStarted = false;
     session.agentSession = undefined;
+    const own = session.agentIds?.[session.agent];
+    if (own) own.started = false;
     session.forkContext = (session.forkContext ?? '') + handoffFor(sessionId, lastRequest(sessionId));
   }
   trackActivity(
