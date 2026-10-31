@@ -10,12 +10,12 @@ import { requestSystemNotificationPermission, sendSystemNotification } from '../
 // switch between (Codex via `codex-auth`, Claude via `cswap`), the "close to the limit" alerts, and custom / local
 // model providers. The work itself is in Rust (`connectors.rs`); this file holds what the screen shows.
 
-export type ConnectorId = 'claude' | 'codex' | 'agy' | 'opencode' | 'copilot';
+export type ConnectorId = 'claude' | 'codex' | 'agy' | 'opencode' | 'copilot' | 'workbuddy';
 export type AccountProvider = 'claude' | 'codex' | 'copilot';
 
 export type Tool = { id: string; path: string | null; version: string | null };
 export type Login = { logged_in: boolean | null; email: string | null; plan: string | null; detail: string | null };
-export type Detected = { tools: Tool[]; claude: Login; codex: Login; antigravity: Login; opencode: Login; copilot: Login };
+export type Detected = { tools: Tool[]; claude: Login; codex: Login; antigravity: Login; opencode: Login; copilot: Login; workbuddy: Login };
 export type UsageWindow = { label: string; pct: number; resets_at: number | null };
 export type Account = {
   id: string;
@@ -71,6 +71,8 @@ export type CustomProvider = {
   enabled: boolean;
   /** A free tier that may keep and train on what it is sent: it never sees project files, code or secrets. */
   restricted?: boolean;
+  /** Uses the native WorkBuddy connector credential and gateway request headers. */
+  workbuddy?: boolean;
 };
 /** The Claude Console's API credit: the key the `credit:` Claude models run on, and the Console sign-in that reads
  * the credit left. Both stay on this computer only. */
@@ -90,7 +92,7 @@ export function openSettings(section: Section = 'connectors') {
 export const connectors = $state({
   detected: null as Detected | null,
   accounts: { claude: null, codex: null, copilot: null, agy: [] } as Record<AccountProvider, Accounts | null> & { agy: AgyAccount[] },
-  autoSwitch: { claude: false, codex: false, copilot: false, agy: false, opencode: false } as Record<ConnectorId, boolean>,
+  autoSwitch: { claude: false, codex: false, copilot: false, agy: false, opencode: false, workbuddy: false } as Record<ConnectorId, boolean>,
   /** What is running right now, by key (`install:codex`, `login:claude`, `switch:codex`…), with a label for it. */
   busy: {} as Record<string, string>,
   /** Last lines of an install or sign-in, by connector id. */
@@ -428,9 +430,34 @@ export async function login(id: ConnectorId, label: string): Promise<boolean> {
     // Login completion is independent from slow usage/account reads. Refresh those in the background.
     void refreshAll();
     if (id === 'copilot') refreshCopilotModels();
+    if (id === 'workbuddy') await syncWorkbuddyProvider();
     if (id !== 'agy') toast.success(`${label} signed in`);
   }
   return ok;
+}
+
+async function syncWorkbuddyProvider(): Promise<void> {
+  const token = await loadSecret('workbuddy');
+  if (!token) return;
+  const models = await call<string[]>('workbuddy_models').catch(() => []);
+  const existing = connectors.custom.find((item) => item.id === 'workbuddy');
+  const next = normalizeCustomProvider({
+    ...(existing ?? {}),
+    id: 'workbuddy',
+    name: 'WorkBuddy',
+    kind: 'openai',
+    baseUrl: 'https://www.workbuddy.ai/v2',
+    keyEnv: '',
+    keys: [{ id: 'workbuddy-account', label: 'WorkBuddy account', apiKey: token }],
+    activeKeyId: 'workbuddy-account',
+    autoSwitch: false,
+    models: models.length ? models : existing?.models ?? [],
+    defaultModel: models[0] ?? existing?.defaultModel ?? '',
+    enabled: true,
+    workbuddy: true,
+  });
+  saveProvider(next, true);
+  await persistCustom(connectors.custom);
 }
 
 /** Cancels a connector sign-in started from an account confirmation dialog. */
@@ -515,7 +542,7 @@ export async function autoSwitchConnectorAccount(connector: ConnectorId, attempt
 
 /** Restores the original profile and confirms native state before another attempt can start. */
 async function restoreConnectorAccount(connector: ConnectorId, id: string | undefined): Promise<void> {
-  if (!id || connector === 'opencode') throw new Error('No original account available to restore');
+  if (!id || connector === 'opencode' || connector === 'workbuddy') throw new Error('No original account available to restore');
   if (connector === 'agy') {
     const before = connectors.accounts.agy.find((item) => item.active)?.id;
     try { await call('antigravity_account_switch', { id }); }
@@ -547,6 +574,7 @@ async function restoreConnectorAccount(connector: ConnectorId, id: string | unde
 
 async function switchConnectorCandidate(connector: ConnectorId, attempt: CredentialAttempt, signal: AbortSignal): Promise<{ email: string } | null> {
   await Promise.all([accountCacheReady, autoSwitchReady]);
+  if (connector === 'workbuddy') return null;
   if (!connectors.autoSwitch[connector] || !inTauri()) return null;
   signal.throwIfAborted();
   if (connector === 'agy') {

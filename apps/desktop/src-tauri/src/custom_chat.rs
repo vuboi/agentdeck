@@ -132,6 +132,8 @@ pub struct Turn {
     /// A provider whose free tier may keep and train on what it is sent: it gets no file, shell, browser, code index or
     /// MCP tool and no project text, only web search and fetch. A trusted model reads the project and hands it text.
     pub restricted: bool,
+    /// WorkBuddy is OpenAI-shaped but requires its own gateway headers and prompt normalization.
+    pub workbuddy: bool,
 }
 
 /// The only tools a restricted provider may call: they read the public web, never this machine.
@@ -1723,11 +1725,18 @@ async fn model_call(
     tools: &[Value],
     emit: &mut impl FnMut(AgentEvent),
 ) -> Result<Step, String> {
+    let mut outgoing_messages = messages.to_vec();
+    if turn.workbuddy {
+        outgoing_messages = workbuddy_turn_messages(&outgoing_messages);
+        for message in &mut outgoing_messages {
+            replace_workbuddy_strings(message);
+        }
+    }
     let mut body = json!({
         "model": turn.model,
         "stream": true,
         "stream_options": { "include_usage": true },
-        "messages": messages,
+        "messages": outgoing_messages,
     });
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools.to_vec());
@@ -1751,7 +1760,27 @@ async fn model_call(
     let mut request = client
         .post(chat_url(&turn.kind, &turn.base_url))
         .json(&body);
-    if let Some(key) = turn.api_key.as_deref().filter(|key| !key.is_empty()) {
+    if turn.workbuddy {
+        let key = match crate::connectors::workbuddy_access_token().await {
+            Ok(key) => key,
+            Err(_) => turn.api_key.clone().unwrap_or_default(),
+        };
+        if key.is_empty() {
+            return Err("WorkBuddy is not signed in".into());
+        }
+        request = request
+            .bearer_auth(key)
+            .header("X-Product", "SaaS")
+            .header("X-Domain", "www.workbuddy.ai")
+            .header("X-IDE-Type", "WorkBuddy")
+            .header("X-IDE-Name", "WorkBuddy")
+            .header("X-IDE-Version", "5.5.6")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("X-Agent-Intent", "craft")
+            .header("X-Agent-Purpose", "conversation")
+            .header("X-Agent-Type", "main")
+            .header("User-Agent", "WorkBuddy/5.5.6");
+    } else if let Some(key) = turn.api_key.as_deref().filter(|key| !key.is_empty()) {
         request = request.bearer_auth(key);
     }
     // A local model reads a long prompt before it answers, so the wait for the first byte is generous but not endless.
@@ -1816,6 +1845,44 @@ async fn model_call(
         }
     }
     Ok(step)
+}
+
+fn replace_workbuddy_strings(value: &mut Value) {
+    match value {
+        Value::String(text) => {
+            for (from, to) in [
+                ("x-anthropic-billing-header:", ""),
+                ("You are Claude Code, Anthropic's official CLI for Claude", "You are Claude Code, Anthropic's CLI for Claude"),
+                ("Codex CLI is an open source project led by OpenAI.", "The Codex CLI is an open source project led by OpenAI."),
+                ("Codex CLI", "the assistant"),
+                ("codex_cli_rs", "assistant"),
+                ("OpenAI", "the provider"),
+                ("Codex", "the assistant"),
+            ] {
+                *text = text.replace(from, to);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(replace_workbuddy_strings),
+        Value::Object(object) => object.values_mut().for_each(replace_workbuddy_strings),
+        _ => {}
+    }
+}
+
+/// WorkBuddy accepts one live turn at a time. Keep the current user turn and its tool loop, while omitting older
+/// AgentDeck transcript turns that the gateway rejects as replayed history.
+fn workbuddy_turn_messages(messages: &[Value]) -> Vec<Value> {
+    let Some(last_user) = messages
+        .iter()
+        .rposition(|message| message["role"].as_str() == Some("user"))
+    else {
+        return messages.to_vec();
+    };
+    let mut result = Vec::with_capacity(messages.len() - last_user + 1);
+    if let Some(system) = messages.first().filter(|message| message["role"].as_str() == Some("system")) {
+        result.push(system.clone());
+    }
+    result.extend(messages[last_user..].iter().cloned());
+    result
 }
 
 /// Reads one SSE line. `true` when it is the end of the stream (`data: [DONE]`).
@@ -2408,6 +2475,7 @@ mod tests {
             chat: String::new(),
             effort: None,
             restricted: false,
+            workbuddy: false,
         }
     }
 

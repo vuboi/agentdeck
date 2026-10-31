@@ -2342,6 +2342,7 @@ pub fn run() {
             connectors::codex_auto_switch,
             connectors::provider_probe,
             connectors::provider_quota,
+            connectors::workbuddy_models,
             connectors::claude_console_credit,
             notify::system_notify,
             error_log::error_log_append,

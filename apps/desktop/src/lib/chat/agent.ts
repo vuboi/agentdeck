@@ -93,6 +93,8 @@ export async function sendCustomTurn(args: {
   effort: string | null;
   /** A free-tier provider: no file, shell or browser tool, only the public web (see custom_chat.rs). */
   restricted?: boolean;
+  /** WorkBuddy uses the OpenAI wire format with Tencent-specific gateway headers. */
+  workbuddy?: boolean;
 }): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('custom_send', args);

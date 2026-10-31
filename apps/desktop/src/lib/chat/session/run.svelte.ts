@@ -526,6 +526,7 @@ export function startTurn(
         cwd: provider.restricted ? null : cwd,
         effort: turnOptionsOf(session.id).effort as Effort,
         restricted: Boolean(provider.restricted),
+        workbuddy: Boolean(provider.workbuddy),
       }), PREPARE_LIMIT_MS, 'starting the provider');
       return;
     }

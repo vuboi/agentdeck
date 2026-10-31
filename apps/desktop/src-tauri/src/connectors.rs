@@ -416,6 +416,7 @@ async fn login_status(provider: &str) -> Login {
         },
         "codex" => codex_login(),
         "copilot" => github_login().await,
+        "workbuddy" => workbuddy_login_status(),
         _ => Login::default(),
     }
 }
@@ -455,6 +456,209 @@ pub struct Detected {
     antigravity: Login,
     opencode: Login,
     copilot: Login,
+    workbuddy: Login,
+}
+
+const WORKBUDDY_SECRET: &str = "agentdeck:workbuddy";
+const WORKBUDDY_BASE: &str = "https://www.workbuddy.ai";
+
+fn workbuddy_login_status() -> Login {
+    let logged_in = secret_load(WORKBUDDY_SECRET.to_string()).is_some();
+    Login {
+        logged_in: Some(logged_in),
+        detail: Some("device sign-in".to_string()),
+        ..Login::default()
+    }
+}
+
+pub(crate) async fn workbuddy_access_token() -> Result<String, String> {
+    let raw = secret_load(WORKBUDDY_SECRET.to_string()).ok_or("WorkBuddy is not signed in")?;
+    let json: Value = serde_json::from_str(&raw).map_err(|_| "saved WorkBuddy credential is invalid")?;
+    let expires_at = json["expires_at"].as_u64().unwrap_or(u64::MAX);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+    if expires_at <= now + 60 {
+        if let Some(refresh) = json["refresh_token"].as_str().filter(|token| !token.is_empty()) {
+            if let Ok(token) = workbuddy_refresh(refresh).await {
+                return Ok(token);
+            }
+        }
+    }
+    json["access_token"]
+        .as_str()
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| "saved WorkBuddy credential has no access token".to_string())
+}
+
+async fn workbuddy_refresh(refresh_token: &str) -> Result<String, String> {
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent("WorkBuddy/5.5.6")
+        .build()
+        .map_err(|error| error.to_string())?
+        .post(format!("{WORKBUDDY_BASE}/v2/plugin/auth/token/refresh"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("X-Refresh-Token", refresh_token)
+        .header("X-Product", "SaaS")
+        .header("X-Domain", "www.workbuddy.ai")
+        .body("{}")
+        .send()
+        .await
+        .map_err(|error| format!("WorkBuddy token refresh failed: {error}"))?;
+    let payload: Value = response.json().await.map_err(|error| error.to_string())?;
+    if payload["code"].as_i64() != Some(0) {
+        return Err(payload["msg"].as_str().unwrap_or("refresh rejected").to_string());
+    }
+    let access = payload["data"]["accessToken"]
+        .as_str()
+        .ok_or("WorkBuddy refresh returned no access token")?;
+    let next_refresh = payload["data"]["refreshToken"].as_str().unwrap_or(refresh_token);
+    let expires_in = payload["data"]["expiresIn"].as_u64().unwrap_or(2_592_000);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+    secret_save(
+        WORKBUDDY_SECRET.to_string(),
+        serde_json::json!({
+            "access_token": access,
+            "refresh_token": next_refresh,
+            "token_type": "Bearer",
+            "expires_at": now.saturating_add(expires_in),
+        })
+        .to_string(),
+    )?;
+    Ok(access.to_string())
+}
+
+async fn workbuddy_sign_in() -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent("WorkBuddy/5.5.6")
+        .build()
+        .map_err(|error| error.to_string())?;
+    let state = client
+        .post(format!("{WORKBUDDY_BASE}/v2/plugin/auth/state?platform=CLI"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("X-Product", "SaaS")
+        .json(&serde_json::json!({ "platform": "CLI" }))
+        .send()
+        .await
+        .map_err(|error| format!("WorkBuddy sign-in could not start: {error}"))?;
+    let status = state.status();
+    let payload: Value = state
+        .json()
+        .await
+        .map_err(|error| format!("WorkBuddy sent invalid sign-in data: {error}"))?;
+    if !status.is_success() || payload["code"].as_i64() != Some(0) {
+        return Err(format!(
+            "WorkBuddy sign-in rejected: {}",
+            payload["msg"].as_str().unwrap_or("unknown error")
+        ));
+    }
+    let state_id = payload["data"]["state"]
+        .as_str()
+        .ok_or("WorkBuddy sign-in returned no state")?;
+    let auth_url = payload["data"]["authUrl"]
+        .as_str()
+        .or_else(|| payload["data"]["url"].as_str())
+        .ok_or("WorkBuddy sign-in returned no browser URL")?;
+    crate::browser::open_external(auth_url.to_string())?;
+
+    for _ in 0..120 {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let response = client
+            .get(format!("{WORKBUDDY_BASE}/v2/plugin/auth/token?state={state_id}"))
+            .header("Accept", "application/json")
+            .header("X-Product", "SaaS")
+            .send()
+            .await
+            .map_err(|error| format!("WorkBuddy sign-in polling failed: {error}"))?;
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|error| format!("WorkBuddy sent invalid token data: {error}"))?;
+        if payload["code"].as_i64() == Some(0) {
+            let access = payload["data"]["accessToken"]
+                .as_str()
+                .ok_or("WorkBuddy sign-in returned no access token")?;
+            secret_save(
+                WORKBUDDY_SECRET.to_string(),
+                serde_json::json!({
+                    "access_token": access,
+                    "refresh_token": payload["data"]["refreshToken"],
+                    "token_type": payload["data"]["tokenType"].as_str().unwrap_or("Bearer"),
+                    "expires_at": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |duration| duration.as_secs())
+                        .saturating_add(payload["data"]["expiresIn"].as_u64().unwrap_or(2_592_000)),
+                })
+                .to_string(),
+            )?;
+            return Ok(());
+        }
+        if payload["code"].as_i64() != Some(11217) {
+            return Err(format!(
+                "WorkBuddy sign-in failed: {}",
+                payload["msg"].as_str().unwrap_or("unknown error")
+            ));
+        }
+    }
+    Err("WorkBuddy sign-in timed out after 10 minutes".to_string())
+}
+
+fn collect_workbuddy_models(value: &Value, models: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            for key in ["id", "model", "modelId", "model_id"] {
+                if let Some(model) = object[key].as_str().filter(|model| model.contains('-')) {
+                    if !models.iter().any(|known| known == model) {
+                        models.push(model.to_string());
+                    }
+                }
+            }
+            for child in object.values() {
+                collect_workbuddy_models(child, models);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_workbuddy_models(item, models);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[tauri::command]
+pub async fn workbuddy_models() -> Result<Vec<String>, String> {
+    let token = workbuddy_access_token().await?;
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent("WorkBuddy/5.5.6")
+        .build()
+        .map_err(|error| error.to_string())?
+        .get(format!("{WORKBUDDY_BASE}/v3/config"))
+        .bearer_auth(token)
+        .header("Accept", "application/json")
+        .header("X-Product", "SaaS")
+        .send()
+        .await
+        .map_err(|error| format!("WorkBuddy model catalog failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("WorkBuddy model catalog returned {}", response.status()));
+    }
+    let payload: Value = response.json().await.map_err(|error| error.to_string())?;
+    let mut models = Vec::new();
+    collect_workbuddy_models(&payload, &mut models);
+    models.retain(|model| !model.contains('/') && model.len() < 120);
+    if models.is_empty() {
+        return Err("WorkBuddy returned no chat models".to_string());
+    }
+    Ok(models)
 }
 
 const TOOLS: [&str; 10] = [
@@ -717,6 +921,7 @@ pub async fn connectors_detect() -> Detected {
         antigravity: antigravity_login(),
         opencode,
         copilot: github_login().await,
+        workbuddy: workbuddy_login_status(),
     }
 }
 
@@ -880,6 +1085,7 @@ async fn connector_login_inner(app: AppHandle, id: String) -> Result<(), String>
     let limit = Duration::from_secs(300);
     let idle_limit = Some(Duration::from_secs(120));
     match id.as_str() {
+        "workbuddy" => workbuddy_sign_in().await,
         "claude" => {
             let claude = which("claude").ok_or("Claude Code is not installed")?;
             run_logged_with_idle_timeout(

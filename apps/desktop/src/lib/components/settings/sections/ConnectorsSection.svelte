@@ -98,6 +98,14 @@
       accounts: 'copilot',
       manager: { id: 'gh', label: 'GitHub CLI', why: 'Uses the active gh auth account for Copilot access.' },
     },
+    {
+      id: 'workbuddy',
+      label: 'WorkBuddy',
+      binary: 'workbuddy',
+      brand: 'lucideBot',
+      tone: 'bg-cyan-500/12 text-cyan-600 dark:text-cyan-400',
+      note: 'Tencent WorkBuddy. Sign-in uses a browser device flow; chat uses its authenticated model catalog.',
+    },
   ];
 
   const loginOf = (id: ConnectorId): Login | undefined => {
@@ -232,8 +240,9 @@
             <div class="col-start-1 row-start-1 flex min-w-0 flex-col gap-4" in:fade={{ duration: 220, delay: 60 }}>
               {#each CARDS.filter((item) => item.id === activeCard) as card (card.id)}
                 {@const info = loginOf(card.id)}
-                {@const path = tool(card.binary)?.path}
-                {@const version = tool(card.binary)?.version}
+                {@const native = card.id === 'workbuddy'}
+                {@const path = native ? card.id : tool(card.binary)?.path}
+                {@const version = native ? 'OAuth' : tool(card.binary)?.version}
                 {@const list = card.accounts ? connectors.accounts[card.accounts] : null}
                 {@const working = busyOf(`install:${card.id}`, `login:${card.id}`, `add:${card.id}`)}
                 {@const log = lastLog(card.id)}
@@ -290,9 +299,9 @@
                   </div>
 
                   <div class="flex items-center gap-3 border-t border-border/70 px-4 py-2.5">
-                    <span class="min-w-0 flex-1 text-[0.75rem] text-muted-foreground">{card.id === 'opencode' ? 'Automatic account switching is unavailable for OpenCode.' : 'Rotate to another saved account when quota or sign-in fails.'}</span>
+                    <span class="min-w-0 flex-1 text-[0.75rem] text-muted-foreground">{card.id === 'opencode' || card.id === 'workbuddy' ? 'Automatic account switching is unavailable for this connector.' : 'Rotate to another saved account when quota or sign-in fails.'}</span>
                     <span class="text-xs font-medium {card.id === 'opencode' ? 'text-muted-foreground' : ''}">Auto switch</span>
-                    <ZSwitch zVariant="dot" checked={card.id !== 'opencode' && Boolean(connectors.autoSwitch[card.id])} zSize="sm" zDisabled={card.id === 'opencode'} onChange={(value) => setConnectorAutoSwitch(card.id, value)} />
+                    <ZSwitch zVariant="dot" checked={card.id !== 'opencode' && card.id !== 'workbuddy' && Boolean(connectors.autoSwitch[card.id])} zSize="sm" zDisabled={card.id === 'opencode' || card.id === 'workbuddy'} onChange={(value) => setConnectorAutoSwitch(card.id, value)} />
                   </div>
 
                   {#if working || log.length > 0 || connectors.errors[`install:${card.id}`] || connectors.errors[`login:${card.id}`] || connectors.errors[`add:${card.id}`]}

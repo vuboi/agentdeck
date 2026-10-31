@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-workbuddy-models"
+description = "Enables the workbuddy_models command without any pre-configured scope."
+commands.allow = ["workbuddy_models"]
+
+[[permission]]
+identifier = "deny-workbuddy-models"
+description = "Denies the workbuddy_models command without any pre-configured scope."
+commands.deny = ["workbuddy_models"]
