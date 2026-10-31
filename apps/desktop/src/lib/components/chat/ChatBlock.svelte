@@ -32,7 +32,9 @@
   let chip = $state<HTMLElement | null>(null);
   let cardOpen = $state(false);
   let failedImageSrc = $state<string | null>(null);
+  let loadedImageSrc = $state<string | null>(null);
   const renderedImageSrc = $derived(block.kind === 'image' ? pictureSrc(block) : '');
+  const imageLoaded = $derived(block.kind === 'image' && loadedImageSrc === renderedImageSrc);
   const imageUnavailable = $derived(
     block.kind === 'image' && (!renderedImageSrc || failedImageSrc === renderedImageSrc),
   );
@@ -125,12 +127,16 @@
       <img src="/assets/image-not-found.png" alt="" aria-hidden="true" class="size-full object-contain" />
     </div>
   {:else}
+    <!-- Holds a small box until the picture decodes, then fades and scales in (transform only: the row does not jump). -->
     <img
       src={renderedImageSrc}
       alt={block.name}
-      class="block-in max-h-56 max-w-full self-start rounded-lg border border-border object-contain"
+      class="min-h-24 min-w-24 max-h-56 max-w-full self-start rounded-lg border border-border bg-muted/40 object-contain transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none {imageLoaded ? 'scale-100 opacity-100' : 'scale-[0.97] opacity-0'}"
       onerror={() => (failedImageSrc = renderedImageSrc)}
-      onload={() => (failedImageSrc = null)}
+      onload={() => {
+        failedImageSrc = null;
+        loadedImageSrc = renderedImageSrc;
+      }}
     />
   {/if}
 {:else if block.kind === 'loading'}

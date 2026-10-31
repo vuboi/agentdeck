@@ -503,20 +503,11 @@ fn tail(lines: Vec<Value>, limit: usize) -> Value {
 
 /// Opens `url` in the Preview panel (a tab of its own when another page is open there) and waits until the page
 /// answers the injected script: then it is ready to act on.
-async fn open_page(app: &AppHandle, url: &str, new_tab: bool, chat: &str) -> Result<Value, String> {
-    // A chat that already drives a tab of its own opens the page there, whichever tab is in front.
-    let own = if new_tab || chat.is_empty() {
-        None
-    } else {
-        let tab = tab_for(app, chat, None);
-        let owned = STATE
-            .lock()
-            .map_err(|_| "busy".to_string())?
-            .current
-            .get(chat)
-            .is_some_and(|current| *current == tab);
-        owned.then_some(tab)
-    };
+async fn open_page(app: &AppHandle, url: &str, requested: Option<bool>, chat: &str) -> Result<Value, String> {
+    // Reuse a tab that already shows this server before opening another; an explicit `new_tab` decides for itself.
+    let own = if requested == Some(true) { None } else { reusable_tab(app, chat, url) };
+    // Nothing to reuse: a new tab, unless the tab in front is free and blank (then the page goes there).
+    let new_tab = requested.unwrap_or_else(|| own.is_none() && front_taken(chat));
     app.emit_to(
         "main",
         "agent-open",
@@ -551,13 +542,45 @@ async fn open_page(app: &AppHandle, url: &str, new_tab: bool, chat: &str) -> Res
     Err(format!("{url} did not open in Preview within 30 s"))
 }
 
-/// Whether a page the agent opens goes to a tab of its own. `new_tab` says it outright. Otherwise the front tab is
-/// used, unless it shows a page that another chat opened and drives: that one is left alone.
-fn wants_new_tab(params: &HashMap<String, String>) -> bool {
-    if let Some(value) = params.get("new_tab") {
-        return value == "1" || value == "true";
+/// Whether a page the agent opens goes to a tab of its own: `Some` when the request says so, `None` to let
+/// `open_page` reuse a tab first.
+fn wants_new_tab(params: &HashMap<String, String>) -> Option<bool> {
+    params.get("new_tab").map(|value| value == "1" || value == "true")
+}
+
+/// The address of a server: scheme, host and port (`http://127.0.0.1:1432`).
+fn server_of(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    format!("{scheme}://{authority}").to_ascii_lowercase()
+}
+
+/// A tab a page can open in without a new one: the chat's own tab, else a tab already on the same server that no other
+/// chat drives. A tab in front that is among them wins.
+fn reusable_tab(app: &AppHandle, chat: &str, url: &str) -> Option<String> {
+    let alive = |tab: &str| !tab.is_empty() && app.get_webview(&format!("browser-{tab}")).is_some();
+    let state = STATE.lock().ok()?;
+    if let Some(tab) = state.current.get(chat).filter(|tab| alive(tab)) {
+        return Some(tab.clone());
     }
-    let chat = params.get("chat").map_or("", String::as_str);
+    let server = server_of(url);
+    let mut tabs: Vec<&String> = state
+        .tabs
+        .iter()
+        .filter(|(id, tab)| {
+            !tab.url.is_empty()
+                && server_of(&tab.url) == server
+                && alive(id)
+                && state.owners.get(*id).is_none_or(|owner| owner == chat)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    tabs.sort_by_key(|id| (**id != state.active, (*id).clone()));
+    tabs.first().map(|id| (*id).clone())
+}
+
+/// Whether the tab in front is taken: it shows a page, or another chat opened and drives it. Such a tab is left alone.
+fn front_taken(chat: &str) -> bool {
     let Ok(state) = STATE.lock() else {
         return false;
     };
@@ -566,7 +589,7 @@ fn wants_new_tab(params: &HashMap<String, String>) -> bool {
         .get(&state.active)
         .is_some_and(|tab| !tab.url.is_empty());
     shows_a_page
-        && state
+        || state
             .owners
             .get(&state.active)
             .is_some_and(|owner| !chat.is_empty() && owner != chat)

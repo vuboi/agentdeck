@@ -1,6 +1,7 @@
 import { messages as mockMessages, type Message, type Block } from '../mock';
 import { loadHistory, inTauri, type HistorySession, listHistory, type HistoryMessage, clock, toBlocks, loadHistoryPage, renameHistory, deleteHistory } from '../../app/platform/history';
 import { restoreCommandImages, stripCommandImageData, deleteCommandImages } from '../content/command-images';
+import { archivedMessages, deleteArchivedMessages } from '../content/archive';
 import { samePath } from '../../files/paths';
 import { CREDIT_PREFIX, baseModel } from '../../agents/credit-model';
 import { getPref, setPref, setPrefs } from '../../app/platform/prefs';
@@ -29,7 +30,7 @@ export async function conversationForExport(sessionId: string): Promise<{ title:
   if (!session) throw new Error('This conversation no longer exists.');
   if (session.source && session.path) {
     const raw = await loadHistory(session.source, session.path);
-    const own = await toMessages(session, raw);
+    const own = await restoreArchivedWork(session, await toMessages(session, raw));
     const all = assemble(session, own, own[0]?.at);
     return {
       title: session.title,
@@ -447,6 +448,45 @@ async function toMessages(
   );
 }
 
+const responseText = (message: Message) =>
+  message.blocks
+    .filter((block): block is Extract<Block, { kind: 'response' }> => block.kind === 'response')
+    .map((block) => block.text)
+    .join('\n\n')
+    .trim();
+
+const isWorkMessage = (message: Message) =>
+  message.autoTurn ||
+  message.blocks.some(
+    (block) =>
+      block.kind === 'delegate' ||
+      (block.kind === 'command' && Boolean(block.taskId || block.task || block.children || block.background)),
+  );
+
+function mergeWorkMessages(messages: Message[], extras: Message[]): Message[] {
+  const restored = [...messages];
+  for (const extra of extras.filter(isWorkMessage)) {
+    const text = responseText(extra);
+    const index = restored.findIndex(
+      (message) =>
+        message.id === extra.id ||
+        (Boolean(text) &&
+          message.role === extra.role &&
+          responseText(message) === text &&
+          (!message.at || !extra.at || Math.abs(Date.parse(message.at) - Date.parse(extra.at)) < 10 * 60_000)),
+    );
+    if (index >= 0) restored[index] = { ...restored[index], ...extra };
+    else if (extra.autoTurn) restored.push(extra);
+  }
+  return restored.sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
+}
+
+/** Reattaches AgentDeck-only work report metadata that provider history cannot represent. */
+async function restoreArchivedWork(session: SessionItem, messages: Message[]): Promise<Message[]> {
+  const records = await archivedMessages(session.id);
+  return mergeWorkMessages(messages, records.flatMap((record) => (record.snapshot ? [record.snapshot] : [])));
+}
+
 /** The file's messages minus the deleted ones, with the other agents' turns that fall in the time range `[lower, upper)`. */
 function assemble(
   session: SessionItem,
@@ -478,7 +518,7 @@ async function fetchTranscript(
     null,
     PAGE_LIMIT,
   );
-  const own = await toMessages(session, page.messages);
+  const own = await restoreArchivedWork(session, await toMessages(session, page.messages));
   const assembled = assemble(
     session,
     own,
@@ -651,7 +691,7 @@ async function readTranscript(session: SessionItem | undefined) {
     // Show what we have right away; a stale copy is replaced as soon as the fresh one arrives.
     chat.messages = await restoreCommandImages(
       session.id,
-      withLive(session.id, cached.messages),
+      withLive(session.id, await restoreArchivedWork(session, cached.messages)),
     );
     if (token !== transcriptToken) return;
     chat.older = cached.stamp === stampOf(session) ? (cached.start ?? 0) : 0;
@@ -663,9 +703,11 @@ async function readTranscript(session: SessionItem | undefined) {
   try {
     const fresh = await fetchTranscript(session);
     if (token !== transcriptToken) return;
-    chat.messages = withLive(session.id, fresh.messages);
+    // A pre-update transcript cache may still contain work cards that the provider parser cannot represent.
+    const merged = mergeWorkMessages(fresh.messages, cached?.messages ?? []);
+    chat.messages = withLive(session.id, merged);
     chat.older = fresh.start;
-    remember(session, fresh.messages, fresh.start);
+    remember(session, merged, fresh.start);
   } catch (error) {
     if (token !== transcriptToken) return;
     if (!cached) chat.messages = [];
@@ -704,6 +746,16 @@ export async function deleteSession(id: string) {
   if (!session) return;
   // A run of the chat ends with it: its CLI is stopped and the events that still arrive have nowhere to go.
   stopTurn(id);
+  // An idle warm CLI can have touched the transcript recently without a visible turn. Release only this chat before
+  // the adapter moves its file; other chats and their background work keep running.
+  if (inTauri()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('agent_warm_reset_session', { session: id });
+    } catch {
+      // The history delete below still reports a real external writer if one is present.
+    }
+  }
   if (session.path && session.source)
     await deleteHistory(session.source, session.path);
   // Forks of it move up to its own parent.
@@ -735,6 +787,7 @@ export async function deleteSession(id: string) {
   lastEventKind.delete(id);
   saveOtherTurns();
   deleteCommandImages(id);
+  await deleteArchivedMessages(id);
   patchCache((list) => list.filter((item) => item.id !== id));
   if (workspace.activeId === id) {
     const next =

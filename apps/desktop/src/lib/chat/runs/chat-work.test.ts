@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isWorkActive, projectChatWork } from './chat-work.ts';
+import { isWorkActive, projectChatWork, stopTarget } from './chat-work.ts';
 import type { Activity } from './activity.svelte';
 import type { TaskRecord } from '../../tasks/delegate-task';
 
 const shell: Activity = { key: 'shell', sessionId: 'chat', name: 'Bash', input: '{"command":"pnpm build","description":"Build the app"}', background: true, status: 'background', startedAt: 1, agent: 'codex', sourceMessageId: 'request' };
+const project: Activity = { key: 'project', sessionId: 'chat', name: 'Run project', input: 'pnpm dev\nE:\\WORK\\PROJECTS\\agentdeck', background: false, status: 'background', startedAt: 1, agent: 'codex', sourceMessageId: 'request' };
 const worker: TaskRecord = { id: 'worker', caller: 'chat', childId: 'child', task: 'Review changes', sourceMessageId: 'request', state: 'running', wait: false, agent: 'claude', agentId: 'claude', model: 'model', label: 'Claude', startedAt: 2 };
 
 test('one tray shows native background commands and cross-provider workers without needing the transcript', () => {
@@ -22,6 +23,22 @@ test('finishing work keeps its identity, output and result available', () => {
   assert.equal(after.detail, 'Build passed');
   assert.equal(after.state, 'done');
   assert.equal(isWorkActive(after), false);
+});
+
+test('only an AgentDeck-owned project run gets an independent Stop action', () => {
+  const [run] = projectChatWork([project], [], []);
+  const [command] = projectChatWork([shell], [], []);
+  assert.equal(run.canStop, true);
+  assert.equal(run.activityKey, 'project');
+  assert.equal(command.canStop, false);
+});
+
+test('Stop targets the row-owned work and never falls back to the main chat', () => {
+  assert.equal(stopTarget({ activityKey: 'project', canStop: true }), 'project');
+  assert.equal(stopTarget({ delegateId: 'worker', canStop: true }), 'delegate');
+  assert.equal(stopTarget({ childId: 'child', canStop: true }), 'child');
+  assert.equal(stopTarget({ activityKey: 'native-shell', canStop: false }), null);
+  assert.equal(stopTarget({ canStop: true }), null);
 });
 
 test('a completed worker waiting for integration remains visible as work awaiting its result', () => {

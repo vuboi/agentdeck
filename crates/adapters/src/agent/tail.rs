@@ -97,6 +97,18 @@ pub(super) fn discard(agent: Option<&str>) {
     }
 }
 
+/// Ends the tail that belongs to one chat, leaving every other chat's background work alone.
+pub(super) fn discard_chat(chat: &str) {
+    let tail = TAILS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(chat);
+    if let Some(tail) = tail {
+        tail.discard.store(true, Ordering::Relaxed);
+        let _ = tail.stop.send(());
+    }
+}
+
 /// Stops the answer in progress of a chat's tail (an interrupt). False when the chat has none.
 pub fn interrupt(chat: &str) -> bool {
     TAILS

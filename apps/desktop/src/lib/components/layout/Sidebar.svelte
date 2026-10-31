@@ -166,6 +166,8 @@
     return parents;
   });
   const seenRun = new SvelteSet<string>();
+  // A run that ended in a chat that was not open: its label blinks a few times, then rests tinted until the chat is opened.
+  const doneUnseen = new SvelteSet<string>();
   let lastWorking = new Set<string>();
   $effect(() => {
     const now = working;
@@ -173,13 +175,17 @@
     untrack(() => {
       // A new run of a chat starts blinking again, even if the last one was opened.
       for (const id of now) if (!lastWorking.has(id)) seenRun.delete(id);
+      for (const id of now) doneUnseen.delete(id);
+      for (const id of lastWorking) if (!now.has(id) && id !== active) doneUnseen.add(id);
       if (now.has(active)) seenRun.add(active);
+      doneUnseen.delete(active);
       lastWorking = new Set(now);
     });
   });
   function labelClass(id: string, selected: boolean) {
     if (selected) return 'font-medium text-primary';
     if (working.has(id)) return seenRun.has(id) ? 'font-medium text-primary/90' : 'row-running-blink font-medium';
+    if (doneUnseen.has(id)) return 'font-medium text-primary/90';
     if (runningParents.has(id)) return 'font-medium text-primary/65';
     return '';
   }
@@ -348,6 +354,53 @@
     });
   }
 
+  /** Every project leaves the list at once; their folders and chats stay on disk, as with a single remove. */
+  function askRemoveAllProjects() {
+    const count = workspace.projects.length;
+    if (!count) return;
+    zModalService.danger({
+      zTitle: 'Remove all projects from the list?',
+      zContent: `${count} ${count === 1 ? 'project leaves' : 'projects leave'} the sidebar. Their folders and chats stay on disk, in Claude and Codex.`,
+      zConfirmStyle: 'dialog',
+      zOkText: 'Remove all',
+      zOkIcon: 'lucideTrash2',
+      zCancelText: 'Cancel',
+      zWidth: '400px',
+      onOk: () => {
+        for (const project of [...workspace.projects]) hideProject(project.id);
+      },
+    });
+  }
+
+  /** Deletes every chat of one project (the same way as Delete on a chat), after one confirmation. */
+  function askClearProjectChats(id: string) {
+    const project = workspace.projects.find((item) => item.id === id);
+    const sessions = workspace.sessions.filter((item) => item.projectId === id);
+    if (!project || !sessions.length) return;
+    zModalService.danger({
+      zTitle: `Delete all ${sessions.length} chats in “${project.name}”?`,
+      zContent: 'Each chat is removed from AgentDeck and from its CLI: the files move to ~/.agentdeck/trash, so they can be restored by hand. A chat open in a running CLI cannot be deleted.',
+      zConfirmStyle: 'dialog',
+      zOkText: 'Delete all',
+      zOkIcon: 'lucideTrash2',
+      zCancelText: 'Cancel',
+      zWidth: '400px',
+      onOk: async () => {
+        let failed = 0;
+        for (const session of sessions) {
+          try {
+            await deleteSession(session.id);
+          } catch {
+            failed += 1;
+          }
+        }
+        if (failed) zModalService.warning({ zTitle: 'Some chats could not be deleted', zContent: `${failed} of ${sessions.length} chats are still in the list.`, zConfirmStyle: 'dialog', zCancelText: null, zOkText: 'OK' });
+        else toast.success(`Deleted ${sessions.length} chats in “${project.name}”`);
+        return true;
+      },
+    });
+  }
+
   const ITEM = 'text-sm! py-1';
   const projectItems = $derived<ZDropdownMenuItem[]>([
     { label: 'New session', icon: 'lucidePlus', iconSize: '12', class: ITEM, onClick: () => menu && addSession(menu.id) },
@@ -439,6 +492,15 @@
       divide: 'before',
       disabled: view.groupBy === DEFAULT_VIEW.groupBy && view.sortBy === DEFAULT_VIEW.sortBy && view.order === DEFAULT_VIEW.order,
       onClick: () => setView({ ...DEFAULT_VIEW }),
+    },
+    {
+      label: 'Remove all projects',
+      icon: 'lucideTrash2',
+      iconSize: '12',
+      divide: 'before',
+      disabled: workspace.projects.length === 0,
+      class: `${ITEM} text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive!`,
+      onClick: () => askRemoveAllProjects(),
     },
   ]);
   const menuItems = $derived(menu?.kind === 'project' ? projectItems : menu?.kind === 'view' ? viewItems : sessionItems);
@@ -584,14 +646,20 @@
     </span>
   {:else}
     <!-- Never an empty slot: a running chat whose row is not the main one gets the dot (with a fallback colour). -->
-    <span class="size-1.5 shrink-0 rounded-full {statusColor[session.status]}" style:background-color={dotFallback[session.status]} aria-label={session.status}></span>
+    <!-- A run that ended unseen: the dot lights up and ripples for a few beats (app.css row-done-dot). -->
+    <!-- A running dot pulses a halo, the same ping as the send button while a reply runs (RunActionButton). -->
+    <span class="relative size-1.5 shrink-0 rounded-full {doneUnseen.has(session.id) ? 'row-done-dot' : statusColor[session.status]}" style:background-color={dotFallback[session.status]} aria-label={session.status}>
+      {#if session.status === 'working' && !doneUnseen.has(session.id)}
+        <span class="pointer-events-none absolute -inset-[3px] animate-ping rounded-full bg-success/25 [animation-duration:1.8s] motion-reduce:hidden" aria-hidden="true"></span>
+      {/if}
+    </span>
   {/if}
 {/snippet}
 
 {#snippet renameField(id: string)}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (keys handled on the field) -->
   <input
-    class="h-5 min-w-0 flex-1 bg-transparent p-0 [font:inherit] text-foreground outline-none"
+    class="h-6 min-w-0 flex-1 bg-transparent p-0 [font:inherit] text-foreground outline-none"
     data-rename
     maxlength={TITLE_MAX}
     aria-label="Chat name"
@@ -674,7 +742,7 @@
     <div class="contents" onclick={blurAfterClick}>
     <Tree
       {nodes}
-      rowHeight={28}
+      rowHeight={34}
       class="text-sm"
       maxHeight={treeHeight}
       label="Projects and sessions"
@@ -743,7 +811,7 @@
           {:else if data?.kind === 'session' && data.session && data.flat}
             <!-- Right under a heading: a flat list, so no branch lines. Status dot (spinner while running) and agent tag
                  as in the project rows. -->
-            <span class="-ml-5 grid w-3 shrink-0 place-items-center">{@render sessionStatus(data.session, ctx.node.id)}</span>
+            <span class="-ml-3 grid w-3 shrink-0 place-items-center">{@render sessionStatus(data.session, ctx.node.id)}</span>
             {#if editing === ctx.node.id}
               {@render renameField(data.session.id)}
             {:else}
@@ -776,6 +844,9 @@
               <!-- Same floating, fading overlay as a chat row: pin, then a new session in it. -->
               <span class="relative flex shrink-0 items-center self-stretch">
                 <span class="invisible absolute top-0 -right-1 bottom-(--z-tree-row-gap) z-10 flex items-center gap-1 rounded-r-(--radius-small) bg-[linear-gradient(to_right,transparent,var(--row-bg,var(--color-muted))_20px)] pr-1 pl-6 group-hover/tree-row:visible group-data-menu-row/tree-row:visible">
+                  <button type="button" class={ACTION} aria-label="Delete all chats in {ctx.node.label}" title="Delete all chats" onclick={(event) => { event.stopPropagation(); askClearProjectChats(id); }}>
+                    <ZIcon zType="lucideListX" zSize="14" class="size-3.5" />
+                  </button>
                   {#if data.path}
                     <button type="button" class={ACTION} aria-label={pinnedFolder ? 'Unpin' : 'Pin'} onclick={(event) => { event.stopPropagation(); togglePinProject(id); }}>
                       <ZIcon zType={(pinnedFolder ? 'lucidePinOff' : 'lucidePin') as ZIconName} zSize="14" class="size-3.5 rotate-45" />
@@ -859,8 +930,15 @@
   aside :global(.tree) {
     scrollbar-gutter: stable;
     padding-top: 4px;
-    /* The empty lane is 10px on the right: a little on the left keeps the rows from looking pushed to one side. */
-    padding-left: 6px;
+    /* A little more air between the chat rows than the Explorer's tree (Tree.svelte: 2px). */
+    --z-tree-row-gap: 2.5px;
+    /* Outer inset from the window's left edge: the highlight (left: -6px below) stops 8px short of it. */
+    padding-left: 14px;
+  }
+  /* The hover and active highlight reaches back to the tree's left edge: the logo, dot and arrow sit 6px inside it,
+     not on its edge. */
+  aside :global(.tree-row)::before {
+    left: -6px;
   }
   /* Where a new session will go: its project (or "This computer") keeps a tinted row until the first message. */
   /* Opaque (mixed with the sidebar), so the fading overlay of the row's buttons uses the very same colour. */

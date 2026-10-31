@@ -13,6 +13,8 @@ export type ChatWork = {
   kind: 'agent' | 'command';
   sourceMessageId?: string;
   sourceTitle?: string;
+  /** The live Activity entry behind a provider-native project run. */
+  activityKey?: string;
   /** The tool call a provider-native task belongs to: the chat's transcript card finds its row by it. */
   callId?: string;
   childId?: string;
@@ -29,6 +31,16 @@ export type ChatWork = {
 
 /** Terminal results remain available in the tray instead of disappearing at completion. */
 export const isWorkActive = (work: ChatWork) => ['queued', 'running', 'paused', 'waiting', 'input'].includes(work.state);
+
+/** The only independent Stop targets a Work row may own. There is deliberately no main-chat fallback. */
+export type WorkStopTarget = 'project' | 'delegate' | 'child' | null;
+export function stopTarget(work: Pick<ChatWork, 'activityKey' | 'delegateId' | 'childId' | 'canStop'>): WorkStopTarget {
+  if (!work.canStop) return null;
+  if (work.activityKey) return 'project';
+  if (work.delegateId) return 'delegate';
+  if (work.childId) return 'child';
+  return null;
+}
 
 /** Prefer the provider's human description to raw tool JSON in the always-visible task title. */
 function workTitle(input: string): string {
@@ -48,12 +60,14 @@ export function projectChatWork(events: readonly Activity[], tasks: readonly Tas
     if ((!event.background && event.name !== 'Run project') || /delegate_task/i.test(event.name)) continue;
     work.push({
       id: `native:${event.key}`, sessionId: event.sessionId, callId: event.callId,
+      activityKey: event.key,
       title: event.taskLabel || workTitle(event.input) || event.name,
       state: event.status === 'ok' ? 'done' : event.status === 'fail' ? 'failed' : event.status === 'stopped' ? 'stopped' : 'running',
       agent: event.agent, model: event.model, kind: event.nativeTaskId || /agent|task|spawn/i.test(event.name) ? 'agent' : 'command',
       sourceMessageId: event.sourceMessageId, sourceTitle: event.sourceTitle,
-      // A native task has no stop of its own here: stopping it would end the chat's whole reply. Only the chat's Stop does that.
-      canStop: false,
+      // AgentDeck owns project servers started by browser_serve, so they can stop independently of the chat turn.
+      // Other provider-native tasks still have no per-task cancellation API and must not stop the whole reply.
+      canStop: event.name === 'Run project' && ['running', 'background'].includes(event.status),
       startedAt: event.startedAt, endedAt: event.endedAt, detail: event.output ?? '',
     });
   }

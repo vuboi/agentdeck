@@ -153,9 +153,12 @@
   $effect(() => {
     const id = terminal.active;
     if (!terminal.open) return;
+    // An agent may open or update the terminal while the user is composing a prompt. Keep the prompt focused in that
+    // case; a terminal opened by an explicit user action still receives the keyboard normally.
+    const preserveComposer = document.activeElement instanceof HTMLElement && document.activeElement.matches('[data-composer-editor]');
     requestAnimationFrame(() => {
       fitSession(id);
-      if (!searching) focusSession(id);
+      if (!searching && !preserveComposer) focusSession(id);
     });
   });
 

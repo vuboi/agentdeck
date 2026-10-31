@@ -1,7 +1,7 @@
 <script lang="ts">
   import RunActionButton from './RunActionButton.svelte';
   import ProjectBar from '../layout/ProjectBar.svelte';
-  import { untrack } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { getPref, setPref } from '../../app/platform/prefs';
   import { ZButton, ZIcon, ZPopover, zTooltip } from '@shival99/z-ui-svelte';
   import PickerPopover, { type PickerItem } from '../ui/PickerPopover.svelte';
@@ -106,6 +106,26 @@
   let fileInput: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
   let area: HTMLDivElement | undefined = $state();
+  let restoreOnWindowFocus = false;
+  onMount(() => {
+    const rememberComposerFocus = () => {
+      restoreOnWindowFocus = document.activeElement === area;
+    };
+    const restoreComposerFocus = () => {
+      if (!restoreOnWindowFocus) return;
+      restoreOnWindowFocus = false;
+      requestAnimationFrame(() => {
+        if (!area?.isConnected || document.activeElement === area || document.querySelector('[role="dialog"]')) return;
+        area.focus({ preventScroll: true });
+      });
+    };
+    window.addEventListener('blur', rememberComposerFocus);
+    window.addEventListener('focus', restoreComposerFocus);
+    return () => {
+      window.removeEventListener('blur', rememberComposerFocus);
+      window.removeEventListener('focus', restoreComposerFocus);
+    };
+  });
   let textEditMenu = $state<{ openAt: (event: MouseEvent, target: HTMLElement) => void } | undefined>();
   const caret = () => area ? editorSelection(area) : { start: draft.length, end: draft.length };
   $effect(() => {
@@ -613,11 +633,19 @@
 </script>
 
 <svelte:window bind:innerWidth={innerW} />
-{#if backgroundWork.length > 0}
-  <BackgroundTasks items={backgroundWork} {sessionId} />
-{/if}
-{#if waiting.length > 0 || queuePaused[sessionId]}
-  <ComposerQueue {sessionId} {waiting} {waitingForUser} onedit={editQueued} />
+{#if backgroundWork.length > 0 && (waiting.length > 0 || queuePaused[sessionId])}
+  <!-- Work and queue share one tray, so its sides run down to the composer like the queue's do. -->
+  <div class="mx-2 -mb-4 overflow-hidden rounded-t-2xl border border-b-0 border-border bg-card pb-4 shadow-md">
+    <BackgroundTasks items={backgroundWork} {sessionId} embedded />
+    <ComposerQueue {sessionId} {waiting} {waitingForUser} onedit={editQueued} embedded />
+  </div>
+{:else}
+  {#if backgroundWork.length > 0}
+    <BackgroundTasks items={backgroundWork} {sessionId} layer />
+  {/if}
+  {#if waiting.length > 0 || queuePaused[sessionId]}
+    <ComposerQueue {sessionId} {waiting} {waitingForUser} onedit={editQueued} />
+  {/if}
 {/if}
 <form
   bind:this={formEl}

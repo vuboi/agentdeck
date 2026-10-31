@@ -2407,6 +2407,7 @@ pub fn run() {
             agent_runs::agent_send,
             copilot::copilot_permission_answer,
             agent_runs::agent_warm_reset,
+            agent_runs::agent_warm_reset_session,
             agent_runs::agent_prewarm,
             awake::keep_awake_set,
             agent_runs::custom_send,

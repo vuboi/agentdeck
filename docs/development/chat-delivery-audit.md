@@ -67,6 +67,23 @@ Model và connector tài khoản cung cấp cấu hình/credential cho runtime. 
 - Hàng báo cáo được đánh thức bằng sự kiện hoàn tất, không polling một giờ rồi xóa kết quả. Prompt đang chờ và yêu cầu người dùng vẫn có thứ tự rõ ràng.
 - Các kiểm tra hồi quy mới bao phủ work projection, khử trùng lặp workflow, ưu tiên không hủy, nguồn báo cáo, listener sau nạp transcript và auto-turn đồng thời với foreground. Chưa thực hiện ma trận chat thật cho mọi tài khoản/provider.
 
+### Luồng Stop độc lập của Work
+
+1. `trackActivity` đổi `browser_serve` thành Activity `Run project`, giữ `activityKey` và thông tin command/folder của server do AgentDeck sở hữu.
+2. `projectChatWork` chiếu Activity thành row Work. Chỉ `Run project` đang sống được đặt `canStop: true`; shell native khác không có nút Stop riêng.
+3. `stopTarget` chọn đúng một đích thuộc row: `project`, `delegate` hoặc `child`. Nếu row không có handle độc lập, kết quả là `null`; không có fallback về `sessionId` của main chat.
+4. `BackgroundTasks` gọi `stopProjectRun` cho `project`, `stopDelegateTask` cho worker delegated và `stopTurn(childId)` cho workflow child.
+5. `stopProjectRun` gọi `server_stop` đúng server key. Sau khi lệnh thành công, Activity được ghi `stopped`, có `endedAt`, audit được cập nhật và row rời nhóm `active`.
+6. Work tray gọi `refreshProjectRun` mỗi giây. Nếu server bị kill ngoài app, `servers_list` trả `running: false` hoặc không còn row; Activity cũng được chuyển sang `stopped`.
+7. Stop của composer/main chat vẫn đi qua `stopTurn(sessionId)` và là luồng riêng; Stop một `Run project` không gọi hàm này.
+8. Nút global của Work là `Stop all` (không phải pause): nó lặp qua từng `stopTarget` độc lập, không gọi `stopTurn(sessionId)` và không làm ảnh hưởng lượt main ngoài các row được người dùng chọn dừng hàng loạt.
+
+Regression cases:
+
+- `chat-work.test.ts`: project run có Stop độc lập; native shell không có Stop; delegate và child có đúng target; row không có handle không được suy diễn thành Stop main.
+- `svelte-check`: kiểm tra wiring của Work tray, `AgentActivityCards` và các nhánh Stop.
+- Còn cần kiểm tra desktop thật với Tauri: bấm Stop trên row `Run project`, xác nhận server tắt, main model vẫn sinh tiếp, rồi force-kill ngoài shell và xác nhận row tự chuyển `Stopped`.
+
 ```powershell
 node --experimental-strip-types --experimental-vm-modules --test apps/desktop/tests/chat-delivery.test.mjs apps/desktop/src/lib/chat/agent-reply.test.ts apps/desktop/src/lib/chat/runs/queue.test.ts apps/desktop/src/lib/chat/runs/run-lanes.test.ts apps/desktop/src/lib/chat/runs/run-state.test.ts
 pnpm --filter desktop check

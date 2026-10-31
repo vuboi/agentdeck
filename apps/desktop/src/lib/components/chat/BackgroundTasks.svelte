@@ -18,14 +18,17 @@
   import { showSession } from '../../app/ui/content-tabs.svelte';
   import { elapsed } from '../../chat/content/blocks';
   import { requestFocusMessage } from '../../chat/content/focus-message.svelte';
-  import { isWorkActive, type ChatWork } from '../../chat/runs/chat-work';
+  import { refreshProjectRun, stopProjectRun } from '../../chat/runs/activity.svelte';
+  import { isWorkActive, stopTarget, type ChatWork } from '../../chat/runs/chat-work';
   import { returnTaskResult, pauseDelegateTask, resumeDelegateTask, stopDelegateTask } from '../../chat/session/delegate-task.svelte';
   import { stopTurnForResume, resumeStoppedTurn } from '../../chat/session/events.svelte';
   import { stopTurn } from '../../chat/session/turns.svelte';
 
   /** Outside the virtual transcript: scrolling and loading old messages cannot unmount the work list.
    *  `title` names the list; `stateKey` keys its open state (the chat by default, so each card can have its own). */
-  let { items, sessionId, title = 'Work', stateKey = sessionId }: { items: ChatWork[]; sessionId: string; title?: string; stateKey?: string } = $props();
+  // `layer` turns the list into a tray above the composer, in the same shell as the queue (ComposerQueue) and inset from it.
+  // `embedded` drops the shell: the caller (Composer) draws one tray around the work list and the queue.
+  let { items, sessionId, title = 'Work', stateKey = sessionId, layer = false, embedded = false }: { items: ChatWork[]; sessionId: string; title?: string; stateKey?: string; layer?: boolean; embedded?: boolean } = $props();
   // Folded by default: each chat keeps its own open state, so the list opens only when the user asks for it.
   // Module level (like the chat's scroll position): the state outlives this component, so switching to another chat
   // and back shows the list as the user left it.
@@ -62,22 +65,38 @@
   };
   const tone = (item: ChatWork) => item.state === 'failed' ? 'text-destructive' : item.state === 'input' || item.state === 'unknown' ? 'text-amber-500' : item.state === 'done' ? 'text-emerald-500' : 'text-muted-foreground';
   const ICON_BUTTON = 'grid size-4 shrink-0 cursor-pointer place-items-center text-muted-foreground outline-none transition-colors hover:text-primary disabled:cursor-default disabled:opacity-40 disabled:hover:text-muted-foreground';
-  // Pause all: the workers that can pause and are still running (a paused one is not counted again).
-  const pausable = $derived(active.filter((item) => item.canPause && item.state !== 'paused'));
-  // Stop ends what the row runs: a worker's task or a child chat's turn. A provider-native task has no Stop (see chat-work.ts).
+  // Stop all still uses each row's own handle; it never stops the main chat turn as a shortcut.
+  const stoppable = $derived(active.filter((item) => stopTarget(item) !== null));
+  // Work is also rendered without the transcript's LiveCommand card. Keep AgentDeck-owned project rows in step with
+  // the Rust server registry so a process killed externally does not remain "active" forever in this tray.
+  $effect(() => {
+    const projectKeys = items.filter((item) => item.canStop && item.activityKey).map((item) => item.activityKey!);
+    if (!projectKeys.length) return;
+    const refresh = () => projectKeys.forEach((key) => void refreshProjectRun(key));
+    void refresh();
+    const timer = window.setInterval(refresh, 1000);
+    return () => window.clearInterval(timer);
+  });
+  // Stop ends what the row runs: an AgentDeck-owned project server, a worker task, or a child chat's turn.
   function stopItem(item: ChatWork) {
-    if (item.delegateId) stopDelegateTask(item.delegateId);
-    else if (item.childId) stopTurn(item.childId);
-  }
-  function pauseAll() {
-    for (const item of pausable) {
-      if (item.delegateId) pauseDelegateTask(item.delegateId);
-      else if (item.childId) stopTurnForResume(item.childId);
+    switch (stopTarget(item)) {
+      case 'project':
+        void stopProjectRun(item.activityKey!);
+        break;
+      case 'delegate':
+        stopDelegateTask(item.delegateId!);
+        break;
+      case 'child':
+        stopTurn(item.childId!);
+        break;
     }
+  }
+  function stopAll() {
+    for (const item of stoppable) stopItem(item);
   }
 </script>
 
-<section class="mb-2 min-w-0 overflow-hidden rounded-lg border border-border/70 text-xs" aria-label="Chat tasks">
+<section class="min-w-0 overflow-hidden text-xs {embedded ? '' : layer ? '-mb-4 mx-2 rounded-t-2xl border border-b-0 border-border bg-card pb-4 shadow-md' : 'mb-2 rounded-lg border border-border/70'}" aria-label="Chat tasks">
   <div class="flex h-8 w-full min-w-0 items-center gap-1 pr-2">
   <button type="button" class="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 px-3 text-left text-muted-foreground outline-none hover:text-foreground" aria-label="Toggle {title}" aria-expanded={isOpen} onclick={() => (open[stateKey] = !isOpen)}>
     {#if running > 0}
@@ -94,10 +113,10 @@
       {#if items.length === 0}<span>All work settled</span>{/if}
     </span>
   </button>
-  {#if pausable.length > 0}
-    <button type="button" class="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.6875rem] text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/60" aria-label="Pause all running work" title="Pause all running workers" onclick={pauseAll}>
-      <ZIcon zType={'lucideSquarePause' as ZIconName} zSize="12" class="size-3" />
-      Pause all
+  {#if stoppable.length > 0}
+    <button type="button" class="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.6875rem] text-muted-foreground outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring/60" aria-label="Stop all running work" title="Stop all running work" onclick={stopAll}>
+      <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="currentColor" /></svg>
+      Stop all
     </button>
   {/if}
   <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60" aria-label="Toggle {title}" aria-expanded={isOpen} onclick={() => (open[stateKey] = !isOpen)}>

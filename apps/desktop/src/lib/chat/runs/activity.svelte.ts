@@ -4,6 +4,7 @@
 
 import { pictureUrl, type AgentEvent } from '../agent';
 import { inTauri } from '../../app/platform/history';
+import { stopServers } from '../../browser/browser.svelte';
 import { planRunRestore, terminalStep, updateInflight, loadInflight, withTerminal, withoutTerminal, type InflightRun, type ServerLike } from './inflight';
 import { sessionTail, watchOutput } from '../../terminal/terminal-session';
 import { endedByTask, statusAfterResult } from './activity-status';
@@ -435,11 +436,12 @@ export async function refreshOutput(item: Activity): Promise<boolean> {
       const row = await serverFor(item);
       // A server that is not in the list any more (stopped, or from an earlier session) keeps the text it has.
       if (!row) {
-        endRestored(item);
+        // Once a live run has resolved its port, a missing server means it was stopped outside AgentDeck.
+        if (item.port !== undefined) endRunProject(item);
         return false;
       }
       item.output = String(await tauriCall('server_log', { port: item.port, lines: 200 })).slice(-OUTPUT_CAP);
-      if (!row.running) endRestored(item);
+      if (!row.running) endRunProject(item);
       return row.running;
     }
     if (item.name === 'Terminal' && item.terminalId) {
@@ -451,6 +453,33 @@ export async function refreshOutput(item: Activity): Promise<boolean> {
     // The output stays as it was.
   }
   return false;
+}
+
+/** Refreshes one project run for surfaces that show Work without mounting its transcript command card. */
+export async function refreshProjectRun(activityKey: string): Promise<boolean> {
+  const item = activity.find((entry) => entry.key === activityKey && entry.name === 'Run project');
+  return item ? refreshOutput(item) : false;
+}
+
+/** Stops one AgentDeck-owned project server and immediately settles its Work entry. */
+export async function stopProjectRun(activityKey: string): Promise<boolean> {
+  if (!inTauri()) return false;
+  const item = activity.find((entry) => entry.key === activityKey && entry.name === 'Run project');
+  if (!item || (item.status !== 'running' && item.status !== 'background')) return false;
+  const row = await serverFor(item);
+  if (!row) {
+    if (item.port === undefined) return false;
+    endRunProject(item);
+    return true;
+  }
+  try {
+    await stopServers(row.key);
+  } catch {
+    return false;
+  }
+  item.port = row.key;
+  endRunProject(item);
+  return true;
 }
 
 /**
@@ -566,8 +595,9 @@ export function finishSavedTerminal(saved: { tabId: string; command: string; cwd
 
 // ---- Run project entries found again after a reload: they end when their server does.
 const restoredRuns = new Set<Activity>();
-function endRestored(item: Activity) {
-  if (!restoredRuns.delete(item) || item.status !== 'running') return;
+function endRunProject(item: Activity) {
+  if (item.status !== 'running' && item.status !== 'background') return;
+  restoredRuns.delete(item);
   item.status = 'stopped';
   item.endedAt = Date.now();
   record(item);

@@ -93,7 +93,7 @@ export const BUILTIN: SlashItem[] = [
   },
   {
     name: 'release',
-    description: 'Write the release notes, bump the version, tag and publish',
+    description: 'Write notes, bump version, commit, push branch and tag for GitHub build',
     kind: 'builtin',
     origin: 'AgentDeck',
     template:

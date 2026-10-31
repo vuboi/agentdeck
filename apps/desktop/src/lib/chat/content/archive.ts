@@ -1,5 +1,6 @@
-import { getPref, listPrefs, setPref } from '../../app/platform/prefs';
+import { getPref, listPrefs, setPref, setPrefs } from '../../app/platform/prefs';
 import type { Message } from '../mock';
+import { stripCommandImageData } from './command-images';
 
 // AgentDeck's own copy of every conversation turn: which agent and model wrote it, when, and what it said.
 // The agent CLIs keep their own history in their own formats; this is one format of ours, kept in IndexedDB, and
@@ -37,6 +38,8 @@ export type ArchiveMessage = {
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number } | null;
   cost: number | null;
   ms: number | null;
+  /** AgentDeck-only fields needed to redraw automatic work reports after the provider transcript is reloaded. */
+  snapshot?: Message;
   savedAt: string;
 };
 
@@ -70,6 +73,19 @@ const textOf = (message: Message) =>
     .join('\n\n')
     .trim();
 
+const hasWorkBlocks = (message: Message) =>
+  message.blocks.some(
+    (block) =>
+      block.kind === 'delegate' ||
+      (block.kind === 'command' && Boolean(block.taskId || block.task || block.children || block.background)),
+  );
+
+const snapshotOf = (message: Message): Message | undefined => {
+  if (!message.autoTurn && !hasWorkBlocks(message)) return undefined;
+  // Command screenshots are indexed separately and can be large; keep their local file references, not base64 data.
+  return JSON.parse(JSON.stringify(stripCommandImageData([message])[0])) as Message;
+};
+
 /** Saves the messages of a finished turn, and the chat they belong to. */
 export function archiveTurn(
   session: { id: string; title: string; agent: string; model: string | null | undefined; projectPath: string | null },
@@ -86,6 +102,7 @@ export function archiveTurn(
     savedAt,
   } satisfies ArchiveSession);
   for (const message of messages) {
+    const snapshot = snapshotOf(message);
     const record: ArchiveMessage = {
       v: ARCHIVE_VERSION,
       id: message.id,
@@ -99,10 +116,28 @@ export function archiveTurn(
       tokens: message.tokens ? { ...message.tokens } : null,
       cost: message.cost ?? null,
       ms: message.ms ?? null,
+      ...(snapshot ? { snapshot } : {}),
       savedAt,
     };
     setPref(KEY_MESSAGE(session.id, message.id), record);
   }
+}
+
+/** Reads AgentDeck's extra turn data without replacing the provider's own transcript. */
+export async function archivedMessages(sessionId: string): Promise<ArchiveMessage[]> {
+  const entries = await listPrefs<ArchiveMessage>(`archive.m.${sessionId}.`);
+  return entries
+    .map(([, message]) => message)
+    .filter((message) => message.snapshot?.autoTurn || (message.snapshot && hasWorkBlocks(message.snapshot)));
+}
+
+/** Removes the local archive overlay when a chat is deleted. */
+export async function deleteArchivedMessages(sessionId: string) {
+  const entries = await listPrefs<ArchiveMessage>(`archive.m.${sessionId}.`);
+  await setPrefs([
+    [KEY_SESSION(sessionId), null],
+    ...entries.map(([key]) => [key, null] as [string, null]),
+  ]);
 }
 
 /** Everything saved after `since` (all of it when `null`). */

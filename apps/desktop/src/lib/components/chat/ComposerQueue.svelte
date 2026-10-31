@@ -12,16 +12,19 @@
   } from '../../chat/sessions.svelte';
 
   // Queued messages sit behind the composer until the agent is free; editing one hands it back to the composer.
+  // `embedded`: the caller draws the tray (Composer, with the work list above); this keeps only the queue's own rows.
   let {
     sessionId,
     waiting,
     waitingForUser,
     onedit,
+    embedded = false,
   }: {
     sessionId: string;
     waiting: Queued[];
     waitingForUser: boolean;
     onedit: (item: Queued) => void;
+    embedded?: boolean;
   } = $props();
 
   // Queued messages are reordered by dragging their handle (zSortable: the rows glide, Escape cancels).
@@ -37,7 +40,7 @@
 {#if waiting.length > 0 || queuePaused[sessionId]}
   <!-- Queued messages sit behind the composer until the agent is free and any open question or permission is resolved. -->
   <div
-    class="mx-3 -mb-4 overflow-hidden rounded-t-2xl border border-b-0 border-border bg-card pb-4 shadow-md"
+    class={embedded ? 'min-w-0 border-t border-border' : 'mx-4 -mb-4 overflow-hidden rounded-t-2xl border border-b-0 border-border bg-card pb-4 shadow-md'}
   >
     <!-- Outside the sortable list, so the status and clear action are not queue rows. -->
     <div

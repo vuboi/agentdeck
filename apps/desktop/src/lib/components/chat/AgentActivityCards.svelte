@@ -7,7 +7,7 @@
   import BackgroundTasks from './BackgroundTasks.svelte';
 
   // The provider's own sub agents and background commands, listed exactly like the Work tray: one design for both.
-  // `sessionId`: the chat the items run in; its background run is what Stop ends.
+  // `sessionId`: the chat the items run in; only rows with their own cancellation handle may show Stop.
   let { items, agent = 'codex', sessionId }: { items: CommandBlock[]; agent?: string; sessionId?: string } = $props();
 
   function identity(item: CommandBlock) {
@@ -46,7 +46,8 @@
       agent: info.model ? info.agent : undefined,
       model: info.model ?? null,
       kind: toolOf(item.command) === 'Bash' ? 'command' : 'agent',
-      canStop: state === 'running' && Boolean(sessionId),
+      activityKey: live?.activityKey,
+      canStop: state === 'running' && live?.canStop === true && Boolean(live.activityKey),
       startedAt: task.startedAt ?? Date.now(),
       endedAt: live?.endedAt ?? task.endedAt,
       detail: task.summary ?? item.output ?? '',

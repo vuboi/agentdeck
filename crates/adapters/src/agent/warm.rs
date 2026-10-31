@@ -201,6 +201,22 @@ pub fn reset(agent: Option<&str>) {
     super::tail::discard(agent);
 }
 
+/// Ends the kept process and tail of one chat without disturbing other chats using the same agent.
+pub fn reset_chat(chat: &str) {
+    let prefix = format!("{chat}{SEP}");
+    let gone: Vec<Warm> = {
+        let mut pool = pool();
+        let keys: Vec<String> = pool
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        keys.into_iter().filter_map(|key| pool.remove(&key)).collect()
+    };
+    drop(gone);
+    super::tail::discard_chat(chat);
+}
+
 /// Whether a kept process can take a turn: same settings, still running, and the turn's conversation (a turn that
 /// names none takes a process started ahead of it).
 fn fits(warm: &mut Warm, key: &str, conversation: Option<&str>) -> bool {

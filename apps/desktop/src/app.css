@@ -299,6 +299,33 @@ html[data-warming] [data-z-popover] {
   50% { color: var(--primary); }
 }
 @media (prefers-reduced-motion: reduce) { .row-running-blink { animation: none; color: var(--primary); } }
+/* A run that ended in a chat not open: its dot lights up and ripples 3 times, then the label rests tinted until the chat
+   is opened. The background is !important: the status dot's inline fallback colour would otherwise win. */
+.row-done-dot {
+  position: relative;
+  background-color: var(--primary) !important;
+  animation: row-done-dot 1.4s ease-in-out 3;
+}
+/* The ripple is a ring that grows out of the dot and fades. */
+.row-done-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid var(--primary);
+  animation: row-done-ripple 1.4s ease-out 3;
+}
+@keyframes row-done-dot {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@keyframes row-done-ripple {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(3); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .row-done-dot, .row-done-dot::after { animation: none; }
+}
 .md a.md-path-ok { font-weight: 600; }
 .md a.md-path-dir::before {
   content: ''; display: inline-block; width: 1em; height: 1em; margin-right: 0.25em; vertical-align: -0.15em; background: currentColor;

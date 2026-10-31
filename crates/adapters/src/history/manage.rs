@@ -3,13 +3,13 @@
 //! Unlike the readers this writes to `~/.claude` and `~/.codex`, so it stays conservative:
 //! - rename only appends one line, the way the tools do themselves;
 //! - delete never removes data, it moves the file into `~/.agentdeck/trash` (restorable by hand);
-//! - a file touched in the last [`IN_USE`] is refused, a running session would just recreate it.
+//! - the move itself is the busy check: a live writer that holds the file open makes the filesystem reject it.
 
 use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde_json::json;
@@ -18,9 +18,6 @@ use super::{HistoryError, Roots, Source};
 
 /// Longest title accepted; the sidebar and the tools show one line.
 const TITLE_MAX: usize = 200;
-
-/// A session file written to more recently than this is probably open in a running CLI.
-const IN_USE: Duration = Duration::from_secs(90);
 
 /// `path` canonicalized and proven to live inside the folder of `source`.
 fn checked(roots: &Roots, source: Source, path: &Path) -> Result<PathBuf, HistoryError> {
@@ -78,14 +75,6 @@ pub fn rename(roots: &Roots, source: Source, path: &Path, title: &str) -> Result
 /// Moves the session out of the tool's folder into the trash and returns where it went.
 pub fn delete(roots: &Roots, source: Source, path: &Path) -> Result<PathBuf, HistoryError> {
     let path = checked(roots, source, path)?;
-    let recent = fs::metadata(&path)?
-        .modified()
-        .ok()
-        .and_then(|time| SystemTime::now().duration_since(time).ok())
-        .is_some_and(|age| age < IN_USE);
-    if recent {
-        return Err(HistoryError::InUse);
-    }
 
     let (root, label) = match source {
         Source::Claude => (&roots.claude, "claude"),
@@ -95,7 +84,13 @@ pub fn delete(roots: &Roots, source: Source, path: &Path) -> Result<PathBuf, His
         .strip_prefix(root.canonicalize()?)
         .map_err(|_| HistoryError::OutsideRoots)?;
     let target = roots.trash.join(label).join(relative);
-    relocate(&path, &target)?;
+    relocate(&path, &target).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            HistoryError::InUse
+        } else {
+            HistoryError::Io(error)
+        }
+    })?;
 
     // Claude keeps subagent and tool output next to the file, in a folder named like it.
     if source == Source::Claude {

@@ -365,7 +365,7 @@ fn rename_changes_the_title_the_tools_and_we_read() {
 }
 
 #[test]
-fn delete_moves_the_file_to_the_trash_and_refuses_busy_or_foreign_files() {
+fn delete_moves_the_file_to_the_trash_and_refuses_foreign_files() {
     let home = Home::new("delete");
     let (claude, codex) = two_sessions(&home);
     let roots = home.roots();
@@ -375,15 +375,12 @@ fn delete_moves_the_file_to_the_trash_and_refuses_busy_or_foreign_files() {
     delete(&roots, Source::Codex, &codex).unwrap();
     assert!(list_all(&roots).is_empty());
 
-    // Just written: probably open in a running CLI.
+    // A recently written but idle session is still deletable; file recency alone is not proof of a running tool.
     let fresh = home.write(
         ".claude/projects/demo/77777777.jsonl",
         &[user("a", None, json!("hi"), "2026-01-01T00:00:00Z")],
     );
-    assert!(matches!(
-        delete(&roots, Source::Claude, &fresh),
-        Err(HistoryError::InUse)
-    ));
+    assert!(delete(&roots, Source::Claude, &fresh).is_ok());
     let outside = home.write("notes/secret.jsonl", &[json!({})]);
     assert!(matches!(
         delete(&roots, Source::Claude, &outside),

@@ -193,6 +193,12 @@ pub(crate) fn agent_warm_reset(agent: Option<String>) {
     ag_adapters::agent::warm::reset(agent.as_deref());
 }
 
+/// Ends only the idle or background CLI kept for one chat before its history is moved away.
+#[tauri::command]
+pub(crate) fn agent_warm_reset_session(session: String) {
+    ag_adapters::agent::warm::reset_chat(&session);
+}
+
 /// Starts a chat's agent CLI while its message is still being typed (Claude, Codex, Antigravity keep it open between
 /// turns), so the first turn does not wait for the CLI to load. The arguments are the ones `agent_send` will get.
 #[tauri::command]

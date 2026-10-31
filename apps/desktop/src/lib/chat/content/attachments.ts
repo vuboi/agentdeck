@@ -1,6 +1,6 @@
 // Helpers for the things that go with a message: documents (icon and colour by type, size) and the clipboard format
 // that "Copy all" writes so pasting into the message box restores text, pictures, notes and files.
-import { fileSize, pictureUrl } from '../agent';
+import { fileSize, pictureUrl, readImageDataUrl } from '../agent';
 import type { Block } from '../mock';
 import type { Attachment, FileAttachment, PageElement } from '../sessions.svelte';
 
@@ -78,9 +78,32 @@ export function plainOf(clip: MessageClip): string {
   return lines.filter(Boolean).join('\n');
 }
 
+/** Turns a Tauri asset URL back into its file path so WebView2 does not have to fetch the asset origin. */
+function assetPathOf(src: string): string | null {
+  try {
+    const url = new URL(src);
+    if (url.protocol !== 'asset:' && url.hostname !== 'asset.localhost') return null;
+    let path = decodeURIComponent(url.pathname);
+    // Windows asset URLs carry the drive after the leading URL slash: /C:/Users/....
+    if (/^\/[A-Za-z]:[\\/]/.test(path)) path = path.slice(1);
+    return path || null;
+  } catch {
+    return null;
+  }
+}
+
 /** A picture as PNG, the one image type the clipboard takes; null when it cannot be read. */
 async function pngOf(src: string): Promise<Blob | null> {
   try {
+    const assetPath = assetPathOf(src);
+    if (assetPath) {
+      try {
+        // Asset URLs are fine for <img>, but their origin is not always fetchable from the app WebView.
+        return await pngOf(await readImageDataUrl(assetPath));
+      } catch {
+        // Keep the browser fetch path for regular web previews and older asset URL implementations.
+      }
+    }
     const blob = await (await fetch(src)).blob();
     if (blob.type === 'image/png') return blob;
     const bitmap = await createImageBitmap(blob);
