@@ -70,7 +70,7 @@
         <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-left outline-none" aria-expanded={expanded} aria-label="Details of the task for {nameOf(card, record)}" onclick={() => (open[key(item, index)] = !expanded)}>
           <AgentLogo agent={kind} model={card.model} class="size-3.5 shrink-0" />
           <span class="shrink-0 text-muted-foreground">Messaged agent</span>
-          <span class="shrink-0 font-medium">{nameOf(card, record)}</span>
+          <span class="min-w-0 truncate font-medium" title={nameOf(card, record)}>{nameOf(card, record)}</span>
           <span class="min-w-0 flex-1 truncate text-muted-foreground">{doing(card) || firstLine(card.task)}</span>
           <span class="inline-flex w-[7.5rem] shrink-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap {TONE[card.state]}">
             {#if card.state === 'running' || card.state === 'background' || card.state === 'queued'}

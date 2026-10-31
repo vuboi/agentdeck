@@ -193,6 +193,34 @@
     }
     switchingAccount = true;
     let loginError = '';
+    const originalId = accountRows.find((item) => item.account.active)?.account.id;
+    let switchPromise: Promise<boolean> | null = null;
+    let rollbackPromise: Promise<boolean> | null = null;
+    let cancelRequested = false;
+    const restoreOriginalAccount = async () => {
+      if (rollbackPromise) return rollbackPromise;
+      rollbackPromise = (async () => {
+        if (switchPromise) await switchPromise;
+        if (!originalId) return true;
+        const activeId = entry.provider === 'agy'
+          ? connectors.accounts.agy.find((account) => account.active)?.id
+          : connectors.accounts[entry.provider]?.accounts.find((account) => account.active)?.id;
+        if (activeId === originalId) return true;
+        let ok = false;
+        if (entry.provider === 'agy') {
+          const original = connectors.accounts.agy.find((account) => account.id === originalId);
+          if (!original) return false;
+          ok = await switchAgyAccount(original);
+        } else {
+          const original = connectors.accounts[entry.provider]?.accounts.find((account) => account.id === originalId);
+          if (!original) return false;
+          ok = await switchAccount(entry.provider, original);
+        }
+        if (!ok) toast.error(connectors.errors[switchErrorKey(entry)] ?? 'Could not restore the previous account.');
+        return ok;
+      })();
+      return rollbackPromise;
+    };
     const ref = zModalService.show({
       zTitle: 'Switch account?',
       zContent: `Switch the active ${labelFor(entry.provider)} account to ${entry.account.email}?`,
@@ -200,22 +228,38 @@
       zIcon: 'lucideArrowLeftRight',
       zOkIcon: 'lucideArrowLeftRight',
       zOkText: 'Switch account',
+      zMaskClosable: false,
       zCancelWhileLoading: true,
       zCancelText: 'Cancel',
       zWidth: '440px',
-      onOk: async () => {
-        const ok = entry.provider === 'agy' ? await switchAgyAccount(entry.account) : await switchAccount(entry.provider, entry.account);
-        if (ok) {
-          delete loginRequired[entryKey(entry)];
-          return true;
-        }
-        const error = connectors.errors[switchErrorKey(entry)] ?? 'Could not switch accounts.';
-        if (isAuthFailure(error)) {
-          loginRequired[entryKey(entry)] = true;
-          loginError = error;
-          return true;
-        }
-        toast.error(error);
+      onOk: () => {
+        if (cancelRequested) return false;
+        switchPromise = entry.provider === 'agy' ? switchAgyAccount(entry.account) : switchAccount(entry.provider, entry.account);
+        return switchPromise.then(async (ok) => {
+          if (cancelRequested) {
+            await restoreOriginalAccount();
+            return false;
+          }
+          if (ok) {
+            delete loginRequired[entryKey(entry)];
+            return true;
+          }
+          const error = connectors.errors[switchErrorKey(entry)] ?? 'Could not switch accounts.';
+          if (isAuthFailure(error)) {
+            loginRequired[entryKey(entry)] = true;
+            loginError = error;
+            return true;
+          }
+          toast.error(error);
+          return false;
+        });
+      },
+      onCancel: (modal) => {
+        cancelRequested = true;
+        modal.loading = false;
+        void restoreOriginalAccount()
+          .catch(() => undefined)
+          .finally(() => modal.close(false));
         return false;
       },
     });
@@ -461,13 +505,14 @@
             </ZButton>
           {/if}
         </div>
-        <div class="flex max-h-[17.5rem] flex-col overflow-x-hidden overflow-y-auto p-1[&>button+button]:mt-1 [&>button+button]:before:absolute [&>button+button]:before:inset-x-2 [&>button+button]:before:-top-0.5 [&>button+button]:before:h-px [&>button+button]:before:bg-border [&>button+button]:before:content-['']" {@attach glide()}>
-          {#each sortedAccountRows as entry (entryKey(entry))}
+        <div class="flex max-h-[17.5rem] flex-col overflow-x-hidden overflow-y-auto p-1" {@attach glide()}>
+          {#each sortedAccountRows as entry, index (entryKey(entry))}
             {@const active = entry.account.active}
             {@const expired = needsLogin(entry)}
             {@const exhausted = exhaustedLimits(entry)}
             {@const unavailable = expired || exhausted.length > 0}
             {@const reset = expired ? null : nextReset(entry)}
+            {#if index > 0}<div class="mx-2 my-1 h-px shrink-0 bg-border" aria-hidden="true"></div>{/if}
             <button
               type="button"
               role="option"
@@ -476,7 +521,7 @@
               aria-disabled={exhausted.length > 0 && !expired}
               disabled={exhausted.length > 0 && !expired}
               title={exhausted.length ? `Limit reached: ${exhausted.join(', ')}` : undefined}
-              class="relative grid w-full min-w-0 grid-cols-[0.875rem_minmax(0,1fr)_2rem] items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none {exhausted.length ? 'cursor-not-allowed text-muted-foreground/55' : 'cursor-pointer'} {active && !unavailable ? 'bg-primary/10' : ''}"
+              class="relative grid w-full min-w-0 grid-cols-[0.875rem_minmax(0,1fr)_2rem] items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none {exhausted.length ? 'cursor-not-allowed text-muted-foreground/55' : 'cursor-pointer'} {active && !unavailable ? ROW_ON : ''}"
               onclick={() => beginAccountAction(entry)}
             >
               <ZIcon zType={icon(expired ? 'lucideLogIn' : exhausted.length ? 'lucideCircleOff' : active ? 'lucideCheck' : 'lucideArrowLeftRight')} class="size-3.5 shrink-0 {expired ? 'text-warning' : exhausted.length ? 'text-muted-foreground/55' : active ? 'text-primary' : 'text-muted-foreground'}" />
