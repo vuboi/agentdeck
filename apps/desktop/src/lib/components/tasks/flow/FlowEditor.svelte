@@ -2,7 +2,7 @@
   import { ZButton, ZDrawer, ZIcon, ZInput, ZSelect } from '@shival99/z-ui-svelte';
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import AgentLogo from '../../ui/AgentLogo.svelte';
-  import { freeFirst, modelSources } from '../../../agents/models.svelte';
+  import { customModelId, freeFirst, modelSources, parseCustomModel } from '../../../agents/models.svelte';
   import type { Agent } from '../../../chat/sessions.svelte';
   import { closeFlow, flowEditor, flowProblem, newMember, savePreset, type WorkflowMember } from '../../../tasks/workflows.svelte';
 
@@ -18,7 +18,10 @@
     const models = freeFirst(source.models()).items;
     return {
       value: `source:${source.key}`, label: source.label, agent: source.provider as Agent, model: `${models.length} models`,
-      children: models.map((model) => ({ value: `${source.provider}|${model.value}`, label: model.label, agent: source.provider as Agent, model: model.value })),
+      children: models.map((model) => {
+        const custom = source.provider === 'custom' ? parseCustomModel(model.value) : null;
+        return { value: `${custom?.providerId ?? source.provider}|${custom?.model ?? model.value}`, label: model.label, agent: (custom ? 'custom' : source.provider) as Agent, model: custom ? customModelId(custom.providerId, custom.model) : model.value };
+      }),
     };
   }).filter((source) => source.children.length > 0));
 

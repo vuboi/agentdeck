@@ -85,6 +85,7 @@ export async function sendCustomTurn(args: {
   kind: string;
   baseUrl: string;
   apiKey: string | null;
+  keyEnv: string | null;
   model: string;
   messages: { role: string; content: string; images?: string[]; files?: string[] }[];
   permissionMode: string | null;
@@ -150,6 +151,12 @@ export async function readImageDataUrl(path: string): Promise<string> {
   return invoke<string>('read_image_data_url', { path });
 }
 
+/** A remote picture fetched only for an explicit action such as attaching the generated result to a chat. */
+export async function fetchImageDataUrl(url: string): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('image_fetch', { url });
+}
+
 /**
  * A picture on disk as a URL the page can show directly (Tauri's asset protocol, scoped in tauri.conf.json): the bytes are
  * read by the browser when drawn, not copied through IPC or kept as base64. Use for pictures under the scoped folders.
@@ -161,6 +168,12 @@ export async function pictureUrl(path: string): Promise<string> {
 
 /** Where a picture is drawn from: its file when it has one (asset URL), else its data URL. Synchronous, for templates. */
 export function pictureSrc(picture: { src?: string; path?: string }): string {
+  if (picture.src && (/^https?:\/\//i.test(picture.src) || picture.src.startsWith('/'))) {
+    return picture.src;
+  }
+  if (picture.path && /^https?:\/\//i.test(picture.path)) {
+    return picture.path;
+  }
   return picture.path ? convertFileSrc(picture.path) : (picture.src ?? '');
 }
 
@@ -204,7 +217,7 @@ export async function readFileBytes(path: string): Promise<ArrayBuffer> {
 /** The Gemini provider a `gemini` model is generated on (its address and key). */
 export type ImageProvider = { kind: string; base_url: string; api_key: string | null; key_env: string | null };
 /** `backend` names the generator that makes the image (image_backend.rs); a new one is added there and listed in the panel. */
-export type ImageModelChoice = { model: string; backend: 'responses' | 'images' | 'gemini'; custom?: ImageProvider };
+export type ImageModelChoice = { model: string; backend: 'responses' | 'images' | 'gemini' | 'pollinations' | 'custom-images'; custom?: ImageProvider };
 export type GeneratedImage = { model: string; backend: string; path: string; variant: number };
 export type ImageGenerationFailure = { model: string; backend: string; variant: number; error: string };
 export type ImageGenerateResult = { run_id: string; images: GeneratedImage[]; failures: ImageGenerationFailure[] };

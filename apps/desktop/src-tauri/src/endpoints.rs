@@ -35,6 +35,8 @@ pub struct Antigravity {
 #[derive(Deserialize)]
 pub struct Web {
     pub search: String,
+    #[serde(rename = "searchApi")]
+    pub search_api: String,
     pub bing: String,
     pub duckduckgo: String,
 }

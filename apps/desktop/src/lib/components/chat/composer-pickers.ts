@@ -4,14 +4,12 @@ import type { PickerItem } from '../ui/PickerPopover.svelte';
 import type { SlashItem } from '../../chat/slash.svelte';
 import { allPresets } from '../../tasks/workflows.svelte';
 import {
-  AGENTS,
-  MODELS,
   AGENT_ICON as agentIcon,
   workspace,
   type Mention,
 } from '../../chat/sessions.svelte';
 import { CREDIT_PREFIX } from '../../agents/credit-model';
-import { isFreeModel, isPaidOnlyModel } from '../../agents/models.svelte';
+import { isFreeModel, isPaidOnlyModel, modelSources, parseCustomModel } from '../../agents/models.svelte';
 
 export const chipIcon: Record<Mention['kind'], ZIconName> = {
   session: 'lucideMessageSquare' as ZIconName,
@@ -115,17 +113,19 @@ export function buildMentionGroups(kind?: Mention['kind']): ZCommandGroup<Mentio
   },
   {
     heading: 'Models',
-    items: AGENTS.flatMap((entry) =>
-      MODELS[entry.value].map((entryModel) => ({
-        id: `ai:${entry.value}/${entryModel.value}`,
-        label: mentionModelLabel(entry.label, entryModel),
-        icon: agentIcon[entry.value],
-        data: {
-          kind: 'ai' as const,
-          id: `${entry.value}/${entryModel.value}`,
-          label: mentionModelLabel(entry.label, entryModel),
-        },
-      })),
+    items: modelSources().flatMap((source) =>
+      source.models().map((entryModel) => {
+        const custom = source.provider === 'custom' ? parseCustomModel(entryModel.value) : null;
+        const provider = custom?.providerId ?? source.provider;
+        const model = custom?.model ?? entryModel.value;
+        const label = mentionModelLabel(source.label, { ...entryModel, value: model });
+        return {
+          id: `ai:${provider}/${model}`,
+          label,
+          icon: source.icon ?? agentIcon[source.provider],
+          data: { kind: 'ai' as const, id: `${provider}/${model}`, label },
+        };
+      }),
     ),
   },
   {

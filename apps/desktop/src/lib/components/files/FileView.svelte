@@ -485,6 +485,16 @@
   <span class="font-mono text-red-500">−{counts.removed}</span>
 {/snippet}
 
+{#snippet fileFooter()}
+  <!-- Where the file is and how big: path on the left; language, lines and size on the right. Both views show it. -->
+  <div class="flex h-7 shrink-0 items-center gap-3 border-t border-border px-3 text-[0.6875rem] text-muted-foreground">
+    <span class="min-w-0 flex-1 truncate font-mono" title={shortPath}>{shortPath}</span>
+    {#if readOnly}<span class="shrink-0 rounded-sm bg-muted px-1.5 py-px whitespace-nowrap">{readOnlyWhy}</span>{/if}
+    <span class="shrink-0 rounded-sm bg-muted px-1.5 py-px">{languageLabel(language)}</span>
+    <span class="shrink-0 whitespace-nowrap tabular-nums">{shownLines} lines · {sizeLabel}</span>
+  </div>
+{/snippet}
+
 <svelte:window onkeydown={onWindowKey} />
 
 <div bind:this={panel} class="relative flex h-full min-h-0 flex-col bg-background" role="tabpanel" aria-label={file.name} data-file-find>
@@ -554,6 +564,7 @@
           <LoadingBar label="Loading changes" />
         {/if}
       </div>
+      {@render fileFooter()}
     {:else}
     {#if incoming !== null}
       <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-muted px-3 text-sm" role="alert">
@@ -574,13 +585,7 @@
         <CodeEditor bind:this={editor} doc={startDoc} lang={language} added={dirty || staleDiff ? undefined : added} removed={dirty || staleDiff ? undefined : removed} modified={dirty || staleDiff ? undefined : modified} {wrap} query={findOpen ? query : ''} {matchCase} {wholeWord} regex={useRegex} bind:invalid={invalidQuery} current={matchAt} bind:total={matchTotal} onchange={recheck} onsave={save} />
       {/if}
     </div>
-    <!-- Where the file is and how big: path on the left; language, lines and size on the right. -->
-    <div class="flex h-7 shrink-0 items-center gap-3 border-t border-border px-3 text-[0.6875rem] text-muted-foreground">
-      <span class="min-w-0 flex-1 truncate font-mono" title={shortPath}>{shortPath}</span>
-      {#if readOnly}<span class="shrink-0 rounded-sm bg-muted px-1.5 py-px whitespace-nowrap">{readOnlyWhy}</span>{/if}
-      <span class="shrink-0 rounded-sm bg-muted px-1.5 py-px">{languageLabel(language)}</span>
-      <span class="shrink-0 whitespace-nowrap tabular-nums">{shownLines} lines · {sizeLabel}</span>
-    </div>
+    {@render fileFooter()}
     {/if}
   {:else}
     <!-- The file is still being read: the same frame as a loaded file (tool bar, body, footer) with the chat's bar along

@@ -4,14 +4,14 @@
   import type { ZIconName } from '@shival99/z-ui-svelte';
   import AgentLogo from '../../ui/AgentLogo.svelte';
   import { connectors } from '../../../agents/connectors.svelte';
-  import { modelSources } from '../../../agents/models.svelte';
+  import { customModelId, modelSources, parseCustomModel } from '../../../agents/models.svelte';
   import { agentDisplayName } from '../../../agents/provider-registry';
   import { theme } from '../../../app/ui/theme.svelte';
 
   const icon = (name: string) => name as ZIconName;
 
   /** The agents a chat can move to: the ones with a CLI (events.svelte.ts CLI_OF). */
-  const CHAIN_AGENTS = ['claude', 'codex', 'antigravity', 'opencode', 'copilot'];
+  const CHAIN_AGENTS = ['claude', 'codex', 'antigravity', 'opencode', 'copilot', 'custom'];
 
   type Node = { value: string; label: string; agent: string; model?: string; children?: Node[] };
 
@@ -22,7 +22,10 @@
       const children = source.models().flatMap((item): Node[] => {
         // The fallback runs on the plan's models, not on the Console credit.
         if (source.provider === 'claude' && item.value.startsWith('credit:')) return [];
-        return [{ value: `${source.provider}|${item.value}`, label: item.label, agent: source.provider, model: item.value }];
+        const custom = source.provider === 'custom' ? parseCustomModel(item.value) : null;
+        const routeAgent = custom?.providerId ?? source.provider;
+        const routeModel = custom?.model ?? item.value;
+        return [{ value: `${routeAgent}|${routeModel}`, label: item.label, agent: custom ? 'custom' : source.provider, model: custom ? customModelId(custom.providerId, custom.model) : item.value }];
       });
       return children.length ? [{ value: `source:${source.key}`, label: source.label, agent: source.provider, children }] : [];
     }),
@@ -101,10 +104,10 @@
               onValueChange={(value) => setRow(index, value === null ? null : String(value))}
             >
               {#snippet option(item)}
-                <span class="flex min-w-0 flex-1 items-center gap-2"><AgentLogo agent={item.agent} model={item.children ? undefined : item.model} class="size-4 shrink-0" /><span class="truncate">{item.label}</span>{#if !item.children}<span class="ml-auto shrink-0 text-[0.6875rem] text-muted-foreground">{agentDisplayName(item.agent)}</span>{/if}</span>
+                <span class="flex min-w-0 flex-1 items-center gap-2"><AgentLogo agent={item.agent} model={item.children ? undefined : item.model} class="size-4 shrink-0" /><span class="truncate">{item.label}</span>{#if !item.children}<span class="ml-auto shrink-0 text-[0.6875rem] text-muted-foreground">{agentDisplayName(item.agent, item.model)}</span>{/if}</span>
               {/snippet}
               {#snippet selection(item)}
-                <span class="flex min-w-0 items-center gap-2"><AgentLogo agent={item.agent} model={item.model} class="size-4 shrink-0" /><span class="truncate font-medium">{item.label}</span><span class="shrink-0 truncate text-[0.6875rem] text-muted-foreground">{agentDisplayName(item.agent)}</span></span>
+                <span class="flex min-w-0 items-center gap-2"><AgentLogo agent={item.agent} model={item.model} class="size-4 shrink-0" /><span class="truncate font-medium">{item.label}</span><span class="shrink-0 truncate text-[0.6875rem] text-muted-foreground">{agentDisplayName(item.agent, item.model)}</span></span>
               {/snippet}
             </ZSelect>
             <button

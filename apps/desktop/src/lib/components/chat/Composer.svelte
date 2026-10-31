@@ -10,13 +10,60 @@
   import { prepare, search } from '../../app/ui/palette';
   import ElementCard from '../browser/ElementCard.svelte';
   import { TRIGGER_ON } from '../../app/ui/popover';
-  import { agyBlocks, agyModes, loadAgyModes } from '../../agents/agy-modes.svelte';
+  import {
+    agyBlocks,
+    agyModes,
+    loadAgyModes,
+  } from '../../agents/agy-modes.svelte';
   import { accountEpoch } from '../../chat/runs/account-epoch.svelte';
-  import { AGENTS, draftElements, draftImages, draftFiles, draftMentions, drafts, replies, isRunning, messagesOf, needsUserInput, lastChat, rememberMixed, queued, queuePaused, type Queued, sendMessage, prewarmChat, stopTurnForResume, resumeStoppedTurn, manuallyStopped, turnOptions, chatTurnOptions, workspace, type Agent, type Effort, type Attachment, type FileAttachment, type Mention, type Permission } from '../../chat/sessions.svelte';
+  import {
+    AGENTS,
+    draftElements,
+    draftImages,
+    draftFiles,
+    draftMentions,
+    drafts,
+    replies,
+    isRunning,
+    messagesOf,
+    needsUserInput,
+    lastChat,
+    rememberMixed,
+    queued,
+    queuePaused,
+    type Queued,
+    sendMessage,
+    prewarmChat,
+    stopTurnForResume,
+    resumeStoppedTurn,
+    manuallyStopped,
+    turnOptions,
+    chatTurnOptions,
+    workspace,
+    type Agent,
+    type Effort,
+    type Attachment,
+    type FileAttachment,
+    type Mention,
+    type Permission,
+  } from '../../chat/sessions.svelte';
   import TextEditContextMenu from '../ui/TextEditContextMenu.svelte';
-  import { clipFromContents, clipFromPaste, imageMime, isImageName } from '../../chat/content/attachments';
-  import { createTextHistory, type TextHistory } from '../../app/text/text-history';
-  import { fileSize, keepPicture, pictureSrc, saveFileAttachment } from '../../chat/agent';
+  import {
+    clipFromContents,
+    clipFromPaste,
+    imageMime,
+    isImageName,
+  } from '../../chat/content/attachments';
+  import {
+    createTextHistory,
+    type TextHistory,
+  } from '../../app/text/text-history';
+  import {
+    fileSize,
+    keepPicture,
+    pictureSrc,
+    saveFileAttachment,
+  } from '../../chat/agent';
   import { inTauri } from '../../app/platform/history';
   import { toast } from '../../app/platform/toast';
   import ModelPicker from './ModelPicker.svelte';
@@ -25,25 +72,47 @@
   import { chatWork } from '../../chat/session/work.svelte';
   import { hasTurnWork } from '../../chat/session/turns.svelte';
   import ComposerChips from './ComposerChips.svelte';
-  import { editorText, editorSelection, setEditorSelection, replaceEditorRange, renderEditor } from './composer-editor';
+  import {
+    editorText,
+    editorSelection,
+    setEditorSelection,
+    replaceEditorRange,
+    renderEditor,
+  } from './composer-editor';
   import ComposerQuota from './ComposerQuota.svelte';
-  import { DOC_MAX, LONG_PASTE_CHARS, MAX_IMAGES, hasMarkdown, readBase64, toAttachment } from './composer-helpers';
-  import { buildMentionGroups, buildSlashGroups, flatten } from './composer-pickers';
+  import {
+    DOC_MAX,
+    LONG_PASTE_CHARS,
+    MAX_IMAGES,
+    hasMarkdown,
+    readBase64,
+    toAttachment,
+  } from './composer-helpers';
+  import {
+    buildMentionGroups,
+    buildSlashGroups,
+    flatten,
+  } from './composer-pickers';
+  import { voiceOf } from '../../chat/voice.svelte';
 
   // What is typed belongs to the open session: switch away and back and it is still there.
   const sessionId = $derived(workspace.activeId);
+  const voice = $derived(voiceOf(sessionId));
   const draft = $derived(drafts[sessionId] ?? '');
   const mentions = $derived(draftMentions[sessionId] ?? []);
   // Ctrl+Z / Ctrl+Y go through a history of our own (per chat): the draft is written from code (a send, a clear, another
   // chat's draft), which drops the textarea's own undo history. A sent message can be brought back with Ctrl+Z too.
   const histories: Record<string, TextHistory> = {};
-  const historyOf = (id: string) => (histories[id] ??= createTextHistory(drafts[id] ?? ''));
-  const setDraft = (value: string, { sent = false } = {}) => {
-    historyOf(sessionId).note(value, { boundary: sent });
-    drafts[sessionId] = value;
+  const historyOf = (id: string) =>
+    (histories[id] ??= createTextHistory(drafts[id] ?? ''));
+  const setDraftFor = (id: string, value: string, { sent = false } = {}) => {
+    historyOf(id).note(value, { boundary: sent });
+    drafts[id] = value;
     // Typing a message starts the agent's CLI, so it is up by the time the message is sent.
-    if (!sent && value.trim()) prewarmChat(sessionId);
+    if (!sent && value.trim()) prewarmChat(id);
   };
+  const setDraft = (value: string, options: { sent?: boolean } = {}) =>
+    setDraftFor(sessionId, value, options);
   const setMentions = (value: Mention[]) => {
     draftMentions[sessionId] = value;
   };
@@ -56,7 +125,8 @@
   // Only this message's reply counts: a background task that keeps listening does not keep the box spinning.
   const running = $derived(isRunning(sessionId) || Boolean(replies[sessionId]));
   const backgroundWork = $derived(chatWork(sessionId));
-  const mac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
+  const mac =
+    typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
   const waiting = $derived(queued[sessionId] ?? []);
   const waitingForUser = $derived(needsUserInput(sessionId));
 
@@ -88,9 +158,22 @@
       resize();
     });
   }
-  const hasInput = $derived(draft.trim().length > 0 || images.length > 0 || elements.length > 0 || attached.length > 0);
-  const action = $derived(running && !hasInput ? 'stop' : manuallyStopped[sessionId] && !hasInput ? 'resume' : 'send');
-  const willQueue = $derived(!waitingForUser && (hasTurnWork(sessionId) || waiting.length > 0));
+  const hasInput = $derived(
+    draft.trim().length > 0 ||
+      images.length > 0 ||
+      elements.length > 0 ||
+      attached.length > 0,
+  );
+  const action = $derived(
+    running && !hasInput
+      ? 'stop'
+      : manuallyStopped[sessionId] && !hasInput
+        ? 'resume'
+        : 'send',
+  );
+  const willQueue = $derived(
+    !waitingForUser && (hasTurnWork(sessionId) || waiting.length > 0),
+  );
   // The foreground reply owns the Stop ring. Background activity has its own indicator above the composer.
   const spinning = $derived(action === 'stop' && !waitingForUser);
   let detail = $state<string | null>(null);
@@ -115,7 +198,12 @@
       if (!restoreOnWindowFocus) return;
       restoreOnWindowFocus = false;
       requestAnimationFrame(() => {
-        if (!area?.isConnected || document.activeElement === area || document.querySelector('[role="dialog"]')) return;
+        if (
+          !area?.isConnected ||
+          document.activeElement === area ||
+          document.querySelector('[role="dialog"]')
+        )
+          return;
         area.focus({ preventScroll: true });
       });
     };
@@ -126,8 +214,11 @@
       window.removeEventListener('focus', restoreComposerFocus);
     };
   });
-  let textEditMenu = $state<{ openAt: (event: MouseEvent, target: HTMLElement) => void } | undefined>();
-  const caret = () => area ? editorSelection(area) : { start: draft.length, end: draft.length };
+  let textEditMenu = $state<
+    { openAt: (event: MouseEvent, target: HTMLElement) => void } | undefined
+  >();
+  const caret = () =>
+    area ? editorSelection(area) : { start: draft.length, end: draft.length };
   $effect(() => {
     void sessionId;
     void draft;
@@ -150,15 +241,24 @@
     if (!area) return;
     const position = caret();
     const before = draft.slice(0, position.start);
-    if (position.end !== position.start || before === dismissed) return void (trigger = null);
+    if (position.end !== position.start || before === dismissed)
+      return void (trigger = null);
     dismissed = null;
     const category = /(^|\s)\/([cmpw])(?:\s+([^\n]*))?$/i.exec(before);
     const found = category ?? /(^|\s)([@/])([^\s@/]*)$/.exec(before);
     trigger = found
       ? {
           char: category ? '/' : (found[2] as '@' | '/'),
-          at: category ? position.start - (category[3]?.length ?? 0) - category[2].length - (category[0].match(/\s+/)?.[0].length ?? 0) - 1 : position.start - found[3].length - 1,
-          query: category ? `${category[2]} ${category[3] ?? ''}`.trimEnd() : found[3],
+          at: category
+            ? position.start -
+              (category[3]?.length ?? 0) -
+              category[2].length -
+              (category[0].match(/\s+/)?.[0].length ?? 0) -
+              1
+            : position.start - found[3].length - 1,
+          query: category
+            ? `${category[2]} ${category[3] ?? ''}`.trimEnd()
+            : found[3],
         }
       : null;
   }
@@ -213,7 +313,8 @@
     }
   });
   $effect(() => {
-    if (agent === 'antigravity' && agyModes.loaded && agyBlocks(permission)) permission = 'ask';
+    if (agent === 'antigravity' && agyModes.loaded && agyBlocks(permission))
+      permission = 'ask';
   });
 
   // The picker belongs to each session: agent, model, effort, speed and approval mode are remembered per
@@ -245,7 +346,13 @@
       agent = session.agent;
       model = session.model;
       // A new chat also takes the effort of the last chat that was written in.
-      if (session.draft && lastChat.agent && lastChat.agent === session.agent && lastChat.model === session.model) effort = lastChat.effort;
+      if (
+        session.draft &&
+        lastChat.agent &&
+        lastChat.agent === session.agent &&
+        lastChat.model === session.model
+      )
+        effort = lastChat.effort;
     }
   }
 
@@ -302,7 +409,12 @@
       if (session) {
         // A chat continued with another agent lists every agent it has had (the sidebar shows them stacked).
         if (session.agent !== current.agent && !session.draft) {
-          session.agents = [...new Set([...(session.agents ?? [session.source ?? session.agent]), current.agent])];
+          session.agents = [
+            ...new Set([
+              ...(session.agents ?? [session.source ?? session.agent]),
+              current.agent,
+            ]),
+          ];
           rememberMixed(session);
         }
         session.agent = current.agent;
@@ -313,16 +425,30 @@
 
   // ---------- slash commands ----------
   // The agent's own commands and skills, plus AgentDeck's: read for the agent and project of this chat.
-  const projectPath = $derived(workspace.projects.find((item) => item.id === workspace.sessions.find((entry) => entry.id === sessionId)?.projectId)?.path ?? null);
+  const projectPath = $derived(
+    workspace.projects.find(
+      (item) =>
+        item.id ===
+        workspace.sessions.find((entry) => entry.id === sessionId)?.projectId,
+    )?.path ?? null,
+  );
   $effect(() => {
     void loadSlash(agent, projectPath);
   });
-  const agentLabel = $derived(AGENTS.find((entry) => entry.value === agent)?.label ?? agent);
+  const agentLabel = $derived(
+    AGENTS.find((entry) => entry.value === agent)?.label ?? agent,
+  );
   const slashGroups = $derived(buildSlashGroups(slash.items, agentLabel));
 
-  const slashPrepared = $derived(slashOpen ? prepare(slashGroups, (item) => String(item.data?.name ?? item.label)) : []);
+  const slashPrepared = $derived(
+    slashOpen
+      ? prepare(slashGroups, (item) => String(item.data?.name ?? item.label))
+      : [],
+  );
   // AgentDeck's own commands lead, so the first row selected is one of them.
-  const slashShown = $derived(slashOpen ? search(slashPrepared, slashQuery, 40, 'AgentDeck') : []);
+  const slashShown = $derived(
+    slashOpen ? search(slashPrepared, slashQuery, 40, 'AgentDeck') : [],
+  );
 
   const slashItems = $derived(
     flatten(slashShown, (item, group) => ({
@@ -341,13 +467,23 @@
   }
 
   // ---------- mentions ----------
-  const categoryMode = $derived(slashOpen && /^[cmpw](?:\s|$)/i.test(slashQuery) ? ({ c: 'session', p: 'project', m: 'ai', w: 'workflow' } as const)[slashQuery[0].toLowerCase() as 'c' | 'p' | 'm' | 'w'] : undefined);
+  const categoryMode = $derived(
+    slashOpen && /^[cmpw](?:\s|$)/i.test(slashQuery)
+      ? ({ c: 'session', p: 'project', m: 'ai', w: 'workflow' } as const)[
+          slashQuery[0].toLowerCase() as 'c' | 'p' | 'm' | 'w'
+        ]
+      : undefined,
+  );
   const mentionPaletteOpen = $derived(paletteOpen || Boolean(categoryMode));
-  const mentionSearch = $derived(categoryMode ? slashQuery.slice(1).trim() : mentionQuery);
+  const mentionSearch = $derived(
+    categoryMode ? slashQuery.slice(1).trim() : mentionQuery,
+  );
   const groups = $derived(buildMentionGroups(categoryMode));
 
   const mentionPrepared = $derived(mentionPaletteOpen ? prepare(groups) : []);
-  const mentionShown = $derived(mentionPaletteOpen ? search(mentionPrepared, mentionSearch) : []);
+  const mentionShown = $derived(
+    mentionPaletteOpen ? search(mentionPrepared, mentionSearch) : [],
+  );
 
   const mentionItems = $derived(
     flatten(mentionShown, (item, group) => ({
@@ -355,7 +491,10 @@
       label: item.label,
       hint: item.keywords?.[0] || undefined,
       icon: item.icon,
-      agent: item.data?.kind === 'ai' ? (String(item.data.id).split('/')[0] as Agent) : undefined,
+      agent:
+        item.data?.kind === 'ai'
+          ? (String(item.data.id).split('/')[0] as Agent)
+          : undefined,
       group,
       data: item.data as Mention,
     })),
@@ -364,9 +503,20 @@
   function pickMention(item: PickerItem<Mention>) {
     const picked = item.data;
     // Mentions stay inline; resolved provider/model metadata is injected for the main model at send time.
-    replaceTrigger(picked.kind === 'workflow' ? `/w ${picked.label} ` : `@${picked.label} `);
-    if (picked.kind === 'workflow') setMentions([...mentions.filter((entry) => entry.kind !== 'workflow'), picked]);
-    else if (!mentions.some((entry) => entry.kind === picked.kind && entry.id === picked.id)) setMentions([...mentions, picked]);
+    replaceTrigger(
+      picked.kind === 'workflow' ? `/w ${picked.label} ` : `@${picked.label} `,
+    );
+    if (picked.kind === 'workflow')
+      setMentions([
+        ...mentions.filter((entry) => entry.kind !== 'workflow'),
+        picked,
+      ]);
+    else if (
+      !mentions.some(
+        (entry) => entry.kind === picked.kind && entry.id === picked.id,
+      )
+    )
+      setMentions([...mentions, picked]);
   }
   function resize() {
     if (!area) return;
@@ -390,7 +540,10 @@
       return true;
     }
     if (text.length > LONG_PASTE_CHARS) {
-      void addDocuments([new File([text], 'Pasted text.txt', { type: 'text/plain' })], id);
+      void addDocuments(
+        [new File([text], 'Pasted text.txt', { type: 'text/plain' })],
+        id,
+      );
       return true;
     }
     return false;
@@ -402,17 +555,31 @@
 
   /** Markdown paste travels as an attachment, leaving the composer free for a question. */
   function attachMarkdown(text: string, id: string) {
-    void addDocuments([new File([text], 'Pasted Markdown.md', { type: 'text/markdown' })], id);
+    void addDocuments(
+      [new File([text], 'Pasted Markdown.md', { type: 'text/markdown' })],
+      id,
+    );
   }
 
   async function addFiles(files: File[]) {
-    const isPicture = (file: File) => /^image\/(png|jpeg|gif|webp)$/.test(file.type);
+    const isPicture = (file: File) =>
+      /^image\/(png|jpeg|gif|webp)$/.test(file.type);
     const id = sessionId;
     const pictures = files.filter(isPicture);
     const documents = files.filter((file) => !isPicture(file));
     const room = MAX_IMAGES - images.length;
-    const added = (await Promise.all(pictures.slice(0, Math.max(0, room)).map((file) => toAttachment(file).catch(() => null)))).filter((item): item is Attachment => item !== null);
-    if (added.length) draftImages[id] = [...(draftImages[id] ?? []), ...(await Promise.all(added.map(keepPicture)))];
+    const added = (
+      await Promise.all(
+        pictures
+          .slice(0, Math.max(0, room))
+          .map((file) => toAttachment(file).catch(() => null)),
+      )
+    ).filter((item): item is Attachment => item !== null);
+    if (added.length)
+      draftImages[id] = [
+        ...(draftImages[id] ?? []),
+        ...(await Promise.all(added.map(keepPicture))),
+      ];
     if (documents.length) await addDocuments(documents, id);
   }
 
@@ -429,7 +596,10 @@
         continue;
       }
       try {
-        const path = await saveFileAttachment(file.name || 'file', await readBase64(file));
+        const path = await saveFileAttachment(
+          file.name || 'file',
+          await readBase64(file),
+        );
         added.push({
           id: crypto.randomUUID(),
           name: file.name || 'file',
@@ -457,8 +627,12 @@
             root: path.replace(/[\/][^\/]*$/, ''),
             path,
           });
-          const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-          const picture = await toAttachment(new File([bytes], name, { type: imageMime(name) }));
+          const bytes = Uint8Array.from(atob(base64), (char) =>
+            char.charCodeAt(0),
+          );
+          const picture = await toAttachment(
+            new File([bytes], name, { type: imageMime(name) }),
+          );
           if (picture) pics.push(picture);
           continue;
         }
@@ -473,7 +647,11 @@
         toast.error(`Could not attach ${name}`);
       }
     }
-    if (pics.length) draftImages[id] = [...(draftImages[id] ?? []), ...(await Promise.all(pics.map(keepPicture)))];
+    if (pics.length)
+      draftImages[id] = [
+        ...(draftImages[id] ?? []),
+        ...(await Promise.all(pics.map(keepPicture))),
+      ];
     if (docs.length) draftFiles[id] = [...(draftFiles[id] ?? []), ...docs];
   }
 
@@ -484,24 +662,31 @@
     if (!inTauri()) return;
     let off: (() => void) | undefined;
     let gone = false;
-    void import('@tauri-apps/api/webview').then(async ({ getCurrentWebview }) => {
-      const stop = await getCurrentWebview().onDragDropEvent((event) => {
-        const area = formEl?.closest('main')?.getBoundingClientRect();
-        const payload = event.payload;
-        if (payload.type === 'leave') {
-          dragging = false;
-          return;
-        }
-        const ratio = window.devicePixelRatio || 1;
-        const inside = !!area && payload.position.x / ratio >= area.left && payload.position.x / ratio <= area.right && payload.position.y / ratio >= area.top && payload.position.y / ratio <= area.bottom;
-        if (payload.type === 'drop') {
-          dragging = false;
-          if (inside && payload.paths.length) void addPaths(payload.paths);
-        } else dragging = inside;
-      });
-      if (gone) stop();
-      else off = stop;
-    });
+    void import('@tauri-apps/api/webview').then(
+      async ({ getCurrentWebview }) => {
+        const stop = await getCurrentWebview().onDragDropEvent((event) => {
+          const area = formEl?.closest('main')?.getBoundingClientRect();
+          const payload = event.payload;
+          if (payload.type === 'leave') {
+            dragging = false;
+            return;
+          }
+          const ratio = window.devicePixelRatio || 1;
+          const inside =
+            !!area &&
+            payload.position.x / ratio >= area.left &&
+            payload.position.x / ratio <= area.right &&
+            payload.position.y / ratio >= area.top &&
+            payload.position.y / ratio <= area.bottom;
+          if (payload.type === 'drop') {
+            dragging = false;
+            if (inside && payload.paths.length) void addPaths(payload.paths);
+          } else dragging = inside;
+        });
+        if (gone) stop();
+        else off = stop;
+      },
+    );
     return () => {
       gone = true;
       off?.();
@@ -513,7 +698,9 @@
     if (hasMarkdown(clip.text)) attachMarkdown(clip.text, sessionId);
     else {
       const range = caret();
-      setDraft(`${draft.slice(0, range.start)}${clip.text}${draft.slice(range.end)}`);
+      setDraft(
+        `${draft.slice(0, range.start)}${clip.text}${draft.slice(range.end)}`,
+      );
     }
     if (clip.images.length)
       setImages([
@@ -541,7 +728,11 @@
       ]);
   }
 
-  async function onMenuPaste(payload: { html: string; text: string; files: File[] }): Promise<boolean> {
+  async function onMenuPaste(payload: {
+    html: string;
+    text: string;
+    files: File[];
+  }): Promise<boolean> {
     const clip = clipFromContents(payload.html, payload.text);
     if (clip) {
       restoreClip(clip);
@@ -588,6 +779,73 @@
     void addFiles(files);
   }
 
+  const voiceRanges: Record<string, ReturnType<typeof caret>> = {};
+  const voiceTooltip = $derived(
+    voice.phase === 'recording'
+      ? 'Stop dictation'
+      : voice.phase === 'transcribing'
+        ? voice.modelProgress > 0
+          ? `Downloading speech model ${Math.round(voice.modelProgress * 100)}%`
+          : 'Transcribing locally…'
+        : 'Voice input',
+  );
+
+  function insertTranscript(
+    value: string,
+    selection: { start: number; end: number },
+    text: string,
+  ) {
+    const start = Math.min(selection.start, value.length);
+    const end = Math.min(Math.max(start, selection.end), value.length);
+    const before = start > 0 && !/\s/.test(value[start - 1]) ? ' ' : '';
+    const after = end < value.length && !/\s/.test(value[end]) ? ' ' : '';
+    const insert = `${before}${text}${after}`;
+    return {
+      value: `${value.slice(0, start)}${insert}${value.slice(end)}`,
+      caret: start + insert.length,
+    };
+  }
+
+  async function toggleVoice() {
+    const originId = sessionId;
+    const capture = voiceOf(originId);
+    try {
+      if (capture.phase === 'recording') {
+        const source = drafts[originId] ?? '';
+        const selection = voiceRanges[originId] ?? {
+          start: source.length,
+          end: source.length,
+        };
+        const text = await capture.stop();
+        if (!text) {
+          if (text === '') toast.info('No speech was recognized');
+          return;
+        }
+        const result = insertTranscript(
+          drafts[originId] ?? '',
+          selection,
+          text,
+        );
+        setDraftFor(originId, result.value);
+        if (sessionId === originId) {
+          requestAnimationFrame(() => {
+            if (sessionId !== originId || !area) return;
+            setEditorSelection(area, result.caret);
+            area.focus();
+            resize();
+          });
+        }
+      } else if (capture.phase === 'idle') {
+        voiceRanges[originId] = caret();
+        await capture.start();
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (capture.phase !== 'recording') delete voiceRanges[originId];
+    }
+  }
+
   function submit(whileRunning: 'queue' | 'next' | 'interrupt' = 'queue') {
     if (!hasInput) return;
     delete manuallyStopped[sessionId];
@@ -627,7 +885,13 @@
     } else if (event.key === 'Enter') {
       event.preventDefault();
       // Enter queues normally; Alt+Enter queues next; Ctrl/Cmd+Enter requests priority without cancelling older work.
-      submit(event.altKey ? 'next' : event.ctrlKey || event.metaKey ? 'interrupt' : 'queue');
+      submit(
+        event.altKey
+          ? 'next'
+          : event.ctrlKey || event.metaKey
+            ? 'interrupt'
+            : 'queue',
+      );
     }
   }
 </script>
@@ -635,9 +899,17 @@
 <svelte:window bind:innerWidth={innerW} />
 {#if backgroundWork.length > 0 && (waiting.length > 0 || queuePaused[sessionId])}
   <!-- Work and queue share one tray, so its sides run down to the composer like the queue's do. -->
-  <div class="mx-2 -mb-4 overflow-hidden rounded-t-2xl border border-b-0 border-border bg-card pb-4 shadow-md">
+  <div
+    class="mx-2 -mb-4 overflow-hidden rounded-t-2xl border border-b-0 border-border bg-card pb-4 shadow-md"
+  >
     <BackgroundTasks items={backgroundWork} {sessionId} embedded />
-    <ComposerQueue {sessionId} {waiting} {waitingForUser} onedit={editQueued} embedded />
+    <ComposerQueue
+      {sessionId}
+      {waiting}
+      {waitingForUser}
+      onedit={editQueued}
+      embedded
+    />
   </div>
 {:else}
   {#if backgroundWork.length > 0}
@@ -649,7 +921,9 @@
 {/if}
 <form
   bind:this={formEl}
-  class="relative z-10 min-w-0 rounded-2xl border bg-card p-2 shadow-lg transition-shadow {dragging ? 'border-primary ring-2 ring-primary/40' : 'border-input'}"
+  class="relative z-10 min-w-0 rounded-2xl border bg-card p-2 shadow-lg transition-shadow {dragging
+    ? 'border-primary ring-2 ring-primary/40'
+    : 'border-input'}"
   onsubmit={(event) => {
     event.preventDefault();
     submit();
@@ -668,21 +942,66 @@
     <div class="mb-2 flex flex-wrap gap-1.5" aria-label="Picked elements">
       {#each elements as item (item.id)}
         <div class="group/chip relative" bind:this={chipAnchors[item.id]}>
-          <button type="button" class="flex h-8 max-w-60 cursor-pointer items-center gap-1.5 rounded-md border px-2 font-mono text-[0.6875rem] outline-none {detail === item.id ? `${TRIGGER_ON} border-primary/60 ring-1 ring-primary/60` : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted'}" aria-label="Details of {item.selector}" aria-expanded={detail === item.id} onclick={() => (detail = detail === item.id ? null : item.id)}>
-            <ZIcon zType={'lucideMousePointerClick' as ZIconName} class="size-3.5 shrink-0 text-primary" />
-            {#if item.picture}<img src={item.picture} alt="" class="size-5 shrink-0 rounded-sm border border-border object-cover" />{/if}
+          <button
+            type="button"
+            class="flex h-8 max-w-60 cursor-pointer items-center gap-1.5 rounded-md border px-2 font-mono text-[0.6875rem] outline-none {detail ===
+            item.id
+              ? `${TRIGGER_ON} border-primary/60 ring-1 ring-primary/60`
+              : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted'}"
+            aria-label="Details of {item.selector}"
+            aria-expanded={detail === item.id}
+            onclick={() => (detail = detail === item.id ? null : item.id)}
+          >
+            <ZIcon
+              zType={'lucideMousePointerClick' as ZIconName}
+              class="size-3.5 shrink-0 text-primary"
+            />
+            {#if item.picture}<img
+                src={item.picture}
+                alt=""
+                class="size-5 shrink-0 rounded-sm border border-border object-cover"
+              />{/if}
             <span class="truncate">&lt;{item.tag} /&gt; {item.text}</span>
           </button>
-          <button type="button" class="absolute -top-3 -right-2.5 flex size-5.5 cursor-pointer items-center justify-center rounded-full border border-border bg-popover text-popover-foreground shadow-md opacity-0 transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100" aria-label="Remove element" onclick={() => (draftElements[sessionId] = elements.filter((entry) => entry !== item))}>
-            <ZIcon zType="lucideX" zSize="12" class="block size-[12px]! shrink-0" />
+          <button
+            type="button"
+            class="absolute -top-3 -right-2.5 flex size-5.5 cursor-pointer items-center justify-center rounded-full border border-border bg-popover text-popover-foreground shadow-md opacity-0 transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100"
+            aria-label="Remove element"
+            onclick={() =>
+              (draftElements[sessionId] = elements.filter(
+                (entry) => entry !== item,
+              ))}
+          >
+            <ZIcon
+              zType="lucideX"
+              zSize="12"
+              class="block size-[12px]! shrink-0"
+            />
           </button>
         </div>
       {/each}
     </div>
     {#each elements.filter((item) => item.id === lastDetail) as item (item.id)}
-      <ZPopover anchor={chipAnchors[item.id]} open={detail === item.id} zTrigger="manual" zPosition="top-left" zOffset={8} zWidth={360} onClose={() => (detail = null)}>
+      <ZPopover
+        anchor={chipAnchors[item.id]}
+        open={detail === item.id}
+        zTrigger="manual"
+        zPosition="top-left"
+        zOffset={8}
+        zWidth={360}
+        onClose={() => (detail = null)}
+      >
         {#snippet children()}
-          <ElementCard tag={item.tag} text={item.text} selector={item.selector} url={item.url} note={item.note} box={item.box} style={item.style} picture={item.picture} />
+          <ElementCard
+            tag={item.tag}
+            text={item.text}
+            selector={item.selector}
+            url={item.url}
+            note={item.note}
+            box={item.box}
+            style={item.style}
+            picture={item.picture}
+          />
         {/snippet}
       </ZPopover>
     {/each}
@@ -704,22 +1023,43 @@
         detectTrigger();
       }}
       onscroll={resize}
-      onkeyup={(event) => (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') && detectTrigger()}
+      onkeyup={(event) =>
+        (event.key === 'ArrowLeft' ||
+          event.key === 'ArrowRight' ||
+          event.key === 'Home' ||
+          event.key === 'End') &&
+        detectTrigger()}
       onclick={detectTrigger}
       onblur={() => (trigger = null)}
       onkeydown={onKeydown}
       onpaste={onPaste}
       oncontextmenu={onTextAreaContextMenu}
       aria-label="Message"
-      data-placeholder={waitingForUser ? 'Answer the pending request…' : willQueue ? `Enter queues · Alt+Enter queues next · ${mac ? '⌘' : 'Ctrl'}+Enter sends now` : 'Do anything…'}
+      data-placeholder={waitingForUser
+        ? 'Answer the pending request…'
+        : willQueue
+          ? `Enter queues · Alt+Enter queues next · ${mac ? '⌘' : 'Ctrl'}+Enter sends now`
+          : 'Do anything…'}
       class="composer-editor relative max-h-45 min-h-[50px] w-[calc(100%+0.5rem)] overflow-x-hidden break-words border-0 bg-transparent pt-0 pr-3 pb-1 pl-0.5 text-sm leading-normal text-foreground caret-foreground selection:bg-primary/25 outline-none"
     ></div>
   </div>
-  <TextEditContextMenu bind:this={textEditMenu} onPasteText={routePastedText} onPasteClipboard={onMenuPaste} />
+  <TextEditContextMenu
+    bind:this={textEditMenu}
+    onPasteText={routePastedText}
+    onPasteClipboard={onMenuPaste}
+  />
 
   <div class="flex min-w-0 items-center justify-between gap-2">
     <div class="flex min-w-0 flex-1 items-center gap-1">
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary" aria-label="Attach files" title="Attach files (or paste / drop)" onclick={() => fileInput?.click()}>
+      <ZButton
+        zWave={false}
+        zType="ghost"
+        zSize="sm"
+        class="size-7! !bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary"
+        aria-label="Attach files"
+        title="Attach files (or paste / drop)"
+        onclick={() => fileInput?.click()}
+      >
         <ZIcon zType="lucidePaperclip" class="size-3.5" />
       </ZButton>
       <input
@@ -732,35 +1072,179 @@
           event.currentTarget.value = '';
         }}
       />
-      <ZButton zWave={false} zType="ghost" zSize="sm" class="hidden size-7! min-[720px]:inline-flex {paletteOpen ? 'bg-primary/15! text-primary!' : '!bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary'}" aria-label="Mention a session, project or AI" title="Mention (@)" onclick={startMention}>
+      <ZButton
+        zWave={false}
+        zType="ghost"
+        zSize="sm"
+        class="hidden size-7! min-[720px]:inline-flex {paletteOpen
+          ? 'bg-primary/15! text-primary!'
+          : '!bg-transparent !text-muted-foreground hover:!bg-primary/10 hover:!text-primary'}"
+        aria-label="Mention a session, project or AI"
+        title="Mention (@)"
+        onclick={startMention}
+      >
         <ZIcon zType="lucideAtSign" class="size-3.5" />
       </ZButton>
-      <ModelPicker bind:agent bind:model bind:effort bind:fast bind:permission />
+      <ModelPicker
+        bind:agent
+        bind:model
+        bind:effort
+        bind:fast
+        bind:permission
+      />
     </div>
     <!-- Composer and workers share a control whose icons never enter the flex layout. -->
+    <ZButton
+      zWave={false}
+      type="button"
+      zType="ghost"
+      zSize="sm"
+      class="h-7! w-fit! min-w-7! shrink-0 gap-2 rounded-full {voice.phase ===
+      'recording'
+        ? 'bg-muted/80 px-2.5! text-foreground hover:bg-muted ring-1 ring-border/50'
+        : 'px-0! text-muted-foreground'}"
+      zDisabled={voice.phase === 'transcribing'}
+      aria-label={voice.phase === 'recording'
+        ? 'Stop dictation'
+        : voice.phase === 'transcribing'
+          ? voiceTooltip
+          : 'Start voice input'}
+      aria-pressed={voice.phase === 'recording'}
+      aria-busy={voice.phase === 'transcribing'}
+      {@attach zTooltip({ content: voiceTooltip, position: 'top' })}
+      onclick={() => void toggleVoice()}
+    >
+      {#if voice.phase === 'recording'}
+        <span class="voice-wave" aria-hidden="true">
+          {#each voice.levels as lvl}
+            <span style:height="{Math.max(3, 3 + lvl * 11)}px"></span>
+          {/each}
+        </span>
+        <span
+          class="size-2.5 rounded-[1.5px] bg-foreground shrink-0"
+          aria-hidden="true"
+        ></span>
+      {:else if voice.phase === 'transcribing'}
+        <span
+          class="size-4 animate-spin rounded-full border-[1.5px] border-muted-foreground/30 border-t-muted-foreground"
+          aria-hidden="true"
+        ></span>
+      {:else}
+        <ZIcon
+          zType={'lucideAudioLines' as ZIconName}
+          zSize="14"
+          class="size-[14px]!"
+        />
+      {/if}
+    </ZButton>
     {#if running && hasInput}
-      <ZButton zWave={false} type="button" zType="ghost" zSize="sm" class="size-7! shrink-0 rounded-full p-0 text-muted-foreground" aria-label="Pause current reply" title="Pause current reply · keep draft" onclick={() => stopTurnForResume(sessionId)}>
-        <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5" fill="currentColor" /></svg>
+      <ZButton
+        zWave={false}
+        type="button"
+        zType="ghost"
+        zSize="sm"
+        class="size-7! shrink-0 rounded-full p-0 text-muted-foreground"
+        aria-label="Pause current reply"
+        title="Pause current reply · keep draft"
+        onclick={() => stopTurnForResume(sessionId)}
+      >
+        <svg class="size-3" viewBox="0 0 16 16" aria-hidden="true"
+          ><rect
+            x="2.5"
+            y="2.5"
+            width="11"
+            height="11"
+            rx="2.5"
+            fill="currentColor"
+          /></svg
+        >
       </ZButton>
     {/if}
-      <RunActionButton
-        {action}
-        {spinning}
-        type={action === 'send' ? 'submit' : 'button'}
-        disabled={action === 'send' && !hasInput}
-        label={action === 'stop' ? 'Pause current reply' : action === 'resume' ? 'Resume' : willQueue ? 'Queue the message' : 'Send message'}
-        tooltip={action === 'stop' ? 'Working · Pause' : action === 'resume' ? 'Resume' : willQueue ? `Send to queue · Alt+Enter queues next · ${mac ? '⌘' : 'Ctrl'}+Enter sends now` : 'Send'}
-        onclick={() => {
-          if (action === 'stop') stopTurnForResume(sessionId);
-          else if (action === 'resume') resumeStoppedTurn(sessionId);
-        }}
-      />
+    <RunActionButton
+      {action}
+      {spinning}
+      type={action === 'send' ? 'submit' : 'button'}
+      disabled={action === 'send' && !hasInput}
+      label={action === 'stop'
+        ? 'Pause current reply'
+        : action === 'resume'
+          ? 'Resume'
+          : willQueue
+            ? 'Queue the message'
+            : 'Send message'}
+      tooltip={action === 'stop'
+        ? 'Working · Pause'
+        : action === 'resume'
+          ? 'Resume'
+          : willQueue
+            ? `Send to queue · Alt+Enter queues next · ${mac ? '⌘' : 'Ctrl'}+Enter sends now`
+            : 'Send'}
+      onclick={() => {
+        if (action === 'stop') stopTurnForResume(sessionId);
+        else if (action === 'resume') resumeStoppedTurn(sessionId);
+      }}
+    />
   </div>
 </form>
 <ComposerQuota {agent} {model} />
 <ProjectBar />
 
+<!-- The pickers open over the message box, left-aligned to it, and follow what is typed after `@` or `/`. One at a
+     time is mounted, so `picker` is always the open one. -->
+{#if slashOpen && !categoryMode}
+  <PickerPopover
+    bind:this={picker}
+    anchor={formEl}
+    open={slashOpen}
+    items={slashItems}
+    query={slashQuery}
+    position="top-left"
+    width={formEl?.clientWidth ? Math.min(formEl.clientWidth, 260) : 260}
+    label="Commands and skills"
+    empty="No command matches"
+    footer="↑↓ navigate · ↵ use · esc close"
+    onpick={pickSlash}
+    onclose={() => (trigger = null)}
+  />
+{:else if mentionPaletteOpen}
+  <PickerPopover
+    bind:this={picker}
+    anchor={formEl}
+    open={mentionPaletteOpen}
+    items={mentionItems}
+    query={mentionSearch}
+    position="top-left"
+    width={formEl?.clientWidth ? Math.min(formEl.clientWidth, 360) : 340}
+    label={categoryMode === 'session'
+      ? 'Chats'
+      : categoryMode === 'project'
+        ? 'Projects'
+        : categoryMode === 'ai'
+          ? 'Models'
+          : categoryMode === 'workflow'
+            ? 'Flows'
+            : 'Mention a chat, a project, a model or a flow'}
+    rowHeight={34}
+    empty="No matches"
+    footer="@ mention · /c chat · /p project · /m model · /w flow"
+    onpick={pickMention}
+    onclose={() => (trigger = null)}
+  />
+{/if}
+
 <style>
+  .voice-wave {
+    display: inline-flex;
+    height: 0.875rem;
+    align-items: center;
+    gap: 2px;
+  }
+  .voice-wave span {
+    width: 2px;
+    border-radius: 9999px;
+    background: currentColor;
+    transition: height 60ms ease-out;
+  }
   .composer-editor {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -772,25 +1256,3 @@
     pointer-events: none;
   }
 </style>
-
-<!-- The pickers open over the message box, left-aligned to it, and follow what is typed after `@` or `/`. One at a
-     time is mounted, so `picker` is always the open one. -->
-{#if slashOpen && !categoryMode}
-  <PickerPopover bind:this={picker} anchor={formEl} open={slashOpen} items={slashItems} query={slashQuery} position="top-left" width={formEl?.clientWidth ? Math.min(formEl.clientWidth, 260) : 260} label="Commands and skills" empty="No command matches" footer="↑↓ navigate · ↵ use · esc close" onpick={pickSlash} onclose={() => (trigger = null)} />
-{:else if mentionPaletteOpen}
-  <PickerPopover
-    bind:this={picker}
-    anchor={formEl}
-    open={mentionPaletteOpen}
-    items={mentionItems}
-    query={mentionSearch}
-    position="top-left"
-    width={formEl?.clientWidth ? Math.min(formEl.clientWidth, 360) : 340}
-    label={categoryMode === 'session' ? 'Chats' : categoryMode === 'project' ? 'Projects' : categoryMode === 'ai' ? 'Models' : categoryMode === 'workflow' ? 'Flows' : 'Mention a chat, a project, a model or a flow'}
-    rowHeight={34}
-    empty="No matches"
-    footer="@ mention · /c chat · /p project · /m model · /w flow"
-    onpick={pickMention}
-    onclose={() => (trigger = null)}
-  />
-{/if}

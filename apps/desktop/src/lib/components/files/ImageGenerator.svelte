@@ -33,6 +33,7 @@
     SETTING_CATEGORY,
     SETTING_ICON,
     fold,
+    freeImageModels,
     formatDuration,
     geminiModels,
     glide,
@@ -59,7 +60,22 @@
         }))
       : [],
   );
-  const models = $derived<ImageModel[]>([...openAiModels, ...gemini]);
+  const customImageModels = $derived<ImageModel[]>(connectors.custom.flatMap((provider) => {
+    if (!provider.enabled || provider.baseUrl.includes(GEMINI_HOST)) return [];
+    const key = activeProviderKey(provider);
+    const keyEnv = providerKeyEnv(provider, key);
+    const models = [...provider.models, ...(provider.baseUrl.includes('api.meta.ai/v1') ? ['muse-image-1.0'] : [])];
+    return [...new Set(models)]
+      .filter((model) => /image|imagen|flux|stable-diffusion|sdxl|dall-e/i.test(model))
+      .slice(0, 8)
+      .map((model) => ({
+        model,
+        backend: 'custom-images' as const,
+        label: `${provider.name} · ${model}`,
+        custom: { kind: provider.kind, base_url: provider.baseUrl, api_key: key?.apiKey || null, key_env: keyEnv || null },
+      }));
+  }));
+  const models = $derived<ImageModel[]>([...openAiModels, ...gemini, ...freeImageModels, ...customImageModels]);
 
   // A picture pasted or dropped into the prompt box: shown above it, sent to the model with the prompt.
   type Reference = { id: string; name: string; mime: string; src: string; path?: string };
@@ -544,7 +560,7 @@
 
               <section aria-label="Prompt model">
                 <SectionTitle label="PROMPT MODEL" />
-                <div class="flex flex-col gap-0.5">
+                <div class="flex flex-col gap-[3.5px]">
                   {#each promptGroups as group (group.provider)}
                     {@const activeProvider = promptSource?.provider === group.provider}
                     <button
@@ -553,7 +569,7 @@
                       aria-haspopup="dialog"
                       aria-expanded={promptModelsOpen && promptSubProvider === group.provider}
                       data-glide-item
-                      class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {activeProvider || (promptModelsOpen && promptSubProvider === group.provider) ? 'bg-primary/10' : ''} {promptModelsOpen && promptSubProvider === group.provider ? 'text-primary' : ''}"
+                      class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-[5px] text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {activeProvider || (promptModelsOpen && promptSubProvider === group.provider) ? 'bg-primary/10' : ''} {promptModelsOpen && promptSubProvider === group.provider ? 'text-primary' : ''}"
                       onpointerenter={(event) => openPromptModels(group.provider, event.currentTarget)}
                       onpointerleave={closeNestedMenusSoon}
                       onfocus={(event) => openPromptModels(group.provider, event.currentTarget)}
@@ -663,6 +679,26 @@
               {/each}
               {:else}
                 <p class="m-0 px-1.5 py-1 text-[0.6875rem] leading-snug text-muted-foreground">Add a Gemini API key in Settings, Cloud providers, to use Nano Banana.</p>
+              {/if}
+              <div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-1.5 py-1 text-[10px] font-medium tracking-wide text-primary uppercase" role="separator"><span>Free community</span><span class="h-px flex-1 bg-primary"></span></div>
+              {#each freeImageModels as item (item.model)}
+                {@const active = selectedModels.includes(item.model)}
+                <button type="button" data-glide-item role="menuitemcheckbox" aria-checked={active} class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : ''}" onclick={() => toggleModel(item.model)} {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}>
+                  <ZIcon zType="lucideWandSparkles" class="size-3.5 shrink-0 text-foreground" />
+                  <span class="min-w-0 flex-1 truncate">{item.label}</span>
+                  {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
+                </button>
+              {/each}
+              {#if customImageModels.length}
+                <div class="mr-1 mt-1 flex shrink-0 items-center gap-2 px-1.5 py-1 text-[10px] font-medium tracking-wide text-primary uppercase" role="separator"><span>Configured image APIs</span><span class="h-px flex-1 bg-primary"></span></div>
+                {#each customImageModels as item (item.model)}
+                  {@const active = selectedModels.includes(item.model)}
+                  <button type="button" data-glide-item role="menuitemcheckbox" aria-checked={active} class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {active ? 'bg-primary/10 text-primary' : ''}" onclick={() => toggleModel(item.model)} {@attach zTooltip({ content: item.label, position: 'right', autoDetect: true, offset: 6 })}>
+                    <ZIcon zType="lucideImagePlus" class="size-3.5 shrink-0 text-foreground" />
+                    <span class="min-w-0 flex-1 truncate">{item.label}</span>
+                    {#if active}<ZIcon zType="lucideCheck" class="size-3.5 shrink-0" />{/if}
+                  </button>
+                {/each}
               {/if}
             </div>
           {/snippet}

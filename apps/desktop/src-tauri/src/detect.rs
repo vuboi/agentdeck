@@ -4,7 +4,9 @@
 //! `.claude/launch.json`, and Django's `manage.py`. The address a server will answer at is only a guess made from the
 //! script (its `--port`, its framework's usual port); `run` reads the real one from the server's own output.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use regex::Regex;
 use serde::Serialize;
@@ -375,6 +377,22 @@ pub fn plain(log: &str) -> String {
     strip_codes(log)
 }
 
+type ServerGate = Arc<tokio::sync::Mutex<()>>;
+static SERVER_GATES: OnceLock<Mutex<HashMap<String, ServerGate>>> = OnceLock::new();
+
+/// Serializes starts for one logical project server. This closes the gap between checking for an existing process
+/// and registering a new one when two agents request the same app at nearly the same time.
+async fn server_gate(command: &str, cwd: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    let gates = SERVER_GATES.get_or_init(|| Mutex::new(HashMap::new()));
+    let gate = gates
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(crate::servers::identity(command, cwd))
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone();
+    gate.lock_owned().await
+}
+
 /// Starts `command` as a server AgentDeck owns and waits until a page answers. The address is the one the server
 /// prints (a dev server moves to the next port when its own is taken); the guess `guess` is used when it prints none.
 /// A server that already answers at the guess is not started again.
@@ -390,40 +408,61 @@ pub async fn bring_up(
     guess: Option<tauri::Url>,
     answers: &[String],
 ) -> Result<(tauri::Url, Option<std::path::PathBuf>), RunFailure> {
+    let _gate = server_gate(command, cwd).await;
+    let existing = crate::servers::find_running(command, cwd);
     if let Some(guess) = guess.as_ref() {
         if let Some(target) = crate::browser::ready(guess).await {
             return Ok((target, None));
         }
     }
+    let mut guess = existing
+        .as_ref()
+        .and_then(|server| server.url.as_deref())
+        .and_then(|url| crate::browser::parse(url).ok())
+        .or(guess);
     let mut command = command.to_string();
-    let mut guess = guess;
+    let requested_command = command.clone();
     let mut options = crate::servers::Options {
         interactive: needs_keyboard(&command, cwd),
         answers: answers.to_vec(),
         env: Vec::new(),
     };
     // Something else holds the port the page was expected on: the same server, on the next free one.
-    if let Some(port) = guess.as_ref().and_then(|target| target.port_or_known_default()) {
-        let (moved, free, env) = crate::servers::prepare_port(&command, port);
-        if free != port {
-            command = moved;
-            options.env = env;
-            if let Some(target) = guess.as_mut() {
-                let _ = target.set_port(Some(free));
+    if existing.is_none() {
+        if let Some(port) = guess
+            .as_ref()
+            .and_then(|target| target.port_or_known_default())
+        {
+            let (moved, free, env) = crate::servers::prepare_port(&command, port);
+            if free != port {
+                command = moved;
+                options.env = env;
+                if let Some(target) = guess.as_mut() {
+                    let _ = target.set_port(Some(free));
+                }
             }
         }
     }
     // The log and the process are kept under the port; a command with no guess gets a number of its own.
-    let key = guess
-        .as_ref()
-        .and_then(|target| target.port_or_known_default())
-        .unwrap_or_else(|| {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (&command, cwd).hash(&mut hasher);
-            40_000 + (hasher.finish() % 20_000) as u16
-        });
-    let log = crate::servers::start_with(&command, cwd, key, &options)?;
+    let key = existing.as_ref().map_or_else(
+        || {
+            guess
+                .as_ref()
+                .and_then(|target| target.port_or_known_default())
+                .unwrap_or_else(|| {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    (&command, cwd).hash(&mut hasher);
+                    40_000 + (hasher.finish() % 20_000) as u16
+                })
+        },
+        |server| server.key,
+    );
+    let log = if existing.is_some() {
+        crate::servers::log_path(key)?
+    } else {
+        crate::servers::start_with_identity(&command, cwd, key, &options, &requested_command, cwd)?
+    };
     let mut started = std::time::Instant::now();
     // The log as it was at the last look, and since when it has not changed: a script waiting for an answer is silent.
     let mut seen = String::new();
@@ -465,7 +504,14 @@ pub async fn bring_up(
                 return Err(failure(&command, cwd, &seen, Ended::Asking));
             }
             options.interactive = true;
-            crate::servers::start_with(&command, cwd, key, &options)?;
+            crate::servers::start_with_identity(
+                &command,
+                cwd,
+                key,
+                &options,
+                &requested_command,
+                cwd,
+            )?;
             started = std::time::Instant::now();
             seen = String::new();
             quiet_since = started;

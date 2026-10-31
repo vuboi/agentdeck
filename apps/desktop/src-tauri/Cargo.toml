@@ -53,6 +53,8 @@ tauri-plugin-notification = "2"
 getrandom = "0.3"
 uuid.workspace = true
 keyring = "4.2.0"
+thiserror.workspace = true
+whisper-rs.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"

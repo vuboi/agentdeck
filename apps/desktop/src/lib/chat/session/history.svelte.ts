@@ -128,8 +128,22 @@ function applyHistory(all: HistorySession[]) {
   rememberParents();
   // One entry per id (first = newest): an older cache can still hold a duplicated Codex thread,
   // and a repeated id breaks the sidebar's keyed tree.
+  // A chat whose agent conversation was started by AgentDeck (a fork, or a chat that continued with another agent)
+  // has a session id of its own, while its history file is named by the agent's conversation id (`codex:<id>`,
+  // `claude:<id>`). That file is the same chat: it is merged into the chat, not listed again on its own.
+  const aliasOf = new Map<string, string>();
+  for (const item of workspace.sessions) {
+    if (item.agentSession) aliasOf.set(`${item.source ?? item.agent}:${item.agentSession}`, item.id);
+    for (const [agent, ids] of Object.entries(item.agentIds ?? {})) if (ids?.id) aliasOf.set(`${agent}:${ids.id}`, item.id);
+  }
   const seen = new Set<string>();
-  const found = all.filter((item) => !seen.has(item.id) && seen.add(item.id));
+  const found = all
+    .map((item) => {
+      const id = aliasOf.get(item.id);
+      if (!id || id === item.id) return item;
+      return { ...item, id, title: workspace.sessions.find((session) => session.id === id)?.title ?? item.title };
+    })
+    .filter((item) => !seen.has(item.id) && seen.add(item.id));
   const ids = new Set(found.map((item) => item.id));
   const current = new Map(workspace.sessions.map((item) => [item.id, item]));
   const projectIds = new Map<string, string>();
@@ -741,59 +755,91 @@ export async function renameSession(id: string, title: string) {
 }
 
 /** Deletes the chat; Claude and Codex sessions are moved to ~/.agentdeck/trash, so they vanish there too. */
+/** An idle warm CLI can have touched the transcript recently without a visible turn. Release only this chat before the adapter moves its file; other chats keep running. */
+async function releaseCli(id: string) {
+  if (!inTauri()) return;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('agent_warm_reset_session', { session: id });
+  } catch {
+    // The history delete below still reports a real external writer if one is present.
+  }
+}
+
+/** The list and every cache forget the removed chats at once, so the sidebar changes in one pass, not row by row. */
+async function forgetSessions(removed: SessionItem[]) {
+  if (!removed.length) return;
+  const gone = new Set(removed.map((item) => item.id));
+  // Forks of a removed chat move up to the nearest parent that stays.
+  const survivingParent = (id: string | undefined): string | undefined => {
+    let parent = id;
+    while (parent && gone.has(parent)) parent = workspace.sessions.find((item) => item.id === parent)?.parentId;
+    return parent;
+  };
+  for (const child of workspace.sessions) if (!gone.has(child.id) && child.parentId && gone.has(child.parentId)) child.parentId = survivingParent(child.parentId);
+  const activeGone = gone.has(workspace.activeId);
+  const activeProject = removed.find((item) => item.id === workspace.activeId)?.projectId;
+  workspace.sessions = workspace.sessions.filter((item) => !gone.has(item.id));
+  for (const id of gone) {
+    delete drafts[id];
+    delete draftMentions[id];
+    delete draftImages[id];
+    delete draftFiles[id];
+    delete draftElements[id];
+    delete localMessages[id];
+    // What the chat kept in memory for its runs, queue and recoveries: nothing reads it again, and it would only grow.
+    delete queued[id];
+    delete queuePaused[id];
+    delete turns[id];
+    delete lastPrompt[id];
+    delete replies[id];
+    delete liveReplies[id];
+    delete liveAsks[id];
+    delete sessionLanes[id];
+    delete recoveries[id];
+    delete resumes[id];
+    delete otherTurns[id];
+    delete hidden[id];
+    transcripts.delete(id);
+    backlog.delete(id);
+    lastEventAt.delete(id);
+    lastEventKind.delete(id);
+    deleteCommandImages(id);
+  }
+  saveOtherTurns();
+  await Promise.all([...gone].map((id) => deleteArchivedMessages(id)));
+  patchCache((list) => list.filter((item) => !gone.has(item.id)));
+  if (activeGone) {
+    const next = workspace.sessions.find((item) => item.projectId === activeProject) ?? workspace.sessions[0];
+    if (next) workspace.activeId = next.id;
+    else newSession(activeProject);
+  }
+}
+
 export async function deleteSession(id: string) {
   const session = workspace.sessions.find((item) => item.id === id);
   if (!session) return;
   // A run of the chat ends with it: its CLI is stopped and the events that still arrive have nowhere to go.
   stopTurn(id);
-  // An idle warm CLI can have touched the transcript recently without a visible turn. Release only this chat before
-  // the adapter moves its file; other chats and their background work keep running.
-  if (inTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('agent_warm_reset_session', { session: id });
-    } catch {
-      // The history delete below still reports a real external writer if one is present.
-    }
-  }
+  await releaseCli(id);
   if (session.path && session.source)
     await deleteHistory(session.source, session.path);
-  // Forks of it move up to its own parent.
-  for (const child of workspace.sessions.filter((item) => item.parentId === id))
-    child.parentId = session.parentId;
-  workspace.sessions = workspace.sessions.filter((item) => item.id !== id);
-  delete drafts[id];
-  delete draftMentions[id];
-  delete draftImages[id];
-  delete draftFiles[id];
-  delete draftElements[id];
-  delete localMessages[id];
-  // What the chat kept in memory for its runs, queue and recoveries: nothing reads it again, and it would only grow.
-  delete queued[id];
-  delete queuePaused[id];
-  delete turns[id];
-  delete lastPrompt[id];
-  delete replies[id];
-  delete liveReplies[id];
-  delete liveAsks[id];
-  delete sessionLanes[id];
-  delete recoveries[id];
-  delete resumes[id];
-  delete otherTurns[id];
-  delete hidden[id];
-  transcripts.delete(id);
-  backlog.delete(id);
-  lastEventAt.delete(id);
-  lastEventKind.delete(id);
-  saveOtherTurns();
-  deleteCommandImages(id);
-  await deleteArchivedMessages(id);
-  patchCache((list) => list.filter((item) => item.id !== id));
-  if (workspace.activeId === id) {
-    const next =
-      workspace.sessions.find((item) => item.projectId === session.projectId) ??
-      workspace.sessions[0];
-    if (next) workspace.activeId = next.id;
-    else newSession(session.projectId);
-  }
+  await forgetSessions([session]);
+}
+
+/** Deletes many chats at once: the files move in parallel, then the list updates once. Returns the ids whose files could not be moved; those stay in the list. */
+export async function deleteSessions(ids: string[]): Promise<string[]> {
+  const sessions = workspace.sessions.filter((item) => ids.includes(item.id));
+  for (const session of sessions) stopTurn(session.id);
+  const failed = new Set<string>();
+  await Promise.all(sessions.map(async (session) => {
+    await releaseCli(session.id);
+    try {
+      if (session.path && session.source) await deleteHistory(session.source, session.path);
+    } catch {
+      failed.add(session.id);
+    }
+  }));
+  await forgetSessions(sessions.filter((item) => !failed.has(item.id)));
+  return [...failed];
 }

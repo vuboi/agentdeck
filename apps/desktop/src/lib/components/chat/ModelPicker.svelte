@@ -240,7 +240,7 @@
       <div class="flex w-full flex-col gap-3 px-2.5">
       <section aria-label="Model">
         <SectionTitle label="MODEL" />
-        <div class="flex flex-col gap-0.5" {@attach glide()}>
+        <div class="flex flex-col gap-[3.5px]" {@attach glide()}>
           {#each sources as source (source.key)}
             {@const current = agent === source.provider && source.models().some((item) => item.value === model) ? modelName(agent, model) : ''}
             <button
@@ -249,7 +249,7 @@
               aria-haspopup="dialog"
               aria-expanded={subOpen && subProvider === source.key}
               data-glide-item
-              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {(subOpen && subProvider === source.key) || current ? 'bg-primary/10' : ''}"
+              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-[5px] text-left text-sm outline-none hover:bg-primary/10 focus-visible:bg-primary/10 {(subOpen && subProvider === source.key) || current ? 'bg-primary/10' : ''}"
               onpointerenter={(event) => openSub(source.key, event.currentTarget)}
               onpointerleave={leaveSub}
               onfocus={(event) => openSub(source.key, event.currentTarget)}

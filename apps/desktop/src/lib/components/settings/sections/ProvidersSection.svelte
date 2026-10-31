@@ -8,7 +8,7 @@
   import { brandLogoFor, providerLogo } from '../../../agents/brand-icons';
   import { connectors, removeProvider, scanLocal } from '../../../agents/connectors.svelte';
   import { zModalService } from '@shival99/z-ui-svelte';
-  import { FREE_CLOUD, KINDS, isClaudeConsole, samePreset, type ProviderForm } from './provider-form.svelte';
+  import { FEATURED_CLOUD, FREE_CLOUD, KINDS, isClaudeConsole, samePreset, type ProviderForm } from './provider-form.svelte';
 
   // Deleting a provider asks first, in the app's danger confirm (the same as deleting a file).
   function confirmRemove(id: string, name: string) {
@@ -73,6 +73,25 @@
                         <span class="grid size-7 shrink-0 place-items-center text-primary" title="Added"><ZIcon zType={icon('lucideCheck')} class="size-3.5" /></span>
                       {:else}
                         <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Add {preset.name}" title="Add {preset.name}" onclick={() => form.useFreeCloud(preset)}>
+                          <ZIcon zType={icon('lucidePlus')} class="size-3.5" />
+                        </ZButton>
+                      {/if}
+                    </li>
+                  {/each}
+                  {#each FEATURED_CLOUD as preset (preset.name)}
+                    <li class="flex min-w-0 items-center gap-2.5 rounded-lg border border-border px-3 py-2 text-sm">
+                      <img src={brandLogoFor(preset.base)} alt="" class="size-5 shrink-0 rounded-sm object-contain" />
+                      <span class="min-w-0 flex-1">
+                        <span class="flex min-w-0 items-center gap-1.5 text-sm font-medium"><span class="truncate">{preset.name}</span><span class="shrink-0 rounded bg-primary/15 px-1.5 py-px text-[10px] font-medium text-primary">Recommended</span></span>
+                        <span class="block truncate text-[0.6875rem] text-muted-foreground" title={preset.note}>{preset.note}</span>
+                      </span>
+                      <ZButton zWave={false} zType="ghost" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Get a {preset.name} API key" title="Get an API key ({preset.keyUrl.replace('https://', '')})" onclick={() => void openExternal(preset.keyUrl)}>
+                        <ZIcon zType={icon('lucideKeyRound')} class="size-3.5" />
+                      </ZButton>
+                      {#if connectors.custom.some((item) => samePreset(preset.base, item.baseUrl))}
+                        <span class="grid size-7 shrink-0 place-items-center text-primary" title="Added"><ZIcon zType={icon('lucideCheck')} class="size-3.5" /></span>
+                      {:else}
+                        <ZButton zWave={false} zType="outline" zSize="sm" class="size-7! shrink-0 p-0" aria-label="Add {preset.name}" title="Add {preset.name}" onclick={() => form.useFeaturedCloud(preset)}>
                           <ZIcon zType={icon('lucidePlus')} class="size-3.5" />
                         </ZButton>
                       {/if}

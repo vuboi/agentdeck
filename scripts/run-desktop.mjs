@@ -1,7 +1,7 @@
 // One entry point for isolated native dev, browser dev, and a locally built release app.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,46 @@ const dryRun = process.argv.includes('--dry-run');
 if (!['dev', 'web', 'build'].includes(mode)) throw new Error('Usage: pnpm dev | pnpm dev:web | pnpm run:build');
 const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
 const env = { ...process.env, [pathKey]: [join(homedir(), '.cargo', 'bin'), process.env[pathKey]].filter(Boolean).join(process.platform === 'win32' ? ';' : ':') };
+if (process.platform === 'win32' && mode !== 'web') {
+  // whisper-rs uses bindgen + CMake. Discover the standard Windows installs so pnpm dev/build works from an ordinary
+  // terminal; explicit variables still win for custom LLVM or Visual Studio installations.
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files';
+  const llvm = join(programFiles, 'LLVM');
+  if (existsSync(join(llvm, 'bin', 'libclang.dll'))) {
+    env.LIBCLANG_PATH ??= join(llvm, 'bin');
+    const clangRoot = join(llvm, 'lib', 'clang');
+    const resources = existsSync(clangRoot) ? readdirSync(clangRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort().at(-1) : undefined;
+    if (resources) env.BINDGEN_EXTRA_CLANG_ARGS ??= `-resource-dir="${join(clangRoot, resources)}"`;
+  }
+  const programFilesX86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)';
+  const hasCpp = (folder) => existsSync(join(folder, 'VC', 'Tools', 'MSVC'));
+  const vs18 = join(programFiles, 'Microsoft Visual Studio', '18', 'Community');
+  const vs17 = join(programFilesX86, 'Microsoft Visual Studio', '2022', 'BuildTools');
+  const visualStudio = [vs18, vs17].find(hasCpp);
+  if (!process.env.VSCMD_VER && visualStudio) {
+    const command = `call "${join(visualStudio, 'Common7', 'Tools', 'VsDevCmd.bat')}" -arch=x64 >nul && set`;
+    const result = spawnSync('cmd.exe', ['/d', '/s', '/c', command], {
+      encoding: 'utf8',
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+    });
+    if (result.status === 0) {
+      const developer = Object.fromEntries(result.stdout.split(/\r?\n/).flatMap((line) => {
+        const separator = line.indexOf('=');
+        return separator > 0 ? [[line.slice(0, separator), line.slice(separator + 1)]] : [];
+      }));
+      const developerPathKey = Object.keys(developer).find((key) => key.toLowerCase() === 'path');
+      if (developerPathKey) env[pathKey] = [developer[developerPathKey], env[pathKey]].filter(Boolean).join(';');
+      for (const [key, value] of Object.entries(developer)) {
+        if (key.toLowerCase() !== 'path') env[key] ??= value;
+      }
+    }
+  }
+  if (!env.CMAKE_GENERATOR) {
+    if (visualStudio === vs18) env.CMAKE_GENERATOR = 'Visual Studio 18 2026';
+    else if (visualStudio === vs17) env.CMAKE_GENERATOR = 'Visual Studio 17 2022';
+  }
+}
 if (process.platform === 'linux') {
   env.GDK_BACKEND ??= 'x11';
   env.WEBKIT_DISABLE_DMABUF_RENDERER ??= '1';

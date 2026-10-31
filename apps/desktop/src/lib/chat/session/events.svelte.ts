@@ -1,4 +1,4 @@
-import { connectors, agentHasRoom, autoSwitchConnectorAccount, autoSwitchProviderKey, limitResetAt, refreshProviderQuota, type ConnectorId } from '../../agents/connectors.svelte';
+import { connectors, agentHasRoom, autoSwitchConnectorAccount, autoSwitchProviderKey, limitResetAt, refreshProviderQuota, type AccountConnectorId } from '../../agents/connectors.svelte';
 import { type FailureKind, type Recovery, classifyFailure, planRecovery, continuePrompt, recoveryNote } from '../recovery/turn-failure';
 import { inTauri, isPreviewCopy, clock } from '../../app/platform/history';
 import { type Message, type Block } from '../mock';
@@ -241,7 +241,7 @@ async function runAutoSwitch(sessionId: string, reason: string, reply: Message, 
         }
       }
     } else {
-      const connector = (session.agent === 'antigravity' ? 'agy' : session.agent) as ConnectorId;
+      const connector = (session.agent === 'antigravity' ? 'agy' : session.agent) as AccountConnectorId;
       const switched = await autoSwitchConnectorAccount(connector, currentAttempt);
       if (switched) selected = switched.email;
     }
@@ -790,7 +790,7 @@ function handleEventNow(
   const autoSwitchRequested = Boolean(update.finished && event.kind === 'error' && (failureKind === 'limit' || failureKind === 'auth') && (
     session.agent === 'custom'
       ? connectors.custom.some((provider) => provider.id === customProviderId && provider.autoSwitch)
-      : ['claude', 'codex', 'copilot', 'agy'].includes(autoSwitchConnector) && connectors.autoSwitch[autoSwitchConnector as ConnectorId]
+      : ['claude', 'codex', 'copilot', 'agy'].includes(autoSwitchConnector) && connectors.autoSwitch[autoSwitchConnector as AccountConnectorId]
   ));
   const recovery = update.finished && event.kind === 'error' && !autoSwitchRequested ? recoveryFor(session, event.message) : null;
   const recovering = autoSwitchRequested || (recovery !== null && recovery.plan.action !== 'stop');

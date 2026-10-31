@@ -4,12 +4,14 @@
   import type { ZIconName, ZTab } from '@shival99/z-ui-svelte';
   import { toast } from '../../../app/platform/toast';
   import { ticker } from '../../../app/platform/clock.svelte';
-  import { GITHUB_SVG, OPENAI_SVG, OPENCODE_SVG } from '../../../agents/brand-icons';
+  import { ALIBABA_SVG, CEREBRAS_SVG, CLAUDE_LOGO, CLOUDFLARE_SVG, COMMAND_CODE_SVG, COPILOT_LOGO, DEEPSEEK_SVG, GEMINI_LOGO, GEMINI_SVG, GITHUB_SVG, GROQ_SVG, KIMI_SVG, MINIMAX_SVG, MUSE_SVG, OPENAI_SVG, OPENCODE_SVG, OPENROUTER_SVG, WORKBUDDY_LOGO, ZHIPU_SVG, connectorLogo } from '../../../agents/brand-icons';
+  import SecretInput from '../../ui/SecretInput.svelte';
   import { openExternal } from '../../../browser/browser.svelte';
   import {
     addAccount,
     cancelAccountAdd,
     cancelLogin,
+    API_CONNECTORS,
     connectors,
     install,
     installed,
@@ -20,11 +22,13 @@
     retrySaveAgyAccount,
     setCodexAutoSwitch,
     setConnectorAutoSwitch,
+    saveApiConnectorKey,
     switchAccount,
     switchAgyAccount,
     tool,
     type Account,
     type AccountProvider,
+    type ApiConnectorId,
     type ConnectorId,
     type Login,
     type UsageWindow,
@@ -42,18 +46,35 @@
     brand: string;
     /** Raw SVG used instead of `brand` when the icon set's version cannot take a colour. */
     svg?: string;
+    /** A full-colour logo (image) that keeps its own colours; wins over `svg` and `brand`. */
+    image?: string;
     /** Colour of the brand icon: the same as the agent's colour in the chat. */
     tone: string;
     note: string;
     accounts?: AccountProvider;
     manager?: { id: string; label: string; why: string };
+    auth?: 'api-key';
+    keyUrl?: string;
   };
+  const apiCard = (id: ApiConnectorId, label: string, svg: string, tone: string, note: string, keyUrl: string): Card => ({
+    id,
+    label,
+    binary: id,
+    brand: 'lucideKeyRound',
+    image: connectorLogo(id),
+    svg,
+    tone,
+    note,
+    auth: 'api-key',
+    keyUrl,
+  });
   const CARDS: Card[] = [
     {
       id: 'claude',
       label: 'Claude Code',
       binary: 'claude',
       brand: 'brandClaude',
+      image: CLAUDE_LOGO,
       tone: 'bg-orange-500/12 text-orange-500',
       note: 'Anthropic’s coding agent. Sign-in opens your browser.',
       accounts: 'claude',
@@ -64,6 +85,7 @@
       label: 'Codex',
       binary: 'codex',
       brand: 'brandOpenai',
+
       svg: OPENAI_SVG,
       tone: 'bg-foreground/10 text-foreground',
       note: 'OpenAI’s coding agent. Sign-in opens your browser.',
@@ -75,6 +97,7 @@
       label: 'Antigravity',
       binary: 'agy',
       brand: 'brandGemini',
+      image: GEMINI_LOGO,
       tone: 'bg-sky-500/12 text-sky-500',
       note: 'Google’s agent CLI (agy). Its sign-in runs in its own window. It has its own browser tools: AgentDeck’s are off for it.',
     },
@@ -83,6 +106,7 @@
       label: 'OpenCode',
       binary: 'opencode',
       brand: 'lucideTerminal',
+
       svg: OPENCODE_SVG,
       tone: 'bg-foreground/10 text-foreground',
       note: 'Open-source coding agent. Sign-in opens the OpenCode provider chooser.',
@@ -93,7 +117,8 @@
       binary: 'copilot',
       brand: 'lucideBot',
       svg: GITHUB_SVG,
-      tone: 'bg-foreground/10 text-foreground',
+      image: COPILOT_LOGO,
+      tone: 'bg-violet-500/12 text-violet-600 dark:text-violet-400',
       note: 'GitHub Copilot coding models. The Copilot CLI is installed here; sign in and switch accounts with GitHub CLI.',
       accounts: 'copilot',
       manager: { id: 'gh', label: 'GitHub CLI', why: 'Uses the active gh auth account for Copilot access.' },
@@ -103,16 +128,48 @@
       label: 'WorkBuddy',
       binary: 'workbuddy',
       brand: 'lucideBot',
+      image: WORKBUDDY_LOGO,
       tone: 'bg-cyan-500/12 text-cyan-600 dark:text-cyan-400',
       note: 'Tencent WorkBuddy. Sign-in uses a browser device flow; chat uses its authenticated model catalog.',
     },
+    apiCard('muse', 'Muse (Meta Model API)', MUSE_SVG, 'bg-blue-500/12 text-blue-600 dark:text-blue-400', 'API key for Muse Model API. This is separate from Muse Code subscription login.', 'https://dev.meta.ai/'),
+    apiCard('commandcode', 'Command Code', COMMAND_CODE_SVG, 'bg-foreground/10 text-foreground', 'API key for the Command Code Provider API and its subscription credits.', 'https://commandcode.ai/studio/api-keys'),
+    apiCard('qwen', 'Alibaba Qwen', ALIBABA_SVG, 'bg-orange-500/12 text-orange-600 dark:text-orange-400', 'DashScope API key for Qwen coding and multimodal models.', 'https://bailian.console.aliyun.com/?tab=model#/api-key'),
+    apiCard('deepseek', 'DeepSeek', DEEPSEEK_SVG, 'bg-sky-500/12 text-sky-600 dark:text-sky-400', 'API key for DeepSeek chat and reasoning models.', 'https://platform.deepseek.com/api_keys'),
+    apiCard('moonshot', 'Kimi (Moonshot)', KIMI_SVG, 'bg-blue-500/12 text-blue-600 dark:text-blue-400', 'API key for Kimi long-context models.', 'https://platform.moonshot.ai/console/api-keys'),
+    apiCard('zai', 'GLM (Z.AI)', ZHIPU_SVG, 'bg-indigo-500/12 text-indigo-600 dark:text-indigo-400', 'API key for GLM multilingual and coding models.', 'https://z.ai/manage-apikey/apikey-list'),
+    apiCard('minimax', 'MiniMax', MINIMAX_SVG, 'bg-pink-500/12 text-pink-600 dark:text-pink-400', 'API key for MiniMax agent and coding models.', 'https://platform.minimax.io/user-center/basic-information/interface-key'),
+    apiCard('gemini', 'Google Gemini', GEMINI_SVG, 'bg-blue-500/12 text-blue-600 dark:text-blue-400', 'API key for the Gemini OpenAI-compatible endpoint.', 'https://aistudio.google.com/app/apikey'),
+    apiCard('groq', 'Groq', GROQ_SVG, 'bg-orange-500/12 text-orange-600 dark:text-orange-400', 'API key for fast open models.', 'https://console.groq.com/keys'),
+    apiCard('cerebras', 'Cerebras', CEREBRAS_SVG, 'bg-orange-500/12 text-orange-600 dark:text-orange-400', 'API key for high-throughput open models.', 'https://cloud.cerebras.ai'),
+    apiCard('openrouter', 'OpenRouter', OPENROUTER_SVG, 'bg-indigo-500/12 text-indigo-600 dark:text-indigo-400', 'One API key for multiple model providers.', 'https://openrouter.ai/settings/keys'),
+    apiCard('cloudflare', 'Cloudflare Workers AI', CLOUDFLARE_SVG, 'bg-orange-500/12 text-orange-600 dark:text-orange-400', 'Account token for Workers AI. The account ID remains part of the endpoint configuration.', 'https://dash.cloudflare.com/profile/api-tokens'),
   ];
 
+  const apiKeyDraft = $state<Partial<Record<ApiConnectorId, string>>>({});
+  const apiKeyBusy = $state<Partial<Record<ApiConnectorId, boolean>>>({});
+
   const loginOf = (id: ConnectorId): Login | undefined => {
+    if (id in API_CONNECTORS) return { logged_in: Boolean(connectors.apiKeys[id as ApiConnectorId]), email: null, plan: null, detail: 'API key' };
     const detected = connectors.detected;
     if (!detected) return undefined;
-    return id === 'agy' ? detected.antigravity : detected[id];
+    const nativeId = id as Exclude<ConnectorId, ApiConnectorId>;
+    return nativeId === 'agy' ? detected.antigravity : detected[nativeId];
   };
+
+  async function saveApiKey(card: Card) {
+    if (card.auth !== 'api-key') return;
+    const id = card.id as ApiConnectorId;
+    apiKeyBusy[id] = true;
+    try {
+      if (await saveApiConnectorKey(id, apiKeyDraft[id] ?? '')) {
+        apiKeyDraft[id] = '';
+        toast.success(`${card.label} key saved`);
+      } else toast.error(`Could not save ${card.label} key`);
+    } finally {
+      apiKeyBusy[id] = false;
+    }
+  }
 
 
   /** Email of the account card whose Refresh button was clicked: only that card's icon spins. */
@@ -179,7 +236,8 @@
 
 {#snippet tabIcon(tab: ZTab)}
   {@const card = CARDS.find((item) => item.id === tab.value)}
-  {#if card?.svg}<ZIcon zSvg={card.svg} class="size-3.5" />{:else if card}<ZIcon zType={icon(card.brand)} class="size-3.5" />{/if}
+  {@const textTone = card?.tone?.split(' ').find((c) => c.startsWith('text-')) ?? ''}
+  {#if card?.image}<img src={card.image} alt="" class="size-3.5 shrink-0 rounded-xs object-contain" />{:else if card?.svg}<ZIcon zSvg={card.svg} class="size-3.5 {textTone}" />{:else if card}<ZIcon zType={icon(card.brand)} class="size-3.5 {textTone}" />{/if}
 {/snippet}
 
 <!-- The tab strip stays put; only the body below it scrolls, so nothing shifts and the body never runs under the strip. -->
@@ -241,8 +299,8 @@
               {#each CARDS.filter((item) => item.id === activeCard) as card (card.id)}
                 {@const info = loginOf(card.id)}
                 {@const native = card.id === 'workbuddy'}
-                {@const path = native ? card.id : tool(card.binary)?.path}
-                {@const version = native ? 'OAuth' : tool(card.binary)?.version}
+                {@const path = card.auth === 'api-key' ? card.id : native ? card.id : tool(card.binary)?.path}
+                {@const version = card.auth === 'api-key' ? 'API key' : native ? 'OAuth' : tool(card.binary)?.version}
                 {@const list = card.accounts ? connectors.accounts[card.accounts] : null}
                 {@const working = busyOf(`install:${card.id}`, `login:${card.id}`, `add:${card.id}`)}
                 {@const log = lastLog(card.id)}
@@ -250,7 +308,7 @@
                 {@const code = codeIn(connectors.logs[card.id] ?? [])}
                 <section class="min-w-0 rounded-xl border border-border bg-card/40" aria-label={card.label}>
                   <div class="flex h-[4.5rem] items-start gap-3 p-4">
-                    <span class="grid size-10 shrink-0 place-items-center rounded-lg {card.tone}">{#if card.svg}<ZIcon zSvg={card.svg} class="size-5" />{:else}<ZIcon zType={icon(card.brand)} class="size-5" />{/if}</span>
+                    <span class="grid size-10 shrink-0 place-items-center rounded-lg {card.tone}">{#if card.image}<img src={card.image} alt="" class="size-5 object-contain" />{:else if card.svg}<ZIcon zSvg={card.svg} class="size-5" />{:else}<ZIcon zType={icon(card.brand)} class="size-5" />{/if}</span>
                     <div class="min-w-0 flex-1">
                       <div class="flex flex-wrap items-center gap-2">
                         <h3 class="text-sm font-semibold">{card.label}</h3>
@@ -275,7 +333,11 @@
                     </div>
                     <div class="flex shrink-0 items-center gap-1.5">
                       <!-- The buttons cross-fade when the state changes (install → installing → signed in) instead of cutting over. -->
-                      {#if connectors.detected && !path}
+                      {#if card.auth === 'api-key'}
+                        <ZButton zWave={false} zType={info?.logged_in ? 'outline' : 'default'} zSize="sm" class="h-8 gap-1.5 px-3 text-sm" onclick={() => (apiKeyDraft[card.id as ApiConnectorId] = '')}>
+                          <ZIcon zType={icon('lucideKeyRound')} class="size-3.5" /> {info?.logged_in ? 'Replace key' : 'Add key'}
+                        </ZButton>
+                      {:else if connectors.detected && !path}
                         <span class="inline-flex" in:fade={{ duration: 180, delay: 60 }} out:fade={{ duration: 120 }}>
                           <ZButton zWave={false} zSize="sm" class="h-8 gap-1.5 px-3 text-sm" disabled={Boolean(working)} onclick={() => void install(card.id, card.label)}>
                             <ZIcon zType={icon(working ? 'lucideLoaderCircle' : 'lucideDownload')} class="size-3.5 {working ? 'animate-spin' : ''}" /> <ZTextMorph zText={working ? 'Installing…' : 'Install'} />
@@ -298,10 +360,30 @@
                     </div>
                   </div>
 
+                  {#if card.auth === 'api-key'}
+                    {@const apiId = card.id as ApiConnectorId}
+                    <div class="border-t border-border/70 px-4 py-3">
+                      <div class="mb-2 flex items-center gap-2">
+                        <h4 class="text-sm font-semibold tracking-wide text-muted-foreground uppercase">API key</h4>
+                        <a class="ml-auto text-[0.6875rem] text-primary hover:underline" href={card.keyUrl} target="_blank" rel="noreferrer">Get a key</a>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <div class="min-w-0 flex-1">
+                          <SecretInput bind:value={apiKeyDraft[apiId]} kept={connectors.apiKeys[apiId] ?? ''} placeholder={API_CONNECTORS[apiId].keyEnv + '…'} />
+                        </div>
+                        <ZButton zWave={false} zSize="sm" class="h-9 shrink-0 px-3 text-sm" disabled={Boolean(apiKeyBusy[apiId]) || !apiKeyDraft[apiId]?.trim()} onclick={() => void saveApiKey(card)}>
+                          <ZIcon zType={icon(apiKeyBusy[apiId] ? 'lucideLoaderCircle' : 'lucideSave')} class="size-3.5 {apiKeyBusy[apiId] ? 'animate-spin' : ''}" />
+                          {apiKeyBusy[apiId] ? 'Saving…' : 'Save'}
+                        </ZButton>
+                      </div>
+                      <p class="mt-2 text-[0.6875rem] text-muted-foreground">The key stays in the system credential store and creates the matching provider for the model picker.</p>
+                    </div>
+                  {/if}
+
                   <div class="flex items-center gap-3 border-t border-border/70 px-4 py-2.5">
-                    <span class="min-w-0 flex-1 text-[0.75rem] text-muted-foreground">{card.id === 'opencode' || card.id === 'workbuddy' ? 'Automatic account switching is unavailable for this connector.' : 'Rotate to another saved account when quota or sign-in fails.'}</span>
-                    <span class="text-xs font-medium {card.id === 'opencode' ? 'text-muted-foreground' : ''}">Auto switch</span>
-                    <ZSwitch zVariant="dot" checked={card.id !== 'opencode' && card.id !== 'workbuddy' && Boolean(connectors.autoSwitch[card.id])} zSize="sm" zDisabled={card.id === 'opencode' || card.id === 'workbuddy'} onChange={(value) => setConnectorAutoSwitch(card.id, value)} />
+                    <span class="min-w-0 flex-1 text-[0.75rem] text-muted-foreground">{card.auth === 'api-key' || card.id === 'opencode' || card.id === 'workbuddy' ? 'Automatic account switching is unavailable for this connector.' : 'Rotate to another saved account when quota or sign-in fails.'}</span>
+                    <span class="text-xs font-medium {card.auth === 'api-key' || card.id === 'opencode' ? 'text-muted-foreground' : ''}">Auto switch</span>
+                    <ZSwitch zVariant="dot" checked={card.auth !== 'api-key' && card.id !== 'opencode' && card.id !== 'workbuddy' && Boolean(connectors.autoSwitch[card.id])} zSize="sm" zDisabled={card.auth === 'api-key' || card.id === 'opencode' || card.id === 'workbuddy'} onChange={(value) => setConnectorAutoSwitch(card.id, value)} />
                   </div>
 
                   {#if working || log.length > 0 || connectors.errors[`install:${card.id}`] || connectors.errors[`login:${card.id}`] || connectors.errors[`add:${card.id}`]}

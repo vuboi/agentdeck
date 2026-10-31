@@ -164,6 +164,7 @@ struct Server {
     child: Child,
     command: String,
     cwd: String,
+    identity: String,
     url: Option<String>,
     started: std::time::SystemTime,
 }
@@ -187,6 +188,38 @@ pub struct Options {
     pub answers: Vec<String>,
     /// Added to the environment (`PORT` when the usual port is taken).
     pub env: Vec<(String, String)>,
+}
+
+/// The stable identity of a project server. The command is trimmed, while Windows paths are compared
+/// case-insensitively and with one separator style so a moved port does not create a second server.
+pub fn identity(command: &str, cwd: &str) -> String {
+    let cwd = cwd.replace('\\', "/").trim_end_matches('/').to_string();
+    #[cfg(windows)]
+    let cwd = cwd.to_ascii_lowercase();
+    format!("{}\0{cwd}", command.trim())
+}
+
+/// A live server previously started for the same project command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Existing {
+    pub key: u16,
+    pub url: Option<String>,
+}
+
+pub fn find_running(command: &str, cwd: &str) -> Option<Existing> {
+    let wanted = identity(command, cwd);
+    let Ok(mut running) = RUNNING.lock() else {
+        return None;
+    };
+    running.iter_mut().find_map(|server| {
+        if server.identity != wanted || !matches!(server.child.try_wait(), Ok(None)) {
+            return None;
+        }
+        Some(Existing {
+            key: server.key,
+            url: server.url.clone(),
+        })
+    })
 }
 
 /// Whether the server this app started on `port` is still running.
@@ -309,6 +342,19 @@ pub fn start_with(
     port: u16,
     options: &Options,
 ) -> Result<PathBuf, String> {
+    start_with_identity(command, cwd, port, options, command, cwd)
+}
+
+/// Starts a server while retaining the command and folder that identify the logical project run. `command` may
+/// contain a port rewrite, so callers that moved a port should pass the original command as `identity_command`.
+pub fn start_with_identity(
+    command: &str,
+    cwd: &str,
+    port: u16,
+    options: &Options,
+    identity_command: &str,
+    identity_cwd: &str,
+) -> Result<PathBuf, String> {
     let log = log_path(port)?;
     std::fs::create_dir_all(log.parent().ok_or("no folder for the server log")?)
         .map_err(|error| error.to_string())?;
@@ -363,8 +409,9 @@ pub fn start_with(
     running.push(Server {
         key: port,
         child,
-        command: command.to_string(),
-        cwd: cwd.to_string(),
+        command: identity_command.to_string(),
+        cwd: identity_cwd.to_string(),
+        identity: identity(identity_command, identity_cwd),
         url: None,
         started: std::time::SystemTime::now(),
     });
@@ -509,6 +556,14 @@ pub fn server_stop(key: Option<u16>) -> Result<(), String> {
 #[cfg(test)]
 mod log_tests {
     use super::*;
+
+    #[test]
+    fn server_identity_is_stable_for_same_command_and_windows_path() {
+        assert_eq!(
+            identity(" pnpm dev  ", r"E:\\WORK\\PROJECTS\\AgentDeck\\"),
+            identity("pnpm dev", "e:/work/projects/agentdeck")
+        );
+    }
 
     #[test]
     fn a_log_is_announced_only_when_its_length_changes() {

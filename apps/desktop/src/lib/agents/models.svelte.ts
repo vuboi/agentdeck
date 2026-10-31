@@ -195,6 +195,8 @@ void loadModels();
  */
 export function modelLabel(value: string | undefined | null): string {
   if (!value) return '';
+  const custom = parseCustomModel(value);
+  if (custom) return modelLabel(custom.model) || custom.model;
   // The same name the pickers show: `credit:` models carry the "· Credit" suffix.
   const credit = creditModel(value);
   if (credit) return `${modelLabel(credit)} · Credit`;

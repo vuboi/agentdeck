@@ -3,9 +3,10 @@
 import endpoints from './endpoints.json';
 
 export type LocalEndpoint = { kind: 'openai' | 'anthropic' | 'ollama'; label: string; base: string };
-export type FreeCloudEndpoint = { name: string; base: string; keyEnv: string; model: string; note: string; keyUrl: string };
+export type CloudEndpoint = { name: string; base: string; keyEnv: string; model: string; note: string; keyUrl: string; restricted?: boolean; capabilities?: string[] };
 
-export const ENDPOINTS = endpoints as Omit<typeof endpoints, 'local' | 'freeCloud'> & {
+export const ENDPOINTS = endpoints as Omit<typeof endpoints, 'local' | 'freeCloud' | 'featuredCloud'> & {
   local: LocalEndpoint[];
-  freeCloud: FreeCloudEndpoint[];
+  freeCloud: CloudEndpoint[];
+  featuredCloud: CloudEndpoint[];
 };

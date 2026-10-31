@@ -34,6 +34,7 @@
     samePath,
     trustFolder,
     deleteSession,
+    deleteSessions,
     forkSession,
     history,
     hideProject,
@@ -354,25 +355,33 @@
     });
   }
 
-  /** Every project leaves the list at once; their folders and chats stay on disk, as with a single remove. */
-  function askRemoveAllProjects() {
-    const count = workspace.projects.length;
-    if (!count) return;
+  /** Deletes the chats in one go (the same way as Delete on a chat), then reports what could not be moved. */
+  async function deleteChats(ids: string[], where: string) {
+    const failed = await deleteSessions(ids);
+    if (failed.length) zModalService.warning({ zTitle: 'Some chats could not be deleted', zContent: `${failed.length} of ${ids.length} chats are still in the list.`, zConfirmStyle: 'dialog', zCancelText: null, zOkText: 'OK' });
+    else toast.success(`Deleted ${ids.length} chats${where}`);
+  }
+
+  /** Every chat in the list (Recents and All), after one confirmation. */
+  function askDeleteAllChats() {
+    const sessions = workspace.sessions;
+    if (!sessions.length) return;
     zModalService.danger({
-      zTitle: 'Remove all projects from the list?',
-      zContent: `${count} ${count === 1 ? 'project leaves' : 'projects leave'} the sidebar. Their folders and chats stay on disk, in Claude and Codex.`,
+      zTitle: `Delete all ${sessions.length} chats?`,
+      zContent: 'Each chat is removed from AgentDeck and from its CLI: the files move to ~/.agentdeck/trash, so they can be restored by hand. A chat open in a running CLI cannot be deleted.',
       zConfirmStyle: 'dialog',
-      zOkText: 'Remove all',
+      zOkText: 'Delete all',
       zOkIcon: 'lucideTrash2',
       zCancelText: 'Cancel',
       zWidth: '400px',
-      onOk: () => {
-        for (const project of [...workspace.projects]) hideProject(project.id);
+      onOk: async () => {
+        await deleteChats(sessions.map((item) => item.id), '');
+        return true;
       },
     });
   }
 
-  /** Deletes every chat of one project (the same way as Delete on a chat), after one confirmation. */
+  /** Deletes every chat of one project, after one confirmation. */
   function askClearProjectChats(id: string) {
     const project = workspace.projects.find((item) => item.id === id);
     const sessions = workspace.sessions.filter((item) => item.projectId === id);
@@ -386,16 +395,7 @@
       zCancelText: 'Cancel',
       zWidth: '400px',
       onOk: async () => {
-        let failed = 0;
-        for (const session of sessions) {
-          try {
-            await deleteSession(session.id);
-          } catch {
-            failed += 1;
-          }
-        }
-        if (failed) zModalService.warning({ zTitle: 'Some chats could not be deleted', zContent: `${failed} of ${sessions.length} chats are still in the list.`, zConfirmStyle: 'dialog', zCancelText: null, zOkText: 'OK' });
-        else toast.success(`Deleted ${sessions.length} chats in “${project.name}”`);
+        await deleteChats(sessions.map((item) => item.id), ` in “${project.name}”`);
         return true;
       },
     });
@@ -494,13 +494,13 @@
       onClick: () => setView({ ...DEFAULT_VIEW }),
     },
     {
-      label: 'Remove all projects',
+      label: 'Delete all chats',
       icon: 'lucideTrash2',
       iconSize: '12',
       divide: 'before',
-      disabled: workspace.projects.length === 0,
+      disabled: workspace.sessions.length === 0,
       class: `${ITEM} text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive!`,
-      onClick: () => askRemoveAllProjects(),
+      onClick: () => askDeleteAllChats(),
     },
   ]);
   const menuItems = $derived(menu?.kind === 'project' ? projectItems : menu?.kind === 'view' ? viewItems : sessionItems);

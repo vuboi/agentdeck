@@ -158,7 +158,9 @@ export function replaceEditorRange(root: HTMLElement, start: number, end: number
   range.setEnd(to.node, to.offset);
   range.deleteContents();
   if (insert) {
-    const text = document.createTextNode(insert);
+    // A line break at the end of the text draws no new line until something follows it: a zero-width space after it
+    // gives the line a box (plain-text reads skip it, see textValue), so one Shift+Enter shows at once.
+    const text = document.createTextNode(insert.endsWith('\n') ? `${insert}​` : insert);
     range.insertNode(text);
     range.setStart(text, text.length);
     range.collapse(true);

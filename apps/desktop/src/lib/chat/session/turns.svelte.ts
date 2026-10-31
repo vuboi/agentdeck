@@ -9,7 +9,7 @@ import { sendSystemNotification, requestSystemNotificationPermission } from '../
 import { stopAgentTurn } from '../agent';
 import { logFlow } from '../../tasks/flow-log';
 import { applyAgentEvent } from '../agent-reply';
-import { customProviderName } from '../../agents/models.svelte';
+import { customProviderName, findModel } from '../../agents/models.svelte';
 import { agentDisplayName } from '../../agents/provider-registry';
 import { isHandbackPrompt } from '../runs/handback';
 import { MODELS, advanceRun, nextId, persistLocal, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type Mention, type PageElement, type Permission, type SessionItem } from './state.svelte';
@@ -472,6 +472,17 @@ void getPref<Record<string, string[]>>('permissions.allowed').then((saved) => {
 });
 
 /** The chat's model if its agent offers it, else that agent's first model. */
+/** The effort a turn is sent with. A model the CLI lists without reasoning levels (Antigravity's Claude models) gets
+ *  none: `agy --effort` refuses it, and the level picked for another model must not follow it. */
+export function effortFor(session: SessionItem): Effort | null {
+  const level = turnOptionsOf(session.id).effort;
+  const model = modelFor(session);
+  const known = model ? findModel(session.agent, model) : undefined;
+  // Antigravity sends a level only when its own list gives this model levels: `agy` refuses --effort for the rest.
+  if (session.agent === 'antigravity') return known?.efforts?.length ? level : null;
+  return known && !known.efforts?.length ? null : level;
+}
+
 export function modelFor(session: SessionItem): string | null {
   // A Console credit model stays picked while its key is missing: the turn then stops and says so (agent.ts), instead of
   // quietly running on the plan's model. Only the user's own pick changes it.

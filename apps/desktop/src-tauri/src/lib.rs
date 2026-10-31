@@ -40,7 +40,9 @@ mod officecli;
 mod process_guard;
 mod process_registry;
 mod project_memory;
+mod providers;
 mod tts;
+mod voice;
 mod privacy;
 mod pty;
 mod servers;
@@ -2375,6 +2377,7 @@ pub fn run() {
             tts::tts_install,
             tts::tts_remove,
             tts::tts_speak,
+            voice::voice_transcribe,
             project_memory::project_memory_read,
             project_memory::project_memory_write,
             project_memory::project_proposals_read,

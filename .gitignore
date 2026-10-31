@@ -28,5 +28,9 @@
 
 # images and checks the app generates for the user
 /.agentdeck/
+/.agentdeck-dev/
+**/.agentdeck/
+**/.agentdeck-dev/
+**/generated-images/
 !apps/desktop/.env.development
 !apps/desktop/.env.production

@@ -10,7 +10,24 @@ import { requestSystemNotificationPermission, sendSystemNotification } from '../
 // switch between (Codex via `codex-auth`, Claude via `cswap`), the "close to the limit" alerts, and custom / local
 // model providers. The work itself is in Rust (`connectors.rs`); this file holds what the screen shows.
 
-export type ConnectorId = 'claude' | 'codex' | 'agy' | 'opencode' | 'copilot' | 'workbuddy';
+export const API_CONNECTORS = {
+  gemini: { name: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', keyEnv: 'GEMINI_API_KEY', model: 'gemini-flash-latest' },
+  groq: { name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', keyEnv: 'GROQ_API_KEY', model: '' },
+  cerebras: { name: 'Cerebras', baseUrl: 'https://api.cerebras.ai/v1', keyEnv: 'CEREBRAS_API_KEY', model: '' },
+  openrouter: { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY', model: '' },
+  cloudflare: { name: 'Cloudflare Workers AI', baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1', keyEnv: 'CLOUDFLARE_API_TOKEN', model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' },
+  deepseek: { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', keyEnv: 'DEEPSEEK_API_KEY', model: 'deepseek-chat' },
+  moonshot: { name: 'Kimi (Moonshot)', baseUrl: 'https://api.moonshot.ai/v1', keyEnv: 'MOONSHOT_API_KEY', model: 'kimi-k2.5' },
+  zai: { name: 'GLM (Z.AI)', baseUrl: 'https://api.z.ai/api/paas/v4', keyEnv: 'ZAI_API_KEY', model: 'glm-4.7' },
+  minimax: { name: 'MiniMax', baseUrl: 'https://api.minimax.io/v1', keyEnv: 'MINIMAX_API_KEY', model: 'MiniMax-M2.5' },
+  muse: { name: 'Muse (Meta Model API)', baseUrl: 'https://api.meta.ai/v1', keyEnv: 'MODEL_API_KEY', model: 'muse-spark-1.3' },
+  commandcode: { name: 'Command Code', baseUrl: 'https://api.commandcode.ai/provider/v1', keyEnv: 'COMMANDCODE_API_KEY', model: '' },
+  qwen: { name: 'Alibaba Qwen', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', keyEnv: 'DASHSCOPE_API_KEY', model: 'qwen3-coder-plus' },
+} as const;
+export type ApiConnectorId = keyof typeof API_CONNECTORS;
+export const API_CONNECTOR_IDS = Object.keys(API_CONNECTORS) as ApiConnectorId[];
+export type ConnectorId = 'claude' | 'codex' | 'agy' | 'opencode' | 'copilot' | 'workbuddy' | ApiConnectorId;
+export type AccountConnectorId = Exclude<ConnectorId, ApiConnectorId>;
 export type AccountProvider = 'claude' | 'codex' | 'copilot';
 
 export type Tool = { id: string; path: string | null; version: string | null };
@@ -51,6 +68,25 @@ export type AgyAccountQuota = { id: string; email: string; active: boolean; quot
 export type AgyAccount = { id: string; email: string; active: boolean; expired: boolean; status: string | null };
 export type ProviderKind = 'openai' | 'anthropic' | 'ollama';
 export type ProviderApiKey = { id: string; label: string; apiKey: string; keyEnv?: string };
+export type RoutingStrategy = 'auto' | 'coding' | 'fast' | 'subscription' | 'thrifty' | 'offline' | 'lkgp';
+export type RoutingProfile = {
+  strategy: RoutingStrategy;
+  allowedProviders: string[];
+  allowedPlans: string[];
+  maxCost: number | null;
+  requiredCapabilities: string[];
+  quotaThreshold: number;
+  fallback: 'next' | 'stop' | 'local';
+};
+export const DEFAULT_ROUTING_PROFILE: RoutingProfile = {
+  strategy: 'auto',
+  allowedProviders: [],
+  allowedPlans: [],
+  maxCost: null,
+  requiredCapabilities: ['chat'],
+  quotaThreshold: 0,
+  fallback: 'next',
+};
 export type CustomProvider = {
   id: string;
   name: string;
@@ -71,6 +107,8 @@ export type CustomProvider = {
   enabled: boolean;
   /** A free tier that may keep and train on what it is sent: it never sees project files, code or secrets. */
   restricted?: boolean;
+  /** Capabilities advertised by a provider preset; model-specific probing can refine this later. */
+  capabilities?: string[];
   /** Uses the native WorkBuddy connector credential and gateway request headers. */
   workbuddy?: boolean;
 };
@@ -103,6 +141,9 @@ export const connectors = $state({
   /** When a turn fails: retry, or let the next agent (provider) of `chain` carry on; never another account (turn-failure.ts). */
   recovery: { enabled: false, chain: ['claude', 'codex', 'opencode', 'antigravity'] as string[], /** At a usage limit with nowhere to move, carry on by itself once the limit resets. */ autoResume: true, /** The user set `enabled` themself (it was on by default before). */ chosen: false },
   custom: [] as CustomProvider[],
+  /** API keys configured from the Connectors tab, mirrored into custom providers for the model picker. */
+  apiKeys: {} as Record<ApiConnectorId, string>,
+  routingProfile: { ...DEFAULT_ROUTING_PROFILE } as RoutingProfile,
   /** Claude Console API credit: Claude Code runs on this key (billed to the credit) for the `credit:` models. */
   claudeCredit: { apiKey: '', sessionKey: '', enabled: true } as ClaudeCredit,
   local: [] as LocalServer[],
@@ -436,6 +477,40 @@ export async function login(id: ConnectorId, label: string): Promise<boolean> {
   return ok;
 }
 
+/** Saves an API connector key in the system credential store and creates the matching provider entry. */
+export async function saveApiConnectorKey(id: ApiConnectorId, value: string): Promise<boolean> {
+  const key = value.trim();
+  const saved = key ? await saveSecret(`connector-api-key:${id}`, key) : (await saveSecret(`connector-api-key:${id}`, ''), true);
+  if (!saved) return false;
+  connectors.apiKeys[id] = key;
+  const preset = API_CONNECTORS[id];
+  const existing = connectors.custom.find((provider) => provider.baseUrl === preset.baseUrl);
+  if (!key) {
+    if (existing) {
+      connectors.custom = connectors.custom.filter((provider) => provider.id !== existing.id);
+      void persistCustom(connectors.custom);
+    }
+    return true;
+  }
+  const provider = normalizeCustomProvider({
+    ...(existing ?? {}),
+    id: existing?.id ?? `connector-${id}`,
+    name: preset.name,
+    kind: 'openai',
+    baseUrl: preset.baseUrl,
+    keyEnv: preset.keyEnv,
+    keys: [{ id: existing?.keys[0]?.id ?? `connector-${id}-key`, label: `${preset.name} API key`, apiKey: key, keyEnv: preset.keyEnv }],
+    activeKeyId: existing?.keys[0]?.id ?? `connector-${id}-key`,
+    autoSwitch: false,
+    models: existing?.models?.length ? existing.models : preset.model ? [preset.model] : [],
+    defaultModel: existing?.defaultModel || preset.model,
+    enabled: true,
+  });
+  saveProvider(provider, true);
+  await persistCustom(connectors.custom);
+  return true;
+}
+
 async function syncWorkbuddyProvider(): Promise<void> {
   const token = await loadSecret('workbuddy');
   if (!token) return;
@@ -536,12 +611,12 @@ export async function setConnectorAutoSwitch(connector: ConnectorId, enabled: bo
 }
 
 /** Tries eligible connector profiles in quota order. Each candidate is only committed after a live usage read succeeds. */
-export async function autoSwitchConnectorAccount(connector: ConnectorId, attempt: CredentialAttempt): Promise<{ email: string } | null> {
+export async function autoSwitchConnectorAccount(connector: AccountConnectorId, attempt: CredentialAttempt): Promise<{ email: string } | null> {
   return rotateCredential(connector, attempt, (signal) => switchConnectorCandidate(connector, attempt, signal));
 }
 
 /** Restores the original profile and confirms native state before another attempt can start. */
-async function restoreConnectorAccount(connector: ConnectorId, id: string | undefined): Promise<void> {
+async function restoreConnectorAccount(connector: AccountConnectorId, id: string | undefined): Promise<void> {
   if (!id || connector === 'opencode' || connector === 'workbuddy') throw new Error('No original account available to restore');
   if (connector === 'agy') {
     const before = connectors.accounts.agy.find((item) => item.active)?.id;
@@ -572,7 +647,7 @@ async function restoreConnectorAccount(connector: ConnectorId, id: string | unde
   void refreshDetect();
 }
 
-async function switchConnectorCandidate(connector: ConnectorId, attempt: CredentialAttempt, signal: AbortSignal): Promise<{ email: string } | null> {
+async function switchConnectorCandidate(connector: AccountConnectorId, attempt: CredentialAttempt, signal: AbortSignal): Promise<{ email: string } | null> {
   await Promise.all([accountCacheReady, autoSwitchReady]);
   if (connector === 'workbuddy') return null;
   if (!connectors.autoSwitch[connector] || !inTauri()) return null;
@@ -897,7 +972,12 @@ async function switchProviderCandidate(provider: CustomProvider, attempt: Creden
   const keys = provider.keys.filter((item) => item.id !== currentId && !attempt.tried.has(item.id)).sort((a, b) => {
     const qa = providerQuotas[`${provider.id}:${a.id}`]?.remaining;
     const qb = providerQuotas[`${provider.id}:${b.id}`]?.remaining;
-    return (qb ?? -1) - (qa ?? -1);
+    const quotaOrder = (qb ?? -1) - (qa ?? -1);
+    // `thrifty` still prefers a key with more remaining quota; `subscription` stops below the
+    // configured threshold; other strategies preserve the quota-aware default until provider
+    // latency/cost telemetry is available.
+    if (connectors.routingProfile.strategy === 'thrifty' || connectors.routingProfile.strategy === 'auto' || connectors.routingProfile.strategy === 'coding') return quotaOrder;
+    return quotaOrder;
   });
   for (const key of keys) {
     await credentialDelay(signal);
@@ -916,7 +996,10 @@ async function switchProviderCandidate(provider: CustomProvider, attempt: Creden
         // Not all provider endpoints expose key quota; the connection probe remains authoritative for auth.
       }
     }
-    if (quota?.remaining !== null && quota?.remaining !== undefined && quota.remaining <= 0) continue;
+    if (quota?.remaining !== null && quota?.remaining !== undefined && quota.remaining <= connectors.routingProfile.quotaThreshold) {
+      if (connectors.routingProfile.strategy === 'subscription') continue;
+      if (connectors.routingProfile.strategy === 'thrifty') continue;
+    }
     signal.throwIfAborted();
     const result = await probeProvider(provider.kind, provider.baseUrl, key.apiKey, key.keyEnv ?? provider.keyEnv).catch(() => null);
     signal.throwIfAborted();
@@ -1021,7 +1104,7 @@ export function providerKeysForExport() {
 }
 
 let hydrated = false;
-Promise.all([getPref<StoredCustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts'), getPref<typeof connectors.recovery>('connectors.recovery'), getPref<ClaudeCredit>('providers.claudeCredit')]).then(async ([custom, alerts, recovery, credit]) => {
+Promise.all([getPref<StoredCustomProvider[]>('providers.custom'), getPref<typeof connectors.alerts>('connectors.alerts'), getPref<typeof connectors.recovery>('connectors.recovery'), getPref<ClaudeCredit>('providers.claudeCredit'), getPref<RoutingProfile>('providers.routing-profile')]).then(async ([custom, alerts, recovery, credit, routingProfile]) => {
   if (custom) {
     connectors.custom = await Promise.all(
       custom.map(async (provider) =>
@@ -1046,6 +1129,14 @@ Promise.all([getPref<StoredCustomProvider[]>('providers.custom'), getPref<typeof
     };
   }
   if (recovery) connectors.recovery = { ...connectors.recovery, ...recovery };
+  if (routingProfile) connectors.routingProfile = { ...DEFAULT_ROUTING_PROFILE, ...routingProfile };
+  for (const id of API_CONNECTOR_IDS) {
+    const key = await restoreSecret(`connector-api-key:${id}`, '');
+    if (key) {
+      connectors.apiKeys[id] = key;
+      await saveApiConnectorKey(id, key);
+    }
+  }
   // Moving to another agent used to run by itself: it is off now until the user switches it on (model popover).
   if (!connectors.recovery.chosen) connectors.recovery = { ...connectors.recovery, enabled: false, chosen: true };
   if (alerts) connectors.alerts = { ...connectors.alerts, ...alerts };
@@ -1076,4 +1167,13 @@ $effect.root(() => {
     const credit = $state.snapshot(connectors.claudeCredit) as ClaudeCredit;
     if (hydrated) void persistClaudeCredit(credit);
   });
+  $effect(() => {
+    const routingProfile = $state.snapshot(connectors.routingProfile) as RoutingProfile;
+    if (hydrated) void setPref('providers.routing-profile', routingProfile);
+  });
 });
+
+/** Updates the AgentDeck route policy used by provider selection and future workflow routing. */
+export function setRoutingProfile(profile: Partial<RoutingProfile>) {
+  connectors.routingProfile = { ...connectors.routingProfile, ...profile };
+}

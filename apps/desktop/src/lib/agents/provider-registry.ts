@@ -1,18 +1,18 @@
 import type { ZIconName } from '@shival99/z-ui-svelte';
-import { GITHUB_SVG, OPENAI_SVG, OPENCODE_SVG, providerLogo } from './brand-icons';
+import { CLAUDE_LOGO, CLAUDE_SVG, COPILOT_LOGO, GEMINI_LOGO, GEMINI_SVG, GITHUB_SVG, OPENAI_SVG, OPENCODE_SVG, connectorLogo, providerLogo } from './brand-icons';
 import { connectors } from './connectors.svelte';
 
 export type BuiltInAgent = 'claude' | 'codex' | 'antigravity' | 'opencode' | 'copilot';
 /** `icon` is an icon-set name; `mark`, when set, is the provider's own SVG and wins over `icon` everywhere. */
-export type AgentProfile = { id: BuiltInAgent; label: string; binary: string; icon: ZIconName; mark?: string; tone: string };
+export type AgentProfile = { id: BuiltInAgent; label: string; binary: string; icon: ZIconName; mark?: string; image?: string; tone: string };
 
 /** Single UI registry for built-in agents. Session, workflow, composer, model and image surfaces read the same metadata. */
 export const BUILT_IN_AGENTS: AgentProfile[] = [
-  { id: 'claude', label: 'Claude', binary: 'claude', icon: 'brandClaude' as ZIconName, tone: 'text-orange-500' },
+  { id: 'claude', label: 'Claude', binary: 'claude', icon: 'brandClaude' as ZIconName, mark: CLAUDE_SVG, image: CLAUDE_LOGO, tone: 'text-orange-500' },
   { id: 'codex', label: 'Codex', binary: 'codex', icon: 'brandOpenai' as ZIconName, mark: OPENAI_SVG, tone: 'text-foreground' },
-  { id: 'antigravity', label: 'Antigravity', binary: 'agy', icon: 'brandGemini' as ZIconName, tone: 'text-sky-500' },
+  { id: 'antigravity', label: 'Antigravity', binary: 'agy', icon: 'brandGemini' as ZIconName, mark: GEMINI_SVG, image: GEMINI_LOGO, tone: 'text-sky-500' },
   { id: 'opencode', label: 'OpenCode', binary: 'opencode', icon: 'lucideTerminal' as ZIconName, mark: OPENCODE_SVG, tone: 'text-foreground' },
-  { id: 'copilot', label: 'GitHub Copilot', binary: 'gh', icon: 'lucideBot' as ZIconName, mark: GITHUB_SVG, tone: 'text-foreground' },
+  { id: 'copilot', label: 'GitHub Copilot', binary: 'gh', icon: 'lucideBot' as ZIconName, mark: GITHUB_SVG, image: COPILOT_LOGO, tone: 'text-violet-500' },
 ];
 
 export const agentProfile = (id: string) => BUILT_IN_AGENTS.find((item) => item.id === id);
@@ -56,6 +56,11 @@ export function agentLook(agent: string, model?: string | null): AgentLook {
     return src ? { kind: 'image', src, tone: '' } : { kind: 'icon', name: 'lucideServer' as ZIconName, tone: 'text-violet-500' };
   }
   const profile = agentProfile(agent);
-  if (!profile) return { kind: 'icon', name: 'lucideBot' as ZIconName, tone: 'text-muted-foreground' };
+  if (profile?.image) return { kind: 'image', src: profile.image, tone: profile.tone };
+  if (!profile) {
+    const logo = connectorLogo(agent);
+    if (logo) return { kind: 'image', src: logo, tone: '' };
+    return { kind: 'icon', name: 'lucideBot' as ZIconName, tone: 'text-muted-foreground' };
+  }
   return profile.mark ? { kind: 'mark', svg: profile.mark, tone: profile.tone } : { kind: 'icon', name: profile.icon, tone: profile.tone };
 }

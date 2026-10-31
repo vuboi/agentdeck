@@ -8,8 +8,9 @@
   import { openInViewer } from '../../files/file-viewer.svelte';
   import { fileWrites } from '../../chat/runs/activity.svelte';
   import { toast } from '../../app/platform/toast';
-  import { fileUrl, hostPlatform, nativePath } from '../../files/path-links';
+  import { hostPlatform, nativePath } from '../../files/path-links';
   import { openWithItem, openWithOptions as getOpenWithOptions, type OpenWithOption } from '../../files/open-with';
+  import { TEXT_FILE } from '../../chat/content/attachment-menu';
 
   let openWithOptions = $state<OpenWithOption[]>([]);
 
@@ -38,16 +39,6 @@
       open = true;
     })();
   });
-
-  async function saveAs() {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const saved = await invoke<string | null>('file_save_as', { root: linkMenu.root, path: linkMenu.file });
-      if (saved) toast.success('File saved');
-    } catch (error) {
-      toast.error(String(error));
-    }
-  }
 
   async function copyContents() {
     try {
@@ -85,11 +76,12 @@
     });
   }
 
+  // A folder cannot be opened in the viewer or read as text, and only a text file has contents to copy.
+  const fileName = $derived(linkMenu.file.split(/[\\/]/).at(-1) ?? '');
   const fileItems = $derived<ZDropdownMenuItem[]>([
-    { label: 'Open file', icon: 'lucideFile', iconSize: '12', class: 'text-sm! py-1', onClick: () => openInViewer(linkMenu.file, linkMenu.root) },
-    ...openWithItem(linkMenu.file, openWithOptions),
-    { label: 'Save as…', icon: 'lucideDownload', iconSize: '12', class: 'text-sm! py-1', onClick: () => void saveAs() },
-    { label: 'Copy file contents', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', onClick: () => void copyContents() },
+    { label: 'Open file', icon: 'lucideFile', iconSize: '12', class: 'text-sm! py-1', disabled: linkMenu.dir, onClick: () => openInViewer(linkMenu.file, linkMenu.root) },
+    ...openWithItem(linkMenu.file, openWithOptions).map((item) => ({ ...item, disabled: linkMenu.dir, submenu: linkMenu.dir ? undefined : item.submenu })),
+    { label: 'Copy file contents', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', disabled: linkMenu.dir || !TEXT_FILE.test(fileName), onClick: () => void copyContents() },
     {
       label: 'Open containing folder',
       icon: 'lucideFolder',
@@ -114,16 +106,6 @@
         // As this system writes it: backslashes on Windows, slashes on macOS and Linux.
         void navigator.clipboard.writeText(nativePath(linkMenu.file, hostPlatform()));
         toast.success('Path copied');
-      },
-    },
-    {
-      label: 'Copy as file:// URL',
-      icon: 'lucideLink',
-      iconSize: '12',
-      class: 'text-sm! py-1',
-      onClick: () => {
-        void navigator.clipboard.writeText(fileUrl(linkMenu.file));
-        toast.success('URL copied');
       },
     },
     {

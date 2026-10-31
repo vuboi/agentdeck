@@ -2,7 +2,7 @@ import { credentialBusy } from '../../agents/credential-switch';
 import { inTauri, clock } from '../../app/platform/history';
 import { accountEpoch } from '../runs/account-epoch.svelte';
 import { pictureData, prehandleAntigravity, prehandleAttachments, prehandleOpencode, prewarmAgent, saveAttachment, sendCustomTurn, sendAgentTurn, stopAgentTurn, answerCopilotPermission } from '../agent';
-import { activeProviderKey, claudeCreditOn, claudeCreditState, connectors, currentCredentialId, providerQuotas, usagePct } from '../../agents/connectors.svelte';
+import { activeProviderKey, claudeCreditOn, claudeCreditState, connectors, currentCredentialId, providerKeyEnv, providerQuotas, usagePct } from '../../agents/connectors.svelte';
 import { type Message, messages as mockMessages } from '../mock';
 import { guide } from '../../app/ui/guide.svelte';
 import { logFlow } from '../../tasks/flow-log';
@@ -27,7 +27,7 @@ import { type RunLane, deliveryFor } from '../runs/run-lanes';
 import { parseQuestions, type Question } from '../recovery/questions';
 import { dequeue } from '../runs/queue';
 import { MODELS, activeSession, advanceRun, localMessages, nextId, persistLocal, runEpochs, sessionCwd, workspace, type Agent, type Attachment, type Effort, type FileAttachment, type SessionItem } from './state.svelte';
-import { AGENTDECK_HINT, KNOWS_PREVIEW, NATIVE_DELEGATION, NATIVE_DELEGATION_HINT, NO_DELEGATE_HINT, OPEN_WORDS, PERMISSION_MODE, agentLabel, approved, continuationGroups, delegateHinted, hasOutstandingSessionWork, hasTurnWork, hiddenPrompt, isRunning, lastPrompt, missedTurns, modelFor, nativeDelegationHinted, notifySessionWorkDone, orchestrateTold, priorDelegateHinted, queuePaused, queued, rememberDelegateHint, rememberLastChat, rememberNativeDelegationHint, turnOptions, turnOptionsOf, turns } from './turns.svelte';
+import { AGENTDECK_HINT, KNOWS_PREVIEW, NATIVE_DELEGATION, NATIVE_DELEGATION_HINT, NO_DELEGATE_HINT, OPEN_WORDS, PERMISSION_MODE, agentLabel, approved, continuationGroups, delegateHinted, hasOutstandingSessionWork, hasTurnWork, hiddenPrompt, isRunning, lastPrompt, missedTurns, modelFor, nativeDelegationHinted, notifySessionWorkDone, orchestrateTold, priorDelegateHinted, queuePaused, queued, rememberDelegateHint, rememberLastChat, rememberNativeDelegationHint, turnOptions, turnOptionsOf, turns, effortFor } from './turns.svelte';
 import { handleAgentEvent, lastEventAt, lastEventKind, manuallyStopped, recoveryChain, recoveryModelFor } from './events.svelte';
 import { answerWorkerApproval, backlog, flushReports, isWorkerChat } from './delegate-task.svelte';
 import { LANGUAGE_RULE } from './orchestration.svelte';
@@ -101,7 +101,9 @@ function prehandleProvider(): PreHandler | undefined {
 /** A route as the user reads it: "Codex GPT 5.6 Terra". */
 const routeLabel = (route: string) => {
   const [agent, ...rest] = route.split('|');
-  return `${agentDisplayName(agent)} ${modelLabel(rest.join('|'))}`;
+  const model = rest.join('|');
+  const custom = connectors.custom.find((item) => item.id === agent);
+  return `${custom?.name ?? agentDisplayName(agent)} ${modelLabel(custom ? `${agent}::${model}` : model)}`;
 };
 
 /** The pick a failed pre-handle is remembered by. */
@@ -176,7 +178,7 @@ export function prewarmChat(sessionId: string) {
     resume,
     model: selectedModel,
     permissionMode: PERMISSION_MODE[turnOptionsOf(session.id).permission],
-    effort: turnOptionsOf(session.id).effort as Effort,
+    effort: effortFor(session),
     allowedTools: [...(approved[session.id] ?? [])],
     cwd,
   }).catch(() => {});
@@ -204,7 +206,7 @@ function prewarmFallback(session: SessionItem) {
     resume: false,
     model,
     permissionMode: PERMISSION_MODE[turnOptionsOf(session.id).permission],
-    effort: turnOptionsOf(session.id).effort as Effort,
+    effort: effortFor(session),
     allowedTools: [...(approved[session.id] ?? [])],
     cwd,
   }).catch(() => {});
@@ -511,6 +513,7 @@ export function startTurn(
         kind: provider.kind,
         baseUrl: provider.baseUrl,
         apiKey: activeProviderKey(provider)?.apiKey || null,
+        keyEnv: providerKeyEnv(provider) || null,
         model: target.model,
         messages: [
           ...history,
@@ -524,7 +527,7 @@ export function startTurn(
         permissionMode: PERMISSION_MODE[turnOptionsOf(session.id).permission],
         allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
         cwd: provider.restricted ? null : cwd,
-        effort: turnOptionsOf(session.id).effort as Effort,
+        effort: effortFor(session),
         restricted: Boolean(provider.restricted),
         workbuddy: Boolean(provider.workbuddy),
       }), PREPARE_LIMIT_MS, 'starting the provider');
@@ -632,7 +635,7 @@ export function startTurn(
         // A model of another agent (left over from a switch) is never sent: the agent's own first model goes instead.
         model: selectedModel,
         permissionMode: PERMISSION_MODE[turnOptionsOf(session.id).permission],
-        effort: turnOptionsOf(session.id).effort as Effort,
+        effort: effortFor(session),
         allowedTools: [...new Set([...(approved[session.id] ?? []), ...allow])],
         cwd,
       }),

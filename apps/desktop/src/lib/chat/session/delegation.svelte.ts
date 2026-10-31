@@ -8,6 +8,7 @@ import { agentLabel } from './turns.svelte';
 import { liveReplies } from './run.svelte';
 import { taskWaiters } from './orchestration.svelte';
 import { chat, transcripts } from './history.svelte';
+import { connectors } from '../../agents/connectors.svelte';
 
 // Dynamic sub-agent runs and inline mention context. Inline model mentions are resolved through AgentDeck MCP tools.
 
@@ -256,8 +257,10 @@ export function mentionContext(mentions: Mention[]): string {
       const project = workspace.projects.find((item) => item.id === mention.id);
       if (project) parts.push(`Project "${project.name}" is at ${project.path}`);
     } else if (mention.kind === 'ai') {
-      const [agent, model] = mention.id.split('/');
-      agents.push(`- @${mention.label}: provider=${agent}; model=${model}.`);
+      const [provider, ...rest] = mention.id.split('/');
+      const model = rest.join('/');
+      const custom = connectors.custom.find((item) => item.id === provider);
+      agents.push(`- @${mention.label}: provider=${provider}; model=${model}${custom ? `; provider_name=${custom.name}` : ''}.`);
     }
   }
   const instructions = agents.length

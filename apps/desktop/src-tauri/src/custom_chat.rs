@@ -11,15 +11,11 @@ use std::time::Duration;
 
 use crate::mcp_client::Server;
 use crate::slash_commands::{self, ProviderCommand};
-use ag_adapters::agent::permission::{verdict, Action, Mode, Verdict};
-use ag_adapters::agent::{
-    allow_entry, file_change, summarize_tool_input, AgentEvent, PermissionRequest,
-};
 use ag_adapters::agent::warm::InjectSlot;
+use ag_adapters::agent::{allow_entry, summarize_tool_input, AgentEvent, PermissionRequest};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::AppHandle;
-use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 /// Model calls in one turn before it is stopped, so a model that keeps calling tools cannot run forever.
@@ -119,6 +115,7 @@ pub struct Turn {
     pub kind: String,
     pub base_url: String,
     pub api_key: Option<String>,
+    pub key_env: Option<String>,
     pub model: String,
     pub cwd: Option<PathBuf>,
     /// The CLI-style permission mode (`acceptEdits`, `plan`, `auto`, `bypassPermissions`); `None` asks for every tool.
@@ -199,7 +196,9 @@ Do not invent details, do not repeat secrets, and keep it under 1200 words. User
             .map(|value| value.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.clone());
         if crate::privacy::sensitive_file(path) {
-            text.push_str(&format!("\n\nAttached file {name}: [content omitted because it may contain secrets]"));
+            text.push_str(&format!(
+                "\n\nAttached file {name}: [content omitted because it may contain secrets]"
+            ));
             continue;
         }
         let extension = std::path::Path::new(path)
@@ -223,12 +222,19 @@ Do not invent details, do not repeat secrets, and keep it under 1200 words. User
 
 /// The same memo, read by a free OpenCode model through the OpenCode CLI: the pictures go in as `--file`, the prompt on
 /// stdin. Standalone, so the pass does not share the user's OpenCode session. The JSON event stream's text parts are the memo.
-pub async fn prehandle_opencode(model: String, prompt: String, images: Vec<String>, files: Vec<String>) -> Result<String, String> {
+pub async fn prehandle_opencode(
+    model: String,
+    prompt: String,
+    images: Vec<String>,
+    files: Vec<String>,
+) -> Result<String, String> {
     if images.is_empty() && files.is_empty() {
         return Ok(String::new());
     }
     use tokio::io::AsyncWriteExt;
-    let binary = ag_adapters::agent::resolve::resolve_binary(&ag_adapters::agent::opencode::OpenCode::default());
+    let binary = ag_adapters::agent::resolve::resolve_binary(
+        &ag_adapters::agent::opencode::OpenCode::default(),
+    );
     let mut command = Command::new(binary);
     command.args(["run", "--standalone", "--format", "json", "--model", &model]);
     for path in images.iter().take(4) {
@@ -264,7 +270,9 @@ pub async fn prehandle_opencode(model: String, prompt: String, images: Vec<Strin
             .chars()
             .take(200)
             .collect();
-        return Err(format!("OpenCode could not read the attachments: {message}"));
+        return Err(format!(
+            "OpenCode could not read the attachments: {message}"
+        ));
     }
     if !output.status.success() {
         return Err("OpenCode could not read the attachments".to_owned());
@@ -286,21 +294,41 @@ pub async fn prehandle_opencode(model: String, prompt: String, images: Vec<Strin
 /// The same memo, read by Antigravity's CLI in print mode. That CLI runs as an agent, so it reads the pictures with its own
 /// tools: they are named in the prompt and their folders are opened with `--add-dir`. Its permissions are skipped (the full
 /// options the user chose), with `--sandbox` on so its terminal stays restricted. The prompt is an argument, so it is capped.
-pub async fn prehandle_antigravity(model: String, prompt: String, images: Vec<String>, files: Vec<String>) -> Result<String, String> {
+pub async fn prehandle_antigravity(
+    model: String,
+    prompt: String,
+    images: Vec<String>,
+    files: Vec<String>,
+) -> Result<String, String> {
     if images.is_empty() && files.is_empty() {
         return Ok(String::new());
     }
-    let binary = ag_adapters::agent::resolve::resolve_binary(&ag_adapters::agent::antigravity::Antigravity::default());
+    let binary = ag_adapters::agent::resolve::resolve_binary(
+        &ag_adapters::agent::antigravity::Antigravity::default(),
+    );
     let mut text = memo_prompt(&prompt, &files).await;
     let pictures: Vec<&String> = images.iter().take(4).collect();
     if !pictures.is_empty() {
-        let names = pictures.iter().map(|path| path.as_str()).collect::<Vec<_>>().join("\n");
-        text.push_str(&format!("\n\nAttached pictures, open each with your file tools and describe it:\n{names}"));
+        let names = pictures
+            .iter()
+            .map(|path| path.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        text.push_str(&format!(
+            "\n\nAttached pictures, open each with your file tools and describe it:\n{names}"
+        ));
     }
     let text: String = text.chars().take(24_000).collect();
     let mut command = Command::new(binary);
     command.arg(format!("-p={text}"));
-    command.args(["--model", &model, "--effort", "low", "--dangerously-skip-permissions", "--sandbox"]);
+    command.args([
+        "--model",
+        &model,
+        "--effort",
+        "low",
+        "--dangerously-skip-permissions",
+        "--sandbox",
+    ]);
     for path in &pictures {
         let folder = std::path::Path::new(path.as_str())
             .parent()
@@ -453,15 +481,13 @@ pub async fn prehandle_attachments(request: PrehandleRequest) -> Result<String, 
         .as_str()
         .map(str::to_owned)
         .or_else(|| {
-            answer
-                .as_array()
-                .map(|parts| {
-                    parts
-                        .iter()
-                        .filter_map(|part| part["text"].as_str())
-                        .collect::<Vec<_>>()
-                        .join("")
-                })
+            answer.as_array().map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| part["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
         })
         .unwrap_or_default()
         .trim()
@@ -531,1379 +557,25 @@ async fn browser_tools(app: &AppHandle, chat: &str) -> Vec<Value> {
 }
 
 /// What running a tool gave: the text for the model, whether it failed, and a picture it returned.
-struct Outcome {
-    text: String,
-    is_error: bool,
-    image: Option<String>,
-}
+mod tools;
+pub(super) use tools::{
+    browser_call, change_for, decide, delete_path, edit_file, failed, glob_files, grep_files,
+    list_dir, make_dir, ok, package_info, path_key, plan_tool, project_brief, read_file, resolve,
+    run_bash, transfer, trim_output, web_fetch, web_search, write_file, Decision, Outcome,
+    BALANCED, START_HEAVY,
+};
 
-fn failed(text: impl Into<String>) -> Outcome {
-    Outcome {
-        text: text.into(),
-        is_error: true,
-        image: None,
-    }
-}
+mod protocol;
+pub(crate) use protocol::{model_call, Call};
 
-fn ok(text: impl Into<String>) -> Outcome {
-    Outcome {
-        text: text.into(),
-        is_error: false,
-        image: None,
-    }
-}
+#[cfg(test)]
+pub(crate) use protocol::{
+    handle_sse_line, messages_provider, read_chunk, read_messages_chunk, read_responses_chunk,
+    responses_input, responses_provider, take_line, Step,
+};
 
-/// How much of a tool's output the model gets: all of it when it fits, else its start and its end around a marker that says
-/// how much was cut (the middle is the part that matters least). Command output keeps mostly its end, where the verdict
-/// is; a page or a file keeps mostly its start.
-fn trim_output(text: &str, limit: usize, tail_percent: usize) -> String {
-    ag_adapters::agent::output::trim_middle(text, limit, tail_percent)
-}
-/// The end of a command's output is what matters.
-const END_HEAVY: usize = 75;
-/// A file or a page is read from the top.
-const START_HEAVY: usize = 25;
-/// A reply of a tool server: no side matters more.
-const BALANCED: usize = 50;
-
-fn resolve(cwd: Option<&Path>, path: &str) -> PathBuf {
-    let path = PathBuf::from(path);
-    match cwd {
-        Some(dir) if path.is_relative() => dir.join(path),
-        _ => path,
-    }
-}
-
-async fn run_bash(command: &str, cwd: Option<&Path>) -> Outcome {
-    #[cfg(windows)]
-    let mut process = {
-        let mut process = Command::new("powershell");
-        process.args(["-NoProfile", "-NonInteractive", "-Command", command]);
-        process.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        process
-    };
-    #[cfg(not(windows))]
-    let mut process = {
-        let mut process = Command::new("sh");
-        process.args(["-c", command]);
-        process
-    };
-    process
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    if let Some(dir) = cwd.filter(|dir| dir.is_dir()) {
-        process.current_dir(dir);
-    }
-    let mut child = match process.spawn() {
-        Ok(child) => child,
-        Err(error) => return failed(format!("could not start the shell: {error}")),
-    };
-    // Ends with the app even when the app is killed (servers.rs job).
-    if let Some(pid) = child.id() {
-        crate::process_guard::adopt_pid(pid);
-    }
-    // The whole tree ends when the command times out or the turn is stopped (the task is dropped), not just the shell.
-    let mut tree = BashTree(child.id());
-    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
-    let collect = async {
-        // Both pipes are read at once: one nobody reads fills up and blocks the command.
-        let (out, err) = tokio::join!(read_capped(stdout), read_capped(stderr));
-        let status = child.wait().await;
-        (out, err, status)
-    };
-    let finished = tokio::time::timeout(Duration::from_secs(120), collect).await;
-    if finished.is_ok() {
-        tree.disarm();
-    }
-    match finished {
-        Ok((out, err, status)) => {
-            let text = [out.trim_end(), err.trim_end()]
-                .iter()
-                .filter(|part| !part.is_empty())
-                .copied()
-                .collect::<Vec<_>>()
-                .join("\n");
-            let text = trim_output(&text, OUTPUT_MAX, END_HEAVY);
-            match status {
-                Ok(status) if status.success() => ok(if text.is_empty() {
-                    "(no output)".to_string()
-                } else {
-                    text
-                }),
-                Ok(status) => failed(
-                    format!("{text}\n(exit code {})", status.code().unwrap_or(-1))
-                        .trim()
-                        .to_string(),
-                ),
-                Err(error) => failed(error.to_string()),
-            }
-        }
-        Err(_) => failed("the command ran for more than 120 seconds and was stopped"),
-    }
-}
-
-/// Ends the process tree of a command that is dropped or timed out before it finished.
-struct BashTree(Option<u32>);
-
-impl BashTree {
-    fn disarm(&mut self) {
-        self.0 = None;
-    }
-}
-
-impl Drop for BashTree {
-    fn drop(&mut self) {
-        if let Some(pid) = self.0 {
-            crate::process_guard::kill_tree(pid);
-        }
-    }
-}
-
-/// Reads a pipe to its end, keeping only the last `BASH_KEEP` bytes so a command that prints for ever cannot fill memory.
-async fn read_capped<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) -> String {
-    let Some(mut pipe) = pipe else { return String::new() };
-    let mut kept: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 8192];
-    while let Ok(read) = pipe.read(&mut chunk).await {
-        if read == 0 {
-            break;
-        }
-        kept.extend_from_slice(&chunk[..read]);
-        if kept.len() > BASH_KEEP * 2 {
-            let extra = kept.len() - BASH_KEEP;
-            kept.drain(..extra);
-        }
-    }
-    if kept.len() > BASH_KEEP {
-        let extra = kept.len() - BASH_KEEP;
-        kept.drain(..extra);
-    }
-    String::from_utf8_lossy(&kept).into_owned()
-}
-
-/// The most of one stream of a command that is kept in memory.
-const BASH_KEEP: usize = 256 * 1024;
-
-const SKIPPED_DIRS: [&str; 7] = [
-    ".git",
-    "node_modules",
-    "target",
-    "dist",
-    ".svelte-kit",
-    ".next",
-    "__pycache__",
-];
-
-/// A name pattern as a regular expression over `/`-separated relative paths: `**` crosses folders, `*` and `?` do not.
-fn glob_regex(pattern: &str) -> Option<regex::Regex> {
-    let pattern = pattern.replace('\\', "/");
-    let pattern = if pattern.contains('/') {
-        pattern
-    } else {
-        format!("**/{pattern}")
-    };
-    let mut out = String::from("(?i)^");
-    let mut chars = pattern.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '*' if chars.peek() == Some(&'*') => {
-                chars.next();
-                if chars.peek() == Some(&'/') {
-                    chars.next();
-                    out.push_str("(?:.*/)?");
-                } else {
-                    out.push_str(".*");
-                }
-            }
-            '*' => out.push_str("[^/]*"),
-            '?' => out.push_str("[^/]"),
-            other => out.push_str(&regex::escape(&other.to_string())),
-        }
-    }
-    out.push('$');
-    regex::Regex::new(&out).ok()
-}
-
-/// The files under `root` (skipping build and dependency folders) with their paths relative to it.
-fn files_under(root: &Path) -> impl Iterator<Item = (PathBuf, String)> {
-    let base = root.to_path_buf();
-    walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_entry(|entry| {
-            !(entry.file_type().is_dir()
-                && entry.depth() > 0
-                && SKIPPED_DIRS.contains(&entry.file_name().to_string_lossy().as_ref()))
-        })
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(move |entry| {
-            let relative = entry
-                .path()
-                .strip_prefix(&base)
-                .unwrap_or(entry.path())
-                .to_string_lossy()
-                .replace('\\', "/");
-            (entry.into_path(), relative)
-        })
-}
-
-fn glob_files(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let Some(pattern) = args["pattern"].as_str() else {
-        return failed("pattern is required");
-    };
-    let Some(matcher) = glob_regex(pattern) else {
-        return failed("that pattern is not valid");
-    };
-    let root = resolve(cwd, args["path"].as_str().unwrap_or("."));
-    let mut found: Vec<String> = files_under(&root)
-        .filter(|(_, relative)| matcher.is_match(relative))
-        .map(|(_, relative)| relative)
-        .take(500)
-        .collect();
-    found.sort();
-    ok(if found.is_empty() {
-        "no file matches".to_string()
-    } else {
-        found.join("\n")
-    })
-}
-
-fn grep_files(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let Some(pattern) = args["pattern"].as_str() else {
-        return failed("pattern is required");
-    };
-    let ignore = args["ignore_case"].as_bool().unwrap_or(false);
-    let Ok(matcher) = regex::RegexBuilder::new(pattern)
-        .case_insensitive(ignore)
-        .build()
-    else {
-        return failed("that is not a valid regular expression");
-    };
-    let only = args["glob"].as_str().and_then(glob_regex);
-    let root = resolve(cwd, args["path"].as_str().unwrap_or("."));
-    let candidates: Vec<(PathBuf, String)> = if root.is_file() {
-        vec![(
-            root.clone(),
-            root.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        )]
-    } else {
-        files_under(&root).collect()
-    };
-    let mut lines = Vec::new();
-    'files: for (path, relative) in candidates {
-        if only.as_ref().is_some_and(|only| !only.is_match(&relative)) {
-            continue;
-        }
-        if std::fs::metadata(&path)
-            .map(|meta| meta.len() > 2_000_000)
-            .unwrap_or(true)
-        {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(&path) else {
-            continue;
-        };
-        if bytes.iter().take(1024).any(|byte| *byte == 0) {
-            continue;
-        }
-        for (index, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
-            if matcher.is_match(line) {
-                lines.push(format!(
-                    "{relative}:{}: {}",
-                    index + 1,
-                    line.trim().chars().take(200).collect::<String>()
-                ));
-                if lines.len() >= 200 {
-                    break 'files;
-                }
-            }
-        }
-    }
-    ok(if lines.is_empty() {
-        "no match".to_string()
-    } else {
-        lines.join("\n")
-    })
-}
-
-/// The text of a page: scripts and styles dropped, tags removed, blank runs collapsed.
-fn page_text(html: &str) -> String {
-    let strip = |text: String, pattern: &str| {
-        regex::Regex::new(pattern)
-            .map(|re| re.replace_all(&text, " ").into_owned())
-            .unwrap_or(text)
-    };
-    let text = strip(
-        html.to_owned(),
-        r"(?is)<script[^>]*>.*?</script>|<style[^>]*>.*?</style>|<noscript[^>]*>.*?</noscript>",
-    );
-    let text = strip(text, r"(?s)<[^>]+>");
-    let text = text
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"");
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// `text` with every run of whitespace (tag gaps included) as one space.
-fn collapse_spaces(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// `restricted`: a free-tier provider's fetch, which never follows a redirect into this machine or its network.
-async fn web_fetch(args: &Value, restricted: bool) -> Outcome {
-    let Some(url) = args["url"]
-        .as_str()
-        .filter(|url| url.starts_with("http://") || url.starts_with("https://"))
-    else {
-        return failed("url must start with http:// or https://");
-    };
-    let redirects = if restricted {
-        reqwest::redirect::Policy::custom(|attempt| {
-            if crate::privacy::internal_url(attempt.url().as_str()) {
-                attempt.error("redirect to an internal address is blocked")
-            } else if attempt.previous().len() >= 10 {
-                attempt.stop()
-            } else {
-                attempt.follow()
-            }
-        })
-    } else {
-        reqwest::redirect::Policy::default()
-    };
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent("AgentDeck")
-        .redirect(redirects)
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => return failed(error.to_string()),
-    };
-    match client.get(url).send().await {
-        Ok(response) if response.status().is_success() => {
-            let html = response
-                .headers()
-                .get("content-type")
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|kind| kind.contains("html"));
-            match response.text().await {
-                Ok(text) => ok(trim_output(
-                    &if html { page_text(&text) } else { text },
-                    OUTPUT_MAX,
-                    START_HEAVY,
-                )),
-                Err(error) => failed(error.to_string()),
-            }
-        }
-        Ok(response) => failed(format!("the server answered {}", response.status())),
-        Err(error) => failed(error.to_string()),
-    }
-}
-
-fn list_dir(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let dir = resolve(cwd, args["path"].as_str().unwrap_or("."));
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(error) => return failed(format!("could not list {}: {error}", dir.display())),
-    };
-    let mut rows: Vec<String> = entries
-        .filter_map(Result::ok)
-        .map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            match entry.metadata() {
-                Ok(meta) if meta.is_dir() => format!("{name}/"),
-                Ok(meta) => format!("{name}  ({} bytes)", meta.len()),
-                Err(_) => name,
-            }
-        })
-        .collect();
-    rows.sort();
-    ok(if rows.is_empty() {
-        "(empty folder)".to_string()
-    } else {
-        rows.join("\n")
-    })
-}
-
-fn make_dir(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let Some(path) = args["path"].as_str() else {
-        return failed("path is required");
-    };
-    match std::fs::create_dir_all(resolve(cwd, path)) {
-        Ok(()) => ok(format!("Folder ready: {path}")),
-        Err(error) => failed(format!("could not create {path}: {error}")),
-    }
-}
-
-/// Copy or move: refuses to overwrite, so nothing is lost by a slip.
-fn transfer(args: &Value, cwd: Option<&Path>, moving: bool) -> Outcome {
-    let (Some(from), Some(to)) = (args["from"].as_str(), args["to"].as_str()) else {
-        return failed("from and to are required");
-    };
-    let (source, target) = (resolve(cwd, from), resolve(cwd, to));
-    if !source.exists() {
-        return failed(format!("{from} does not exist"));
-    }
-    if target.exists() {
-        return failed(format!(
-            "{to} already exists: pick another name or Delete it first"
-        ));
-    }
-    if let Some(parent) = target.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let done = if moving {
-        std::fs::rename(&source, &target)
-    } else if source.is_dir() {
-        copy_dir(&source, &target)
-    } else {
-        std::fs::copy(&source, &target).map(|_| ())
-    };
-    match done {
-        Ok(()) => ok(format!(
-            "{} {from} to {to}",
-            if moving { "Moved" } else { "Copied" }
-        )),
-        Err(error) => failed(error.to_string()),
-    }
-}
-
-fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)?.filter_map(Result::ok) {
-        let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&entry.path(), &target)?;
-        } else {
-            std::fs::copy(entry.path(), target)?;
-        }
-    }
-    Ok(())
-}
-
-/// Deletes a file or folder, but only inside the project folder.
-fn delete_path(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let Some(path) = args["path"].as_str() else {
-        return failed("path is required");
-    };
-    let target = resolve(cwd, path);
-    let (Ok(real), Some(Ok(root))) = (target.canonicalize(), cwd.map(Path::canonicalize)) else {
-        return failed(format!(
-            "{path} does not exist, or there is no project folder"
-        ));
-    };
-    if real == root || !real.starts_with(&root) {
-        return failed("only files and folders inside the project folder can be deleted");
-    }
-    let done = if real.is_dir() {
-        std::fs::remove_dir_all(&real)
-    } else {
-        std::fs::remove_file(&real)
-    };
-    match done {
-        Ok(()) => ok(format!("Deleted {path}")),
-        Err(error) => failed(error.to_string()),
-    }
-}
-
-/// A web search through Brave's plain HTML page: title, address and snippet of the first results.
-async fn web_search(args: &Value) -> Outcome {
-    let Some(query) = args["query"]
-        .as_str()
-        .filter(|query| !query.trim().is_empty())
-    else {
-        return failed("query is required");
-    };
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .user_agent("Mozilla/5.0 AgentDeck")
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => return failed(error.to_string()),
-    };
-    // Three engines at once: their rows are merged, so one that refuses (429) still leaves the others.
-    type Parse = fn(&str) -> Vec<(String, String, String)>;
-    let engines: [(&str, &str, Parse); 3] = [
-        ("Brave", crate::endpoints::ENDPOINTS.web.search.as_str(), brave_results),
-        ("Bing", crate::endpoints::ENDPOINTS.web.bing.as_str(), bing_results),
-        ("DuckDuckGo", crate::endpoints::ENDPOINTS.web.duckduckgo.as_str(), duckduckgo_results),
-    ];
-    let pages = futures_util::future::join_all(engines.iter().map(|(name, address, read)| {
-        let client = &client;
-        async move { (*name, engine_page(client, address, query).await.map(|page| read(&page))) }
-    }))
-    .await;
-    let mut lists = Vec::new();
-    let mut problems = Vec::new();
-    for (name, result) in pages {
-        match result {
-            Ok(rows) => lists.push(rows),
-            Err(error) => problems.push(format!("{name}: {error}")),
-        }
-    }
-    if lists.iter().all(Vec::is_empty) && !problems.is_empty() {
-        let limited = problems.iter().any(|problem| problem.contains("429"));
-        let advice = if limited { " Do not search again in this turn; answer from what you have or say what you could not check." } else { "" };
-        return failed(format!("the searches failed: {}.{advice}", problems.join("; ")));
-    }
-    // Round by round, one row from each engine, the same address kept once.
-    let mut seen = std::collections::HashSet::new();
-    let mut merged = Vec::new();
-    let longest = lists.iter().map(Vec::len).max().unwrap_or(0);
-    for index in 0..longest {
-        for list in &lists {
-            if let Some((title, target, snippet)) = list.get(index) {
-                if seen.insert(target.trim_end_matches('/').to_lowercase()) {
-                    merged.push(format!("{}. {title}\n   {target}\n   {snippet}", merged.len() + 1));
-                }
-            }
-        }
-    }
-    merged.truncate(8);
-    ok(if merged.is_empty() {
-        "no results".to_string()
-    } else {
-        merged.join("\n")
-    })
-}
-
-/// The page of one search engine for a query. A refusal (429) is said as it is, so the turn can stop asking.
-async fn engine_page(client: &reqwest::Client, address: &str, query: &str) -> Result<String, String> {
-    let response = client
-        .get(address)
-        .query(&[("q", query)])
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
-    let status = response.status();
-    if status.as_u16() == 429 {
-        return Err("429 Too Many Requests".into());
-    }
-    if !status.is_success() {
-        return Err(status.to_string());
-    }
-    response.text().await.map_err(|error| error.to_string())
-}
-
-/// The results on a Bing search page: (title, address, snippet) of each `b_algo` block.
-fn bing_results(page: &str) -> Vec<(String, String, String)> {
-    let (Ok(link), Ok(snippet)) = (
-        regex::Regex::new(r#"(?s)<h2><a href="(https?://[^"]+)"[^>]*>(.*?)</a></h2>"#),
-        regex::Regex::new(r#"(?s)<p[^>]*>(.*?)</p>"#),
-    ) else {
-        return Vec::new();
-    };
-    page.split(r#"class="b_algo""#)
-        .skip(1)
-        .filter_map(|block| {
-            let found = link.captures(block)?;
-            let target = found[1].replace("&amp;", "&");
-            let title = collapse_spaces(&page_text(&found[2]));
-            let snippet = snippet
-                .captures(block)
-                .map(|found| collapse_spaces(&page_text(&found[1])))
-                .unwrap_or_default();
-            Some((title, target, snippet))
-        })
-        .collect()
-}
-
-/// The results on a DuckDuckGo HTML page: (title, address, snippet) of each `result__a` link, its snippet by order.
-fn duckduckgo_results(page: &str) -> Vec<(String, String, String)> {
-    let (Ok(link), Ok(snippet)) = (
-        regex::Regex::new(r#"(?s)class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#),
-        regex::Regex::new(r#"(?s)class="result__snippet"[^>]*>(.*?)</a>"#),
-    ) else {
-        return Vec::new();
-    };
-    let snippets: Vec<String> = snippet
-        .captures_iter(page)
-        .map(|found| page_text(&found[1]).replace('\n', " "))
-        .collect();
-    link.captures_iter(page)
-        .enumerate()
-        .filter_map(|(index, found)| {
-            let target = duckduckgo_target(&found[1])?;
-            let title = page_text(&found[2]).replace('\n', " ");
-            Some((title, target, snippets.get(index).cloned().unwrap_or_default()))
-        })
-        .collect()
-}
-
-/// The address a DuckDuckGo result link leads to: its `uddg` parameter when the link goes through DuckDuckGo.
-fn duckduckgo_target(href: &str) -> Option<String> {
-    let href = href.replace("&amp;", "&");
-    let full = if href.starts_with("//") { format!("https:{href}") } else { href };
-    let url = reqwest::Url::parse(&full).ok()?;
-    if url.host_str() == Some("duckduckgo.com") && url.path().starts_with("/l/") {
-        return url.query_pairs().find(|pair| pair.0 == "uddg").map(|pair| pair.1.into_owned());
-    }
-    full.starts_with("http").then_some(full)
-}
-
-/// The results on a Brave search page: (title, address, snippet) of each result block that has a title and an address.
-/// DuckDuckGo's HTML page answers 202 with a bot check to this client, so it returned no results.
-fn brave_results(page: &str) -> Vec<(String, String, String)> {
-    let (Ok(link), Ok(title), Ok(description)) = (
-        regex::Regex::new(r#"<a href="(https?://[^"]+)""#),
-        regex::Regex::new(r#"class="title search-snippet-title[^"]*" title="([^"]*)""#),
-        regex::Regex::new(r#"(?s)class="description[^"]*"[^>]*>(.*?)</div>"#),
-    ) else {
-        return Vec::new();
-    };
-    page.split(r#"data-type="web""#)
-        .skip(1)
-        .filter_map(|block| {
-            let target = link.captures(block)?[1].replace("&amp;", "&");
-            let title = page_text(&title.captures(block)?[1]).replace('\n', " ");
-            let snippet = description
-                .captures(block)
-                .map(|found| page_text(&found[1]).replace('\n', " "))
-                .unwrap_or_default();
-            Some((title, target, snippet))
-        })
-        .collect()
-}
-
-/// The file change a Write or Edit makes. A Write over an existing file shows what it replaces, so the diff is
-/// the real one and not "every line added".
-fn change_for(
-    name: &str,
-    args: &Value,
-    cwd: Option<&Path>,
-) -> Option<ag_adapters::agent::FileChange> {
-    let mut change = file_change(name, args)?;
-    if name == "Write" {
-        if let Ok(old) =
-            std::fs::read_to_string(resolve(cwd, args["file_path"].as_str().unwrap_or_default()))
-        {
-            change.removed = old.lines().count();
-            change.before = old.chars().take(3000).collect();
-        }
-    }
-    Some(change)
-}
-
-fn read_file(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let Some(path) = args["file_path"].as_str() else {
-        return failed("file_path is required");
-    };
-    let text = match std::fs::read(resolve(cwd, path)) {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(error) => return failed(format!("could not read {path}: {error}")),
-    };
-    let first = args["offset"].as_u64().unwrap_or(1).max(1) as usize;
-    let limit = args["limit"].as_u64().unwrap_or(2000) as usize;
-    let numbered: Vec<String> = text
-        .lines()
-        .enumerate()
-        .skip(first - 1)
-        .take(limit)
-        .map(|(index, line)| format!("{:>6}\t{line}", index + 1))
-        .collect();
-    ok(if numbered.is_empty() {
-        "(empty)".to_string()
-    } else {
-        trim_output(&numbered.join("\n"), OUTPUT_MAX * 3, START_HEAVY)
-    })
-}
-
-fn write_file(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let (Some(path), Some(content)) = (args["file_path"].as_str(), args["content"].as_str()) else {
-        return failed("file_path and content are required");
-    };
-    let target = resolve(cwd, path);
-    if let Some(parent) = target.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let existed = target.exists();
-    match std::fs::write(&target, content) {
-        Ok(()) => ok(format!(
-            "{} {} lines {} {path}",
-            if existed { "Updated" } else { "Created" },
-            content.lines().count(),
-            if existed { "in" } else { "in new file" }
-        )),
-        Err(error) => failed(format!("could not write {path}: {error}")),
-    }
-}
-
-/// A key that names one file however it was written (relative, with `./`, back slashes, other case on Windows).
-fn path_key(cwd: Option<&Path>, path: &str) -> String {
-    let full = resolve(cwd, path);
-    let full = std::fs::canonicalize(&full).unwrap_or(full);
-    full.to_string_lossy()
-        .replace('\\', "/")
-        .trim_start_matches("//?/")
-        .to_lowercase()
-}
-
-/// Lines of `text` around `at` (0-based), numbered, for showing the model what is really there.
-fn numbered_around(text: &str, at: usize, before: usize, after: usize) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let from = at.saturating_sub(before);
-    let to = (at + after + 1).min(lines.len());
-    (from..to)
-        .map(|index| format!("{:>6}\t{}", index + 1, lines[index]))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Why an Edit did not find its text: the nearest place in the file, so the next try can copy it exactly.
-fn not_found(text: &str, old: &str, path: &str) -> String {
-    let wanted: Vec<&str> = old
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.len() > 3)
-        .collect();
-    let lines: Vec<&str> = text.lines().collect();
-    let hit = wanted
-        .iter()
-        .find_map(|line| lines.iter().position(|candidate| candidate.trim() == *line))
-        .or_else(|| {
-            wanted
-                .iter()
-                .find_map(|line| lines.iter().position(|candidate| candidate.contains(*line)))
-        });
-    match hit {
-        Some(at) => format!("old_string was not found in {path}: it must match the file exactly, spaces, tabs and line breaks included. The closest place is at line {}:\n{}\nCopy the text from here (Read the lines if you need more) and try again.", at + 1, numbered_around(text, at, 2, 8)),
-        None => format!("old_string was not found in {path}, and none of its lines is in the file. Read the file (or code_outline it), then copy the exact text you want to replace."),
-    }
-}
-
-/// The Plan tool: what will change, and where. Returns the plan as the model should see it, and the files it names.
-fn plan_tool(
-    args: &Value,
-    cwd: Option<&Path>,
-) -> (Outcome, Option<std::collections::HashSet<String>>) {
-    let list = |name: &str| {
-        args[name]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-    };
-    let (files, steps) = (list("files"), list("steps"));
-    if files.is_empty() || steps.is_empty() {
-        return (failed("Give the files you will change (find them with code_search, Grep or Glob first) and the steps."), None);
-    }
-    let mut keys = std::collections::HashSet::new();
-    let mut out = format!(
-        "Plan recorded: {}\nFiles:",
-        args["goal"].as_str().unwrap_or_default()
-    );
-    for file in &files {
-        keys.insert(path_key(cwd, file));
-        out.push_str(&format!(
-            "\n- {file} ({})",
-            if resolve(cwd, file).exists() {
-                "exists: Read it before you edit it"
-            } else {
-                "will be created"
-            }
-        ));
-    }
-    out.push_str("\nSteps:");
-    for (index, step) in steps.iter().enumerate() {
-        out.push_str(&format!("\n{}. {step}", index + 1));
-    }
-    if let Some(checks) = args["checks"]
-        .as_str()
-        .filter(|text| !text.trim().is_empty())
-    {
-        out.push_str(&format!("\nCheck with: {checks}"));
-    }
-    out.push_str("\nDo step 1 now. After the last step, run the check and look at the result before you answer.");
-    (ok(out), Some(keys))
-}
-
-/// The latest version of a package, from its registry.
-async fn package_info(args: &Value) -> Outcome {
-    let Some(name) = args["name"]
-        .as_str()
-        .map(str::trim)
-        .filter(|name| !name.is_empty() && name.len() < 120 && !name.contains(char::is_whitespace))
-    else {
-        return failed("name is required");
-    };
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .user_agent("AgentDeck")
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => return failed(error.to_string()),
-    };
-    let get = |url: String| {
-        let client = client.clone();
-        async move {
-            client
-                .get(url)
-                .send()
-                .await
-                .map_err(|error| error.to_string())?
-                .error_for_status()
-                .map_err(|error| error.to_string())?
-                .json::<Value>()
-                .await
-                .map_err(|error| error.to_string())
-        }
-    };
-    let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
-    match args["ecosystem"].as_str().unwrap_or("npm") {
-        "crates" | "cargo" | "rust" => {
-            match get(format!("https://crates.io/api/v1/crates/{name}")).await {
-                Ok(json) => {
-                    let krate = &json["crate"];
-                    ok(format!(
-                        "{name} (crates.io)\nlatest stable: {}\nnewest: {}\n{}\ndocs: {}\nhome: {}",
-                        text(&krate["max_stable_version"]),
-                        text(&krate["newest_version"]),
-                        text(&krate["description"]),
-                        text(&krate["documentation"]),
-                        text(&krate["homepage"])
-                    ))
-                }
-                Err(error) => failed(format!("no answer for {name}: {error}")),
-            }
-        }
-        "pypi" | "python" => match get(format!("https://pypi.org/pypi/{name}/json")).await {
-            Ok(json) => ok(format!(
-                "{name} (PyPI)\nlatest: {}\n{}\nhome: {}\nrequires python: {}",
-                text(&json["info"]["version"]),
-                text(&json["info"]["summary"]),
-                text(&json["info"]["home_page"]),
-                text(&json["info"]["requires_python"])
-            )),
-            Err(error) => failed(format!("no answer for {name}: {error}")),
-        },
-        _ => match get(format!(
-            "https://registry.npmjs.org/{}/latest",
-            name.replace('/', "%2F")
-        ))
-        .await
-        {
-            Ok(json) => {
-                let tags = get(format!(
-                    "https://registry.npmjs.org/-/package/{}/dist-tags",
-                    name.replace('/', "%2F")
-                ))
-                .await
-                .map(|tags| tags.to_string())
-                .unwrap_or_default();
-                let deprecated = json["deprecated"]
-                    .as_str()
-                    .map(|why| format!("\nDEPRECATED: {why}"))
-                    .unwrap_or_default();
-                ok(format!(
-                    "{name} (npm)\nlatest: {}\ntags: {tags}\n{}\nhome: {}{deprecated}",
-                    text(&json["version"]),
-                    text(&json["description"]),
-                    text(&json["homepage"])
-                ))
-            }
-            Err(error) => failed(format!("no answer for {name}: {error}")),
-        },
-    }
-}
-
-/// What the project says about itself, for the model: the versions of its main libraries (so it writes for those, not for
-/// the ones it remembers), its scripts, and its own rules file.
-fn project_brief(cwd: Option<&Path>) -> String {
-    let Some(dir) = cwd else { return String::new() };
-    let mut out = String::new();
-    if let Ok(text) = std::fs::read_to_string(dir.join("package.json")) {
-        if let Ok(json) = serde_json::from_str::<Value>(&text) {
-            const MAIN: [&str; 24] = [
-                "@angular/core",
-                "@angular/material",
-                "svelte",
-                "@sveltejs/kit",
-                "react",
-                "react-dom",
-                "next",
-                "vue",
-                "nuxt",
-                "solid-js",
-                "tailwindcss",
-                "vite",
-                "typescript",
-                "rxjs",
-                "zod",
-                "@tauri-apps/api",
-                "@ngrx/store",
-                "@tanstack/query-core",
-                "pinia",
-                "express",
-                "nestjs",
-                "@nestjs/core",
-                "prisma",
-                "drizzle-orm",
-            ];
-            let mut found = Vec::new();
-            for section in ["dependencies", "devDependencies"] {
-                for (name, version) in json[section].as_object().into_iter().flatten() {
-                    if MAIN.contains(&name.as_str()) || name.starts_with("@shival99/") {
-                        found.push(format!("{name}@{}", version.as_str().unwrap_or_default()));
-                    }
-                }
-            }
-            if !found.is_empty() {
-                out.push_str(&format!("\n\nThe project's own versions (write code for these, not for older ones you may remember): {}.", found.join(", ")));
-            }
-            let scripts: Vec<&str> = json["scripts"]
-                .as_object()
-                .into_iter()
-                .flat_map(|map| map.keys().map(String::as_str))
-                .take(16)
-                .collect();
-            if !scripts.is_empty() {
-                out.push_str(&format!("\npackage.json scripts: {}.", scripts.join(", ")));
-            }
-        }
-    }
-    for file in ["AGENTS.md", "CLAUDE.md"] {
-        if let Ok(text) = std::fs::read_to_string(dir.join(file)) {
-            let rules: String = text.chars().take(4500).collect();
-            out.push_str(&format!(
-                "\n\nThe project's rules ({file}); follow them:\n{rules}"
-            ));
-            break;
-        }
-    }
-    out
-}
-
-fn edit_file(args: &Value, cwd: Option<&Path>) -> Outcome {
-    let (Some(path), Some(old), Some(new)) = (
-        args["file_path"].as_str(),
-        args["old_string"].as_str(),
-        args["new_string"].as_str(),
-    ) else {
-        return failed("file_path, old_string and new_string are required");
-    };
-    let target = resolve(cwd, path);
-    let text = match std::fs::read_to_string(&target) {
-        Ok(text) => text,
-        Err(error) => return failed(format!("could not read {path}: {error}")),
-    };
-    // A file with Windows line ends, and a model that wrote its text with plain ones: the same text.
-    let crlf = text.contains("\r\n");
-    let fit = |piece: &str| {
-        if crlf && !piece.contains("\r\n") {
-            piece.replace('\n', "\r\n")
-        } else {
-            piece.to_owned()
-        }
-    };
-    let (old, new) = (fit(old), fit(new));
-    let (old, new) = (old.as_str(), new.as_str());
-    match text.matches(old).count() {
-        0 => failed(not_found(&text, old, path)),
-        1 => {
-            let line = text[..text.find(old).unwrap_or(0)].matches('\n').count();
-            let updated = text.replacen(old, new, 1);
-            match std::fs::write(&target, &updated) {
-                // The result is shown back, so the model sees where its text landed and what is around it.
-                Ok(()) => ok(format!(
-                    "Edited {path} at line {}. It now reads:\n{}",
-                    line + 1,
-                    numbered_around(&updated, line, 3, new.lines().count() + 2)
-                )),
-                Err(error) => failed(format!("could not write {path}: {error}")),
-            }
-        }
-        count if args["replace_all"].as_bool() == Some(true) => {
-            match std::fs::write(&target, text.replace(old, new)) {
-                Ok(()) => ok(format!("Edited {path}: {count} replacements")),
-                Err(error) => failed(format!("could not write {path}: {error}")),
-            }
-        }
-        count => failed(format!(
-            "old_string appears {count} times: add more surrounding text, or set replace_all"
-        )),
-    }
-}
-
-/// Calls one AgentDeck browser tool through the MCP server the app runs for itself.
-async fn browser_call(app: &AppHandle, chat: &str, name: &str, args: &Value) -> Outcome {
-    let request = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": args } }).to_string();
-    let Some(answer) = crate::mcp::handle(app, &request, chat).await else {
-        return failed("the browser did not answer");
-    };
-    let Ok(answer) = serde_json::from_str::<Value>(&answer) else {
-        return failed("the browser answered with something unreadable");
-    };
-    let result = &answer["result"];
-    let mut text = Vec::new();
-    let mut image = None;
-    for part in result["content"].as_array().into_iter().flatten() {
-        match part["type"].as_str() {
-            Some("text") => text.push(part["text"].as_str().unwrap_or_default().to_owned()),
-            Some("image") => {
-                image = Some(format!(
-                    "data:{};base64,{}",
-                    part["mimeType"].as_str().unwrap_or("image/png"),
-                    part["data"].as_str().unwrap_or_default()
-                ));
-            }
-            _ => {}
-        }
-    }
-    let mut text = text.join("\n");
-    if text.is_empty() && image.is_some() {
-        text = "Screenshot taken.".into();
-    }
-    Outcome {
-        text: trim_output(&text, OUTPUT_MAX, BALANCED),
-        is_error: result["isError"].as_bool().unwrap_or(false),
-        image,
-    }
-}
-
-enum Decision {
-    Allow,
-    /// Asked every time, whatever the mode and whatever was allowed before: a command that is risky but has real uses
-    /// (see `ag_adapters::agent::guard`). The text says what to look at.
-    Careful(&'static str),
-    Deny(&'static str),
-    Ask,
-}
-
-/// Whether a tool call may run now, under the permission mode and what the user approved before.
-/// `external`: the tool comes from an MCP server the user set up (AgentDeck's own browser tools are not external).
-fn decide(turn: &Turn, name: &str, args: &Value, external: bool) -> Decision {
-    // Whatever the model asks for, a restricted provider runs nothing that touches this machine.
-    if turn.restricted && (external || !RESTRICTED_TOOLS.contains(&name)) {
-        return Decision::Deny("this provider has no access to the project or the machine: say what is needed and another agent will do it.");
-    }
-    if turn.restricted {
-        // Its web tools must not carry a secret out in a query, nor reach this machine or its network.
-        if name == "WebFetch"
-            && args["url"]
-                .as_str()
-                .is_some_and(crate::privacy::internal_url)
-        {
-            return Decision::Deny("internal addresses (localhost, private IPs, .internal hosts) are blocked for this provider.");
-        }
-        if crate::privacy::private_content(&args.to_string()).is_some() {
-            return Decision::Deny("the call holds a secret, an environment variable or an internal address: blocked for this provider.");
-        }
-    }
-    let mode = Mode::parse(turn.permission_mode.as_deref());
-    // The guard only makes a call stricter and runs before the mode and before any earlier "always allow": a heavy command
-    // is refused in every mode, a risky one is asked about each time (plan mode still refuses every command).
-    if name == "Bash" {
-        match ag_adapters::agent::guard::assess(args["command"].as_str().unwrap_or_default()) {
-            Some(ag_adapters::agent::guard::Risk::Block(reason)) => return Decision::Deny(reason),
-            Some(ag_adapters::agent::guard::Risk::Confirm(reason)) if mode != Mode::Plan => return Decision::Careful(reason),
-            _ => {}
-        }
-    }
-    let approved = turn
-        .allowed
-        .iter()
-        .any(|entry| entry == name || *entry == allow_entry(name, args));
-    let (action, refusal) = match name {
-        "Read" | "Glob" | "Grep" | "WebFetch" | "WebSearch" | "Skill" | "LS" => return Decision::Allow,
-        "Write" | "Edit" | "MkDir" | "Move" | "Copy" => (
-            Action::Write,
-            "plan mode: nothing may be changed. Describe the plan instead.",
-        ),
-        "Bash" | "Delete" => (
-            Action::Shell,
-            "plan mode: commands may not run. Describe the plan instead.",
-        ),
-        // External tools from the user's MCP servers.
-        _ if external => (Action::Other, "plan mode: external tools may not run."),
-        // The browser tools of AgentDeck itself.
-        _ => return Decision::Allow,
-    };
-    match verdict(mode, action) {
-        Verdict::Approve => Decision::Allow,
-        Verdict::Refuse => Decision::Deny(refusal),
-        Verdict::Ask if approved => Decision::Allow,
-        Verdict::Ask => Decision::Ask,
-    }
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// One model call
-
-#[derive(Default)]
-struct Call {
-    id: String,
-    name: String,
-    arguments: String,
-}
-
-#[derive(Default)]
-struct Step {
-    /// Why the model stopped: `stop`, `tool_calls`, `length`…
-    finish: String,
-    text: String,
-    calls: Vec<Call>,
-    /// Prompt tokens not served from the provider's prompt cache.
-    input_tokens: u64,
-    /// Prompt tokens the provider read from its cache (billed at a fraction, and a sign the prefix stayed stable).
-    cached_tokens: u64,
-    output_tokens: u64,
-}
-
-/// Reads one `data:` line of the stream: emits text and reasoning, collects the tool calls.
-fn read_chunk(data: &str, step: &mut Step, emit: &mut impl FnMut(AgentEvent)) {
-    let Ok(json) = serde_json::from_str::<Value>(data) else {
-        return;
-    };
-    let delta = &json["choices"][0]["delta"];
-    for key in ["reasoning_content", "reasoning"] {
-        if let Some(part) = delta[key].as_str().filter(|part| !part.is_empty()) {
-            emit(AgentEvent::Thinking {
-                text: part.to_owned(),
-            });
-            break;
-        }
-    }
-    if let Some(part) = delta["content"].as_str().filter(|part| !part.is_empty()) {
-        step.text.push_str(part);
-        emit(AgentEvent::Delta {
-            text: part.to_owned(),
-        });
-    }
-    if let Some(finish) = json["choices"][0]["finish_reason"].as_str() {
-        step.finish = finish.to_owned();
-    }
-    for piece in delta["tool_calls"].as_array().into_iter().flatten() {
-        let index = piece["index"].as_u64().unwrap_or(0) as usize;
-        while step.calls.len() <= index {
-            step.calls.push(Call::default());
-        }
-        let call = &mut step.calls[index];
-        if let Some(id) = piece["id"].as_str().filter(|id| !id.is_empty()) {
-            call.id = id.to_owned();
-        }
-        if let Some(name) = piece["function"]["name"].as_str() {
-            call.name.push_str(name);
-        }
-        if let Some(arguments) = piece["function"]["arguments"].as_str() {
-            call.arguments.push_str(arguments);
-        }
-    }
-    if let Some(usage) = json.get("usage").filter(|usage| usage.is_object()) {
-        let prompt = usage["prompt_tokens"].as_u64().unwrap_or(0);
-        // OpenAI names the cached part `prompt_tokens_details.cached_tokens`; DeepSeek `prompt_cache_hit_tokens`.
-        let cached = usage["prompt_tokens_details"]["cached_tokens"]
-            .as_u64()
-            .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
-            .unwrap_or(0)
-            .min(prompt);
-        step.input_tokens = prompt - cached;
-        step.cached_tokens = cached;
-        step.output_tokens = usage["completion_tokens"].as_u64().unwrap_or(0);
-    }
-}
-
-/// Sends the conversation and streams the answer. `Err` is a message for the user.
-async fn model_call(
-    client: &reqwest::Client,
-    turn: &Turn,
-    messages: &[Value],
-    tools: &[Value],
-    emit: &mut impl FnMut(AgentEvent),
-) -> Result<Step, String> {
-    let mut outgoing_messages = messages.to_vec();
-    if turn.workbuddy {
-        outgoing_messages = workbuddy_turn_messages(&outgoing_messages);
-        for message in &mut outgoing_messages {
-            replace_workbuddy_strings(message);
-        }
-    }
-    let mut body = json!({
-        "model": turn.model,
-        "stream": true,
-        "stream_options": { "include_usage": true },
-        "messages": outgoing_messages,
-    });
-    if !tools.is_empty() {
-        body["tools"] = Value::Array(tools.to_vec());
-    }
-    // Workers AI cuts an answer short at its own small default, so ask for a fixed ceiling.
-    if turn.base_url.contains("api.cloudflare.com") {
-        body["max_tokens"] = json!(2048);
-    }
-    // Servers differ in how they take this, and one ignores what it does not know: `reasoning_effort` (LM Studio,
-    // OpenAI-style, Ollama), `chat_template_kwargs` (llama.cpp, vLLM) and `think` (Ollama).
-    match turn.effort.as_deref() {
-        Some("off") => {
-            body["reasoning_effort"] = json!("none");
-            body["chat_template_kwargs"] = json!({ "enable_thinking": false });
-            body["think"] = json!(false);
-        }
-        Some(level @ ("low" | "medium" | "high")) => body["reasoning_effort"] = json!(level),
-        Some(_) => body["reasoning_effort"] = json!("high"),
-        None => {}
-    }
-    let mut request = client
-        .post(chat_url(&turn.kind, &turn.base_url))
-        .json(&body);
-    if turn.workbuddy {
-        let key = match crate::connectors::workbuddy_access_token().await {
-            Ok(key) => key,
-            Err(_) => turn.api_key.clone().unwrap_or_default(),
-        };
-        if key.is_empty() {
-            return Err("WorkBuddy is not signed in".into());
-        }
-        request = request
-            .bearer_auth(key)
-            .header("X-Product", "SaaS")
-            .header("X-Domain", "www.workbuddy.ai")
-            .header("X-IDE-Type", "WorkBuddy")
-            .header("X-IDE-Name", "WorkBuddy")
-            .header("X-IDE-Version", "5.5.6")
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("X-Agent-Intent", "craft")
-            .header("X-Agent-Purpose", "conversation")
-            .header("X-Agent-Type", "main")
-            .header("User-Agent", "WorkBuddy/5.5.6");
-    } else if let Some(key) = turn.api_key.as_deref().filter(|key| !key.is_empty()) {
-        request = request.bearer_auth(key);
-    }
-    // A local model reads a long prompt before it answers, so the wait for the first byte is generous but not endless.
-    let sent = match tokio::time::timeout(Duration::from_secs(300), request.send()).await {
-        Ok(sent) => sent,
-        Err(_) => return Err("the server did not answer within 5 minutes".into()),
-    };
-    let mut response = match sent {
-        Ok(response) => response,
-        Err(error) if error.is_connect() => {
-            return Err("could not connect: is the server running?".into())
-        }
-        Err(error) => return Err(error.to_string()),
-    };
-    if !response.status().is_success() {
-        let status = response.status();
-        let detail = response.text().await.unwrap_or_default();
-        let detail = serde_json::from_str::<Value>(&detail)
-            .ok()
-            .and_then(|json| json["error"]["message"].as_str().map(str::to_owned))
-            .unwrap_or(detail);
-        let detail = detail.trim();
-        return Err(if detail.is_empty() {
-            format!("the server answered {status}")
-        } else {
-            format!("{status}: {detail}")
-        });
-    }
-    let mut step = Step::default();
-    // Buffer raw bytes: a network chunk can end inside a Vietnamese character or emoji.
-    // Decode only complete lines; ASCII newlines cannot occur inside a multi-byte UTF-8 character.
-    let mut pending: Vec<u8> = Vec::new();
-    'stream: loop {
-        // A server that stops sending (a stuck model, a dropped connection) must not leave the chat waiting for ever.
-        let next = match tokio::time::timeout(STALL, response.chunk()).await {
-            Ok(next) => next,
-            Err(_) => {
-                return Err(format!(
-                    "the model sent nothing for {} seconds and was stopped",
-                    STALL.as_secs()
-                ))
-            }
-        };
-        match next {
-            Ok(Some(bytes)) => {
-                pending.extend_from_slice(&bytes);
-                while let Some(line) = take_line(&mut pending) {
-                    if handle_sse_line(&line, &mut step, emit) {
-                        break 'stream;
-                    }
-                }
-            }
-            Ok(None) => {
-                // The stream can end on a line without its newline: that last `data:` line still holds text.
-                if !pending.is_empty() {
-                    let rest = String::from_utf8_lossy(&pending).into_owned();
-                    handle_sse_line(&rest, &mut step, emit);
-                }
-                break;
-            }
-            Err(error) => return Err(error.to_string()),
-        }
-    }
-    Ok(step)
-}
-
-fn replace_workbuddy_strings(value: &mut Value) {
-    match value {
-        Value::String(text) => {
-            for (from, to) in [
-                ("x-anthropic-billing-header:", ""),
-                ("You are Claude Code, Anthropic's official CLI for Claude", "You are Claude Code, Anthropic's CLI for Claude"),
-                ("Codex CLI is an open source project led by OpenAI.", "The Codex CLI is an open source project led by OpenAI."),
-                ("Codex CLI", "the assistant"),
-                ("codex_cli_rs", "assistant"),
-                ("OpenAI", "the provider"),
-                ("Codex", "the assistant"),
-            ] {
-                *text = text.replace(from, to);
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(replace_workbuddy_strings),
-        Value::Object(object) => object.values_mut().for_each(replace_workbuddy_strings),
-        _ => {}
-    }
-}
-
-/// WorkBuddy accepts one live turn at a time. Keep the current user turn and its tool loop, while omitting older
-/// AgentDeck transcript turns that the gateway rejects as replayed history.
-fn workbuddy_turn_messages(messages: &[Value]) -> Vec<Value> {
-    let Some(last_user) = messages
-        .iter()
-        .rposition(|message| message["role"].as_str() == Some("user"))
-    else {
-        return messages.to_vec();
-    };
-    let mut result = Vec::with_capacity(messages.len() - last_user + 1);
-    if let Some(system) = messages.first().filter(|message| message["role"].as_str() == Some("system")) {
-        result.push(system.clone());
-    }
-    result.extend(messages[last_user..].iter().cloned());
-    result
-}
-
-/// Reads one SSE line. `true` when it is the end of the stream (`data: [DONE]`).
-fn handle_sse_line(line: &str, step: &mut Step, emit: &mut impl FnMut(AgentEvent)) -> bool {
-    let Some(data) = line.trim().strip_prefix("data:") else {
-        return false;
-    };
-    let data = data.trim();
-    if data == "[DONE]" {
-        return true;
-    }
-    read_chunk(data, step, emit);
-    false
-}
-
-/// The next complete SSE line (including its newline), decoded as UTF-8; incomplete bytes stay buffered.
-fn take_line(pending: &mut Vec<u8>) -> Option<String> {
-    let end = pending.iter().position(|byte| *byte == b'\n')?;
-    let line: Vec<u8> = pending.drain(..=end).collect();
-    Some(String::from_utf8_lossy(&line).into_owned())
-}
+#[cfg(test)]
+pub(crate) use tools::{bing_results, brave_results, duckduckgo_results, END_HEAVY};
 
 fn system_prompt(cwd: Option<&Path>, skills: &[ProviderCommand]) -> String {
     let folder = cwd
@@ -2012,7 +684,7 @@ pub async fn run_turn(
             message: "the provider address must start with http:// or https://".into(),
         });
     }
-    if turn.kind == "anthropic" {
+    if turn.kind == "anthropic" && !protocol::messages_provider(&turn) {
         return emit(AgentEvent::Error {
             message: "Anthropic-compatible providers cannot chat yet".into(),
         });
@@ -2097,7 +769,11 @@ pub async fn run_turn(
     ];
     // Workers AI's OpenAI-compatible route checks each message against its own schema: only text content, never null.
     let text_only = turn.base_url.contains("api.cloudflare.com");
-    messages.extend(history.iter().map(|message| wire_message(message, text_only)));
+    messages.extend(
+        history
+            .iter()
+            .map(|message| wire_message(message, text_only)),
+    );
     // A message the user writes while this turn runs goes into the conversation at the next step, as a CLI that reads
     // its input at any time would take it: the work goes on, and the answer covers it.
     let (_inbox_slot, mut inbox) = InjectSlot::open(&turn.chat);
@@ -2146,7 +822,11 @@ pub async fn run_turn(
                 && retries < 2
             {
                 retries += 1;
-                messages.push(json!({ "role": "assistant", "content": step.text }));
+                let mut assistant = json!({ "role": "assistant", "content": step.text });
+                if !step.reasoning.is_empty() {
+                    assistant["reasoning_content"] = step.reasoning.clone().into();
+                }
+                messages.push(assistant);
                 messages.push(json!({ "role": "user", "content": "That tool call was written as text, so it did not run. Call the tool through the tool-calling interface." }));
                 continue;
             }
@@ -2175,7 +855,11 @@ pub async fn run_turn(
             let mut late = false;
             while let Ok(text) = inbox.try_recv() {
                 if !late {
-                    messages.push(json!({ "role": "assistant", "content": step.text }));
+                    let mut assistant = json!({ "role": "assistant", "content": step.text });
+                    if !step.reasoning.is_empty() {
+                        assistant["reasoning_content"] = step.reasoning.clone().into();
+                    }
+                    messages.push(assistant);
                     late = true;
                 }
                 messages.push(json!({ "role": "user", "content": text }));
@@ -2213,11 +897,15 @@ pub async fn run_turn(
                 }
             })
             .collect();
-        messages.push(json!({
+        let mut assistant = json!({
             "role": "assistant",
             "content": step.text.clone(),
             "tool_calls": calls.iter().zip(&ids).map(|(call, id)| json!({ "id": id, "type": "function", "function": { "name": call.name, "arguments": if call.arguments.is_empty() { "{}" } else { call.arguments.as_str() } } })).collect::<Vec<_>>(),
-        }));
+        });
+        if !step.reasoning.is_empty() {
+            assistant["reasoning_content"] = step.reasoning.clone().into();
+        }
+        messages.push(assistant);
 
         // Every call of the step is shown as running at once. Those that only wait (on a sub-agent, on the web) start
         // together, so the slowest sets the time and not the sum; the rest run in order after them. The tasks live in
@@ -2261,15 +949,28 @@ pub async fn run_turn(
             emit(AgentEvent::ToolCall {
                 id: id.clone(),
                 name: shown.clone(),
-                input: if call.name == "delegate_task" { args.to_string() } else { summarize_tool_input(&call.name, &args) },
+                input: if call.name == "delegate_task" {
+                    args.to_string()
+                } else {
+                    summarize_tool_input(&call.name, &args)
+                },
                 change: change_for(&call.name, &args, turn.cwd.as_deref()),
-                background: (crate::delegate::is_tool(&call.name) && args["wait"] == false) || ag_adapters::agent::delegate_wait(&shown, &args),
+                background: (crate::delegate::is_tool(&call.name) && args["wait"] == false)
+                    || ag_adapters::agent::delegate_wait(&shown, &args),
             });
             let waits_only = user_tool.is_none()
                 && args.is_object()
-                && (crate::delegate::is_tool(&call.name) || matches!(call.name.as_str(), "WebFetch" | "WebSearch" | "PackageInfo"));
+                && (crate::delegate::is_tool(&call.name)
+                    || matches!(call.name.as_str(), "WebFetch" | "WebSearch" | "PackageInfo"));
             if waits_only && matches!(decide(&turn, &call.name, &args, false), Decision::Allow) {
-                let (app, chat, name, args, id, restricted) = (app.clone(), chat.clone(), call.name.clone(), args.clone(), id.clone(), turn.restricted);
+                let (app, chat, name, args, id, restricted) = (
+                    app.clone(),
+                    chat.clone(),
+                    call.name.clone(),
+                    args.clone(),
+                    id.clone(),
+                    turn.restricted,
+                );
                 side_by_side.spawn(async move {
                     let outcome = match name.as_str() {
                         "WebFetch" => web_fetch(&args, restricted).await,
@@ -2282,7 +983,8 @@ pub async fn run_turn(
             }
             prepared.push(args);
         }
-        let mut finished: std::collections::HashMap<String, Outcome> = std::collections::HashMap::new();
+        let mut finished: std::collections::HashMap<String, Outcome> =
+            std::collections::HashMap::new();
         while let Some(joined) = side_by_side.join_next().await {
             if let Ok((id, outcome)) = joined {
                 finished.insert(id, outcome);
@@ -2436,12 +1138,19 @@ mod tests {
     fn a_character_split_across_chunks_stays_whole() {
         // "ệ" is three UTF-8 bytes: cut it between two network chunks.
         let text = "data: {\"t\":\"Việt\"}\n".as_bytes();
-        let cut = text.iter().position(|byte| *byte == 0xE1).map(|at| at + 1).expect("contains ệ");
+        let cut = text
+            .iter()
+            .position(|byte| *byte == 0xE1)
+            .map(|at| at + 1)
+            .expect("contains ệ");
         let mut pending = Vec::new();
         pending.extend_from_slice(&text[..cut]);
         assert_eq!(take_line(&mut pending), None);
         pending.extend_from_slice(&text[cut..]);
-        assert_eq!(take_line(&mut pending).as_deref(), Some("data: {\"t\":\"Việt\"}\n"));
+        assert_eq!(
+            take_line(&mut pending).as_deref(),
+            Some("data: {\"t\":\"Việt\"}\n")
+        );
         assert!(pending.is_empty());
     }
 
@@ -2455,7 +1164,9 @@ mod tests {
             let mut lines = Vec::new();
             for chunk in [&text.as_bytes()[..cut], &text.as_bytes()[cut..]] {
                 pending.extend_from_slice(chunk);
-                while let Some(line) = take_line(&mut pending) { lines.push(line); }
+                while let Some(line) = take_line(&mut pending) {
+                    lines.push(line);
+                }
             }
             assert_eq!(lines, [first, second], "chunk boundary {cut}");
             assert_eq!(pending, b"data: unfinished");
@@ -2468,6 +1179,7 @@ mod tests {
             kind: "openai".into(),
             base_url: String::new(),
             api_key: None,
+            key_env: None,
             model: String::new(),
             cwd: None,
             permission_mode: mode.map(str::to_owned),
@@ -2587,6 +1299,148 @@ mod tests {
     }
 
     #[test]
+    fn responses_use_provider_specific_open_models_only() {
+        let base = "https://api.commandcode.ai/provider/v1";
+        let make = |model: &str| Turn {
+            kind: "openai".into(),
+            base_url: base.into(),
+            api_key: None,
+            key_env: None,
+            model: model.into(),
+            cwd: None,
+            permission_mode: None,
+            allowed: Vec::new(),
+            chat: String::new(),
+            effort: None,
+            restricted: false,
+            workbuddy: false,
+        };
+        assert!(responses_provider(&make("deepseek/deepseek-v4-flash")));
+        let mut muse = make("muse-spark-1.3");
+        muse.base_url = "https://api.meta.ai/v1".into();
+        assert!(responses_provider(&muse));
+        assert!(!responses_provider(&make("anthropic/claude-sonnet-4-6")));
+        let mut other = make("gpt-4o");
+        other.base_url = "https://api.openai.com/v1".into();
+        assert!(!responses_provider(&other));
+    }
+
+    #[test]
+    fn responses_input_preserves_tool_round_trips() {
+        let messages = vec![
+            json!({ "role": "system", "content": "be concise" }),
+            json!({ "role": "user", "content": [{ "type": "text", "text": "look" }, { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } }] }),
+            json!({ "role": "assistant", "content": "", "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "Bash", "arguments": "{\"command\":\"pwd\"}" } }] }),
+            json!({ "role": "tool", "tool_call_id": "call_1", "content": "C:/project" }),
+        ];
+        let input = responses_input(&messages);
+        assert_eq!(input[1]["content"][0]["type"], "input_text");
+        assert_eq!(input[1]["content"][1]["type"], "input_image");
+        assert_eq!(input[2]["type"], "function_call");
+        assert_eq!(input[2]["call_id"], "call_1");
+        assert_eq!(input[3]["type"], "function_call_output");
+        assert_eq!(input[3]["output"], "C:/project");
+    }
+
+    #[test]
+    fn messages_provider_accepts_claude_on_command_code_and_muse() {
+        let mut turn = turn(None, &[]);
+        turn.base_url = "https://api.commandcode.ai/provider/v1".into();
+        turn.model = "anthropic/claude-sonnet-4-6".into();
+        assert!(messages_provider(&turn));
+        turn.base_url = "https://api.meta.ai/v1".into();
+        assert!(messages_provider(&turn));
+        turn.model = "muse-spark-1.3".into();
+        assert!(!messages_provider(&turn));
+    }
+
+    #[test]
+    fn messages_stream_maps_text_thinking_and_tool_input() {
+        let mut step = Step::default();
+        let mut text = String::new();
+        let mut thinking = String::new();
+        let mut emit = |event| match event {
+            AgentEvent::Delta { text: part } => text.push_str(&part),
+            AgentEvent::Thinking { text: part } => thinking.push_str(&part),
+            _ => {}
+        };
+        read_messages_chunk(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_1","name":"Bash","input":{}}}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_messages_chunk(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_messages_chunk(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"pwd\"}"}}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_messages_chunk(
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"done"}}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_messages_chunk(
+            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":7}}"#,
+            &mut step,
+            &mut emit,
+        );
+        assert_eq!(thinking, "plan");
+        assert_eq!(text, "done");
+        assert_eq!(step.finish, "tool_calls");
+        assert_eq!(step.output_tokens, 7);
+        assert_eq!(step.calls[0].name, "Bash");
+        assert_eq!(step.calls[0].arguments, r#"{"command":"pwd"}"#);
+    }
+
+    #[test]
+    fn responses_stream_maps_text_reasoning_and_function_calls() {
+        let mut step = Step::default();
+        let mut text = String::new();
+        let mut thinking = String::new();
+        let mut emit = |event| match event {
+            AgentEvent::Delta { text: part } => text.push_str(&part),
+            AgentEvent::Thinking { text: part } => thinking.push_str(&part),
+            _ => {}
+        };
+        read_responses_chunk(
+            r#"{"type":"response.output_text.delta","delta":"hello"}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_responses_chunk(
+            r#"{"type":"response.reasoning_summary_text.delta","delta":"think"}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_responses_chunk(
+            r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"Bash","arguments":""}}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_responses_chunk(
+            r#"{"type":"response.function_call_arguments.delta","item_id":"item_1","delta":"{\"command\":\"pwd\"}"}"#,
+            &mut step,
+            &mut emit,
+        );
+        read_responses_chunk(
+            r#"{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":3}}}"#,
+            &mut step,
+            &mut emit,
+        );
+        assert_eq!(text, "hello");
+        assert_eq!(thinking, "think");
+        assert_eq!(step.calls[0].id, "call_1");
+        assert_eq!(step.calls[0].arguments, "{\"command\":\"pwd\"}");
+        assert_eq!(step.finish, "tool_calls");
+        assert_eq!((step.input_tokens, step.output_tokens), (10, 3));
+    }
+
+    #[test]
     fn cached_prompt_tokens_are_counted_apart() {
         let mut step = Step::default();
         let mut emit = |_| {};
@@ -2616,7 +1470,10 @@ mod tests {
             files: Vec::new(),
         };
         let text = wire_message(&message, true);
-        assert_eq!(text["content"], "look\n\n[1 image(s) attached: this model reads text only]");
+        assert_eq!(
+            text["content"],
+            "look\n\n[1 image(s) attached: this model reads text only]"
+        );
         let parts = wire_message(&message, false);
         assert_eq!(parts["content"][1]["type"], "image_url");
     }
@@ -2646,6 +1503,7 @@ mod tests {
             &mut step,
             &mut emit,
         );
+        assert_eq!(step.reasoning, "hm");
         read_chunk(
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"Bash","arguments":"{\"comm"}}]}}]}"#,
             &mut step,
@@ -2688,26 +1546,76 @@ mod tests {
         let wipe = json!({ "command": "rm -rf /" });
         let drop = json!({ "command": "psql -c \"DROP DATABASE shop\"" });
         let ordinary = json!({ "command": "cargo build" });
-        for mode in [None, Some("acceptEdits"), Some("auto"), Some("bypassPermissions")] {
-            assert!(matches!(decide(&turn(mode, &[]), "Bash", &wipe, false), Decision::Deny(_)), "{mode:?}");
-            assert!(matches!(decide(&turn(mode, &[]), "Bash", &drop, false), Decision::Deny(_)), "{mode:?}");
+        for mode in [
+            None,
+            Some("acceptEdits"),
+            Some("auto"),
+            Some("bypassPermissions"),
+        ] {
+            assert!(
+                matches!(
+                    decide(&turn(mode, &[]), "Bash", &wipe, false),
+                    Decision::Deny(_)
+                ),
+                "{mode:?}"
+            );
+            assert!(
+                matches!(
+                    decide(&turn(mode, &[]), "Bash", &drop, false),
+                    Decision::Deny(_)
+                ),
+                "{mode:?}"
+            );
         }
         // Not even a command the user allowed before.
-        assert!(matches!(decide(&turn(None, &["Bash(rm -rf /)"]), "Bash", &wipe, false), Decision::Deny(_)));
+        assert!(matches!(
+            decide(&turn(None, &["Bash(rm -rf /)"]), "Bash", &wipe, false),
+            Decision::Deny(_)
+        ));
         // An ordinary command is still the mode's business.
-        assert!(matches!(decide(&turn(Some("bypassPermissions"), &[]), "Bash", &ordinary, false), Decision::Allow));
+        assert!(matches!(
+            decide(
+                &turn(Some("bypassPermissions"), &[]),
+                "Bash",
+                &ordinary,
+                false
+            ),
+            Decision::Allow
+        ));
     }
 
     #[test]
     fn a_risky_command_is_asked_about_each_time_in_every_mode_but_plan() {
         let risky = json!({ "command": "git push --force origin main" });
-        for mode in [None, Some("acceptEdits"), Some("auto"), Some("bypassPermissions")] {
-            assert!(matches!(decide(&turn(mode, &[]), "Bash", &risky, false), Decision::Careful(_)), "{mode:?}");
+        for mode in [
+            None,
+            Some("acceptEdits"),
+            Some("auto"),
+            Some("bypassPermissions"),
+        ] {
+            assert!(
+                matches!(
+                    decide(&turn(mode, &[]), "Bash", &risky, false),
+                    Decision::Careful(_)
+                ),
+                "{mode:?}"
+            );
         }
         // An earlier "always allow" does not count for it.
-        assert!(matches!(decide(&turn(Some("auto"), &["Bash(git push --force origin main)"]), "Bash", &risky, false), Decision::Careful(_)));
+        assert!(matches!(
+            decide(
+                &turn(Some("auto"), &["Bash(git push --force origin main)"]),
+                "Bash",
+                &risky,
+                false
+            ),
+            Decision::Careful(_)
+        ));
         // Plan mode still refuses every command.
-        assert!(matches!(decide(&turn(Some("plan"), &[]), "Bash", &risky, false), Decision::Deny(_)));
+        assert!(matches!(
+            decide(&turn(Some("plan"), &[]), "Bash", &risky, false),
+            Decision::Deny(_)
+        ));
     }
 
     #[test]
@@ -2824,7 +1732,10 @@ mod tests {
         let results = brave_results(page);
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, "Cloudflare Workers AI & more");
-        assert_eq!(results[0].1, "https://www.cloudflare.com/products/workers-ai/");
+        assert_eq!(
+            results[0].1,
+            "https://www.cloudflare.com/products/workers-ai/"
+        );
         assert_eq!(results[0].2, "Pay for inference.");
         assert_eq!(results[1].2, "");
         assert!(brave_results("<html>bot check</html>").is_empty());

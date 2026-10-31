@@ -515,6 +515,7 @@
       y: event.clientY,
       file: file ?? '',
       root: file ? fileRootOf(file, projectRoot) : '',
+      dir: link.classList.contains('md-path-dir'),
     });
   }
 

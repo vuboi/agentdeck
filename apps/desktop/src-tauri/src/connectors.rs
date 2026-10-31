@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -26,6 +26,34 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
+
+#[path = "connectors/runtime.rs"]
+pub(crate) mod runtime;
+#[path = "connectors/secrets.rs"]
+pub(crate) mod secrets;
+#[path = "connectors/workbuddy.rs"]
+pub(crate) mod workbuddy;
+
+pub(crate) use runtime::{account_tool_allows, capture, command, version_of, which, Captured, KillTree};
+#[cfg(test)]
+pub(crate) use crate::providers::custom::{models_url, parse_models};
+pub(crate) use secrets::{delete_secret, stored_secret, write_secret};
+
+/// Keep the Tauri command symbols in this facade while the credential-store implementation lives in `secrets.rs`.
+#[tauri::command]
+pub fn secret_save(target: String, value: String) -> Result<(), String> {
+    secrets::secret_save(target, value)
+}
+
+#[tauri::command]
+pub fn secret_load(target: String) -> Option<String> {
+    secrets::secret_load(target)
+}
+
+#[tauri::command]
+pub fn secret_delete(target: String) -> Result<(), String> {
+    secrets::secret_delete(target)
+}
 
 struct LoginTask {
     generation: u64,
@@ -52,183 +80,7 @@ static LOGIN_TASKS: LazyLock<Mutex<HashMap<String, LoginTask>>> =
 static LOGIN_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------------------------------------------
-// Finding and running programs
-
-/// Places a desktop app started without a shell PATH still finds the CLIs.
-fn extra_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Ok(home) = crate::home_folder() {
-        dirs.push(home.join(".local").join("bin"));
-        dirs.push(home.join(".cargo").join("bin"));
-    }
-    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
-        dirs.push(local.join("pnpm"));
-        dirs.push(local.join("agy").join("bin"));
-        if let Ok(versions) = std::fs::read_dir(local.join("mise").join("installs").join("node")) {
-            dirs.extend(versions.flatten().map(|entry| entry.path()));
-        }
-    }
-    if let Some(roaming) = std::env::var_os("APPDATA").map(PathBuf::from) {
-        dirs.push(roaming.join("npm"));
-    }
-    dirs
-}
-
-fn search_path() -> Vec<PathBuf> {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path).chain(extra_dirs()).collect()
-}
-
-/// The first `<dir>/<name>` that exists, trying the executable suffixes of the platform.
-pub(crate) fn which(name: &str) -> Option<PathBuf> {
-    let suffixes: &[&str] = if cfg!(windows) {
-        &[".exe", ".cmd", ".bat"]
-    } else {
-        &[""]
-    };
-    search_path().into_iter().find_map(|dir| {
-        suffixes
-            .iter()
-            .map(|suffix| dir.join(format!("{name}{suffix}")))
-            .find(|path| path.is_file())
-    })
-}
-
-/// A command with no console window and no stdin, whose PATH also holds the well-known tool folders (the `.cmd`
-/// shims of npm tools need `node` on it).
-pub(crate) fn command(program: &Path) -> Command {
-    #[cfg(windows)]
-    let mut command = {
-        let is_batch = program
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-            });
-        if is_batch {
-            let mut command = Command::new("cmd");
-            command.args(["/D", "/S", "/C"]).arg(program);
-            command
-        } else {
-            Command::new(program)
-        }
-    };
-    #[cfg(not(windows))]
-    let mut command = Command::new(program);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    if let Ok(path) = std::env::join_paths(search_path()) {
-        command.env("PATH", path);
-    }
-    #[cfg(windows)]
-    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    command
-}
-
-/// Stops a started program together with everything it started when dropped. `kill_on_drop` ends only the program
-/// itself: `npx` and the `.cmd` shims start a shell, then a package manager, then the node server, and killing the
-/// first leaves the node process running. Declare it after the child so it is dropped first (once the child is gone
-/// its children can no longer be found through it).
-pub(crate) struct KillTree(Option<u32>);
-
-impl KillTree {
-    pub(crate) fn of(child: &tokio::process::Child) -> Self {
-        Self(child.id())
-    }
-}
-
-impl Drop for KillTree {
-    fn drop(&mut self) {
-        #[cfg(windows)]
-        if let Some(pid) = self.0 {
-            use std::os::windows::process::CommandExt;
-            let mut kill = std::process::Command::new("taskkill");
-            kill.args(["/PID", &pid.to_string(), "/T", "/F"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-            kill.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-            let _ = kill.spawn();
-        }
-        #[cfg(not(windows))]
-        let _ = self.0;
-    }
-}
-
-pub(crate) struct Captured {
-    pub ok: bool,
-    pub stdout: String,
-    pub stderr: String,
-}
-
-/// The account tools AgentDeck uses (`codex-auth`, `cswap`) have commands it never needs. `codex-auth app` downloads a
-/// patched Codex build from a third party and `cswap upgrade` replaces the tool itself: neither may be started from here,
-/// whatever an account id or a future change passes along. Only the commands below run; anything else is refused.
-fn account_tool_allows(program: &Path, args: &[&str]) -> Result<(), String> {
-    let name = program
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    let allowed: &[&str] = match name.as_str() {
-        "codex-auth" => &["list", "switch", "remove", "login"],
-        "cswap" => &["list", "switch"],
-        _ => return Ok(()),
-    };
-    match args.first() {
-        Some(first) if allowed.contains(first) => Ok(()),
-        other => Err(format!(
-            "{name} {} is not one AgentDeck runs",
-            other.copied().unwrap_or_default()
-        )),
-    }
-}
-
-pub(crate) async fn capture(
-    program: &Path,
-    args: &[&str],
-    limit: Duration,
-) -> Result<Captured, String> {
-    account_tool_allows(program, args)?;
-    let child = command(program)
-        .args(args)
-        .spawn()
-        .map_err(|error| format!("could not start {}: {error}", program.display()))?;
-    let output = tokio::time::timeout(limit, child.wait_with_output())
-        .await
-        .map_err(|_| {
-            format!(
-                "{} took longer than {}s",
-                program.display(),
-                limit.as_secs()
-            )
-        })?
-        .map_err(|error| error.to_string())?;
-    Ok(Captured {
-        ok: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    })
-}
-
-/// The first non-empty line of a tool's `--version`.
-async fn version_of(program: &Path) -> Option<String> {
-    let out = capture(program, &["--version"], Duration::from_secs(8))
-        .await
-        .ok()?;
-    let text = if out.stdout.trim().is_empty() {
-        out.stderr
-    } else {
-        out.stdout
-    };
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(str::to_owned)
-}
-
-/// A line of an install or sign-in that is running, for the log under the button.
+// Process and executable helpers live in connectors/runtime.rs.\n\n/// A line of an install or sign-in that is running, for the log under the button.
 #[derive(Clone, Serialize)]
 struct LogLine {
     id: String,
@@ -271,7 +123,10 @@ async fn pump<R: AsyncRead + Unpin>(
 /// The OAuth page address a sign-in CLI printed in `line`, if it is there.
 fn sign_in_address(line: &str) -> Option<String> {
     let start = line.find("https://")?;
-    let url: String = line[start..].chars().take_while(|c| !c.is_whitespace()).collect();
+    let url: String = line[start..]
+        .chars()
+        .take_while(|c| !c.is_whitespace())
+        .collect();
     (url.contains("/oauth/authorize")).then_some(url)
 }
 
@@ -416,7 +271,7 @@ async fn login_status(provider: &str) -> Login {
         },
         "codex" => codex_login(),
         "copilot" => github_login().await,
-        "workbuddy" => workbuddy_login_status(),
+        "workbuddy" => workbuddy::login_status(),
         _ => Login::default(),
     }
 }
@@ -459,206 +314,9 @@ pub struct Detected {
     workbuddy: Login,
 }
 
-const WORKBUDDY_SECRET: &str = "agentdeck:workbuddy";
-const WORKBUDDY_BASE: &str = "https://www.workbuddy.ai";
-
-fn workbuddy_login_status() -> Login {
-    let logged_in = secret_load(WORKBUDDY_SECRET.to_string()).is_some();
-    Login {
-        logged_in: Some(logged_in),
-        detail: Some("device sign-in".to_string()),
-        ..Login::default()
-    }
-}
-
-pub(crate) async fn workbuddy_access_token() -> Result<String, String> {
-    let raw = secret_load(WORKBUDDY_SECRET.to_string()).ok_or("WorkBuddy is not signed in")?;
-    let json: Value = serde_json::from_str(&raw).map_err(|_| "saved WorkBuddy credential is invalid")?;
-    let expires_at = json["expires_at"].as_u64().unwrap_or(u64::MAX);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-    if expires_at <= now + 60 {
-        if let Some(refresh) = json["refresh_token"].as_str().filter(|token| !token.is_empty()) {
-            if let Ok(token) = workbuddy_refresh(refresh).await {
-                return Ok(token);
-            }
-        }
-    }
-    json["access_token"]
-        .as_str()
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| "saved WorkBuddy credential has no access token".to_string())
-}
-
-async fn workbuddy_refresh(refresh_token: &str) -> Result<String, String> {
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .user_agent("WorkBuddy/5.5.6")
-        .build()
-        .map_err(|error| error.to_string())?
-        .post(format!("{WORKBUDDY_BASE}/v2/plugin/auth/token/refresh"))
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .header("X-Refresh-Token", refresh_token)
-        .header("X-Product", "SaaS")
-        .header("X-Domain", "www.workbuddy.ai")
-        .body("{}")
-        .send()
-        .await
-        .map_err(|error| format!("WorkBuddy token refresh failed: {error}"))?;
-    let payload: Value = response.json().await.map_err(|error| error.to_string())?;
-    if payload["code"].as_i64() != Some(0) {
-        return Err(payload["msg"].as_str().unwrap_or("refresh rejected").to_string());
-    }
-    let access = payload["data"]["accessToken"]
-        .as_str()
-        .ok_or("WorkBuddy refresh returned no access token")?;
-    let next_refresh = payload["data"]["refreshToken"].as_str().unwrap_or(refresh_token);
-    let expires_in = payload["data"]["expiresIn"].as_u64().unwrap_or(2_592_000);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-    secret_save(
-        WORKBUDDY_SECRET.to_string(),
-        serde_json::json!({
-            "access_token": access,
-            "refresh_token": next_refresh,
-            "token_type": "Bearer",
-            "expires_at": now.saturating_add(expires_in),
-        })
-        .to_string(),
-    )?;
-    Ok(access.to_string())
-}
-
-async fn workbuddy_sign_in() -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .user_agent("WorkBuddy/5.5.6")
-        .build()
-        .map_err(|error| error.to_string())?;
-    let state = client
-        .post(format!("{WORKBUDDY_BASE}/v2/plugin/auth/state?platform=CLI"))
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .header("X-Product", "SaaS")
-        .json(&serde_json::json!({ "platform": "CLI" }))
-        .send()
-        .await
-        .map_err(|error| format!("WorkBuddy sign-in could not start: {error}"))?;
-    let status = state.status();
-    let payload: Value = state
-        .json()
-        .await
-        .map_err(|error| format!("WorkBuddy sent invalid sign-in data: {error}"))?;
-    if !status.is_success() || payload["code"].as_i64() != Some(0) {
-        return Err(format!(
-            "WorkBuddy sign-in rejected: {}",
-            payload["msg"].as_str().unwrap_or("unknown error")
-        ));
-    }
-    let state_id = payload["data"]["state"]
-        .as_str()
-        .ok_or("WorkBuddy sign-in returned no state")?;
-    let auth_url = payload["data"]["authUrl"]
-        .as_str()
-        .or_else(|| payload["data"]["url"].as_str())
-        .ok_or("WorkBuddy sign-in returned no browser URL")?;
-    crate::browser::open_external(auth_url.to_string())?;
-
-    for _ in 0..120 {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        let response = client
-            .get(format!("{WORKBUDDY_BASE}/v2/plugin/auth/token?state={state_id}"))
-            .header("Accept", "application/json")
-            .header("X-Product", "SaaS")
-            .send()
-            .await
-            .map_err(|error| format!("WorkBuddy sign-in polling failed: {error}"))?;
-        let payload: Value = response
-            .json()
-            .await
-            .map_err(|error| format!("WorkBuddy sent invalid token data: {error}"))?;
-        if payload["code"].as_i64() == Some(0) {
-            let access = payload["data"]["accessToken"]
-                .as_str()
-                .ok_or("WorkBuddy sign-in returned no access token")?;
-            secret_save(
-                WORKBUDDY_SECRET.to_string(),
-                serde_json::json!({
-                    "access_token": access,
-                    "refresh_token": payload["data"]["refreshToken"],
-                    "token_type": payload["data"]["tokenType"].as_str().unwrap_or("Bearer"),
-                    "expires_at": std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |duration| duration.as_secs())
-                        .saturating_add(payload["data"]["expiresIn"].as_u64().unwrap_or(2_592_000)),
-                })
-                .to_string(),
-            )?;
-            return Ok(());
-        }
-        if payload["code"].as_i64() != Some(11217) {
-            return Err(format!(
-                "WorkBuddy sign-in failed: {}",
-                payload["msg"].as_str().unwrap_or("unknown error")
-            ));
-        }
-    }
-    Err("WorkBuddy sign-in timed out after 10 minutes".to_string())
-}
-
-fn collect_workbuddy_models(value: &Value, models: &mut Vec<String>) {
-    match value {
-        Value::Object(object) => {
-            for key in ["id", "model", "modelId", "model_id"] {
-                if let Some(model) = object[key].as_str().filter(|model| model.contains('-')) {
-                    if !models.iter().any(|known| known == model) {
-                        models.push(model.to_string());
-                    }
-                }
-            }
-            for child in object.values() {
-                collect_workbuddy_models(child, models);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_workbuddy_models(item, models);
-            }
-        }
-        _ => {}
-    }
-}
-
 #[tauri::command]
 pub async fn workbuddy_models() -> Result<Vec<String>, String> {
-    let token = workbuddy_access_token().await?;
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .user_agent("WorkBuddy/5.5.6")
-        .build()
-        .map_err(|error| error.to_string())?
-        .get(format!("{WORKBUDDY_BASE}/v3/config"))
-        .bearer_auth(token)
-        .header("Accept", "application/json")
-        .header("X-Product", "SaaS")
-        .send()
-        .await
-        .map_err(|error| format!("WorkBuddy model catalog failed: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!("WorkBuddy model catalog returned {}", response.status()));
-    }
-    let payload: Value = response.json().await.map_err(|error| error.to_string())?;
-    let mut models = Vec::new();
-    collect_workbuddy_models(&payload, &mut models);
-    models.retain(|model| !model.contains('/') && model.len() < 120);
-    if models.is_empty() {
-        return Err("WorkBuddy returned no chat models".to_string());
-    }
-    Ok(models)
+    workbuddy::models().await
 }
 
 const TOOLS: [&str; 10] = [
@@ -921,7 +579,7 @@ pub async fn connectors_detect() -> Detected {
         antigravity: antigravity_login(),
         opencode,
         copilot: github_login().await,
-        workbuddy: workbuddy_login_status(),
+        workbuddy: workbuddy::login_status(),
     }
 }
 
@@ -1085,7 +743,7 @@ async fn connector_login_inner(app: AppHandle, id: String) -> Result<(), String>
     let limit = Duration::from_secs(300);
     let idle_limit = Some(Duration::from_secs(120));
     match id.as_str() {
-        "workbuddy" => workbuddy_sign_in().await,
+        "workbuddy" => workbuddy::sign_in().await,
         "claude" => {
             let claude = which("claude").ok_or("Claude Code is not installed")?;
             run_logged_with_idle_timeout(
@@ -1601,14 +1259,20 @@ fn parse_cswap(text: &str) -> Result<Vec<Account>, String> {
 /// Premium-request quota of the account `gh` is signed in as, from `copilot_internal/user`: the call VS Code's Copilot
 /// Chat makes for its own quota meter. Read only; `None` when the call fails.
 async fn copilot_usage(gh: &Path) -> Option<(Vec<UsageWindow>, i64)> {
-    let out = capture(gh, &["api", "copilot_internal/user"], Duration::from_secs(15))
-        .await
-        .ok()?;
+    let out = capture(
+        gh,
+        &["api", "copilot_internal/user"],
+        Duration::from_secs(15),
+    )
+    .await
+    .ok()?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs() as i64;
-    out.ok.then(|| parse_copilot_usage(&out.stdout, now)).flatten()
+    out.ok
+        .then(|| parse_copilot_usage(&out.stdout, now))
+        .flatten()
 }
 
 /// `copilot_internal/user` JSON to the premium-request window. An unlimited plan has no window.
@@ -2111,125 +1775,11 @@ pub fn antigravity_quota_cached() -> Option<AgyQuota> {
     saved_agy_quota()
 }
 
-/// What a secret of the system store holds (Windows Credential Manager), as text.
-#[cfg(windows)]
-pub(crate) fn stored_secret(target: &str) -> Option<String> {
-    use windows::core::PCWSTR;
-    use windows::Win32::Security::Credentials::{
-        CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
-    };
-
-    let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut found: *mut CREDENTIALW = std::ptr::null_mut();
-    // SAFETY: `CredReadW` fills `found` with a credential it allocates; it is read once, copied, and given back to `CredFree`.
-    let bytes = unsafe {
-        CredReadW(PCWSTR(wide.as_ptr()), CRED_TYPE_GENERIC, None, &mut found).ok()?;
-        let credential = &*found;
-        let bytes = if credential.CredentialBlob.is_null() {
-            Vec::new()
-        } else {
-            std::slice::from_raw_parts(
-                credential.CredentialBlob,
-                credential.CredentialBlobSize as usize,
-            )
-            .to_vec()
-        };
-        CredFree(found.cast());
-        bytes
-    };
-    // Stored as UTF-8 text, or as UTF-16 by some writers.
-    match String::from_utf8(bytes.clone()) {
-        Ok(text) if text.trim_start().starts_with('{') => Some(text),
-        _ => {
-            let units: Vec<u16> = bytes
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-                .collect();
-            String::from_utf16(&units).ok()
-        }
-    }
-}
-
-/// Writes a JSON credential into Windows Credential Manager; tokens never enter the account index file.
-#[cfg(windows)]
-pub(crate) fn write_secret(target: &str, secret: &str) -> Result<(), String> {
-    use windows::core::PWSTR;
-    use windows::Win32::Security::Credentials::{
-        CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
-    };
-
-    let mut target_wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut bytes = secret.as_bytes().to_vec();
-    let credential = CREDENTIALW {
-        Type: CRED_TYPE_GENERIC,
-        TargetName: PWSTR(target_wide.as_mut_ptr()),
-        CredentialBlobSize: u32::try_from(bytes.len()).map_err(|error| error.to_string())?,
-        CredentialBlob: bytes.as_mut_ptr(),
-        Persist: CRED_PERSIST_LOCAL_MACHINE,
-        ..Default::default()
-    };
-    // SAFETY: the target and blob stay alive for the duration of CredWriteW; the API copies both values.
-    unsafe { CredWriteW(&credential, 0).map_err(|error| error.to_string()) }
-}
-
-/// Removes a credential from Windows Credential Manager after its account-specific copy has been saved.
-#[cfg(windows)]
-pub(crate) fn delete_secret(target: &str) -> Result<(), String> {
-    use windows::core::PCWSTR;
-    use windows::Win32::Security::Credentials::{CredDeleteW, CRED_TYPE_GENERIC};
-
-    if stored_secret(target).is_none() {
-        return Ok(());
-    }
-    let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
-    // SAFETY: `wide` remains valid for the duration of the Windows API call.
-    unsafe {
-        CredDeleteW(PCWSTR(wide.as_ptr()), CRED_TYPE_GENERIC, None)
-            .map_err(|error| error.to_string())
-    }
-}
-
-/// Only AgentDeck's own secrets (`agentdeck:` targets) can be reached from the webview, never other credentials.
-fn secret_target(target: &str) -> Result<String, String> {
-    if target.starts_with("agentdeck:") && target.len() > "agentdeck:".len() && !target.contains('\0') {
-        Ok(target.to_string())
-    } else {
-        Err("not an AgentDeck secret".to_string())
-    }
-}
-
-/// The system credential store entry for an AgentDeck secret: Windows Credential Manager, the macOS Keychain or the
-/// Linux Secret Service, whichever the system has.
-fn secret_entry(target: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new("AgentDeck", target).map_err(|error| error.to_string())
-}
-
-/// Saves a provider key or sign-in in the system credential store.
-#[tauri::command]
-pub fn secret_save(target: String, value: String) -> Result<(), String> {
-    let target = secret_target(&target)?;
-    secret_entry(&target)?.set_password(&value).map_err(|error| error.to_string())
-}
-
-/// Reads a secret saved by `secret_save`; `None` when there is none or the store is not available.
-#[tauri::command]
-pub fn secret_load(target: String) -> Option<String> {
-    let target = secret_target(&target).ok()?;
-    secret_entry(&target).ok()?.get_password().ok()
-}
-
-/// Removes a secret saved by `secret_save`; a missing one is not an error.
-#[tauri::command]
-pub fn secret_delete(target: String) -> Result<(), String> {
-    let target = secret_target(&target)?;
-    match secret_entry(&target)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
 fn agy_accounts_path() -> Result<PathBuf, String> {
-    crate::home_folder().map(|home| home.join(crate::channel::home_folder_name()).join("antigravity-accounts.json"))
+    crate::home_folder().map(|home| {
+        home.join(crate::channel::home_folder_name())
+            .join("antigravity-accounts.json")
+    })
 }
 
 #[cfg(windows)]
@@ -2361,7 +1911,10 @@ pub async fn antigravity_accounts_list() -> Vec<AgyAccount> {
 async fn adopt_unsaved_agy_sign_in() {
     static LAST_TRY: AtomicU64 = AtomicU64::new(0);
     let Some(current) = agy_sign_in() else { return };
-    if current["token"]["access_token"].as_str().is_none_or(str::is_empty) {
+    if current["token"]["access_token"]
+        .as_str()
+        .is_none_or(str::is_empty)
+    {
         return;
     }
     if agy_saved_active_email().is_some() {
@@ -2476,7 +2029,10 @@ async fn antigravity_sign_in_another_account() -> Result<(), String> {
                 format!("could not clear the old Antigravity sign-in file: {error}")
             })?;
         }
-        let mut restore = RestoreSignIn { previous: previous.clone(), armed: true };
+        let mut restore = RestoreSignIn {
+            previous: previous.clone(),
+            armed: true,
+        };
         delete_secret("gemini:antigravity")?;
 
         // `agy` owns the CLI sign-in flow. A fresh console gives its TUI a real terminal and lets
@@ -2700,7 +2256,8 @@ pub async fn antigravity_quotas() -> Vec<AgyAccountQuota> {
     let accounts = antigravity_accounts_list().await;
     let reads = accounts.into_iter().map(|account| async move {
         #[cfg(windows)]
-        let sign_in = stored_secret(&agy_secret_target(&account.email)).and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let sign_in = stored_secret(&agy_secret_target(&account.email))
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
         #[cfg(not(windows))]
         let sign_in: Option<Value> = None;
         let (quota, error) = match sign_in {
@@ -2748,9 +2305,10 @@ pub async fn agy_modes(force: bool) -> AgyModes {
         return AgyModes::default();
     };
     let version = version_of(&agy).await.unwrap_or_default();
-    let cache = crate::home_folder()
-        .ok()
-        .map(|home| home.join(crate::channel::home_folder_name()).join("agy-modes.json"));
+    let cache = crate::home_folder().ok().map(|home| {
+        home.join(crate::channel::home_folder_name())
+            .join("agy-modes.json")
+    });
     if !force {
         let saved = cache
             .as_ref()
@@ -2808,109 +2366,6 @@ pub async fn agy_modes(force: bool) -> AgyModes {
 // ---------------------------------------------------------------------------------------------------------------
 // Custom and local providers
 
-#[derive(Serialize)]
-pub struct Probe {
-    ok: bool,
-    models: Vec<String>,
-    ms: u64,
-    error: Option<String>,
-}
-
-fn models_url(kind: &str, base: &str) -> String {
-    let base = base.trim().trim_end_matches('/');
-    match kind {
-        "ollama" => format!("{base}/api/tags"),
-        // A base typed with its version (`https://api.anthropic.com/v1`) is the same address.
-        "anthropic" => format!("{}/v1/models", base.trim_end_matches("/v1")),
-        _ => format!("{base}/models"),
-    }
-}
-
-fn parse_models(kind: &str, json: &Value) -> Vec<String> {
-    let (list, key) = if kind == "ollama" {
-        (&json["models"], "name")
-    } else {
-        (&json["data"], "id")
-    };
-    list.as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item[key].as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-async fn probe(
-    kind: &str,
-    base: &str,
-    key: Option<&str>,
-    key_env: Option<&str>,
-    limit: Duration,
-) -> Probe {
-    let started = Instant::now();
-    let done = |models: Vec<String>, error: Option<String>| Probe {
-        ok: error.is_none(),
-        models,
-        ms: started.elapsed().as_millis() as u64,
-        error,
-    };
-    if !(base.starts_with("http://") || base.starts_with("https://")) {
-        return done(
-            Vec::new(),
-            Some("the address must start with http:// or https://".to_string()),
-        );
-    }
-    let client = match reqwest::Client::builder().timeout(limit).build() {
-        Ok(client) => client,
-        Err(error) => return done(Vec::new(), Some(error.to_string())),
-    };
-    let mut request = client.get(models_url(kind, base));
-    // The key typed in the settings wins; otherwise the environment variable the user named.
-    let key = match (
-        key.filter(|key| !key.is_empty()),
-        key_env.filter(|name| !name.is_empty()),
-    ) {
-        (Some(key), _) => Some(key.to_owned()),
-        (None, Some(name)) => match std::env::var(name) {
-            Ok(key) => Some(key),
-            Err(_) => {
-                return done(
-                    Vec::new(),
-                    Some(format!("environment variable {name} is not set")),
-                )
-            }
-        },
-        (None, None) => None,
-    };
-    if let Some(key) = key {
-        request = if kind == "anthropic" {
-            request
-                .header("x-api-key", key)
-                .header("anthropic-version", "2023-06-01")
-        } else {
-            request.bearer_auth(key)
-        };
-    }
-    match request.send().await {
-        Ok(response) if response.status().is_success() => match response.json::<Value>().await {
-            Ok(json) => done(parse_models(kind, &json), None),
-            Err(error) => done(Vec::new(), Some(format!("not a model list: {error}"))),
-        },
-        Ok(response) => done(
-            Vec::new(),
-            Some(format!("the server answered {}", response.status())),
-        ),
-        Err(error) if error.is_timeout() => done(Vec::new(), Some("no answer in time".to_string())),
-        Err(error) if error.is_connect() => done(
-            Vec::new(),
-            Some("could not connect: is the server running?".to_string()),
-        ),
-        Err(error) => done(Vec::new(), Some(error.to_string())),
-    }
-}
-
 /// Asks a provider's endpoint for its models: the "Test connection" button. The key, if any, is read from the
 /// environment variable the user named and never leaves this function except as a request header.
 #[tauri::command]
@@ -2919,8 +2374,8 @@ pub async fn provider_probe(
     base_url: String,
     api_key: Option<String>,
     key_env: Option<String>,
-) -> Probe {
-    probe(
+) -> crate::providers::custom::Probe {
+    crate::providers::custom::probe(
         &kind,
         &base_url,
         api_key.as_deref(),
@@ -3129,7 +2584,8 @@ pub async fn local_scan() -> Vec<LocalServer> {
         .into_iter()
         .map(|(kind, label, base_url)| {
             tauri::async_runtime::spawn(async move {
-                let found = probe(kind, base_url, None, None, limit).await;
+                let found =
+                    crate::providers::custom::probe(kind, base_url, None, None, limit).await;
                 found.ok.then_some(LocalServer {
                     kind,
                     label,
@@ -3182,7 +2638,10 @@ mod tests {
 
         // An unlimited plan has no window to show.
         let unlimited = r#"{"quota_snapshots":{"premium_interactions":{"unlimited":true,"percent_remaining":100}}}"#;
-        assert_eq!(parse_copilot_usage(unlimited, 1).expect("quota").0, Vec::new());
+        assert_eq!(
+            parse_copilot_usage(unlimited, 1).expect("quota").0,
+            Vec::new()
+        );
         assert!(parse_copilot_usage("not json", 1).is_none());
     }
 

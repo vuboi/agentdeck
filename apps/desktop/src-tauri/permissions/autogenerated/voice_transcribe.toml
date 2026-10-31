@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-voice-transcribe"
+description = "Enables the voice_transcribe command without any pre-configured scope."
+commands.allow = ["voice_transcribe"]
+
+[[permission]]
+identifier = "deny-voice-transcribe"
+description = "Denies the voice_transcribe command without any pre-configured scope."
+commands.deny = ["voice_transcribe"]

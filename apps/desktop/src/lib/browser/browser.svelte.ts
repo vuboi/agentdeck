@@ -668,8 +668,8 @@ function openForAgent(address: string, inNewTab: boolean, ownTab?: string) {
 }
 
 /** The right-click menu of a link, shown by LinkMenu. */
-/** The right-click menu of a link. `file` is set when the link is a file in the project: then `root` is its folder. */
-export const linkMenu = $state({ open: false, url: '', x: 0, y: 0, file: '', root: '' });
+/** The right-click menu of a link. `file` is set when the link is a file or folder in the project: then `root` is its folder, and `dir` says it is a folder. */
+export const linkMenu = $state({ open: false, url: '', x: 0, y: 0, file: '', root: '', dir: false });
 
 // ---- running the project from the Preview ----
 export type RunTarget = { name: string; command: string; cwd: string; url: string | null; source: string; /** The script file it runs (`node scripts/dev.mjs`). */ wrapper: string | null; /** That script asks questions: it needs a terminal. */ prompts: boolean };

@@ -58,7 +58,8 @@ export async function withPreviews(images: GeneratedImage[]): Promise<Preview[]>
   const loaded = await Promise.all(
     images.map(async (image) => {
       try {
-        return { ...image, src: pictureSrc({ path: image.path }) };
+        const src = /^https?:\/\//i.test(image.path) ? image.path : pictureSrc({ path: image.path });
+        return { ...image, src };
       } catch {
         return null;
       }

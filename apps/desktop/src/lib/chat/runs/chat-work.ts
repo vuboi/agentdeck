@@ -27,6 +27,8 @@ export type ChatWork = {
   startedAt: number;
   endedAt?: number;
   detail: string;
+  /** Stable command and folder identity used to collapse repeated Run project calls. */
+  projectKey?: string;
 };
 
 /** Terminal results remain available in the tray instead of disappearing at completion. */
@@ -69,6 +71,7 @@ export function projectChatWork(events: readonly Activity[], tasks: readonly Tas
       // Other provider-native tasks still have no per-task cancellation API and must not stop the whole reply.
       canStop: event.name === 'Run project' && ['running', 'background'].includes(event.status),
       startedAt: event.startedAt, endedAt: event.endedAt, detail: event.output ?? '',
+      projectKey: event.name === 'Run project' ? projectIdentity(event.input) : undefined,
     });
   }
   for (const task of tasks) {
@@ -97,5 +100,26 @@ export function projectChatWork(events: readonly Activity[], tasks: readonly Tas
       });
     }
   }
-  return work.sort((a, b) => Number(isWorkActive(b)) - Number(isWorkActive(a)) || b.startedAt - a.startedAt);
+  const unique: ChatWork[] = [];
+  const projects = new Map<string, number>();
+  for (const item of work) {
+    if (!item.projectKey) {
+      unique.push(item);
+      continue;
+    }
+    const previous = projects.get(item.projectKey);
+    if (previous === undefined) {
+      projects.set(item.projectKey, unique.length);
+      unique.push(item);
+      continue;
+    }
+    const current = unique[previous];
+    if (current && !isWorkActive(current) && isWorkActive(item)) unique[previous] = item;
+  }
+  return unique.sort((a, b) => Number(isWorkActive(b)) - Number(isWorkActive(a)) || b.startedAt - a.startedAt);
+}
+
+function projectIdentity(input: string): string {
+  const [command = '', cwd = ''] = input.split('\n');
+  return `${command.trim()}\0${cwd.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase()}`;
 }

@@ -117,33 +117,33 @@
       {/if}
 
       <!-- Models: load them from the endpoint, or type one id. -->
-      <section class="rounded-xl border border-border bg-muted/20 p-4">
-        <div class="flex flex-wrap items-center gap-2">
+      <section class="flex flex-col gap-2 rounded-xl border border-border bg-muted/20 p-4">
+        <div class="flex items-center gap-2">
           <span class="text-sm font-medium">Models</span>
+          {#if draft.models.length > 0}<span class="rounded-full bg-primary/15 px-2 py-0.5 text-[0.6875rem] font-medium text-primary tabular-nums">{draft.models.length}</span>{/if}
           <ZButton zWave={false} zType="outline" zSize="sm" class="ml-auto h-8 gap-1.5 px-3 text-sm" disabled={form.probing || !draft.baseUrl} onclick={() => void form.test()}>
             <ZIcon zType={icon(form.probing ? 'lucideLoaderCircle' : 'lucideRefreshCw')} class="size-3.5 {form.probing ? 'animate-spin' : ''}" /> {draft.models.length ? 'Reload models' : 'Load models'}
           </ZButton>
         </div>
+        <!-- The field is the same place whether models are loaded (a picker) or not (a typed id); the note sits right under it. -->
+        <div class="flex min-w-0 flex-col gap-1">
+          {#if draft.models.length > 0}
+            <span class="text-[0.75rem] text-muted-foreground">Default model</span>
+            <ZSelect zOptions={[...new Set([draft.defaultModel, ...draft.models].filter(Boolean))].map((model) => ({ label: model, value: model }))} zShowSearch={draft.models.length > 8} value={draft.defaultModel} onValueChange={(value) => { if (draft) draft.defaultModel = String(value ?? ''); }} />
+          {:else}
+            <ZInput bind:value={draft.defaultModel} zPlaceholder="qwen3-coder:30b" aria-label="Model id" />
+          {/if}
+        </div>
         <!-- One line always kept for the note, so loading, a result or an error never moves the form. -->
-        <p class="mt-2 flex h-4 min-w-0 items-center gap-1 text-sm transition-colors duration-200 {form.probing ? 'text-muted-foreground' : form.probeNote?.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}" role="status" title={form.probeNote?.text}>
+        <p class="flex h-4 min-w-0 items-center gap-1 text-[0.75rem] transition-colors duration-200 {form.probing ? 'text-muted-foreground' : form.probeNote?.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}" role="status" title={form.probeNote?.text}>
           {#if form.probing}
             <ZIcon zType={icon('lucideLoaderCircle')} class="size-3.5 shrink-0 animate-spin" /><span class="truncate">Loading models…</span>
           {:else if form.probeNote}
             <ZIcon zType={icon(form.probeNote.ok ? 'lucideCircleCheck' : 'lucideCircleX')} class="size-3.5 shrink-0" /><span class="truncate">{form.probeNote.text}</span>
+          {:else if draft.models.length === 0}
+            <span class="truncate text-muted-foreground">Loaded automatically on save, or type one.</span>
           {/if}
         </p>
-        {#if draft.models.length > 0}
-          <div class="mt-3 grid grid-cols-[7.5rem_minmax(0,1fr)] items-center gap-x-4 text-sm">
-            <span class="text-muted-foreground">Default model</span>
-            <ZSelect zOptions={draft.models.map((model) => ({ label: model, value: model }))} zShowSearch={draft.models.length > 8} value={draft.defaultModel} onValueChange={(value) => { if (draft) draft.defaultModel = String(value ?? ''); }} />
-          </div>
-        {:else}
-          <div class="mt-3 grid grid-cols-[7.5rem_minmax(0,1fr)] items-center gap-x-4 text-sm">
-            <span class="text-muted-foreground">Model id</span>
-            <ZInput bind:value={draft.defaultModel} zPlaceholder="qwen3-coder:30b" />
-          </div>
-          <p class="mt-1.5 text-[0.75rem] text-muted-foreground">Loaded automatically on save, or type one.</p>
-        {/if}
       </section>
 
       <!-- Privacy: a free plan may keep what it is sent, so the agents are limited. -->

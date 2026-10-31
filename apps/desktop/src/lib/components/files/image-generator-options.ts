@@ -23,6 +23,10 @@ export const geminiModels: { model: string; label: string }[] = [
   { model: 'gemini-3.1-flash-image', label: 'Nano Banana 2' },
   { model: 'gemini-3-pro-image', label: 'Nano Banana Pro' },
 ];
+/** Community free image generation. It is intentionally separate from configured paid APIs. */
+export const freeImageModels: ImageModel[] = [
+  { model: 'flux', backend: 'pollinations', label: 'Pollinations · FLUX (free)' },
+];
 // Match the backend's per-run limit without increasing the default generation workload.
 export const MAX_IMAGE_MODELS = 4;
 // A panel that opens by growing from its top edge and goes by shrinking and fading, so what is below it never jumps.

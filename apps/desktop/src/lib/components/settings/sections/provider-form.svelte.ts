@@ -1,4 +1,4 @@
-import { ENDPOINTS } from '../../../agents/endpoints';
+import { ENDPOINTS, type CloudEndpoint } from '../../../agents/endpoints';
 import { connectors, newProviderId, probeProvider, refreshClaudeCredit, saveProvider, type CustomProvider } from '../../../agents/connectors.svelte';
 
 export const KINDS = [
@@ -9,6 +9,7 @@ export const KINDS = [
 
 /** Official APIs with a free tier, all OpenAI-compatible. The key is read from the named environment variable when none is typed. */
 export const FREE_CLOUD = ENDPOINTS.freeCloud;
+export const FEATURED_CLOUD = ENDPOINTS.featuredCloud;
 
 /** A preset's address against a saved one. A preset with `{account_id}` (Cloudflare) matches any account. */
 export function samePreset(base: string, url: string) {
@@ -53,6 +54,10 @@ export class ProviderForm {
     return this.draft ? FREE_CLOUD.find((preset) => samePreset(preset.base, this.draft?.baseUrl ?? '') || preset.base === this.draft?.baseUrl) : undefined;
   }
 
+  get cloudPreset() {
+    return this.draft ? [...FREE_CLOUD, ...FEATURED_CLOUD].find((preset) => samePreset(preset.base, this.draft?.baseUrl ?? '') || preset.base === this.draft?.baseUrl) : undefined;
+  }
+
   /** The draft is a Claude Console key: the Claude logo and name are fixed, and the Console sign-in is asked for. */
   get isClaude() {
     return this.draft ? isClaudeConsole(this.draft) : false;
@@ -60,7 +65,7 @@ export class ProviderForm {
 
   /** The name a provider cannot change: a free cloud provider's, or the Claude Console's. */
   get fixedName() {
-    return this.freePreset?.name ?? (this.isClaude ? 'Claude Console' : undefined);
+    return this.cloudPreset?.name ?? (this.isClaude ? 'Claude Console' : undefined);
   }
 
   /** The Console sign-in (`sessionKey`) read for the credit left; one for the account, so it is shared by every Claude key. */
@@ -106,7 +111,8 @@ export class ProviderForm {
       const result = await probeProvider(draft.kind, draft.baseUrl, active?.apiKey ?? '', active?.keyEnv ?? draft.keyEnv);
       if (result.ok) {
         draft.models = result.models;
-        if (!result.models.includes(draft.defaultModel)) draft.defaultModel = result.models[0] ?? '';
+        // The model the user chose (a preset's, or typed) stays; the list only fills in when there is none.
+        if (!draft.defaultModel) draft.defaultModel = result.models[0] ?? '';
         this.probeNote = { ok: true, text: `${result.models.length} model${result.models.length === 1 ? '' : 's'} in ${result.ms} ms` };
       } else {
         this.probeNote = { ok: false, text: result.error ?? 'failed' };
@@ -153,12 +159,16 @@ export class ProviderForm {
   }
 
   /** Opens the provider form filled in for a free cloud API: paste the key, Test lists its models, Save. */
-  useFreeCloud(preset: (typeof FREE_CLOUD)[number]) {
-    this.draft = { ...blank(), name: preset.name, kind: 'openai', baseUrl: preset.base, keyEnv: preset.keyEnv, defaultModel: preset.model, restricted: true };
+  useFreeCloud(preset: CloudEndpoint) {
+    this.draft = { ...blank(), name: preset.name, kind: 'openai', baseUrl: preset.base, keyEnv: preset.keyEnv, defaultModel: preset.model, restricted: preset.restricted ?? true, capabilities: preset.capabilities };
     this.keptKey = '';
     this.account = '';
     this.providerModal = true;
     this.probeNote = { ok: true, text: `Paste your ${preset.name} key (or set ${preset.keyEnv}), then Load models.` };
+  }
+
+  useFeaturedCloud(preset: CloudEndpoint) {
+    this.useFreeCloud({ ...preset, restricted: false });
   }
 
   useLocal(server: { kind: CustomProvider['kind']; label: string; base_url: string; models: string[] }) {

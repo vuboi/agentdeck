@@ -237,7 +237,7 @@
 <div class="block-in flex flex-col text-sm">
   <button
     type="button"
-    class="flex w-fit max-w-full cursor-pointer items-center gap-2 rounded-md py-0.5 text-left text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+    class="flex h-6 w-fit max-w-full cursor-pointer items-center gap-2 rounded-md text-left text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
     aria-expanded={hasDetails && view.open}
     disabled={!hasDetails}
     onclick={() => hasDetails && (view.open = !view.open)}
@@ -255,7 +255,7 @@
       {#if runningStep}
         <!-- While a step runs the line is that step ("Running pnpm test", "Using officecli load_skill word"), cut to the
              width; once every step is done it goes back to the summary. -->
-        <span class="min-w-0 truncate">
+        <span class="min-w-0 truncate font-medium">
           {#key runningLine}
             <span class="block truncate" in:fade={{ duration: 120 }} out:fade={{ duration: 90 }}>
               <ZShimmerText class="block truncate font-medium" zText={runningLine} />
@@ -269,7 +269,8 @@
       {/if}
       {#if total}{@render chips(total)}{/if}
     {/if}
-    {#if hasDetails}<ZIcon zType="lucideChevronRight" class="size-3 shrink-0 transition-transform duration-300 motion-reduce:transition-none {view.open ? 'rotate-90' : ''}" />{/if}
+    <!-- Always kept, so the label does not change width when the group gains or loses details. -->
+    <ZIcon zType="lucideChevronRight" class="size-3 shrink-0 transition-transform duration-300 motion-reduce:transition-none {view.open ? 'rotate-90' : ''} {hasDetails ? '' : 'invisible'}" />
   </button>
 
   <div class="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none {hasDetails && view.open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}">

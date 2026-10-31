@@ -8,7 +8,7 @@ import { copyImage } from './attachments';
 // The right-click menu of a picture or document waiting in a message box (chat and image generator alike).
 const row = 'text-sm! py-1';
 const removeRow = `${row} text-destructive! hover:bg-destructive/10! hover:text-destructive! [&_svg]:text-destructive!`;
-const TEXT_FILE = /\.(txt|md|mdx|log|json|ya?ml|toml|xml|csv|tsv|[jt]sx?|svelte|vue|py|rs|go|java|c|cpp|h|cs|rb|php|sh|ps1|sql|html|css|scss)$/i;
+export const TEXT_FILE = /\.(txt|md|mdx|log|json|ya?ml|toml|xml|csv|tsv|[jt]sx?|svelte|vue|py|rs|go|java|c|cpp|h|cs|rb|php|sh|ps1|sql|html|css|scss)$/i;
 
 export type Picture = { id: string; name: string; mime: string; src: string; path?: string };
 export type Document = { name: string; path: string; size: number };

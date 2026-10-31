@@ -3,7 +3,7 @@
   import { ZIcon, ZSelect, ZSwitch, ZTabs, zSortable } from '@shival99/z-ui-svelte';
   import type { ZIconName, ZTab } from '@shival99/z-ui-svelte';
   import AgentLogo from '../../ui/AgentLogo.svelte';
-  import { modelSources, parseCustomModel } from '../../../agents/models.svelte';
+  import { customModelId, modelSources, parseCustomModel } from '../../../agents/models.svelte';
   import { agentDisplayName } from '../../../agents/provider-registry';
   import { TASK_ROLES, routesOf, type TaskRoleId } from '../../../agents/task-roles';
   import { roleOpen, setRoleOpen, taskRoles, tasksTab } from '../../../agents/task-roles.svelte';
@@ -33,7 +33,7 @@
       const children = source.models().flatMap((item): Node[] => {
         if (source.provider === 'custom') {
           const target = parseCustomModel(item.value);
-          return target ? [{ value: `${target.providerId}|${target.model}`, label: item.label, agent: target.providerId, model: target.model }] : [];
+          return target ? [{ value: `${target.providerId}|${target.model}`, label: item.label, agent: 'custom', model: customModelId(target.providerId, target.model) }] : [];
         }
         // The pre-handle reads with the Console-credit Claude models; hand-offs take the plan models.
         if (source.provider === 'claude' && reading !== item.value.startsWith('credit:')) return [];
@@ -147,10 +147,10 @@
                       onValueChange={(value) => setRow(role.id, index, value === null ? null : String(value))}
                     >
                       {#snippet option(item)}
-                        <span class="flex min-w-0 flex-1 items-center gap-2"><AgentLogo agent={item.agent} model={item.children ? undefined : item.model} class="size-4 shrink-0" /><span class="truncate">{item.label}</span>{#if !item.children}<span class="ml-auto shrink-0 text-[0.6875rem] text-muted-foreground">{agentDisplayName(item.agent)}</span>{/if}</span>
+                        <span class="flex min-w-0 flex-1 items-center gap-2"><AgentLogo agent={item.agent} model={item.children ? undefined : item.model} class="size-4 shrink-0" /><span class="truncate">{item.label}</span>{#if !item.children}<span class="ml-auto shrink-0 text-[0.6875rem] text-muted-foreground">{agentDisplayName(item.agent, item.model)}</span>{/if}</span>
                       {/snippet}
                       {#snippet selection(item)}
-                        <span class="flex min-w-0 items-center gap-2"><AgentLogo agent={item.agent} model={item.model} class="size-4 shrink-0" /><span class="truncate font-medium">{item.label}</span><span class="shrink-0 truncate text-[0.6875rem] text-muted-foreground">{agentDisplayName(item.agent)}</span></span>
+                        <span class="flex min-w-0 items-center gap-2"><AgentLogo agent={item.agent} model={item.model} class="size-4 shrink-0" /><span class="truncate font-medium">{item.label}</span><span class="shrink-0 truncate text-[0.6875rem] text-muted-foreground">{agentDisplayName(item.agent, item.model)}</span></span>
                       {/snippet}
                     </ZSelect>
                     <button

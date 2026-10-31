@@ -198,23 +198,241 @@
   // The header buttons stage what is not staged yet, or unstage everything once all of it is staged.
   const stageAllLabel = $derived(tracked.length ? 'Stage all' : 'Unstage all');
 
+  // Multiple selection: Shift+click, Ctrl/Cmd+click, and drag-selection
+  let selectedKeys = $state<Set<string>>(new Set());
+  let lastSelectedKey = $state<string | null>(null);
+  const selectedChanges = $derived(changes.filter((change) => selectedKeys.has(rowKey(change))));
+  const isMulti = $derived(selectedChanges.length > 1);
+  const anyUnstagedInSelected = $derived(selectedChanges.some((c) => !c.staged));
+  const stageBtnLabel = $derived(
+    isMulti
+      ? anyUnstagedInSelected
+        ? `Stage ${selectedChanges.length} files`
+        : `Unstage ${selectedChanges.length} files`
+      : stageAllLabel
+  );
+  const stageBtnIcon = $derived(
+    isMulti ? (anyUnstagedInSelected ? 'lucidePlus' : 'lucideMinus') : tracked.length ? 'lucidePlus' : 'lucideMinus'
+  );
+  const revertBtnLabel = $derived(
+    isMulti ? `Revert ${selectedChanges.length} files` : 'Revert all'
+  );
+  function onStageBtn() {
+    if (isMulti) {
+      void stageRows(selectedChanges, anyUnstagedInSelected);
+    } else {
+      void (tracked.length ? stageRows(tracked, true) : stageRows(staged, false));
+    }
+  }
+  function onRevertBtn() {
+    if (isMulti) {
+      ask({ all: false, list: selectedChanges });
+    } else {
+      ask({ all: true, list: [] });
+    }
+  }
+
+  // Prune selection when files disappear
+  $effect(() => {
+    const existing = new Set(changes.map(rowKey));
+    untrack(() => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const k of selectedKeys) {
+        if (existing.has(k)) next.add(k);
+        else changed = true;
+      }
+      if (changed) selectedKeys = next;
+    });
+  });
+
+  // Drag selection (marquee)
+  let isPointerDown = false;
+  let isDragging = $state(false);
+  let justFinishedDrag = false;
+  let dragStartPos = $state<{ x: number; y: number } | null>(null);
+  let dragCurrentPos = $state<{ x: number; y: number } | null>(null);
+  let pointerDownClient = { x: 0, y: 0 };
+  let dragBaseSelected = new Set<string>();
+
+  const rowOffsets = $derived.by(() => {
+    const offsets: { top: number; bottom: number }[] = [];
+    let cur = 0;
+    for (let i = 0; i < listRows.length; i++) {
+      const h = listRows[i].group ? HEADER : ROW;
+      offsets.push({ top: cur, bottom: cur + h });
+      cur += h;
+    }
+    return offsets;
+  });
+
+  function handleScrollerPointerDown(event: PointerEvent) {
+    if (event.button !== 0) return;
+    if ((event.target as Element).closest('[data-row-action]')) return;
+    if (!scroller) return;
+
+    const rect = scroller.getBoundingClientRect();
+    pointerDownClient = { x: event.clientX, y: event.clientY };
+    dragStartPos = {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top + scroller.scrollTop,
+    };
+    dragCurrentPos = { ...dragStartPos };
+    isPointerDown = true;
+    dragBaseSelected = event.ctrlKey || event.metaKey ? new Set(selectedKeys) : new Set();
+  }
+
+  function handlePointerMove(event: PointerEvent) {
+    if (!isPointerDown || !scroller || !dragStartPos) return;
+
+    const dx = Math.abs(event.clientX - pointerDownClient.x);
+    const dy = Math.abs(event.clientY - pointerDownClient.y);
+    if (!isDragging && (dx > 4 || dy > 4)) {
+      isDragging = true;
+    }
+
+    if (isDragging) {
+      const rect = scroller.getBoundingClientRect();
+      const curX = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+      const curY = Math.max(0, event.clientY - rect.top + scroller.scrollTop);
+      dragCurrentPos = { x: curX, y: curY };
+
+      const boxTop = Math.min(dragStartPos.y, curY);
+      const boxBottom = Math.max(dragStartPos.y, curY);
+
+      const next = new Set(dragBaseSelected);
+      for (let i = 0; i < listRows.length; i++) {
+        const item = listRows[i];
+        if (!item.change) continue;
+        const bounds = rowOffsets[i];
+        if (bounds && bounds.bottom >= boxTop && bounds.top <= boxBottom) {
+          next.add(rowKey(item.change));
+        }
+      }
+      selectedKeys = next;
+
+      if (event.clientY < rect.top + 24) {
+        scroller.scrollTop -= 12;
+      } else if (event.clientY > rect.bottom - 24) {
+        scroller.scrollTop += 12;
+      }
+    }
+  }
+
+  function handlePointerUp() {
+    if (isDragging) {
+      justFinishedDrag = true;
+      setTimeout(() => (justFinishedDrag = false), 60);
+    }
+    isPointerDown = false;
+    isDragging = false;
+    dragStartPos = null;
+    dragCurrentPos = null;
+  }
+
+  function handleRowClick(event: MouseEvent, change: Change) {
+    if (justFinishedDrag) return;
+    if ((event.target as Element).closest('[data-row-action]')) return;
+    const key = rowKey(change);
+
+    if (event.ctrlKey || event.metaKey) {
+      const next = new Set(selectedKeys);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      selectedKeys = next;
+      lastSelectedKey = key;
+    } else if (event.shiftKey && lastSelectedKey) {
+      const fileRowsList = listRows.filter((r): r is ListRow & { change: Change } => Boolean(r.change));
+      const fromIdx = fileRowsList.findIndex((r) => r.key === lastSelectedKey);
+      const toIdx = fileRowsList.findIndex((r) => r.key === key);
+      if (fromIdx !== -1 && toIdx !== -1) {
+        const start = Math.min(fromIdx, toIdx);
+        const end = Math.max(fromIdx, toIdx);
+        const range = fileRowsList.slice(start, end + 1).map((r) => r.key);
+        selectedKeys = new Set([...selectedKeys, ...range]);
+      } else {
+        selectedKeys = new Set([key]);
+      }
+    } else {
+      selectedKeys = new Set([key]);
+      lastSelectedKey = key;
+      openChange(change);
+    }
+  }
+
+  function handleScrollerClick(event: MouseEvent) {
+    if (justFinishedDrag) return;
+    if ((event.target as Element).closest('[data-row]')) return;
+    if ((event.target as Element).closest('[data-row-action]')) return;
+    selectedKeys = new Set();
+    lastSelectedKey = null;
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+      if (changes.length > 0) {
+        event.preventDefault();
+        selectedKeys = new Set(changes.map(rowKey));
+      }
+    } else if (event.key === 'Escape') {
+      if (selectedKeys.size > 0) {
+        event.preventDefault();
+        selectedKeys = new Set();
+      }
+    }
+  }
+
   // Right-click menu of a row. While it is open its row keeps its buttons showing, as a hovered row does.
   let menu = $state<{ x: number; y: number; change: Change } | null>(null);
   let menuOpen = $state(false);
   $effect(() => closeOnScroll(() => menuOpen, () => (menuOpen = false)));
   function openMenu(event: MouseEvent, change: Change) {
     event.preventDefault();
+    if (!selectedKeys.has(rowKey(change))) {
+      selectedKeys = new Set([rowKey(change)]);
+      lastSelectedKey = rowKey(change);
+    }
     menu = { x: event.clientX, y: event.clientY, change };
     menuOpen = true;
   }
   const menuKey = $derived(menuOpen && menu ? rowKey(menu.change) : '');
   const lit = (change: Change) => menuKey === rowKey(change) || openedKey === rowKey(change);
   function menuItems(change: Change): ZDropdownMenuItem[] {
+    const multi = selectedChanges.length > 1 && selectedKeys.has(rowKey(change));
+    const targetList = multi ? selectedChanges : [change];
+    const anyUnstaged = targetList.some((c) => !c.staged);
+    const count = targetList.length;
+
     return [
-      { label: 'Open', icon: 'lucideFile', iconSize: '12', class: 'text-sm! py-1', onClick: () => openChange(change) } as ZDropdownMenuItem,
-      { label: change.staged ? 'Unstage' : 'Stage', icon: change.staged ? 'lucideMinus' : 'lucidePlus', iconSize: '12', class: 'text-sm! py-1', onClick: () => void stageRows([change], !change.staged) } as ZDropdownMenuItem,
-      { label: 'Revert', icon: 'lucideUndo2', iconSize: '12', class: 'text-sm! py-1', divide: 'after', onClick: () => ask({ all: false, list: [change] }) } as ZDropdownMenuItem,
-      { label: 'Copy path', icon: 'lucideCopy', iconSize: '12', class: 'text-sm! py-1', onClick: () => void navigator.clipboard.writeText(change.abs) } as ZDropdownMenuItem,
+      ...(multi
+        ? []
+        : [{ label: 'Open', icon: icon('lucideFile'), iconSize: '12', class: 'text-sm! py-1', onClick: () => openChange(change) } as ZDropdownMenuItem]),
+      {
+        label: multi ? (anyUnstaged ? `Stage ${count} files` : `Unstage ${count} files`) : change.staged ? 'Unstage' : 'Stage',
+        icon: icon(multi ? (anyUnstaged ? 'lucidePlus' : 'lucideMinus') : change.staged ? 'lucideMinus' : 'lucidePlus'),
+        iconSize: '12',
+        class: 'text-sm! py-1',
+        onClick: () => void stageRows(targetList, multi ? anyUnstaged : !change.staged),
+      } as ZDropdownMenuItem,
+      {
+        label: multi ? `Revert ${count} files...` : 'Revert',
+        icon: icon('lucideUndo2'),
+        iconSize: '12',
+        class: 'text-sm! py-1',
+        divide: 'after',
+        onClick: () => ask({ all: false, list: targetList }),
+      } as ZDropdownMenuItem,
+      {
+        label: multi ? `Copy ${count} paths` : 'Copy path',
+        icon: icon('lucideCopy'),
+        iconSize: '12',
+        class: 'text-sm! py-1',
+        onClick: () => void navigator.clipboard.writeText(targetList.map((c) => c.abs).join('\n')),
+      } as ZDropdownMenuItem,
     ];
   }
 
@@ -298,21 +516,37 @@
       </div>
     {:else}
       <div class="flex h-9 min-w-0 shrink-0 items-center gap-1.5 overflow-hidden border-b border-border px-2 text-sm">
-        <span class="shrink-0 font-medium tabular-nums" title="{changes.length} {changes.length === 1 ? 'file' : 'files'}">{compact(changes.length)} {changes.length === 1 ? 'file' : 'files'}</span>
-        <span class="shrink-0 text-emerald-500 tabular-nums" title="{totals.added} lines added">+{compact(totals.added)}</span>
-        <span class="shrink-0 text-red-500 tabular-nums" title="{totals.removed} lines removed">−{compact(totals.removed)}</span>
+        {#if isMulti}
+          <span class="shrink-0 font-medium text-primary tabular-nums" title="{selectedChanges.length} files selected">{selectedChanges.length} selected</span>
+          <button type="button" class="flex size-5 cursor-pointer items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground outline-none" title="Clear selection (Esc)" onclick={() => (selectedKeys = new Set())}>
+            <ZIcon zType={icon('lucideX')} class="size-3" />
+          </button>
+        {:else}
+          <span class="shrink-0 font-medium tabular-nums" title="{changes.length} {changes.length === 1 ? 'file' : 'files'}">{compact(changes.length)} {changes.length === 1 ? 'file' : 'files'}</span>
+          <span class="shrink-0 text-emerald-500 tabular-nums" title="{totals.added} lines added">+{compact(totals.added)}</span>
+          <span class="shrink-0 text-red-500 tabular-nums" title="{totals.removed} lines removed">−{compact(totals.removed)}</span>
+        {/if}
         <span class="flex-1"></span>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! shrink-0 p-0" disabled={busy} aria-label={stageAllLabel} title={stageAllLabel} onclick={() => void (tracked.length ? stageRows(tracked, true) : stageRows(staged, false))}>
-          <ZIcon zType={icon(tracked.length ? 'lucidePlus' : 'lucideMinus')} class="size-3.5" />
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! shrink-0 p-0" disabled={busy} aria-label={stageBtnLabel} title={stageBtnLabel} onclick={() => void onStageBtn()}>
+          <ZIcon zType={icon(stageBtnIcon)} class="size-3.5" />
         </ZButton>
-        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! shrink-0 p-0 hover:!text-destructive" disabled={busy} aria-label="Revert all" title="Revert all" onclick={() => ask({ all: true, list: [] })}>
+        <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! shrink-0 p-0 hover:!text-destructive" disabled={busy} aria-label={revertBtnLabel} title={revertBtnLabel} onclick={() => onRevertBtn()}>
           <ZIcon zType={icon(reverting ? 'lucideLoaderCircle' : 'lucideUndo2')} class="size-3.5 {reverting ? 'animate-spin' : ''}" />
         </ZButton>
       </div>
 
       <!-- Virtual list: each row has its own height, so only the rows in view (plus a margin) are rendered. -->
-      <div bind:this={scroller} class="min-h-0 flex-1 overflow-auto pb-1.5">
+      <div bind:this={scroller} class="relative min-h-0 flex-1 overflow-auto pb-1.5 select-none" role="presentation" onpointerdown={handleScrollerPointerDown} onclick={handleScrollerClick}>
         <div class="relative w-full" style:height="{$virtualizer.getTotalSize()}px">
+          {#if isDragging && dragStartPos && dragCurrentPos}
+            <div
+              class="pointer-events-none absolute z-20 rounded border border-primary/50 bg-primary/20"
+              style:left="{Math.min(dragStartPos.x, dragCurrentPos.x)}px"
+              style:top="{Math.min(dragStartPos.y, dragCurrentPos.y)}px"
+              style:width="{Math.max(2, Math.abs(dragCurrentPos.x - dragStartPos.x))}px"
+              style:height="{Math.max(2, Math.abs(dragCurrentPos.y - dragStartPos.y))}px"
+            ></div>
+          {/if}
           {#each changeRows as row (row.key)}
             {@const item = listRows[row.index]}
             <!-- The virtual rows are updated after the list (an effect): for one frame a row can point past a list that shrank. -->
@@ -325,19 +559,58 @@
               </div>
             {:else if item?.change}
               {@const change = item.change}
+              {@const isSelected = selectedKeys.has(rowKey(change))}
               <div class="absolute top-0 left-0 w-full px-1.5" style:height="{row.size}px" style:transform="translateY({row.start}px)">
                 <!-- The whole row opens the file; the buttons at its end do their own thing. They show on hover, or while the row's menu is open. -->
-                <div class="group my-px flex h-[calc(100%-2px)] cursor-pointer items-center gap-1.5 rounded-[3px] px-2 text-sm hover:bg-muted/50 {lit(change) ? 'bg-muted font-medium text-foreground' : ''}" role="presentation" in:fade={{ duration: 150 }} onpointerenter={() => warm(change)} onclick={(event) => !(event.target as Element).closest('[data-row-action]') && openChange(change)} oncontextmenu={(event) => openMenu(event, change)}>
+                <div
+                  data-row
+                  class="group my-px flex h-[calc(100%-2px)] cursor-pointer items-center gap-1.5 rounded-[3px] px-2 text-sm transition-colors {isSelected ? 'bg-primary/20 font-medium text-primary ring-1 ring-primary/40' : lit(change) ? 'bg-muted font-medium text-foreground' : 'hover:bg-muted/50'}"
+                  role="presentation"
+                  in:fade={{ duration: 150 }}
+                  onpointerenter={() => warm(change)}
+                  onclick={(event) => handleRowClick(event, change)}
+                  oncontextmenu={(event) => openMenu(event, change)}
+                >
                   <button type="button" class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left no-underline outline-none" title="Open {change.path}">
                     <span class="w-3 shrink-0 text-center font-mono {STATUS[change.status]?.tone}" title={STATUS[change.status]?.label}>{change.status}</span>
                     <span class="shrink-0 whitespace-nowrap">{nameOf(change.path)}</span>
                     <span class="min-w-0 truncate text-muted-foreground">{dirOf(change.path)}</span>
                   </button>
-                  <span class="flex shrink-0 items-center gap-0.5 {lit(change) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}" data-row-action>
-                    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0" aria-label={change.staged ? 'Unstage' : 'Stage'} title={change.staged ? 'Unstage' : 'Stage'} disabled={busy} onclick={() => void stageRows([change], !change.staged)}>
-                      <ZIcon zType={icon(change.staged ? 'lucideMinus' : 'lucidePlus')} class="size-3.5" />
+                  <span class="flex shrink-0 items-center gap-0.5 {lit(change) || isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}" data-row-action>
+                    <ZButton
+                      zWave={false}
+                      zType="ghost"
+                      zSize="sm"
+                      class="size-6! p-0"
+                      aria-label={isMulti && isSelected ? (anyUnstagedInSelected ? `Stage ${selectedChanges.length} files` : `Unstage ${selectedChanges.length} files`) : change.staged ? 'Unstage' : 'Stage'}
+                      title={isMulti && isSelected ? (anyUnstagedInSelected ? `Stage ${selectedChanges.length} files` : `Unstage ${selectedChanges.length} files`) : change.staged ? 'Unstage' : 'Stage'}
+                      disabled={busy}
+                      onclick={() => {
+                        if (isMulti && isSelected) {
+                          void stageRows(selectedChanges, anyUnstagedInSelected);
+                        } else {
+                          void stageRows([change], !change.staged);
+                        }
+                      }}
+                    >
+                      <ZIcon zType={icon(isMulti && isSelected ? (anyUnstagedInSelected ? 'lucidePlus' : 'lucideMinus') : change.staged ? 'lucideMinus' : 'lucidePlus')} class="size-3.5" />
                     </ZButton>
-                    <ZButton zWave={false} zType="ghost" zSize="sm" class="size-6! p-0 hover:!text-destructive" aria-label="Revert file" title="Revert file" disabled={busy} onclick={() => ask({ all: false, list: [change] })}>
+                    <ZButton
+                      zWave={false}
+                      zType="ghost"
+                      zSize="sm"
+                      class="size-6! p-0 hover:!text-destructive"
+                      aria-label={isMulti && isSelected ? `Revert ${selectedChanges.length} files` : 'Revert file'}
+                      title={isMulti && isSelected ? `Revert ${selectedChanges.length} files` : 'Revert file'}
+                      disabled={busy}
+                      onclick={() => {
+                        if (isMulti && isSelected) {
+                          ask({ all: false, list: selectedChanges });
+                        } else {
+                          ask({ all: false, list: [change] });
+                        }
+                      }}
+                    >
                       <ZIcon zType={icon('lucideUndo2')} class="size-3.5" />
                     </ZButton>
                   </span>
@@ -369,3 +642,5 @@
   onpick={pickChanged}
   onclose={() => (findQuery = '')}
 />
+
+<svelte:window onkeydown={handleKeyDown} onpointermove={handlePointerMove} onpointerup={handlePointerUp} />

@@ -33,6 +33,13 @@ test('only an AgentDeck-owned project run gets an independent Stop action', () =
   assert.equal(command.canStop, false);
 });
 
+test('repeated starts of the same project share one tray work item', () => {
+  const duplicate = { ...project, key: 'project-again', startedAt: 2 };
+  const items = projectChatWork([project, duplicate], [], []);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].activityKey, 'project');
+});
+
 test('Stop targets the row-owned work and never falls back to the main chat', () => {
   assert.equal(stopTarget({ activityKey: 'project', canStop: true }), 'project');
   assert.equal(stopTarget({ delegateId: 'worker', canStop: true }), 'delegate');

@@ -345,6 +345,44 @@ phần "exact" của M6; phần estimate/fallback vẫn ở M6/M8.
 
 **Gợi ý giao.** PTY Rust + event: Codex. Tích hợp xterm/theme/tab/log nền: Claude.
 
+### M15 — Provider platform: facade, manifest và routing profile
+
+**Mục tiêu.** Mở rộng provider theo từng giao thức, giữ nguyên command/frontend contract hiện tại và không đổi provider giữa một stream đang chạy.
+
+**Trạng thái (2026-10-31): nền tảng đầu đã có.** WorkBuddy đã tách thành connector/provider module; provider preset có Cloudflare, DeepSeek, Kimi, GLM, MiniMax, Command Code và Alibaba Qwen; routing profile đã có schema/persistence và quota threshold cơ bản.
+
+**Việc cần làm theo thứ tự.**
+1. Hoàn tất facade `connectors/` và `providers/`: chuyển từng connector lớn vào module riêng (`claude`, `codex`, `antigravity`, `copilot`, `opencode`, `api_key`, `secrets`) nhưng giữ Tauri command ở facade để frontend không phải migrate một lần.
+2. Thêm `ProviderManifest` dùng chung: `id`, `auth`, `protocol`, `capabilities`, `quota`, `free_tier`, `risk_policy`, `image_backend` và `search_backend`. Registry là nguồn duy nhất cho model picker, Settings, workflow và image generation.
+3. Tách routing thành ba tầng: lọc capability/plan/cost, chấm điểm health/quota/latency, rồi retry/fallback. Một session được pin provider/account trong turn; fallback chỉ xảy ra tại retry boundary an toàn.
+4. Hoàn thiện các profile AgentDeck: `auto`, `coding`, `fast`, `subscription`, `thrifty`, `offline`, `lkgp`. Mọi quyết định phải lưu lý do (`quota thấp`, `không có tool`, `cooldown`, `latency`) để UI hiển thị được.
+5. Dùng quota `exact`, `estimated`, `reactive` hiện có; `subscription` không rơi âm thầm xuống free, `offline` không gọi network để probe quota.
+
+**DoD.** Có manifest registry duy nhất; chat cũ vẫn resume được; route decision có test cho capability/quota/cooldown/pinning; `429`, timeout và stream lỗi chỉ fallback ở ranh giới an toàn; `cargo clippy`, `cargo test`, `svelte-check` sạch.
+
+### M16 — Provider API ổn định, search và image generation
+
+**Mục tiêu.** Có một pool nhỏ, chất lượng và dễ kiểm soát thay vì tích hợp hàng loạt free endpoint không ổn định.
+
+**Ưu tiên tích hợp.**
+1. API-compatible: Cloudflare Workers AI, DeepSeek, Kimi/Moonshot, GLM/Z.AI, MiniMax, Command Code, Alibaba Qwen và OpenCode Zen nếu endpoint/auth ổn định.
+2. Free/no-auth có kiểm soát: Pollinations và GitHub Models; mỗi provider có quota/cooldown/risk policy riêng, không coi free là quota chung.
+3. Search: Brave Search API làm adapter chính, HTML engines chỉ là fallback; key đọc từ environment/secret store, không đưa vào prompt, log hoặc export.
+4. Image: dùng backend riêng cho `/images/generations`, Gemini image API và provider native nào có API ảnh đã xác minh. Chat provider chỉ được xuất hiện trong Image Generator khi có capability `image_generation`.
+
+**DoD.** Provider có key test/probe, model discovery, streaming chat, error mapping, quota source và logo; Search trả kết quả có URL/snippet; Image Generator lưu được ảnh base64 và báo lỗi provider rõ ràng; không gọi network từ test.
+
+### M17 — CLI/OAuth và provider experimental
+
+**Mục tiêu.** Thêm provider có auth riêng mà không nhét credential vào generic custom provider.
+
+**Việc cần làm.**
+1. Command Code: preset API đã có; tiếp tục xác minh OAuth flow, session header rotation, resume và tool event trước khi viết connector native.
+2. Muse Spark Web: connector cookie trong keyring, executor riêng, bật cờ `experimental`; không đưa vào `auto` mặc định, không dùng cho dữ liệu dự án khi chưa có risk policy.
+3. Kiro và provider reverse/web khác chỉ bật opt-in sau khi kiểm tra điều khoản, độ ổn định và khả năng xoá credential.
+
+**DoD.** Login/refresh/logout không lộ token; stream/tool/error map về `AgentEvent`; session pin/fallback đúng policy; UI hiển thị experimental và lý do provider bị loại khỏi auto routing.
+
 ### Rủi ro chung
 - Định dạng của `agy`, `~/.claude/usage-cache.json`, rollout Codex đều **không được vendor công bố**: ghim phiên bản đã thấy (agy 1.4.5, Claude Code 2.1.306), parser dung thứ (dòng lạ bỏ qua và đếm), có contract test từ fixture.
 - Trình duyệt kép: Antigravity có `browser_*` của riêng nó; để mặc định tắt cho tới khi M13 cho chọn rõ.

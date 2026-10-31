@@ -9,9 +9,9 @@ use std::time::Duration;
 use ag_adapters::agent::antigravity::Antigravity;
 use ag_adapters::agent::claude::Claude;
 use ag_adapters::agent::codex::Codex;
+use ag_adapters::agent::interrupt::{StopHandle, StopToken, INTERRUPT_DEADLINE};
 use ag_adapters::agent::opencode::OpenCode;
 use ag_adapters::agent::runner::{drive_turn, resolve_binary};
-use ag_adapters::agent::interrupt::{StopHandle, StopToken, INTERRUPT_DEADLINE};
 use ag_adapters::agent::warm::drive_warm_turn_with;
 use ag_adapters::agent::{AgentEvent, ChatResponseCapabilities, Provider, TurnRequest};
 use serde::Serialize;
@@ -22,9 +22,11 @@ use crate::{custom_chat, mcp_manage};
 /// A chat in "This computer" has no project path; give its CLI an intentional user-home cwd instead of letting it
 /// inherit the directory the desktop app happened to be launched from (often the AgentDeck source repository).
 fn home_directory() -> Option<PathBuf> {
-    ["USERPROFILE", "HOME"]
-        .into_iter()
-        .find_map(|key| std::env::var_os(key).map(PathBuf::from).filter(|path| path.is_dir()))
+    ["USERPROFILE", "HOME"].into_iter().find_map(|key| {
+        std::env::var_os(key)
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
+    })
 }
 
 fn working_directory(cwd: Option<String>) -> Option<PathBuf> {
@@ -65,7 +67,10 @@ fn stop_run(run: Run) {
     stop.stop();
     let mut handle = run.handle;
     tauri::async_runtime::spawn(async move {
-        if tokio::time::timeout(INTERRUPT_DEADLINE + ABORT_GRACE, &mut handle).await.is_err() {
+        if tokio::time::timeout(INTERRUPT_DEADLINE + ABORT_GRACE, &mut handle)
+            .await
+            .is_err()
+        {
             handle.abort();
         }
     });
@@ -84,7 +89,9 @@ const FINISHED_KEEP: usize = 256;
 
 /// The table of runs. A panic while it was held must not stop every later stop and send: the data is still sound.
 fn running() -> std::sync::MutexGuard<'static, HashMap<(String, String), Run>> {
-    RUNNING.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    RUNNING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Keeps one independently addressable run. A new turn never replaces another lane of the same visible chat.
@@ -97,13 +104,22 @@ fn track(
 ) {
     let mut running = running();
     let key = (session, turn);
-    let mut finished = FINISHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut finished = FINISHED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if finished.remove(&key) {
         // Already over: `forget` ran first. Nothing to keep or stop.
         return;
     }
     drop(finished);
-    if let Some(previous) = running.insert(key, Run { handle, stop, response }) {
+    if let Some(previous) = running.insert(
+        key,
+        Run {
+            handle,
+            stop,
+            response,
+        },
+    ) {
         stop_run(previous);
     }
 }
@@ -114,7 +130,9 @@ fn forget(session: &str, turn: &str) {
     let key = (session.to_owned(), turn.to_owned());
     if running.remove(&key).is_none() {
         // Not listed (yet): remember the end, so a `track` that comes after it does not list a run that is over.
-        let mut finished = FINISHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut finished = FINISHED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if finished.len() >= FINISHED_KEEP {
             finished.clear();
         }
@@ -159,21 +177,32 @@ async fn run_turn(
     keep_open: bool,
     mut stop: StopToken,
 ) {
-    let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, provider.id(), req.model.as_deref().unwrap_or("-"));
+    let mut noted = crate::flow_log::TurnGuard::new(
+        &session,
+        &turn,
+        provider.id(),
+        req.model.as_deref().unwrap_or("-"),
+    );
     if provider.id() == "antigravity" {
         mcp_manage::ensure_agy_link().await;
     }
     // What a kept CLI says on its own after a turn (a background job finished) reaches the chat through this.
     let tail_app = app.clone();
-    ag_adapters::agent::tail::set_sink(std::sync::Arc::new(move |chat, turn, event| emit(&tail_app, chat, turn, None, event)));
+    ag_adapters::agent::tail::set_sink(std::sync::Arc::new(move |chat, turn, event| {
+        emit(&tail_app, chat, turn, None, event)
+    }));
     let binary = resolve_binary(provider.as_ref());
     // Claude, Codex and Antigravity keep their CLI open between the chat's turns (see `warm.rs`); OpenCode starts one per turn.
     // A turn that runs for another one (a side answer, a delegated worker, a step of a flow) is run once, not kept: it
     // would sit idle for twenty minutes and push the processes of the chats people are in out of the pool.
     let warm = keep_open
-        && drive_warm_turn_with(binary.clone(), provider.as_ref(), &req, stop.clone(), |event| {
-            emit(&app, &session, &turn, message_id.as_deref(), event)
-        })
+        && drive_warm_turn_with(
+            binary.clone(),
+            provider.as_ref(),
+            &req,
+            stop.clone(),
+            |event| emit(&app, &session, &turn, message_id.as_deref(), event),
+        )
         .await;
     if !warm {
         // A per-turn process has no interrupt message: a stop drops the turn, which ends its process tree.
@@ -182,7 +211,11 @@ async fn run_turn(
             () = stop.stopped() => {}
         }
     }
-    noted.finish(if stop.is_stopped() { "stopped" } else { "finished" });
+    noted.finish(if stop.is_stopped() {
+        "stopped"
+    } else {
+        "finished"
+    });
     forget(&session, &turn);
 }
 
@@ -279,8 +312,20 @@ pub(crate) async fn agent_send(
             api_key,
         };
         let (stop, token) = StopHandle::new();
-        let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, "copilot", req.model.as_deref().unwrap_or("-"));
-        let run = crate::copilot::run_turn(app.clone(), session.clone(), turn.clone(), message_id.clone(), req, token);
+        let mut noted = crate::flow_log::TurnGuard::new(
+            &session,
+            &turn,
+            "copilot",
+            req.model.as_deref().unwrap_or("-"),
+        );
+        let run = crate::copilot::run_turn(
+            app.clone(),
+            session.clone(),
+            turn.clone(),
+            message_id.clone(),
+            req,
+            token,
+        );
         let (chat, this_turn) = (session.clone(), turn.clone());
         let handle = tauri::async_runtime::spawn(async move {
             run.await;
@@ -305,8 +350,20 @@ pub(crate) async fn agent_send(
             api_key,
         };
         let (stop, token) = StopHandle::new();
-        let mut noted = crate::flow_log::TurnGuard::new(&session, &turn, "opencode", req.model.as_deref().unwrap_or("-"));
-        let run = crate::opencode_serve::run_turn(app.clone(), session.clone(), turn.clone(), message_id.clone(), req, token);
+        let mut noted = crate::flow_log::TurnGuard::new(
+            &session,
+            &turn,
+            "opencode",
+            req.model.as_deref().unwrap_or("-"),
+        );
+        let run = crate::opencode_serve::run_turn(
+            app.clone(),
+            session.clone(),
+            turn.clone(),
+            message_id.clone(),
+            req,
+            token,
+        );
         let (chat, this_turn) = (session.clone(), turn.clone());
         let handle = tauri::async_runtime::spawn(async move {
             run.await;
@@ -357,6 +414,7 @@ pub(crate) async fn custom_send(
     kind: String,
     base_url: String,
     api_key: Option<String>,
+    key_env: Option<String>,
     model: String,
     messages: Vec<custom_chat::ChatMessage>,
     permission_mode: Option<String>,
@@ -371,8 +429,13 @@ pub(crate) async fn custom_send(
         kind,
         base_url,
         api_key,
+        key_env,
         model,
-        cwd: if restricted { None } else { working_directory(cwd) },
+        cwd: if restricted {
+            None
+        } else {
+            working_directory(cwd)
+        },
         permission_mode,
         allowed: allowed_tools,
         chat: session.clone(),
@@ -466,7 +529,9 @@ pub(crate) fn agent_stop(session: String, turn: Option<String>) {
     let mut running = running();
     let keys = running
         .keys()
-        .filter(|(chat, run_turn)| chat == &session && turn.as_deref().is_none_or(|target| target == run_turn))
+        .filter(|(chat, run_turn)| {
+            chat == &session && turn.as_deref().is_none_or(|target| target == run_turn)
+        })
         .cloned()
         .collect::<Vec<_>>();
     for key in keys {

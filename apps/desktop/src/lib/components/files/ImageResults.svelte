@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ZIcon } from '@shival99/z-ui-svelte';
   import { activeSession, draftImages, type Attachment } from '../../chat/sessions.svelte';
-  import { mimeOfPath, revealFile } from '../../chat/agent';
+  import { fetchImageDataUrl, keepPicture, mimeOfPath, revealFile } from '../../chat/agent';
   import { openImages } from '../../browser/preview.svelte';
   import { gen, type Preview } from '../../files/image-gen.svelte';
   import { modelLabel } from '../../agents/models.svelte';
@@ -16,10 +16,28 @@
   const loadingRun = $derived(gen.loadingRun);
   const runSkeleton = $derived(gen.runSkeleton);
   let failuresOpen = $state(false);
+  let failedSources = $state<Set<string>>(new Set());
+
+  function resultSrc(image: Preview) {
+    return failedSources.has(image.src) ? '/assets/image-not-found.png' : image.src;
+  }
+
+  function markImageFailed(src: string) {
+    if (!src || src === '/assets/image-not-found.png') return;
+    failedSources = new Set(failedSources).add(src);
+  }
+
+  function isWebImage(path: string) {
+    return /^https?:\/\//i.test(path);
+  }
+
+  function revealImage(image: Preview) {
+    if (!isWebImage(image.path)) void revealFile(image.path);
+  }
 
   function openPreview(index: number) {
     openImages(
-      previews.map((image) => ({ src: image.src, name: `${image.model}-${image.variant}.png` })),
+      previews.map((image) => ({ src: resultSrc(image), name: `${image.model}-${image.variant}.png` })),
       index,
     );
   }
@@ -27,10 +45,21 @@
   async function useInChat(image: Preview) {
     const session = activeSession();
     if (!session) return;
-    // The candidate is already a file: the message box takes its path (no copy in memory).
-    const attachment: Attachment = { id: crypto.randomUUID(), name: `generated-${image.model}-${image.variant}.png`, mime: mimeOfPath(image.path), src: '', path: image.path };
-    draftImages[session.id] = [...(draftImages[session.id] ?? []), attachment];
-    toast.success('Image added to the composer');
+    try {
+      const name = `generated-${image.model}-${image.variant}.png`;
+      let attachment: Attachment;
+      if (isWebImage(image.path)) {
+        // Keep the original URL for display. Download only after this explicit action because chat attachments need a file.
+        const kept = await keepPicture({ id: crypto.randomUUID(), name, mime: 'image/png', src: await fetchImageDataUrl(image.path) });
+        attachment = kept;
+      } else {
+        attachment = { id: crypto.randomUUID(), name, mime: mimeOfPath(image.path), src: '', path: image.path };
+      }
+      draftImages[session.id] = [...(draftImages[session.id] ?? []), attachment];
+      toast.success('Image added to the composer');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
   }
 </script>
 
@@ -46,16 +75,18 @@
       {#each previews as image, index (image.path)}
         <article class="group overflow-hidden rounded-lg border border-border bg-background">
           <button type="button" class="block w-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Preview {modelLabel(image.model)} #{image.variant}" onclick={() => openPreview(index)}>
-            <img src={image.src} alt="{modelLabel(image.model)} candidate #{image.variant}" class="aspect-square w-full object-cover" />
+            <img src={resultSrc(image)} alt="{modelLabel(image.model)} candidate #{image.variant}" class="aspect-square w-full object-cover" onerror={() => markImageFailed(image.src)} />
           </button>
           <div class="flex items-center gap-1 px-1.5 py-1.5">
             <span class="min-w-0 flex-1 truncate text-[10px] text-muted-foreground" title="{modelLabel(image.model)} · #{image.variant} — {image.path}">{modelLabel(image.model)} · #{image.variant}</span>
             <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Use image in chat" title="Use image in chat" onclick={() => useInChat(image)}>
               <ZIcon zType="lucideMessageSquarePlus" class="size-3.5" />
             </button>
-            <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Reveal image file" title="Reveal image file" onclick={() => void revealFile(image.path)}>
-              <ZIcon zType="lucideFolderOpen" class="size-3.5" />
-            </button>
+            {#if !isWebImage(image.path)}
+              <button type="button" class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Reveal image file" title="Reveal image file" onclick={() => revealImage(image)}>
+                <ZIcon zType="lucideFolderOpen" class="size-3.5" />
+              </button>
+            {/if}
           </div>
         </article>
       {/each}
